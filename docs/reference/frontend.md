@@ -12,12 +12,13 @@ nothing there.
 | `main.ts` | bootstrap and wiring: the store from the URL's state, the panel's parts, the region's bbox, a stored route when the URL names one, clicks on the map, the cancel on `pagehide` |
 | `state.ts` | `Store`, the app's state on an `EventTarget`; `Settings`, `Stop`, `RunView`, `targetOf`; the API's limits (tiers, budget, leash, targets) |
 | `api/types.ts` | the API's shapes, written by hand from `api.md` |
-| `api/client.ts` | the fetch wrappers, `ApiError`, `errorBody`, `subscribe` (a job's events over `EventSource`) |
+| `api/client.ts` | the fetch wrappers (`geocode` among them), `ApiError`, `errorBody`, `subscribe` (a job's events over `EventSource`) |
 | `map/basemap.ts` | the basemap and its switch (**Basemap**) |
 | `map/map.ts` | the MapLibre map, its controls, `fitTo` |
 | `map/routeLayer.ts` | `spliceLine` and `RouteLayer`: the baseline, the growing route, the flash (**Live growth**) |
 | `map/stopsLayer.ts` | the stop markers and the snapped-position ghosts |
-| `stops/stopList.ts` | how a click, a drag or a removal changes the stops; the list in the panel |
+| `stops/stopList.ts` | how a click, a drag or a removal changes the stops (`placeStop`: a click's, and a place search's pick); the list in the panel |
+| `stops/search.ts` | `PlaceSearch` (the place search, no DOM, so the tests drive it) and `mountPlaceSearch`, its field, button and results |
 | `settings/panel.ts` | the request's settings and the units |
 | `run/controls.ts` | `JobRunner`, a job's lifecycle (no DOM, so the tests drive it); `mountRunControls`, Go, Cancel, Reroll, Make it worse and the stat line |
 | `share/share.ts` | the URL state, `UrlSync`, `openRoute`, the share section (**Links**) |
@@ -43,9 +44,13 @@ The API has no `/api` prefix; the dev server (and `preview`) proxies `/api/*` to
 its own pair on free ports:
 
 ```
-WORST_ROUTE_DATA=<main tree>/data uv run worst-route serve --region portland --port <api> --store <lane>/data/routes.sqlite
+WORST_ROUTE_DATA=<main tree>/data uv run worst-route serve --region portland --port <api> --store <lane>/data/routes.sqlite --geocoder none
 cd frontend && WORST_ROUTE_API=http://127.0.0.1:<api> npm run dev -- --port <web> --strictPort
 ```
+
+No agent calls Nominatim: a lane's `serve` runs with `--geocoder none` (the search then shows
+`GEOCODER_DISABLED`), or with `--nominatim-url` pointed at a stub of its own that answers
+`/search` with a jsonv2 body such as `tests/fixtures/geocode/nominatim-portland.json`.
 
 Prettier formats everything under `frontend/` but the recordings (`.prettierignore`); the
 gate runs its check as part of `typecheck`.
@@ -61,7 +66,15 @@ is most of it), 290 kB gzipped.
   way, inserted before the end. A marker is numbered and coloured by its role (start green, via
   blue, end red) and dragged to move; the list shows each stop's coordinates and a remove button.
   A stop keeps its coordinates at 6 decimals, so the request and the link that reproduces it
-  carry the same numbers. Once a job has snapped them (its `snapped` event, or a stored route's
+  carry the same numbers. **Searching for a place** is the other way to place a stop: a field
+  and a Search button under the list's heading. Nothing is asked while typing (Nominatim's
+  policy forbids type-ahead); the button or Enter sends the text to `GET /geocode` (the server's
+  proxy, cached and limited to a request a second, `docs/reference/api.md`, **Geocoding**), and
+  up to five places in the region are listed under the field by their names ("No places found."
+  when there are none; a place's OSM tag is its tooltip). Picking one places the next stop
+  exactly as a click there would (`placeStop`: the start, the end, then stops along the way, at
+  6 decimals), and clears the field; the place's name is not kept with the stop, as a click has
+  none. The search is locked with the stops while a job runs, and until `/regions` has answered. Once a job has snapped them (its `snapped` event, or a stored route's
   stops), the list shows each stop's node, how far it moved and the API's note, and the map a
   dashed ghost dot where it went (the note as its tooltip). Editing the stops forgets the route
   shown and the snaps. Stops and settings are locked while a job runs.
@@ -96,7 +109,8 @@ is most of it), 290 kB gzipped.
   `timeout`, `failed`), the seed, and, when Make it worse found nothing, "no worse route found
   with seed N; try again or Reroll".
 - **Errors.** Every API error shows its `code` and `message` in a banner over the map, closed by
-  its × or the next action; an error with a `stop_index` (`STOP_OUTSIDE_REGION`,
+  its × or the next action (a place search's too: `RATE_LIMITED`, "the geocoder is busy, try
+  again in a few seconds", when the server's slots are taken; a search closes the banner first); an error with a `stop_index` (`STOP_OUTSIDE_REGION`,
   `NO_NODE_NEAR`, `STOP_UNREACHABLE_WITHOUT_REPEAT`) highlights that stop in the list and on
   the map. The client adds codes of its own: `NETWORK` (the server cannot be reached),
   `HTTP_<status>` (a refusal without the API's body, as a proxy's 502), `BAD_RESPONSE` (a
@@ -196,9 +210,10 @@ follows the app again from the next change. The units are not in the URL.
 | Test file | What it covers |
 |---|---|
 | `map/routeLayer.test.ts` | `spliceLine` on hand-made lines (a longer and a shorter detour, either end, the input left alone); each recording replayed: it ends with the stored route's node count, every node where the job's final snapshot has it (whose stop positions are the route's), every drawn point a point of the stored geometry in order with the same ends; and at every snapshot after splices (the max-mode recording's after its 50th `progress`), the replayed nodes equal the snapshot's |
-| `api/types.test.ts` | each type's runtime spec, which the compiler holds to the type's keys; the specs against `api.md` (its JSON request example, and the field lists of the events, `done`'s metrics, `/regions`, the 202, the job status and the route document) and against every payload of both recordings; the ratio recording's target reached in `done` and the document, its round-trip refusal; a payload that does not fit is caught |
+| `api/types.test.ts` | each type's runtime spec, which the compiler holds to the type's keys; the specs against `api.md` (its JSON request example, and the field lists of the events, `done`'s metrics, `/regions`, the 202, the job status, the route document and `/geocode`) and against every payload of both recordings; the ratio recording's target reached in `done` and the document, its round-trip refusal; a payload that does not fit is caught |
 | `run/controls.test.ts` | `JobRunner` with `fetch` and `EventSource` stubbed: a TypeError from the client and an event the app cannot handle end the run as `CLIENT_ERROR` with the controls unlocked (the job cancelled), the server's `error` closes the stream; Make it worse keeps the route and its seed when nothing worse is found and tries the next seed, follows a worse route's seed; Go and Reroll send the settings' seed, then none; leaving the page cancels a job whose POST is in flight once it is answered, a running one at once; a ratio and a drive-time target sent, shown while running and with what was achieved (`target reached`), and Make it worse whose base already meets its target |
 | `api/client.test.ts` | the API's error bodies, `BAD_RESPONSE` for an HTML success, `HTTP_<status>`, `NETWORK`, `CLIENT_ERROR` |
+| `stops/search.test.ts` | `PlaceSearch` with `fetch` stubbed and a real store: nothing asked while typing, one `GET /api/geocode?q=&region=` on Search, nothing for a blank text or before the region; the candidates listed, an empty answer said; a pick placing the stop exactly as `placeStop` (a click) does, as the start and as a stop before the end, and clearing the field; nothing placed or asked while a job runs; a 429 in the banner, and a search closing it |
 | `share/share.test.ts` | the URL state round trip (every field, `auto`, seeds 0 and 2⁵³ − 1, clicked coordinates exactly), values it ignores, the app's state to the URL and back; a `?route=` link at startup: the URL untouched until the route opens, then written from its request, and kept, with the banner, when it does not open; targets in the URL, values ignored, and a ratio-target route opened by link |
 | `format.test.ts` | distances in both units and their thresholds, durations, ratios, counts; drive times typed as a target, read and written back |
 
@@ -234,8 +249,8 @@ its end, so a mid-run snapshot exists, and stays near 1 MB.
 ## Seeing it
 
 Agents run the app in their own clone (**Running it**) and drive it with headless Chrome over
-the DevTools protocol, the tile server blocked (`Network.setBlockedURLs`), writing screenshots
-to their scratch directory; a Playwright tool under `tools/` is a later item. Killing the dev
+the DevTools protocol, the tile server blocked (`Network.setBlockedURLs`) and the geocoder off
+or pointed at a stub of their own, writing screenshots to their scratch directory; a Playwright tool under `tools/` is a later item. Killing the dev
 server mid-run reloads the page (Vite's client does), so a dropped stream is tested through a
 relay in front of `npm run preview`.
 
@@ -266,6 +281,16 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
 - **A dropped stream** (cut 2.3 s in, at event 26): `reconnecting…`, then about 3 s later a
   snapshot with id 57 and live events, ids rising strictly; replaying everything the browser
   received gives the stored route's 4,734 nodes exactly.
+- **The place search** (2026-10-30, `serve --nominatim-url` pointed at a local stub answering
+  the committed jsonv2 Portland body; Nominatim itself never called): typing "Powell's" one
+  key at a time sent nothing; Enter sent one request and listed three places; picking the first
+  placed the start at 45.523117, −122.681255 and cleared the field, and a search by the button
+  for the Hawthorne store placed the end, both in the URL's `stops`. Go (seed 1, 6 s) from
+  them: the search locked while it ran, 50.4× on the budget (174 mi), the stops snapped 59 ft
+  and 151 ft. With ten distinct queries sent at once by a script (on the serialised rate
+  limit), six went upstream, each at least a second after the previous answer, and four were
+  refused, and the page's own search 0.05 s later, with five queued ahead of it, showed
+  `RATE_LIMITED` in the banner.
 
 ## Limitations
 
@@ -279,5 +304,5 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
 - **Seeds above 2⁵³ − 1** cannot be typed: the API allows up to 2⁶³ − 1, but a JavaScript number
   is exact only up to 2⁵³. A stored route with a larger seed (from the CLI or a script) shows it
   rounded.
-- **Desktop layout only**; directions, toasts, the share image, geocoding search and the
-  other objectives arrive with their milestones.
+- **Desktop layout only**; directions, toasts, the share image and the other objectives arrive
+  with their milestones.

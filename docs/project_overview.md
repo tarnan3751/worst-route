@@ -124,6 +124,12 @@ route worse, and opens a stored route by its `?route=` link; the settings and st
 URL, every API error shows in a banner, and leaving the page cancels a running job. On
 Portland, Powell's → Reed grows to 60.0× in 12 s on the map; its tests replay streams recorded
 from the server, node for node.
+The geocoding proxy is built (M4's first piece; `docs/reference/api.md`, **Geocoding**): a
+place search in the stop list (a field and a button, no type-ahead) asks `GET /geocode`, which
+answers up to five places in the region from Nominatim behind a 30-day sqlite cache and a limit
+of one request a second, under the project's User-Agent; a pick places the next stop as a map
+click does. No test or agent run calls Nominatim: the tests use a fake geocoder or a mocked
+transport, and every test refuses httpx's real transports.
 The workflow scaffolding exists: `CLAUDE.md`, the four agents,
 `tools/gates.sh`, `tools/land_series.sh`, this overview, `docs/PLAN.md`. The M1 bootstrap is
 built: the uv project (Python 3.12, `src` layout, the M1 dependencies), the gate running ruff,
@@ -139,7 +145,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 | M1 — Portland, distance mode, CLI | Built | bootstrap, every pipeline step (download to qa; Portland's build passes QA), the graph package and the engine (snapping, seed route, transition-aware searches, splice loop, distance objective, validator, `worst-route plan` / `validate`). The acceptance run (`docs/PLAN.md` §7 M1 step 9; `uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` on build e4b3b4ad90db, `graph_version` 45f650e868fa, the reference backend: 20 random Portland pairs 3–15 km apart): all 20 plan and the validator passes all 20; the median ratio is 21.5× (3.3–45.2×); seeds 1 and 2 share 10–16% of their edges (Jaccard on 5 pairs, all < 0.3); the cul-de-sac via moves 86 m to the nearest through street with its note. Powell's → Reed gives 58–62×, PDX → Beaverton 7.3× (`docs/reference/engine.md`, **On Portland**) |
 | M2 — API + map, live growth | In progress | CSR + Numba backend built, its transition-aware kernels included (the default on every build; byte-identical to the reference: on Portland the acceptance's 20 routes and Powell's → Reed reproduce exactly, at 7,200–8,200 attempts/s); the API built (jobs in worker processes, SSE progress, the route store, make it worse, `worst-route serve`); targets by ratio and duration built (engine, CLI `--target`/`--base`, API), a 13-minute Portland drive to 9 h within ±2 % in 1.8 s over the API; the MapLibre frontend built (stops by click, the route growing live, run controls, settings with the targets, links); remaining: the acceptance |
 | M3 — Modes and constraints | Planned | turn-aware kernel, never/only-left; slowest time; collectibles; brands; hard mode; the search honouring stage B transitions (built at M1); alphabet search |
-| M4 — Presentation | Planned | directions, stats, toasts, comparisons, share image, geocoding proxy, share links |
+| M4 — Presentation | In progress | directions, stats, toasts, comparisons, share image, geocoding proxy, share links; built: the geocoding proxy (`GET /geocode`, Nominatim behind a cache and 1 request/s) and the place search in the stop list |
 | M5 — Scaling up | Planned | Oregon; array-based simplify/consolidate; US at T1; the national decision gate; public-hosting prep |
 | M6 — Stretch | Planned | certified worst (CP-SAT), turn restrictions, stop reordering, portfolio runs |
 

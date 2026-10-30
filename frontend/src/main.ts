@@ -1,7 +1,7 @@
 // Bootstrap and wiring (docs/reference/frontend.md): the store, from the URL's state; the map
 // and the panel's parts; the region's bbox from /regions; a stored route when the URL names one,
-// the URL left alone until it has opened; clicks on the map add stops; leaving the page cancels
-// a running job.
+// the URL left alone until it has opened; clicks on the map and a place search's picks add stops,
+// the same way (placeStop); leaving the page cancels a running job.
 import "./style.css";
 import { errorBody, getRegions } from "./api/client";
 import { mountBanner } from "./banner";
@@ -12,8 +12,9 @@ import { JobRunner, mountRunControls } from "./run/controls";
 import { mountSettings } from "./settings/panel";
 import { UrlSync, decodeUrlState, mountShare, openRoute, settingsFrom } from "./share/share";
 import { DEFAULT_SETTINGS, IDLE_RUN, Store, type Stop } from "./state";
-import { busy, mountStopList, withStopAdded } from "./stops/stopList";
-import { bboxBounds, round6 } from "./util/geo";
+import { PlaceSearch, mountPlaceSearch } from "./stops/search";
+import { mountStopList, placeStop } from "./stops/stopList";
+import { bboxBounds } from "./util/geo";
 
 const byId = (id: string): HTMLElement => document.getElementById(id) as HTMLElement;
 
@@ -38,7 +39,10 @@ function edit(stops: Stop[]): void {
 }
 
 mountBanner(byId("banner"), store);
-mountStopList(byId("stops"), store, edit);
+const placeSearch = document.createElement("div");
+const place = (lat: number, lon: number): boolean => placeStop(store, edit, lat, lon);
+mountPlaceSearch(placeSearch, store, new PlaceSearch(store, place));
+mountStopList(byId("stops"), store, edit, placeSearch);
 mountSettings(byId("settings"), store);
 mountShare(byId("share"), store);
 new StopsLayer(map, store, edit);
@@ -47,11 +51,7 @@ const urlSync = new UrlSync(store, (query) => {
 });
 if (url.route === null) urlSync.start(false);
 
-map.on("click", (event) => {
-  if (busy(store)) return;
-  const { lat, lng } = event.lngLat;
-  edit(withStopAdded(store.state.stops, round6(lat), round6(lng)));
-});
+map.on("click", (event) => place(event.lngLat.lat, event.lngLat.lng));
 
 map.once("load", () => {
   routeLayer = new RouteLayer(map);

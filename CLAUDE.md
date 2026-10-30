@@ -29,7 +29,9 @@ route streamed over Server-Sent Events, the route store and "make it worse". So 
 inefficiency targets (M2's fourth step): a ratio or a duration, reached within ±2 %, from
 `plan --target` and the API. So is the frontend (`docs/reference/frontend.md`, M2's third
 step): a MapLibre map on which stops are clicked, the route drawn growing live from the stream,
-the run controls, the settings (the targets among them) and links. The plan (`docs/PLAN.md`,
+the run controls, the settings (the targets among them) and links. So is the geocoding proxy
+(M4's first piece): a place search in the stop list, answered by `GET /geocode` from Nominatim
+behind a cache and a one-request-a-second limit. The plan (`docs/PLAN.md`,
 2026-10-30) is written and its open questions answered as far as `docs/project_overview.md` §3
 records. **M1 is built**: in the acceptance run on the
 Portland build (`uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20

@@ -16,6 +16,7 @@ import type {
   Baseline,
   Done,
   ErrorBody,
+  GeocodeResult,
   JobCreated,
   JobStatus,
   Progress,
@@ -106,6 +107,11 @@ export function getRoute(routeId: string): Promise<RouteDocument> {
 
 export function getRouteGeojson(routeId: string): Promise<RouteFeatureCollection> {
   return call(`/routes/${encodeURIComponent(routeId)}/geojson`);
+}
+
+/** The places `q` may mean in `region`, from the server's geocoding proxy. */
+export function geocode(q: string, region: string): Promise<GeocodeResult> {
+  return call(`/geocode?${new URLSearchParams({ q, region })}`);
 }
 
 /** What a job's stream calls, in the order the server sends. */

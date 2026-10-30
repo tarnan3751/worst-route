@@ -2,13 +2,15 @@
 // them, and the list in the panel.
 //
 // The first click is the start, the second the end, and later ones are stops along the way,
-// inserted before the end. A stop keeps its coordinates at 6 decimals (util/geo.ts, round6). An
-// edit forgets where the last job snapped the stops; once a job has run, the list shows each
-// stop's node, how far it moved and the API's note. The stop an error names (`stop_index`) is
-// highlighted, here and on the map.
+// inserted before the end (`placeStop`, which a place search's pick goes through too). A stop
+// keeps its coordinates at 6 decimals (util/geo.ts, round6). An edit forgets where the last job
+// snapped the stops; once a job has run, the list shows each stop's node, how far it moved and
+// the API's note. The stop an error names (`stop_index`) is highlighted, here and on the map.
+// The place search (search.ts) sits under the list's heading.
 import { formatDistance, formatLatLon, type Units } from "../format";
 import type { Stop, Store } from "../state";
 import { el } from "../util/dom";
+import { round6 } from "../util/geo";
 
 export type Role = "start" | "via" | "end";
 
@@ -50,6 +52,19 @@ export function busy(store: Store): boolean {
   return phase === "starting" || phase === "running";
 }
 
+/** Place the next stop at (lat, lon), as a click on the map does, through `edit`; nothing while
+ * a job runs. Whether it was placed. */
+export function placeStop(
+  store: Store,
+  edit: (stops: Stop[]) => void,
+  lat: number,
+  lon: number,
+): boolean {
+  if (busy(store)) return false;
+  edit(withStopAdded(store.state.stops, round6(lat), round6(lon)));
+  return true;
+}
+
 const ROLE_NAMES: Record<Role, string> = { start: "Start", via: "Stop", end: "End" };
 
 function snapLine(stop: Stop, units: Units): string | null {
@@ -60,17 +75,19 @@ function snapLine(stop: Stop, units: Units): string | null {
   return parts.join(" · ");
 }
 
-/** The stop list in `root`; `edit` applies a change to the stops. */
+/** The stop list in `root`, the place search (`search`) under its heading; `edit` applies a
+ * change to the stops. */
 export function mountStopList(
   root: HTMLElement,
   store: Store,
   edit: (stops: Stop[]) => void,
+  search: HTMLElement,
 ): void {
   const hint =
     "Click the map: first the start, then the end; more clicks add stops along the way. " +
-    "Drag a marker to move it.";
+    "Drag a marker to move it, or search for a place.";
   const list = el("ol", "stop-list");
-  root.replaceChildren(el("h2", "", "Stops"), el("p", "hint", hint), list);
+  root.replaceChildren(el("h2", "", "Stops"), search, el("p", "hint", hint), list);
 
   let shown: unknown[] = [];
   store.watch(["stops", "error", "run", "settings"], (state) => {

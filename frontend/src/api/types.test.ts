@@ -1,8 +1,8 @@
 // The hand-written types against the API: each type has a runtime spec whose keys the compiler
 // holds to the type's (`object<T>` needs exactly T's keys); the specs are checked against the
 // shapes docs/reference/api.md writes down (its JSON request example, and the field lists of
-// the events, /regions, the 202, the job status and the route document) and against every
-// payload of the stream recorded from the server.
+// the events, /regions, the 202, the job status, the route document and /geocode) and against
+// every payload of the stream recorded from the server.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { RECORDINGS, loadStream } from "../__fixtures__/stream";
@@ -12,6 +12,8 @@ import type {
   Done,
   DoneMetrics,
   ErrorBody,
+  GeocodeCandidate,
+  GeocodeResult,
   JobCreated,
   JobStatus,
   Leg,
@@ -287,6 +289,15 @@ const routeDocument = object<RouteDocument>({
   validation: object<Validation>({ ok: "boolean", checked_at: "string" }),
 });
 
+const geocodeResult = object<GeocodeResult>({
+  query: "string",
+  region: "string",
+  candidates: array(
+    object<GeocodeCandidate>({ label: "string", lat: "number", lon: "number", category: "string" }),
+  ),
+  cached: "boolean",
+});
+
 const EVENTS: Record<string, Spec> = {
   snapped,
   baseline,
@@ -427,6 +438,10 @@ describe("the types against docs/reference/api.md", () => {
     const status = /\*\*The job status\*\*[^`]*`[^`]*`[^`]*`(\{[^`]*\})`/.exec(reference)?.[1];
     expect(status).toBeDefined();
     expect(differences(parseFields(status!), jobStatus, "status")).toEqual([]);
+  });
+
+  it("has the fields of /geocode", () => {
+    expect(differences(documentedOn("| GET | `/geocode` |"), geocodeResult, "geocode")).toEqual([]);
   });
 
   it("has the route document's fields", () => {

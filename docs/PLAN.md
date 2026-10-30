@@ -641,7 +641,7 @@ Nominatim's public policy (verified 2026-10-30): max **1 request/s per applicati
 - Map click / marker drag is the primary way to set stops, so geocoding is a convenience, not a dependency.
 - Public hosting: either self-hosted **Photon** (Java + OpenSearch; the US-only index is tens of GB, workable on a small VPS) or a paid geocoder with a free tier. Interface `Geocoder.search(q, bbox) -> list[Candidate]` so this is a config switch.
 
-As built (M4, `docs/reference/api.md`, **Geocoding**): `GET /geocode?q=&region=` (the region names the bbox) answers at most 5 candidates `{label, lat, lon, category}` from Nominatim's jsonv2 search, with `countrycodes=us`, the region's bbox as `viewbox` and `bounded=1`. The cache is `geocode.sqlite` beside the route store, keyed by the region, its bbox and the normalised query (casefolded, whitespace collapsed), 30 days, empty answers included. Requests go upstream one at a time per process, at least a second after the previous answer came back (so a slow connection never brings two closer); a search that finds five already queued is `RATE_LIMITED` (429), identical searches queued behind one in flight are answered from the cache, and after Nominatim refuses (429, 403) the proxy asks nothing for 60 s (502 `GEOCODER_ERROR` meanwhile). The User-Agent is `worst-route/<version> (<repo url>)`, with `; <contact>` from `WORST_ROUTE_CONTACT`. `worst-route serve --geocoder none` turns it off; `--nominatim-url` points it elsewhere.
+As built (M4, `docs/reference/api.md`, **Geocoding**): `GET /geocode?q=&region=` (the region names the bbox) answers at most 5 candidates `{label, lat, lon, category}` from Nominatim's jsonv2 search, with `countrycodes=us`, the region's bbox as `viewbox` and `bounded=1`. The cache is `geocode.sqlite` beside the route store, keyed by the region, its bbox and the normalised query (casefolded, whitespace collapsed), 30 days, empty answers included. Requests go upstream one at a time per process, at least a second after the previous answer came back (so a slow connection never brings two closer); a search that finds five already queued is `RATE_LIMITED` (429), identical searches queued behind one in flight are answered from the cache, and after Nominatim refuses (429, 403) the proxy asks nothing for 60 s (502 `GEOCODER_ERROR` meanwhile). The User-Agent is `worst-route/<version> (<repo url>)`, with `; <contact>` from `WORST_ROUTE_CONTACT`. `worst-route serve --geocoder none` turns it off; `--nominatim-url` points it elsewhere. The search box is a field and a Search button at the top of the stop list (`docs/reference/frontend.md`, **Using it**); a pick places the next stop exactly as a map click does.
 
 ### 4.5 Jobs and workers
 
@@ -680,7 +680,8 @@ frontend/
 │   ├── map/map.ts            # MapLibre init, style, attribution, layer order
 │   ├── map/routeLayer.ts     # baseline (grey dashed) + worst route (gradient) sources; applySplice(), setSnapshot()
 │   ├── map/stopsLayer.ts     # draggable markers, numbered, snapped-position ghost + note tooltip
-│   ├── stops/stopList.ts     # ordered list: add by click, remove; geocode search box (button, not type-ahead) (M4)
+│   ├── stops/stopList.ts     # ordered list: add by click, remove
+│   ├── stops/search.ts       # (M4, built) the place search: a field and a button, not type-ahead; a pick places a stop as a click
 │   ├── settings/panel.ts     # seed, budget, inefficiency target, scale (tier auto/override, leash), objective mode, units; constraints (M3), vehicle, departure (M4)
 │   ├── run/controls.ts       # Go / Cancel / Reroll (new seed) / Make it worse; the live stat line with the ratio ticking up
 │   ├── share/share.ts        # URL state, ?route= links, copy link; open share.png, download GeoJSON (M4)

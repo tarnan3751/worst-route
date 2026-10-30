@@ -258,3 +258,22 @@ export interface Done {
   stopped_because: StopReason;
   metrics: DoneMetrics;
 }
+
+// --- Geocoding (GET /geocode) ---------------------------------------------------------------
+
+/** A place a search may mean: its label, where it is, its main OSM tag (`amenity/cafe`). */
+export interface GeocodeCandidate {
+  label: string;
+  lat: number;
+  lon: number;
+  category: string;
+}
+
+/** `GET /geocode?q=&region=`: the query as normalised, at most five candidates (best first),
+ * and whether the server's cache answered. */
+export interface GeocodeResult {
+  query: string;
+  region: string;
+  candidates: GeocodeCandidate[];
+  cached: boolean;
+}

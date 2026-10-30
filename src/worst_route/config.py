@@ -8,8 +8,12 @@ call `settings.cache_clear()`.
 `REGIONS` names the areas the pipeline builds (`docs/PLAN.md` §2): each is a Geofabrik state
 extract, optionally clipped to a bbox, with the projected CRS its metric steps use. Speeds,
 tier definitions, class allowlists and defaults join this module as their steps are built.
+
+`HighwayClass` numbers the road classes a build keeps (stored per edge as `edge_highway`) and
+`TIERS` lists each tier's classes (`docs/PLAN.md` §2.6).
 """
 
+from enum import IntEnum
 from functools import cache
 from pathlib import Path
 
@@ -75,3 +79,42 @@ KEPT_HIGHWAY: frozenset[str] = frozenset(
 )
 ALLEY_SERVICE = "alley"
 BLOCKING_ACCESS = frozenset({"private", "no"})
+
+
+class HighwayClass(IntEnum):
+    """The road classes a build keeps, stored per edge as `edge_highway` (uint8).
+
+    Each is the OSM `highway` value of the same name, lowercased, except `ALLEY`, which is
+    `highway=service` with `service=alley`.
+    """
+
+    MOTORWAY = 0
+    MOTORWAY_LINK = 1
+    TRUNK = 2
+    TRUNK_LINK = 3
+    PRIMARY = 4
+    PRIMARY_LINK = 5
+    SECONDARY = 6
+    SECONDARY_LINK = 7
+    TERTIARY = 8
+    TERTIARY_LINK = 9
+    UNCLASSIFIED = 10
+    RESIDENTIAL = 11
+    LIVING_STREET = 12
+    ALLEY = 13
+
+
+_T0 = frozenset(
+    {
+        HighwayClass.MOTORWAY,
+        HighwayClass.MOTORWAY_LINK,
+        HighwayClass.TRUNK,
+        HighwayClass.TRUNK_LINK,
+    }
+)
+_T1 = _T0 | {HighwayClass.PRIMARY, HighwayClass.PRIMARY_LINK}
+_T2 = _T1 | {HighwayClass.SECONDARY, HighwayClass.SECONDARY_LINK}
+_T3 = _T2 | {HighwayClass.TERTIARY, HighwayClass.TERTIARY_LINK}
+
+# The classes of tiers T0..T4; each tier contains the one before it, T4 is every class.
+TIERS: tuple[frozenset[HighwayClass], ...] = (_T0, _T1, _T2, _T3, frozenset(HighwayClass))

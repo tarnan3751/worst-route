@@ -1,0 +1,50 @@
+[
+  {
+    "addresstype": "shop",
+    "boundingbox": ["45.5225710", "45.5236620", "-122.6820310", "-122.6804790"],
+    "category": "shop",
+    "display_name": "Powell's City of Books, 1005, West Burnside Street, Pearl District, Portland, Multnomah County, Oregon, 97209, United States",
+    "importance": 0.3672818,
+    "lat": "45.5231165",
+    "licence": "Data © OpenStreetMap contributors, ODbL 1.0. http://osm.org/copyright",
+    "lon": "-122.6812548",
+    "name": "Powell's City of Books",
+    "osm_id": 1001,
+    "osm_type": "way",
+    "place_id": 1,
+    "place_rank": 30,
+    "type": "books"
+  },
+  {
+    "addresstype": "shop",
+    "boundingbox": ["45.5118120", "45.5122930", "-122.6211980", "-122.6203740"],
+    "category": "shop",
+    "display_name": "Powell's Books on Hawthorne, 3723, Southeast Hawthorne Boulevard, Richmond, Portland, Multnomah County, Oregon, 97214, United States",
+    "importance": 0.0000999,
+    "lat": "45.5120524",
+    "licence": "Data © OpenStreetMap contributors, ODbL 1.0. http://osm.org/copyright",
+    "lon": "-122.6207861",
+    "name": "Powell's Books on Hawthorne",
+    "osm_id": 1002,
+    "osm_type": "way",
+    "place_id": 2,
+    "place_rank": 30,
+    "type": "books"
+  },
+  {
+    "addresstype": "amenity",
+    "boundingbox": ["45.5228800", "45.5232800", "-122.6818500", "-122.6814500"],
+    "category": "amenity",
+    "display_name": "Powell's Coffee Room, West Burnside Street, Pearl District, Portland, Multnomah County, Oregon, 97209, United States",
+    "importance": 0.0000999,
+    "lat": "45.5230800",
+    "licence": "Data © OpenStreetMap contributors, ODbL 1.0. http://osm.org/copyright",
+    "lon": "-122.6816500",
+    "name": "Powell's Coffee Room",
+    "osm_id": 1003,
+    "osm_type": "node",
+    "place_id": 3,
+    "place_rank": 30,
+    "type": "cafe"
+  }
+]

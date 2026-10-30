@@ -17,6 +17,8 @@ else: every route it returns has passed the validator.
 | `sse.py` | `Event`, `path_points`, the payload builders, `server_sent` |
 | `store.py` | `RouteStore`, `StoredRoute`, `route_id` |
 
+The geocoding proxy's backend is the `geocode/` package (**Geocoding**).
+
 Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in requests; every number is metric
 (metres, seconds). There is no `/api` prefix: the frontend's dev server proxies to the root.
 
@@ -319,6 +321,80 @@ the row stored first is kept. A request that produces a route already stored (an
 lands on it, a rerun, a "make it worse" that accepts no splice) gets the existing id in its
 `done`, and that id's document is the first record's: its request, labels, departure, seed and
 run. `get` returns a `StoredRoute`, which the validator reads like a `Route`.
+
+## Geocoding
+
+The place search's backend (`docs/PLAN.md` §4.4): a place name to at most `GEOCODE_LIMIT` (5)
+points in the region, asked of Nominatim behind a cache and a rate limit, so that the browser
+never talks to Nominatim and the application keeps to its usage policy (at most one request a
+second for the whole application, no autocomplete, an identifying User-Agent, results cached).
+Code: `src/worst_route/geocode/`.
+
+| Module | What it holds |
+|---|---|
+| `base.py` | `Candidate` (`label`, `lat`, `lon`, `category`), the `Geocoder` protocol, `GeocodeError`, `GeocodeRefusedError`, `normalise` |
+| `nominatim.py` | `NominatimGeocoder`, `user_agent` |
+| `fake.py` | `FakeGeocoder`: fixed answers, no network, the queries it was asked (tests) |
+| `cache.py` | `GeocodeCache`, `key` |
+| `limiter.py` | `RateLimiter`, `RateLimited` |
+| `service.py` | `GeocodeService`, `Answer` |
+
+**A search** (`GeocodeService.search(region, bbox, query)`) normalises the query (casefolded,
+each run of whitespace one space, stripped) and answers from the cache when it holds it
+(nothing sent, no turn taken, paused or not). Else it is refused at once while the geocoder is
+paused (**The pause**), and otherwise queues for a turn of the rate limit. In its turn it reads
+the cache again, so a query queued behind the same one in flight is answered from the cache and
+leaves at once, taking no interval (three identical searches at once ask Nominatim once), and
+checks the pause again; then it asks the geocoder, keeps at most `GEOCODE_LIMIT` (5) of what
+comes back, and caches the answer, an empty one too, before its turn ends. A failure is never
+cached.
+
+**Nominatim** (`NominatimGeocoder`): one `GET <nominatim_url>/search` per query with
+`format=jsonv2`, `q` (the normalised query), `limit`, `countrycodes=us`,
+`viewbox=<lon_min>,<lat_min>,<lon_max>,<lat_max>` (the region's bbox), `bounded=1` and
+`addressdetails=0`, under `User-Agent: worst-route/<version> (<repo url>)` (`Settings.user_agent`),
+or `(<repo url>; <contact>)` with a contact (`WORST_ROUTE_CONTACT`), timing out after
+`GEOCODE_TIMEOUT_S` (10 s). jsonv2 answers a list of places: a candidate's `label` is its
+`display_name`, its `lat` and `lon` the place's (strings in jsonv2), its `category` jsonv2's
+`category` and `type` joined (`amenity/cafe`, `shop/books`). A place outside the bbox is dropped,
+though `bounded=1` should keep it out already. Nominatim's 429 or 403 (too many requests, or
+blocked) is a `GeocodeRefusedError`, which pauses the geocoder; any other error status, a
+timeout, a transport error or a body that is not a list of such places is a `GeocodeError`.
+Nothing is retried. The field names are Nominatim's documented ones, held to the example of its
+search documentation (`tests/fixtures/geocode/`).
+
+**The cache** (`GeocodeCache`): a sqlite file, `geocode.sqlite`, in WAL mode with a connection
+per call, one table:
+
+```
+queries(key TEXT PRIMARY KEY, created REAL, body TEXT)
+```
+
+The key is the sha256 of the region, its bbox's four numbers rounded to 4 decimals and the
+normalised query, one per line: `Powell's   BOOKS` and `powell's books` share a row, and a
+region rebuilt with another bbox asks again. `body` is the candidates as JSON and `created` the
+time it was stored (seconds since the epoch). An answer is kept `GEOCODE_CACHE_TTL_S` (30 days);
+an expired one is replaced on the next search for it.
+
+**The rate limit** (`RateLimiter`): requests go upstream one at a time, each in a caller's
+turn, which callers take in the order they came behind one `asyncio.Lock`, with at least one
+second (1 / `GEOCODE_RPS`) between the previous answer (or failure) coming back and the next
+request going: a caller in its turn sleeps until then, and once its request has answered the
+next one's time is set from that moment. So two requests reach Nominatim at least the interval
+plus the latency apart, whatever a new connection costs. A caller that finds `waiting` callers
+already queued (the turn's holder not counted) is refused at once (`RateLimited`), taking no
+place, when `waiting + 1` intervals exceed `GEOCODE_MAX_WAIT_S` (5 s), and told
+`ceil((waiting + 1) × interval − 5)` seconds (at least 1). The cap counts intervals, not
+latencies: the last caller let in waits about five seconds plus the answers ahead of it. Of a
+burst of ten distinct queries six go upstream (one at once, five queued) and four are refused
+at once. A caller that goes away while it is queued leaves the queue, and one whose turn ends
+without a request (the cache answered) takes no interval.
+
+**The pause**: when Nominatim refuses (429, too many requests; 403, blocked: the usage policy's
+signals), the service asks it nothing more for `GEOCODE_PAUSE_S` (60 s) from when the refusal
+came back. Meanwhile a search the cache cannot answer is refused at once, without queueing, as a
+`GeocodeError` "the geocoder refused; paused for N s" (N the whole seconds left; the refused
+search itself is answered the same, with 60). Like the rate limit, the pause is per process.
 
 ## Measured
 

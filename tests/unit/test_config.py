@@ -61,6 +61,14 @@ def test_user_agent_names_project_and_contact() -> None:
     assert settings().user_agent == "worst-route/0.1.0 (https://github.com/tarnan3751/worst-route)"
 
 
+def test_contact_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WORST_ROUTE_CONTACT", raising=False)
+    assert settings().contact is None
+    settings.cache_clear()
+    monkeypatch.setenv("WORST_ROUTE_CONTACT", "ops@example.org")
+    assert settings().contact == "ops@example.org"
+
+
 def test_highway_classes_are_the_kept_classes() -> None:
     # The format's class numbers and the pipeline's class strings name the same classes.
     assert {c.name.lower() for c in HighwayClass} == KEPT_HIGHWAY | {ALLEY_SERVICE}

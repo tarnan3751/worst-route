@@ -1,9 +1,10 @@
 """Settings and named regions.
 
 `Settings` holds what varies per machine, read from the environment: the data directory
-(`WORST_ROUTE_DATA`, default `./data`; `CLAUDE.md`, **Commands**) and the User-Agent sent to
-outside services. `settings()` returns one cached instance; tests that change the environment
-call `settings.cache_clear()`.
+(`WORST_ROUTE_DATA`, default `./data`; `CLAUDE.md`, **Commands**), the User-Agent sent to
+outside services, and the contact (`WORST_ROUTE_CONTACT`) the geocoder adds to it.
+`settings()` returns one cached instance; tests that change the environment call
+`settings.cache_clear()`.
 
 `REGIONS` names the areas the pipeline builds (`docs/PLAN.md` §2): each is a Geofabrik state
 extract, optionally clipped to a bbox, with the projected CRS its metric steps use. Speeds,
@@ -12,7 +13,8 @@ tier definitions, class allowlists and defaults join this module as their steps 
 `HighwayClass` numbers the road classes a build keeps (stored per edge as `edge_highway`) and
 `TIERS` lists each tier's classes (`docs/PLAN.md` §2.6). `DEFAULT_BACKEND` names the graph
 backend the engine searches with unless told otherwise. The `API_*` numbers are the API's job
-limits and streaming cadence (`docs/reference/api.md`).
+limits and streaming cadence (`docs/reference/api.md`); the `GEOCODE_*` numbers its geocoding
+proxy's rate, cache and limits.
 """
 
 import os
@@ -32,6 +34,7 @@ class Settings(BaseSettings):
 
     data_dir: Path = Field(default=Path("data"), validation_alias="WORST_ROUTE_DATA")
     user_agent: str = "worst-route/0.1.0 (https://github.com/tarnan3751/worst-route)"
+    contact: str | None = None  # WORST_ROUTE_CONTACT: added to the geocoder's User-Agent
 
 
 class Region(BaseModel):
@@ -306,3 +309,23 @@ API_COALESCE_S = 0.1
 API_SNAPSHOT_EVERY = 50
 API_SIMPLIFY_M = 1.0
 API_DEFAULT_MAX_ITERATIONS = 1_000_000
+
+
+# Geocoding (`docs/reference/api.md`, **Geocoding**; `docs/PLAN.md` §4.4). The proxy sends its
+# requests upstream one at a time, each at least 1 / GEOCODE_RPS seconds after the previous one's
+# answer came back, from the whole process, as Nominatim's usage policy asks; a search is refused
+# (RATE_LIMITED) when the queue it would join holds GEOCODE_MAX_WAIT_S of intervals already.
+# After Nominatim refuses (429 or 403) the proxy asks nothing for GEOCODE_PAUSE_S. Answers are
+# cached GEOCODE_CACHE_TTL_S, at most GEOCODE_LIMIT candidates each; an upstream request times
+# out after GEOCODE_TIMEOUT_S; a query is at most GEOCODE_MAX_QUERY_CHARS once normalised.
+# GeocoderName is the API's choice of geocoder ("none" turns the endpoint off), NOMINATIM_URL
+# the public instance's address.
+GeocoderName = Literal["nominatim", "none"]
+NOMINATIM_URL = "https://nominatim.openstreetmap.org"
+GEOCODE_RPS = 1.0
+GEOCODE_MAX_WAIT_S = 5.0
+GEOCODE_PAUSE_S = 60.0
+GEOCODE_CACHE_TTL_S = 30 * 86400.0
+GEOCODE_LIMIT = 5
+GEOCODE_TIMEOUT_S = 10.0
+GEOCODE_MAX_QUERY_CHARS = 200

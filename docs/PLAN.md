@@ -112,7 +112,7 @@ worst-route/
 │   ├── presentation/
 │   │   ├── directions.py  stats.py  comparisons.py  share_image.py  jokes.py
 │   ├── geocode/
-│   │   ├── base.py  nominatim.py  photon.py  cache.py
+│   │   ├── base.py  nominatim.py  cache.py  limiter.py  service.py  fake.py   # as built (M4); photon.py later
 │   └── api/
 │       ├── app.py  routes_api.py  schemas.py  jobs.py  worker.py  sse.py  store.py
 ├── frontend/                   # Vite + TS, see §5

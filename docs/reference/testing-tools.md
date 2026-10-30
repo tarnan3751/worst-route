@@ -5,9 +5,11 @@ in `CLAUDE.md`, **Agent workflow**; this file is the how-it-works.
 
 ## Tests
 
-What exists: `tests/conftest.py`, which documents the `data` marker; `tests/unit/`, with the
-config and CLI tests (typer's `CliRunner`); `tests/pipeline/`, with the pipeline step tests and a
-`conftest.py` whose autouse fixture fails any test that would reach the network and whose
+What exists: `tests/conftest.py`, which documents the `data` marker and whose autouse fixture
+makes httpx's real transports refuse every request, so a test whose mock went missing fails
+instead of reaching a server (`MockTransport` and `ASGITransport` are untouched); `tests/unit/`,
+with the config and CLI tests (typer's `CliRunner`); `tests/pipeline/`, with the pipeline step
+tests and a `conftest.py` whose autouse fixture also refuses `httpx.stream` and whose
 `data_dir` fixture points `WORST_ROUTE_DATA` at a temporary directory; `tests/graph/`, the graph
 package's tests, which build their graphs with `worst_route.graph.testing`
 (`docs/reference/graph.md`, **Test builders**) and check both backends against networkx and
@@ -16,7 +18,11 @@ builders in `tests/engine/graphs.py` and a `data_dir` fixture for the `plan` / `
 (`docs/reference/engine.md`, **Tests**); `tests/api/`, the API's tests, with lattice builds and
 helpers in `tests/api/support.py`, async tests on anyio's pytest plugin (`@pytest.mark.anyio`,
 which httpx's dependency anyio provides) and the app driven in-process over `httpx`
-(`docs/reference/api.md`, **Tests**); `tests/golden/`, the golden routes, frozen per build and
+(`docs/reference/api.md`, **Tests**); `tests/geocode/`, the geocoding proxy's tests, with
+`FakeGeocoder` or a `NominatimGeocoder` on an `httpx.MockTransport` answering the jsonv2 bodies
+under `tests/fixtures/geocode/` (`support.offline_clients` puts code that makes its own client on
+one too, so no test builds a real HTTP client), and a fake clock for the cache, the rate limit
+and the pause (`docs/reference/api.md`, **Geocoding**); `tests/golden/`, the golden routes, frozen per build and
 `graph_version` and rewritten only under a tier A brief; and `tests/fixtures/osm/`, hand-written
 OSM XML that pyosmium reads directly, with no conversion (`docs/reference/pipeline.md`,
 **Fixtures**). `tests/` and every test folder under it are packages (an empty `__init__.py`

@@ -1,9 +1,10 @@
 # Powell's Books → Reed College on Portland's latest build, read through WORST_ROUTE_DATA: on both
-# backends, then the slowest time and the turn constraints. Run on demand with
-# `uv run pytest -m data`; skipped when there is no build.
+# backends, then the slowest time and the turn constraints, and collecting each item. Run on
+# demand with `uv run pytest -m data`; skipped when there is no build.
 import pytest
 
 from worst_route.engine.constraints import Constraints
+from worst_route.engine.objectives.collect import ITEMS, CollectItem, count_items
 from worst_route.engine.plan import plan_route
 from worst_route.engine.request import RouteRequest
 from worst_route.engine.route import Route
@@ -93,3 +94,51 @@ def test_strict_no_left_refuses_powells_to_reed_in_one_line(portland: GraphData)
     message = str(refused.value)
     assert "\n" not in message and message.endswith("under the strict no-left constraint")
     assert refused.value.constraint == "no_left"
+
+
+@pytest.fixture(scope="module")
+def distance_items(portland: GraphData) -> dict[str, int]:
+    request = RouteRequest(stops=[POWELLS, REED], seed=1, max_iterations=4000, budget_s=120)
+    route = plan_route(portland, request, backend=CsrBackend(portland)).route
+    return count_items(portland, route.nodes, route.edges)
+
+
+@pytest.mark.parametrize("item", ITEMS)
+def test_collecting_passes_more_of_its_item_than_distance(
+    portland: GraphData, distance_items: dict[str, int], item: CollectItem
+) -> None:
+    # The same 4,000 attempts. Portland's two toll booths are on roads into parks that only
+    # those roads reach (cut edges), so no route passes one without a stop beyond it.
+    request = RouteRequest(
+        stops=[POWELLS, REED],
+        seed=1,
+        max_iterations=4000,
+        budget_s=120,
+        objective="collect",
+        item=item,
+    )
+    result = plan_route(portland, request, backend=CsrBackend(portland))
+    assert result.report.ok
+    collected = result.route.metrics.counters["items"]
+    assert collected == count_items(portland, result.route.nodes, result.route.edges)
+    if item == "toll_booth":
+        assert collected[item] == distance_items[item] == 0
+    else:
+        assert collected[item] > distance_items[item]
+
+
+def test_a_collecting_route_reaches_a_duration_target(portland: GraphData) -> None:
+    request = RouteRequest(
+        stops=[POWELLS, REED],
+        seed=1,
+        max_iterations=1_000_000,
+        budget_s=120,
+        objective="collect",
+        item="bridge",
+        target=Target(kind="duration", value=3 * 3600),
+    )
+    result = plan_route(portland, request, backend=CsrBackend(portland))
+    assert result.run.stopped_because == "target"
+    experienced = result.route.metrics.time_s + result.route.metrics.delay_s
+    assert 0.98 * 3 * 3600 <= experienced <= 1.02 * 3 * 3600
+    assert result.route.metrics.counters["items"]["bridge"] > 0

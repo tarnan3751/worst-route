@@ -13,6 +13,7 @@ export interface LineString {
 
 export type Tier = "auto" | "T0" | "T1" | "T2" | "T3" | "T4";
 export type Objective = "distance" | "time" | "collect" | "brand" | "alphabet";
+export type CollectItem = "toll_booth" | "level_crossing" | "roundabout" | "bridge";
 export type TargetKind = "max" | "ratio" | "duration";
 export type StopReason = "budget" | "converged" | "target" | "cancelled" | "timeout";
 export type JobState = "queued" | "running" | "done" | "error";
@@ -59,6 +60,7 @@ export interface RouteRequest {
   stops?: StopIn[] | null;
   objective?: Objective;
   constraints?: Constraints;
+  item?: CollectItem | null; // what `collect` collects; only with it
   tier?: Tier;
   leash_km?: number | "auto";
   budget_s?: number;
@@ -95,11 +97,22 @@ export interface JobCreated {
   seed: number;
 }
 
-/** A route's numbers while it grows; the objective's counters ride along. */
+/** How many of each collectible a route passes. */
+export interface ItemCounts {
+  toll_booth: number;
+  level_crossing: number;
+  roundabout: number;
+  bridge: number;
+}
+
+/** A route's numbers while it grows; the objective's counters ride along (a collecting route's
+ * `item` and `items`). */
 export interface Metrics {
   length_m: number;
   time_s: number;
   ratio: number | null;
+  item?: CollectItem;
+  items?: ItemCounts;
   [counter: string]: unknown;
 }
 
@@ -178,6 +191,7 @@ export interface DocumentMetrics {
   target?: TargetMetrics | null; // null for max
   delay_s?: number; // absent from servers older than the turn counts
   turns?: Turns;
+  items?: ItemCounts; // absent from servers older than the collectibles
 }
 
 export interface Run {

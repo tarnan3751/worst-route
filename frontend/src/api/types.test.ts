@@ -15,6 +15,7 @@ import type {
   ErrorBody,
   GeocodeCandidate,
   GeocodeResult,
+  ItemCounts,
   JobCreated,
   JobStatus,
   Leg,
@@ -116,8 +117,22 @@ const lineString = object<LineString>({ type: literal("LineString"), coordinates
 const tier = literal("auto", "T0", "T1", "T2", "T3", "T4");
 const stopReason = literal("budget", "converged", "target", "cancelled", "timeout");
 const errorBody = object<ErrorBody>({ code: "string", message: "string" }, "any");
+const collectItem = literal("toll_booth", "level_crossing", "roundabout", "bridge");
+const itemCounts = object<ItemCounts>({
+  toll_booth: "integer",
+  level_crossing: "integer",
+  roundabout: "integer",
+  bridge: "integer",
+});
+// A collecting route's item and counts; absent for every other objective.
 const metrics = object<Metrics>(
-  { length_m: "number", time_s: "number", ratio: nullable("number") },
+  {
+    length_m: "number",
+    time_s: "number",
+    ratio: nullable("number"),
+    item: optional(collectItem),
+    items: optional(itemCounts),
+  },
   nullable("number"),
 );
 const targetMetrics = object<TargetMetrics>({
@@ -132,7 +147,8 @@ const turns = object<Turns>({
   straight: "integer",
   u_turn: "integer",
 });
-// Optional: the max-mode recording predates the targets, both the delays and the turns.
+// Optional: the max-mode recording predates the targets, all of them the delays, the turns
+// and the item counts.
 const doneMetrics = object<DoneMetrics>(
   {
     length_m: "number",
@@ -142,6 +158,8 @@ const doneMetrics = object<DoneMetrics>(
     target: optional(nullable(targetMetrics)),
     delay_s: optional("number"),
     turns: optional(turns),
+    item: optional(collectItem),
+    items: optional(itemCounts),
   },
   nullable("number"),
 );
@@ -167,6 +185,7 @@ const routeRequest = object<RouteRequest>({
   stops: optional(nullable(array(stopIn))),
   objective: optional(literal("distance", "time", "collect", "brand", "alphabet")),
   constraints: optional(constraints),
+  item: optional(nullable(collectItem)),
   tier: optional(tier),
   leash_km: optional({ anyOf: ["number", literal("auto")] }),
   budget_s: optional("number"),
@@ -298,6 +317,7 @@ const routeDocument = object<RouteDocument>({
     target: optional(nullable(targetMetrics)),
     delay_s: optional("number"), // the recordings predate the delays and the turns
     turns: optional(turns),
+    items: optional(itemCounts),
   }),
   run: object<Run>({
     attempts: "integer",

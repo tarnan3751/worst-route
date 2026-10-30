@@ -32,7 +32,8 @@ worst-route serve --region R [--build-id ID] [--host 127.0.0.1] [--port 8000] [-
 ```
 
 It loads the region's build (`--build-id`, else the region's `latest`) before it listens, so a
-missing build is one line on stderr and exit 1. Then uvicorn serves one process. The jobs live
+missing build, or one saved before an array of the format existed (`docs/reference/graph.md`,
+**The build format**), is one line on stderr and exit 1. Then uvicorn serves one process. The jobs live
 in that process's memory, and each runs in a worker process of its own, `--workers` at once
 (default `API_MAX_JOBS`, cores − 2). The routes go to `--store`, by default
 `<WORST_ROUTE_DATA>/routes.sqlite`; a lane that reads the main tree's builds through
@@ -81,9 +82,12 @@ what the API and the presentation need:
 
 - `stops`: at least two, in order; the same point first and last makes a round trip. `label` is
   kept for the presentation.
-- `objective`: `distance` (the longest) or `time` (the slowest: driving time and the delays at
-  signals and stop signs; `docs/reference/engine.md`, **Objectives**); `collect`, `brand` and
-  `alphabet` are `NOT_YET`.
+- `objective`: `distance` (the longest), `time` (the slowest: driving time and the delays at
+  signals and stop signs) or `collect` (the most of one item, then the longest;
+  `docs/reference/engine.md`, **Objectives**); `brand` and `alphabet` are `NOT_YET`.
+- `item`: what `collect` collects, `toll_booth`, `level_crossing`, `roundabout` or `bridge`;
+  needed with `collect`, refused with any other objective (null or left out). `collect` takes
+  no ratio target: it counts items, not metres.
 - `constraints`: `{no_left, no_right, strict}`, all false by default (and left out of the
   engine's request then). `no_left` makes each left turn (and U-turn) cost the route a
   kilometre's worth of its score (1,000 m, or 90 s under `time`: `TURN_PENALTY_M`,
@@ -116,7 +120,7 @@ FastAPI's `detail`):
 
 | Status | Code | When |
 |---|---|---|
-| 422 | `INVALID_REQUEST` (+ `errors`, pydantic's without their `input`, and `field` when every error lies in one field of the body; or + `field`) | a body or field that does not parse (a seed beyond 2⁶³ − 1 included, `Infinity` or `NaN` for a number), an unknown objective, a target out of bounds, a ratio target for a round trip (`field: "target"`), both turn constraints or `strict` without one (`field: "constraints"`); a place search's query empty or over 200 characters once normalised (`field: "q"`) |
+| 422 | `INVALID_REQUEST` (+ `errors`, pydantic's without their `input`, and `field` when every error lies in one field of the body; or + `field`) | a body or field that does not parse (a seed beyond 2⁶³ − 1 included, `Infinity` or `NaN` for a number), an unknown objective, a target out of bounds, a ratio target for a round trip (`field: "target"`), `collect` without an item or an item for another objective, or an unknown item (`field: "item"`), a ratio target under `collect` (`field: "target"`), both turn constraints or `strict` without one (`field: "constraints"`); a place search's query empty or over 200 characters once normalised (`field: "q"`) |
 | 422 | `UNKNOWN_REGION` | a region this server does not serve |
 | 422 | `STOP_OUTSIDE_REGION` (+ `stop_index`) | outside the region's bbox: the build's `params.bbox`, else its nodes' extent |
 | 422 | `NO_NODE_NEAR` (+ `stop_index`, null when no single stop is to blame) | no node within 5 km can play the stop's role |
@@ -143,8 +147,8 @@ that did not start, or one that died without a result, partway through a message
 `WORKER_TIMEOUT` (still running `API_KILL_GRACE_S` after its budget, with no route yet).
 
 `POST /jobs` refuses before a job exists, in this order: the body (the target's bounds
-included), a ratio target for a round trip, the region, the objective, the budget, the job
-limit (429), the base route, each stop against the bbox, then the
+included), a ratio target for a round trip, the region, the objective (and whether its item and
+target fit it), the budget, the job limit (429), the base route, each stop against the bbox, then the
 **pre-flight** (`jobs.prepare`): the request's masks and `resolve_stops` (snapping and the
 re-snap fallback), in a worker thread, and for a base route `plan.check_base`. The worker repeats
 them, deterministically, so a request that passes the pre-flight is not refused for its stops
@@ -187,7 +191,8 @@ of the last splice applied; `elapsed_s` the wall time since it started.
  legs:       [{from_stop, to_stop, node_range: [a, b]}],
  metrics:    {length_m, baseline_length_m, ratio, time_s, baseline_time_s, baseline_delay_s,
               time_ratio, departure, arrival, target, delay_s,
-              turns: {left, right, straight, u_turn}},
+              turns: {left, right, straight, u_turn},
+              items: {toll_booth, level_crossing, roundabout, bridge}},
  run:        {attempts, accepted, stopped_because, elapsed_s, backend},
  validation: {ok: true, checked_at}}
 ```
@@ -203,6 +208,12 @@ ratio, of lengths or under `time` of experienced times, or its experienced time 
 driving and the delays; and whether that is within ±2 %), null for `max`; `delay_s` is the waiting at the route's signals and
 stop signs, and `turns` counts its turns by class (`docs/reference/engine.md`, **Turns**), both
 worked out from the build, so a route stored before they existed has them too;
+`items` counts the route's collectibles, whatever its objective (`docs/reference/engine.md`,
+**Objectives**: `count_items`), recounted on the stored route when the document is asked for,
+so a row of the current `graph_version` that lacks `items` in its stored metrics has them too;
+a route stored before the collectibles was planned on a build without `node_roundabouts`, at an
+older `graph_version`, so it answers `BUILD_UNAVAILABLE` (its build lacks the array, or is
+rebuilt at another version);
 `stopped_because` is `target` (within it),
 `budget`, `converged`, `cancelled` or `timeout`. The presentation's fields (directions, toasts, comparisons, fuel,
 states, towns) arrive with M4.
@@ -217,8 +228,8 @@ Each event has an `id`, counting up per job, an `event` name and a JSON `data`:
 | `snapped` | at the job's creation (from the pre-flight) | `{stops: [{input: {lat, lon}, label, node, lat, lon, moved_m, note}], tier, leash_km, active_nodes}` |
 | `baseline` | when the worker has built the route the loop starts from | `{length_m, time_s, geometry}` (null for a round trip) |
 | `snapshot` | right after `baseline` (iteration 0: the seed, or the base route), after every 50th `progress`, just before `done` when the stored route is not the one the splices drew (**Jobs**), and first on every (re)connect once the route exists | `{iteration, elapsed_s, node_count, stop_idx, geometry, node_index, metrics}` |
-| `progress` | at most every 0.1 s while splices are accepted | `{iteration, elapsed_s, score, metrics: {length_m, time_s, ratio}, splices: [{i, j, node_count, coords, node_index}]}` |
-| `done` | the route is stored (or was already: its existing id, **The store**) | `{route_id, stopped_because, metrics}`: the stored route's `{length_m, time_s, ratio, time_ratio, target, delay_s, turns: {left, right, straight, u_turn}}`, as in the document (`target` null for `max`) |
+| `progress` | at most every 0.1 s while splices are accepted | `{iteration, elapsed_s, score, metrics: {length_m, time_s, ratio, item, items}, splices: [{i, j, node_count, coords, node_index}]}`: `item` and `items` only for `collect` |
+| `done` | the route is stored (or was already: its existing id, **The store**) | `{route_id, stopped_because, metrics}`: the stored route's `{length_m, time_s, ratio, time_ratio, target, delay_s, turns: {left, right, straight, u_turn}, items: {toll_booth, level_crossing, roundabout, bridge}, item}`, as in the document (`target` null for `max`; `item` only for `collect`) |
 | `error` | the job ended without a route | `{code, message, ...}` |
 
 The stream ends after `done` or `error`. A browser's `EventSource` reconnects when a stream
@@ -523,7 +534,7 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 | `test_jobs.py` | the manager with inline workers: event order and ids, a client replay equal to the stored route, late subscribers (after a worker that died with splices waiting too: they come before its `error`, ids rising strictly), `Last-Event-ID` resync, cancel (validated, stored, reproduced by its attempts), the queue and its limit, cancel before the route exists, continuations, the time limit, orphans running and queued, a worker that raises, a store failure while cancelling (by hand and by the sweep, which goes on), a worker that does not start (the queue moves on), the TTL; a target run whose best is not its last route (an overshoot on a 5 × 5 lattice): a snapshot of the stored route before `done`, for live and late clients, and a cancel after the overshoot storing the closest route, reproduced by its attempts |
 | `test_worker_process.py` (`slow`) | real spawned workers: a run to `done`, a cancel mid-run, a worker killed from outside (`WORKER_FAILED`), a fake worker that dies 60 kB into a 2 MB message (`WORKER_FAILED`, then a clean `stop()`), and a worker whose API process (a probe) is killed exiting within 3 s; about 4 s |
 | `test_geocode_api.py` | `GET /geocode` with a `FakeGeocoder`: the answer's shape, at most five candidates, the cache across casing and spacing (one upstream call), each refusal (an empty, blank, missing or too long query; a missing or unknown region; `RATE_LIMITED` from a full queue with its `retry_after_s`, a cached query still answered; `GEOCODER_ERROR`; a 429 upstream, on an `httpx.MockTransport`, pausing the geocoder, the next search refused without a request; `GEOCODER_DISABLED`, with no cache file); the default service, its client on a `MockTransport` (`offline_clients`): Nominatim at its URL with the User-Agent and contact, the cache beside the store, the limits and the pause, its client closed by the lifespan. The other API tests serve with `geocoder="none"`, so they build no geocoder |
-| `test_routes_api.py` | every endpoint over `httpx.AsyncClient` in-process, every refusal code, cancel over HTTP, a closed stream cancelling its job, a stream that subscribes only once it runs, make it worse and its mismatches (a base outside its request's masks included), a continuation that changes nothing reporting the stored route; ratio and duration jobs ending `target` with the target in `done` and the document (none for max), a target out of bounds or a ratio for a round trip refused, make it worse with a smaller target shrinking; a stored route differing from the drawn one by a parallel edge sent as a snapshot before `done`, with `GET /jobs/{id}` agreeing; a ratio target for a round trip refused before anything else, for a base route too; `Infinity` and `NaN` in a body refused; a slowest-time job under a soft no-left constraint, its turns and delays in `done` and the document; a strict constraint refusing a base route that turns left, a soft one taking it; a leg a strict constraint cannot drive answered `INFEASIBLE_TURN_CONSTRAINT` with its leg and constraint, one no route covers without it either (two one-way rings) `STOP_UNREACHABLE_WITHOUT_REPEAT` with strict set too; a body cut short refused without a `field`; `strict` alone and both constraints refused on `field: "constraints"`; on a lattice with signals, the document's `time_ratio`, `done`'s, and `arrival` counting the delays, the route's and the baseline's, for a route stored before the documents carried `baseline_delay_s` too |
+| `test_routes_api.py` | every endpoint over `httpx.AsyncClient` in-process, every refusal code, cancel over HTTP, a closed stream cancelling its job, a stream that subscribes only once it runs, make it worse and its mismatches (a base outside its request's masks included), a continuation that changes nothing reporting the stored route; ratio and duration jobs ending `target` with the target in `done` and the document (none for max), a target out of bounds or a ratio for a round trip refused, make it worse with a smaller target shrinking; a stored route differing from the drawn one by a parallel edge sent as a snapshot before `done`, with `GET /jobs/{id}` agreeing; a ratio target for a round trip refused before anything else, for a base route too; `Infinity` and `NaN` in a body refused; a slowest-time job under a soft no-left constraint, its turns and delays in `done` and the document; a strict constraint refusing a base route that turns left, a soft one taking it; a leg a strict constraint cannot drive answered `INFEASIBLE_TURN_CONSTRAINT` with its leg and constraint, one no route covers without it either (two one-way rings) `STOP_UNREACHABLE_WITHOUT_REPEAT` with strict set too; a body cut short refused without a `field`; `strict` alone and both constraints refused on `field: "constraints"`; on a lattice with signals, the document's `time_ratio`, `done`'s, and `arrival` counting the delays, the route's and the baseline's, for a route stored before the documents carried `baseline_delay_s` too; a collect job counting its bridges in every `progress` and in `done`, the document's `items` agreeing (a distance job's too), and the item and target refusals naming their field |
 
 `tests/engine/test_plan.py` covers `plan_route`'s hooks, `tests/graph/test_loader.py` the loader,
 and `tests/unit/test_cli.py` `serve`'s errors, options (the geocoder's included, with the line

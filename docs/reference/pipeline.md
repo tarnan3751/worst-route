@@ -63,8 +63,16 @@ report beside it in `qa/`.
 
 - **Build id:** `--build-id` if given, else the first 12 hex digits of a sha256 over the JSON
   list `[md5 of the filtered roads file, region name, region bbox, region CRS (EPSG code),
-  PIPELINE_VERSION]` (`layout.build_id_for`). `PIPELINE_VERSION` is in `pipeline/__init__.py`;
-  bump it when a step's output changes for the same input.
+  PIPELINE_VERSION]` (`layout.build_id_for`). `PIPELINE_VERSION` is in `config.py` (the
+  `pipeline` package re-exports it, and `graph.store` reads it to name the remedy for another
+  version's build); bump it when a step's output changes for the same input. It is 2 since
+  M3, for two changes: `enrich`'s bearings leave out cleanup's stubs, and `save` writes
+  `node_roundabouts`. Every step's sidecar records it, so a region built at version 1 is
+  rebuilt from `filter` (which reads the raw extract again, no download) under a new build id,
+  and `latest` moves to it; a version 2 build saved before `node_roundabouts` existed is saved
+  again (`pipeline save --force`). Portland's build at version 2 is 506f747d7458, at the
+  `graph_version` ae1ce1e8289b; the main tree's e4b3b4ad90db (version 1) is rebuilt so after
+  this lands.
 - **Sidecar:** after `filter`, `build` or `cleanup` writes its output it records
   `{"step", "inputs": [{"file", "md5"}], "params"}` in `<output>.inputs.json` (filter: the
   bbox and the pipeline version; build: the region, bbox, CRS and pipeline version; cleanup:
@@ -520,6 +528,9 @@ build_dir)`. The arrays are `docs/reference/graph.md`'s; how they come from the 
 - **Twins** and **transitions**: the cleaned graph's tables, keys turned into ids, rows sorted.
 - **Tiers**: `tier_node_mask[t]` what `tiers` kept, `tier_edge_mask[t]` the tier's classes with
   both ends kept.
+- **Collectibles**: `node_roundabouts`, the `roundabouts` count of each super-junction's record
+  (the rings among its internal edges, so an interchange that holds a ring counts it), 0 at
+  every other node.
 
 A super-node whose transition table is empty allows no turn through it, which the format cannot
 say (a node without rows allows every turn): `graph_data` raises `EmptyTransitionsError`, naming
@@ -540,12 +551,16 @@ strings or the meta differ, and writes `stages/save.json` (`graph_version`, the 
 size, seconds). `save.remove_build` deletes a written build, `meta.json` first, for `--force`.
 
 **Portland** (2–4 s): 65,810 nodes, 168,167 edges, 3,353 twin pairs, 11,378 transition rows at
-657 super-junctions, 39.8 MB.
+657 super-junctions, 39.9 MB; 170 roundabout rings, at 165 roundabouts (one holds two) and 4
+interchanges.
 
 ## `qa`
 
 `qa.run_qa(build_dir) -> QaReport` reads the saved build, the stage reports and the
-super-junction records in `stages/enrich.pkl`, and writes under the build's `qa/`:
+super-junction records in `stages/enrich.pkl`, and writes under the build's `qa/` (a build
+without an array of the format is one line naming its remedy, the rebuild from `filter` for one
+another pipeline version wrote, and exit 1; a plain `save` refuses such a build with the same
+line):
 
 - `twins.geojson`: one feature per twin pair, a MultiLineString of the two edges, with their
   ids, classes, identities and lengths;

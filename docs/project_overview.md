@@ -1,9 +1,9 @@
 # Worst Route — project overview
 
-Last updated: 2026-10-30. Snapshot taken after the slowest time and the turn constraints
-landed: the plan is written; the project scaffolding, every pipeline step, the graph package,
-the engine, the API and the frontend are built; Portland has a saved build, and the M1
-acceptance run on it passes (§2.2): M1 is built, and M3's first two modes are.
+Last updated: 2026-10-30. Snapshot taken after the collect mode landed: the plan is written; the
+project scaffolding, every pipeline step, the graph package, the engine, the API and the
+frontend are built; Portland has a saved build, and the M1 acceptance run on it passes (§2.2):
+M1 is built, and M3's first three modes are.
 
 This file answers three questions: what the project is meant to become, how far along it is, and
 what has been decided. It is written for a human reader and for an AI agent picking up the
@@ -40,7 +40,7 @@ Claude: Python for the pipeline, engine, API and rendering; TypeScript + MapLibr
   heuristic that makes it worse under a pluggable objective, with a validator that proves the
   result legal. `docs/PLAN.md` §3. Built for M1 with the distance mode, and searched with the
   CSR + Numba backend since M2's first step; targets by ratio or duration since M2's fourth;
-  the other modes are later milestones.
+  the collect mode since M3; the other modes are later milestones.
 - **API and frontend** (In progress): FastAPI jobs with Server-Sent Events progress, a MapLibre map
   that shows the route getting worse live, settings, reroll, make it worse. `docs/PLAN.md` §4–5.
   The API and the frontend are built for the distance mode and its targets
@@ -48,8 +48,9 @@ Claude: Python for the pipeline, engine, API and rendering; TypeScript + MapLibr
 - **Modes** (In progress): longest distance, slowest time, never/only turn left, collect toll
   booths / rail crossings / roundabouts / bridges, brand pilgrimage, alphabet route, hard mode.
   Built: longest distance, slowest time, and never turn left / right as constraints on either
-  (soft: each such turn costs a kilometre; strict: none), with targets by ratio or duration;
-  the frontend offers the distance mode only so far.
+  (soft: each such turn costs a kilometre; strict: none), with targets by ratio or duration, and
+  collecting toll booths, level crossings, roundabouts or bridges (targets by duration); the
+  frontend offers the distance mode only so far.
 - **Presentation** (Planned): directions, stat toasts, comparisons, states and towns, share image.
 - **Scale** (Planned): Portland → Oregon → national at a tier to be decided at M5.
 
@@ -119,6 +120,13 @@ classed by their change of bearing and counted in every route's metrics; `--no-l
 `--no-right` (the API's `constraints`) make each such turn cost a kilometre of score, and
 `--strict` allows none, refused in every search including the Numba kernels', which take a set of
 banned turn classes. Two more golden routes freeze the slowest time and soft no-left.
+The collect mode is built (M3 step 3): `objective: "collect"` with an `item` (toll booths,
+level crossings, roundabouts or bridges) passes as many of it as it can, then drives as far,
+through `plan --objective collect --item …` and the API, and every route file and route
+document counts all four items; the build keeps each super-junction's roundabout rings
+(`node_roundabouts`). On Portland, Powell's → Reed passes 24–30 bridges against the distance
+route's 16–17, and Portland's two toll booths, on roads into parks, can be passed only with a
+stop beyond them. A sixth golden route freezes a run collecting bridges.
 The API is built (`docs/reference/api.md`, M2 step 2): `worst-route serve` runs a FastAPI app
 that plans each request as a job in a worker process of its own, streams the route as it grows
 over Server-Sent Events (splices, periodic snapshots, resumable with `Last-Event-ID`), stores
@@ -155,7 +163,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 |---|---|---|
 | M1 — Portland, distance mode, CLI | Built | bootstrap, every pipeline step (download to qa; Portland's build passes QA), the graph package and the engine (snapping, seed route, transition-aware searches, splice loop, distance objective, validator, `worst-route plan` / `validate`). The acceptance run (`docs/PLAN.md` §7 M1 step 9; `uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` on build e4b3b4ad90db, `graph_version` 45f650e868fa, the reference backend: 20 random Portland pairs 3–15 km apart): all 20 plan and the validator passes all 20; the median ratio is 21.5× (3.3–45.2×); seeds 1 and 2 share 10–16% of their edges (Jaccard on 5 pairs, all < 0.3); the cul-de-sac via moves 86 m to the nearest through street with its note. Powell's → Reed gives 58–62×, PDX → Beaverton 7.3× (`docs/reference/engine.md`, **On Portland**) |
 | M2 — API + map, live growth | In progress | CSR + Numba backend built, its transition-aware kernels included (the default on every build; byte-identical to the reference: on Portland the acceptance's 20 routes and Powell's → Reed reproduce exactly, at 7,200–8,200 attempts/s); the API built (jobs in worker processes, SSE progress, the route store, make it worse, `worst-route serve`); targets by ratio and duration built (engine, CLI `--target`/`--base`, API), a 13-minute Portland drive to 9 h within ±2 % in 1.8 s over the API; the MapLibre frontend built (stops by click, the route growing live, run controls, settings with the targets, links); remaining: the acceptance |
-| M3 — Modes and constraints | In progress | built: the turn classes, never turn left / right (soft by default, `strict` for none; engine, CLI, API), the kernels refusing banned turn classes, slowest time (engine, CLI, API); on Portland strict no-left plans 4 of the 20 acceptance pairs and soft no-left 20 at a median of 5.33× (§2.3; on a build re-enriched at pipeline version 2, whose bearings describe the roads, not cleanup's stubs); the search honouring stage B transitions was built at M1. Remaining: collectibles; brands; hard mode; alphabet search; the frontend's controls for the new modes; the acceptance |
+| M3 — Modes and constraints | In progress | built: the turn classes, never turn left / right (soft by default, `strict` for none; engine, CLI, API), the kernels refusing banned turn classes, slowest time (engine, CLI, API), collectibles (the collect objective for toll booths, level crossings, roundabouts and bridges in the engine, `plan --objective collect --item` and the API; `node_roundabouts` in the build; on Portland 24–30 bridges where the distance route passes 16–17); on Portland strict no-left plans 4 of the 20 acceptance pairs and soft no-left 20 at a median of 5.33× (§2.3; on a build re-enriched at pipeline version 2, whose bearings describe the roads, not cleanup's stubs); the search honouring stage B transitions was built at M1. Remaining: brands; hard mode; alphabet search; the frontend's controls for the new modes; the acceptance |
 | M4 — Presentation | In progress | directions, stats, toasts, comparisons, share image, geocoding proxy, share links; built: the geocoding proxy (`GET /geocode`, Nominatim behind a cache and 1 request/s) and the place search in the stop list |
 | M5 — Scaling up | Planned | Oregon; array-based simplify/consolidate; US at T1; the national decision gate; public-hosting prep |
 | M6 — Stretch | Planned | certified worst (CP-SAT), turn restrictions, stop reordering, portfolio runs |
@@ -203,6 +211,15 @@ The risks the plan anticipates are `docs/PLAN.md` §8.3. Found on the Portland b
   by the coordinator at M3's review; letting a shrinking splice add an avoided turn when the
   route's density of them does not rise is a later option (`docs/reference/engine.md`,
   **Constraints**, **Limitations**, **On Portland**).
+- **Collecting is bounded by the area and by the no-repeat rule**: a collect run draws its
+  waypoints from the item's places in the request's area, so a route collects nothing it cannot
+  reach within the leash (Powell's → Reed's leash of 3.6 km holds 45 rings, 144 bridge roads and
+  no toll booth); an item on a dead-end road or one behind a cut edge cannot be passed without a
+  stop beyond it (Portland's two toll booths, on roads into Barton Park and Meldrum Bar Park,
+  stay out of reach even with a 30 km leash, where waypoints drawn at them hold the run to
+  129.96× against distance's 176.93× over 30,000 attempts). Where an item is common, a long
+  distance route can pass about as many by chance (level crossings, seed 2: 45 collecting
+  against 52).
 - **A possible stage B over-restriction**: the I-84 / NE Halsey super-junction (node 65437 of
   the 2026-10-30 Portland build) forbids NE 42nd Ave → NE Sandy Blvd, a turn that looks
   drivable; to investigate in the next cleanup fold.
@@ -368,6 +385,26 @@ brief):
   `9h`, `90m`, `2h30m` or minutes) are sent as the request's target and shown with what was
   achieved, within ±2 %; the URL carries `target=max|ratio:<x>|duration:<seconds>`; the
   max-mode recording is kept and a smaller ratio-target recording added.
+- **Collect as built for M3** (2026-10-30, at its brief): one `Collect` objective, `objective:
+  "collect"` with `item` ∈ toll_booth, level_crossing, roundabout, bridge, scoring items × 10⁶ +
+  length in its own terms (toll booths and crossings as edge terms, roundabouts as node terms from
+  the new `node_roundabouts` array, bridges by runs as pair terms and a new `first_edge_term`
+  hook); a ratio target is refused under it, a duration compares the experienced time; waypoints from the
+  uncollected items' places in the request's area, any node once none is left; the first radius
+  half the baseline within [2 km, r_max]; the metrics' counters `{item, items}` and every route
+  file and route document's `metrics.items` (all four, whatever the mode); `plan
+  --objective/--item` (taken from the file with `--base`) and the API's `item`. `node_roundabouts`
+  is appended to the format, so every `graph_version` changes and a build made before it is made
+  again (from `filter` at pipeline version 1, by `pipeline save --force` at version 2); the golden
+  routes keep their routes, with the new version and the request's null `item`. At the review
+  (same day): a waypoint ball holding none of an objective's pool draws from all its nodes (the
+  toll-booth run under a 30 km leash had starved at 49.8×); a bridge run through a round trip's
+  start counts once (`first_edge_term(e, closing)`); the validator recounts reported `items`,
+  which a saved route's file carries; `PIPELINE_VERSION` 2 (moved to `config`) names both M3
+  changes, the bearings without stubs and the new array, and a build without one of the format's
+  arrays reads as one line naming its remedy (the rebuild from `filter` for another pipeline
+  version's build, else `pipeline save --force`), which a plain `save` gives too; `plan` refuses
+  an unknown objective before its item.
 - **Share image rendered from our own data** (route, faint network, Census outlines), no
   third-party basemap.
 - **Towns from the Census Gazetteer** with an area-equivalent radius; states from Census

@@ -6,7 +6,8 @@ the test. Every backend must reproduce it, byte for byte. Two more freeze target
 same stops and seed (a ratio and a duration target, each stopping within it), and two more the
 modes, with the same seed: the slowest time from the same stops on the lattice with a primary
 road every fourth row and column (signals where two cross, stop signs along them), and the
-distance with a soft no-left constraint between inner nodes. A golden file
+distance with a soft no-left constraint between inner nodes; and one a run collecting bridges
+on the lattice with a few roads made bridges. A golden file
 changes only under a tier A brief that says so; to rewrite one, run
 `WORST_ROUTE_REGEN_GOLDEN=1 uv run pytest tests/golden` and commit the file.
 """
@@ -24,7 +25,7 @@ from worst_route.engine.request import RouteRequest
 from worst_route.engine.target import Target
 from worst_route.engine.turns import count_turns
 from worst_route.graph.csr_backend import CsrBackend
-from worst_route.graph.data import GraphData
+from worst_route.graph.data import EdgeFlag, GraphData
 from worst_route.graph.python_backend import PythonBackend
 
 from ..engine.graphs import at_node, lattice
@@ -39,6 +40,12 @@ TARGETS = {
 MODES: dict[str, tuple[dict[str, Any], tuple[int, ...], int]] = {
     "grid20_time.json": ({"objective": "time"}, (0, 210, 399), 4),
     "grid20_noleft.json": ({"constraints": {"no_left": True}}, (42, 210, 357), 0),
+}
+# The collect run's lattice: thirteen of its roads are bridges, nine east-west and four north-south.
+BRIDGES = {
+    (a, b): {"flags": EdgeFlag.BRIDGE}
+    for a, b in [(r * 20 + c, r * 20 + c + 1) for r in (4, 9, 14) for c in (3, 9, 15)]
+    + [(r * 20 + c, (r + 1) * 20 + c) for r in (6, 12) for c in (6, 13)]
 }
 Backend = type[PythonBackend] | type[CsrBackend]
 
@@ -79,6 +86,24 @@ def test_grid_mode_route_is_golden(backend_type: Backend, name: str) -> None:
     actual["delay_s"] = result.route.metrics.delay_s
     actual["turns"] = count_turns(g, result.route.edges)
     compare(Path(__file__).with_name(name), actual)
+
+
+@pytest.mark.parametrize("backend_type", [PythonBackend, CsrBackend], ids=["python", "csr"])
+def test_grid_collect_route_is_golden(backend_type: Backend) -> None:
+    g = lattice(20, 20, rounded_lonlat=True, roads=BRIDGES)
+    stops = [at_node(g, v) for v in (0, 210, 399)]
+    request = RouteRequest(
+        stops=stops,
+        seed=7,
+        max_iterations=400,
+        budget_s=120,
+        objective="collect",
+        item="bridge",
+    )
+    result = plan_route(g, request, backend=backend_type(g), check_delta=True)
+    actual = golden_of(g, request, result)
+    actual["items"] = result.route.metrics.counters["items"]
+    compare(Path(__file__).with_name("grid20_collect_bridge.json"), actual)
 
 
 def golden_of(g: GraphData, request: RouteRequest, result: PlanResult) -> dict[str, Any]:

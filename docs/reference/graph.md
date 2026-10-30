@@ -59,6 +59,7 @@ lists the arrays in a fixed order, the order of the fields, the files and the ha
 | twins | `twin_indptr`, `twin_edges` | i64[m+1], i32[] | using an edge bans every edge in its row; symmetric, rows strictly ascending, never itself |
 | transitions | `trans_node`, `trans_in`, `trans_out` | i32[k] each | allowed (in, out) pairs at a node, sorted by (node, in, out), no duplicates; a node with no rows allows every pair |
 | tiers | `tier_node_mask`, `tier_edge_mask` | bool[T, n], bool[T, m] | tier membership (the pipeline's after per-tier SCC) |
+| collectibles | `node_roundabouts` | u8[n] | the roundabout rings a super-junction holds (a roundabout's one, sometimes two; an interchange that holds a ring counts it), 0 at every other node; the collect mode's roundabouts (`docs/reference/engine.md`, **Objectives**). Added after the first builds (with `PIPELINE_VERSION` 2): a build saved before it lacks the file and is made again (**The build format**) |
 
 A node with no transition rows allows every pair, so an empty table cannot be written: cleanup
 keeps a super-junction whose table is empty (no pair allowed), and `save` refuses a build that has
@@ -80,8 +81,9 @@ what costs nothing to read: every array present as a NumPy array of its dtype an
 meta keys, `counts` against n and m, and `params` surviving a JSON round trip unchanged. The
 default also checks contents: the indptr runs (from 0 to the values' length, each at least its
 minimum above), id and enum ranges, `member_osm_ids` unique, edges sorted by (u, v), both
-adjacency lists exactly as defined, twins and transitions as above, and a transition's edges
-meeting at its node.
+adjacency lists exactly as defined, twins and transitions as above, a transition's edges
+meeting at its node, and roundabout rings counted at super-junctions (interchanges and
+roundabouts) only.
 
 ## The build format
 
@@ -109,7 +111,19 @@ arrays/<name>.npy    one file per array of ARRAY_SPECS, written by np.save witho
   `np.load(mmap_mode="r", allow_pickle=False)`: worker processes share one copy through the OS
   page cache, and loading costs nearly nothing. `mmap=False` loads read-only copies. It runs
   `validate(deep=False)` only: a deep validation or a re-hash would read every page of the
-  build in every worker.
+  build in every worker. A build without one of the arrays raises `MissingArray` (a
+  `FileNotFoundError`), one line naming the remedy for the build's state (`store.outdated`):
+  for a build another pipeline version wrote (its `meta.pipeline_version` is not
+  `PIPELINE_VERSION`), the rebuild ("the build at PATH was written by pipeline 1 (now 2):
+  rebuild the region with `worst-route pipeline filter --region R` and the steps after it"),
+  which gives the build a new id; for this version's build, the array and the save that writes
+  it again ("the build at PATH lacks the array node_roundabouts: rebuild it with `worst-route
+  pipeline save --force --region R`"). `plan`, `validate`, `serve`, `pipeline qa` and the
+  acceptance tool print it and exit 1, and a plain `pipeline save` refuses another version's
+  build with the same rebuild line. `PIPELINE_VERSION` 2 (M3) covers the bearings without
+  cleanup's stubs and `node_roundabouts`, so a build made at version 1 is rebuilt from `filter`,
+  and one made at version 2 before `node_roundabouts` existed is saved again
+  (`docs/reference/pipeline.md`, **Build ids, sidecars, skipping**).
 - `.npy` per array, not `.npz` or Parquet: NumPy memory-maps `.npy` files only (`.npz`
   members are read whole). Parquet exports for DuckDB or QGIS are a `qa` convenience for later.
 
@@ -363,7 +377,8 @@ workers share the OS page cache), its `SpatialIndex`, and `make_backend(data, ba
 an old build under that name. The two builds used last stay loaded (`lru_cache(maxsize=2)` keyed
 by data directory, region, build id and backend: the region the API serves, and one other a
 stored route was planned on). A missing `latest` or `meta.json` raises `BuildNotFound` (a
-`FileNotFoundError`) naming the step to run; `make_backend`'s `ImportError` for `csr` without
+`FileNotFoundError`) naming the step to run, and so does a build missing an array, with
+`MissingArray`'s line; `make_backend`'s `ImportError` for `csr` without
 numba passes through. On Portland a load takes about 0.35 s in a fresh process, mostly imports.
 The CLI's `plan` and `validate` keep their own loading, with its one-line errors.
 
@@ -426,8 +441,9 @@ hand; nothing outside tests uses it.
   `*_LINK` classes; identity = ref, else name (not normalised); unit = the edge id; bearings
   from the coordinates (in = out); one member per node with OSM id = node index + 1; one way
   per edge with id = input position + 1; geometry the two endpoints; pass-through from the
-  topology; state −1, kind plain, no delay; tier masks: edges of tier ≤ t and their endpoints
-  (no SCC); meta region and build id `"test"`, a fixed `created`, and `graph_version` computed.
+  topology; state −1, kind plain, no delay, no roundabout rings; tier masks: edges of tier ≤ t
+  and their endpoints (no SCC); meta region and build id `"test"`, a fixed `created`, and
+  `graph_version` computed.
   The result is validated and read-only.
 - `grid_graph(rows, cols, spacing_m, *, oneway_rows="", oneway_cols="") -> GraphData`: a
   lattice of residential streets at `GRID_ORIGIN` (UTM 10N, near downtown Portland); node
@@ -439,11 +455,13 @@ hand; nothing outside tests uses it.
 
 ## Tests
 
-`tests/graph/`: `test_data.py` (every malformation `validate` rejects), `test_testing.py` (the
-builders), `test_store.py` (round trips, the version and its pin, refusals), `test_backends.py`,
+`tests/graph/`: `test_data.py` (every malformation `validate` rejects, rings at a plain node
+among them), `test_testing.py` (the builders), `test_store.py` (round trips, the version and its
+pin, refusals), `test_backends.py`,
 `test_edge_search.py`, `test_spatial.py` (snapping roles, masks, `exclude` and notes; leash and
 bubble masks; the masked balls against `bubble_mask`, radii on lattice nodes included), and
-`test_loader.py` (`latest`, the two builds kept, memory-mapped arrays, missing builds).
+`test_loader.py` (`latest`, the two builds kept, memory-mapped arrays, missing builds, a build
+missing an array).
 
 `test_backends.py` runs the reference's tests on both backends through the `backend_type`
 fixture:

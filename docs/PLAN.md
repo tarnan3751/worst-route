@@ -222,7 +222,7 @@ Built for M1 without brands, states and places (M3, M4); how it works and Portla
 - **Identity (hard mode):** `identity_id` per edge: normalized ref set if present (`"I 5"`, `"I-5"`, `"Interstate 5"` → `I 5`; `"US 26;OR 8"` → both refs, identity = the first after sorting by class I > US > state (a state's postal code or `SR`) > other, alphabetically within a class; a `Business`/`Spur`/`Alt` suffix stays on its ref, so such a route never takes its mainline's identity), else normalized name (case-folded, abbreviations expanded: `St→Street`, `NE→Northeast`, directional suffixes kept). Dictionary of identities saved with the build.
 - **Twin units:** `unit_id` groups the forward/backward edges of a two-way road (the edges whose original node lists run opposite ways; the unit's id is the smaller edge id; implied by node-simplicity, except in a two-edge round trip out along a road and back, which `Route.splice` and the validator refuse by unit); the twins table from §2.4e stays a table of its own.
 - **Bearings:** `bearing_out` over the first 20 m of the geometry (leaving u) and `bearing_in` over the last 20 m (arriving at v), as §3.6's turn rule reads them. As built in M3, the geometry less the stubs cleanup added to reach a merged node, so that a turn there is the road's (`docs/reference/pipeline.md`, enrich).
-- **Collectibles:** toll booths and level crossings are nodes on ways; map each to the simplified edges whose original node list contains it (both directions of a two-way road; a route uses one) → `toll_booth_n`, `level_crossing_n` per edge; one at a junction counts on the node's lowest-id out-edge until node collectibles (M3). `bridge=yes` per edge. Roundabout → super-node flag. Stop signs/signals → node delay.
+- **Collectibles:** toll booths and level crossings are nodes on ways; map each to the simplified edges whose original node list contains it (both directions of a two-way road; a route uses one) → `toll_booth_n`, `level_crossing_n` per edge; one at a junction counts on the node's lowest-id out-edge until node collectibles (M3). `bridge=yes` per edge. Roundabout → super-node flag; as built, `save` keeps each super-junction's count of rings as `node_roundabouts`, so an interchange that holds a ring counts it. Stop signs/signals → node delay.
 - **Brands:** POIs with `brand` or `brand:wikidata`; snap each to the nearest kept edge within 50 m (STRtree nearest on edge geometries). Table `pois(brand_key, wikidata, name, lon, lat, edge_id, offset_m)`; `brand_key` = `brand:wikidata` when present else normalized brand name. Index by brand for the `/brands` autocomplete.
 - **States:** Census cartographic boundary file `cb_2024_us_state_500k` → `state_fips` per node (STRtree `contains` on node points).
 - **Places:** Census Gazetteer `2024_Gaz_place_national.txt` (GEOID, NAME, LSAD, ALAND, INTPTLAT/INTPTLONG). Store as a table with `radius_m = clamp(sqrt(ALAND/π), 400 m, 12 km)`. "Passed through" is evaluated at request time (§3.9).
@@ -252,7 +252,8 @@ data/graphs/<region>/<build_id>/
   strings.json       names, refs, identities: the tables edge_name / edge_ref / edge_identity index into
   arrays/<name>.npy  one file per array:
     nodes            node_lon/lat/x/y, node_kind (plain|cluster|interchange|roundabout), node_state (FIPS),
-                     node_pass_through, node_delay_s; member_indptr + member_osm_ids (original OSM node ids per node)
+                     node_pass_through, node_delay_s; member_indptr + member_osm_ids (original OSM node ids per node);
+                     node_roundabouts (the rings each super-junction holds; last in the array order, added in M3)
     edges            edge_u/v (int32), length_m, speed_kmh, time_s (float32), highway (enum), tier, name, ref,
                      identity, unit, flags (bridge, tunnel, toll, roundabout, link), toll_booths, level_crossings,
                      bearing_in/out (int16 degrees); way_indptr + way_osm_ids
@@ -416,6 +417,7 @@ class Objective(Protocol):
     def edge_terms(self, G) -> np.ndarray | None: ...      # e.g. length, time, toll_booth_n, brand POI count
     # consecutive-edge term and feasibility (turn direction, bridge-run counting)
     def pair_term(self, G, e_in: int, e_out: int) -> float: ...
+    def first_edge_term(self, G, e: int, closing: int) -> float: ... # as built (M3): the first edge's pair term, after no edge (a bridge at the start); closing = a round trip's last edge, else -1
     def feasible_pair(self, G, e_in: int, e_out: int) -> bool: ...
     # anything non-additive; evaluated on the whole route
     def global_term(self, G, nodes, edges) -> float: ...           # the route's arrays, so a candidate is scored before it is spliced
@@ -429,7 +431,7 @@ class Objective(Protocol):
     def target_value(self, G, route) -> float: ...                  # the quantity the target modes compare
     def describe(self, G, route) -> dict: ...                       # mode-specific numbers for toasts
 
-score(route) = Σ node_terms[v] + Σ edge_terms[e] + Σ pair_term(e_k, e_k+1) + global_term(nodes, edges)
+score(route) = Σ node_terms[v] + Σ edge_terms[e] + Σ pair_term(e_k, e_k+1) + first_edge_term(e_0, closing) + global_term(nodes, edges)
 ```
 
 `Objective.delta(route, i, j, detour)` is implemented once in the base class: it sums node/edge terms over the removed run and the detour, re-evaluates the pair terms at the two boundaries plus inside the detour, and calls `global_term` on the candidate only if the objective declares `has_global = True`. `Composite(primary, secondary)` implements lexicographic objectives as `primary × 10⁹ + secondary` (lengths are < 10⁷ m, so no overflow in float64).
@@ -451,6 +453,8 @@ Normalisation of refs for identities: strip spaces/hyphens, uppercase, map `INTE
 | **Collect: toll booths, rail crossings** | `edge_terms = count on edge`, Composite with length | waypoint pool = edges with uncollected items; `initial_radius` larger | Yes. Items on an edge are counted once because an edge is used once. |
 | **Collect: bridges** | `pair_term = 1` when `e_out.bridge and not e_in.bridge` (counts bridge *runs*, so a bridge split by a junction counts once) | waypoint pool = bridge edges | Yes |
 | **Collect: roundabouts** | `node_terms = 1` on roundabout super-nodes | waypoint pool = roundabout nodes | Yes, **only because** roundabouts are super-nodes (§2.4d). Without that, the route could use two different arcs of the same ring. |
+
+**Collect as built** (M3; `docs/reference/engine.md`, **Objectives**): one `Collect` objective (`objective: "collect"` with `item` ∈ `toll_booth | level_crossing | roundabout | bridge`) whose score is items × 10⁶ (`COLLECT_ITEM_WEIGHT`) + length, items first, in its own terms rather than a `Composite`: edge terms count × 10⁶ + length for toll booths and level crossings; node terms rings × 10⁶ for roundabouts, from `node_roundabouts` (§2.7), so an interchange holding a ring counts it; for bridges the pair term above × 10⁶ and a `first_edge_term` hook for a route that starts on a bridge (a run through a round trip's start counts once). The waypoint pool is the nodes of the items the route has not collected within the request's active area (the ends of the edges holding one, the super-junctions holding a ring), less the route's nodes, recomputed per accepted splice; once none is left, any node, and a waypoint ball holding none of it draws from all its nodes. The first radius is half the baseline within [2 km, r_max]. A ratio target is refused under `collect` (it counts items, not metres); a duration target compares the experienced time (driving and delays). Every route file and route document counts all four items (`metrics.items`), whatever the mode. On Portland, Powell's → Reed (seeds 1–3), the converged bridge runs pass 24–30 bridges where the distance routes pass 16–17; Portland's two toll booths lie on roads into parks that only those roads reach, so no route passes one without a stop beyond it.
 | **Brand pilgrimage** | `edge_terms = POI count for brand_key on edge`, Composite with length | waypoint pool = POI edges | Yes. "Pass" = drive the edge the POI is snapped to (≤ 50 m). |
 | **Hard mode** (constraint, any objective) | `banned_edges` = every edge whose `identity_id` is already in the route, except identities of `edges[i−1]` and `edges[j]` (so a stretch can be extended at the splice boundary); `feasible_window` recounts stretches in the changed window and rejects if any identity has > 1 maximal run | — | Yes, with the window check. Base rule (twins) is a special case of this with identity = carriageway pair. |
 | **Alphabet route** | letters completed, then length | — | **No.** See §3.8. |
@@ -577,7 +581,7 @@ The engine's `RouteRequest` field for field, under the engine's names (the stops
 }
 ```
 
-- `objective` ∈ `distance | time | collect | brand | alphabet`; `distance` and `time` are built (the others are `NOT_YET`). `constraints: {no_left, no_right, strict}` adds the turn constraints (M3, `docs/reference/api.md`). M3 adds the collect item and the brand key.
+- `objective` ∈ `distance | time | collect | brand | alphabet`; `distance`, `time` and `collect` are built (the others are `NOT_YET`). `item` ∈ `toll_booth | level_crossing | roundabout | bridge` goes with `collect` and only with it (built in M3; `collect` takes no ratio target). `constraints: {no_left, no_right, strict}` adds the turn constraints (M3, `docs/reference/api.md`). M3 adds the brand key.
 - `target.kind` ∈ `max | ratio | duration` with `"value": 50` (×) or `"seconds": 32400`, reached within ±2 %; built in M2 step 4 (`docs/reference/api.md`).
 - `tier` ∈ `auto | T0..T4`; `leash_km` ∈ `auto | number` (at most 150); `budget_s` at most 120; `max_iterations` defaults to 1,000,000 here, so the seconds budget ends a run (the CLI keeps 5,000).
 - `base_route_id` set → "Make it worse": the job starts from that route (its stops, tier and leash, which the request may leave out; the objective, target, budget and seed may differ). `seed` omitted → random, returned in the response.
@@ -788,7 +792,7 @@ Deliverable: `worst-route plan --region portland --from 45.5231,-122.6765 --to 4
 
 1. Edge-state Dijkstra kernel (turn-aware; the reference backend's Python search and the engine's use of it moved to M1, the Numba kernel to M2 step 1); `feasible_pair`; never-left / never-right constraints; infeasibility reporting. Built (`docs/reference/engine.md`, **Turns**, **Constraints**): turn classes, `no_left` / `no_right` soft (each such turn costs a kilometre) and strict (none, refused in the searches and by the validator; an unreachable stop says so), from `plan --no-left|--no-right [--strict]` and the API's `constraints`.
 2. Slowest-time objective with node delays. Built (`docs/reference/engine.md`, **Objectives**): `plan --objective time` and the API's `objective: "time"`; on Portland, Powell's → Reed reaches 52.18× the baseline's experienced time (67.55× its driving time), and a 9 h duration in 1,575 attempts.
-3. Collectibles pipeline (toll booths, crossings, bridges, roundabout super-nodes) + collect objectives with waypoint pools.
+3. Collectibles pipeline (toll booths, crossings, bridges, roundabout super-nodes) + collect objectives with waypoint pools. Built (§3.7, **Collect as built**).
 4. Brand index + pilgrimage objective + `/brands`.
 5. Hard mode (identity bans + window stretch check). (The search honouring the stage B transition tables moved to M1.)
 6. Alphabet mode via constructive search.

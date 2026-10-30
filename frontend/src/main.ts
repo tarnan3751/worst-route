@@ -1,6 +1,7 @@
-// Bootstrap and wiring (docs/reference/frontend.md): the store, the map, the panel's parts;
-// the region's bbox from /regions; clicks on the map add stops; leaving the page cancels a
-// running job.
+// Bootstrap and wiring (docs/reference/frontend.md): the store, from the URL's state; the map
+// and the panel's parts; the region's bbox from /regions; a stored route when the URL names one,
+// the URL left alone until it has opened; clicks on the map add stops; leaving the page cancels
+// a running job.
 import "./style.css";
 import { errorBody, getRegions } from "./api/client";
 import { mountBanner } from "./banner";
@@ -9,16 +10,18 @@ import { RouteLayer } from "./map/routeLayer";
 import { StopsLayer } from "./map/stopsLayer";
 import { JobRunner, mountRunControls } from "./run/controls";
 import { mountSettings } from "./settings/panel";
+import { UrlSync, decodeUrlState, mountShare, openRoute, settingsFrom } from "./share/share";
 import { DEFAULT_SETTINGS, IDLE_RUN, Store, type Stop } from "./state";
 import { busy, mountStopList, withStopAdded } from "./stops/stopList";
 import { bboxBounds, round6 } from "./util/geo";
 
 const byId = (id: string): HTMLElement => document.getElementById(id) as HTMLElement;
 
+const url = decodeUrlState(location.search);
 const store = new Store({
   region: null,
-  stops: [],
-  settings: DEFAULT_SETTINGS,
+  stops: (url.stops ?? []).map(({ lat, lon }) => ({ lat, lon, snapped: null })),
+  settings: settingsFrom(url, DEFAULT_SETTINGS),
   run: IDLE_RUN,
   route: null,
   error: null,
@@ -37,7 +40,12 @@ function edit(stops: Stop[]): void {
 mountBanner(byId("banner"), store);
 mountStopList(byId("stops"), store, edit);
 mountSettings(byId("settings"), store);
+mountShare(byId("share"), store);
 new StopsLayer(map, store, edit);
+const urlSync = new UrlSync(store, (query) => {
+  if (query !== location.search) history.replaceState(null, "", location.pathname + query);
+});
+if (url.route === null) urlSync.start(false);
 
 map.on("click", (event) => {
   if (busy(store)) return;
@@ -49,12 +57,15 @@ map.once("load", () => {
   routeLayer = new RouteLayer(map);
   runner = new JobRunner(store, routeLayer, (bounds) => fitTo(map, bounds));
   mountRunControls(byId("run"), store, runner);
+  if (url.route !== null) {
+    void openRoute(url.route, store, runner).then((opened) => urlSync.start(opened));
+  }
 });
 
 getRegions()
   .then(([region]) => {
     store.update({ region });
-    fitTo(map, bboxBounds(region.bbox));
+    if (store.state.route === null) fitTo(map, bboxBounds(region.bbox)); // a route fits itself
   })
   .catch((error: unknown) => store.update({ error: errorBody(error) }));
 

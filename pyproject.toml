@@ -19,6 +19,9 @@ dependencies = [
     "pydantic-settings",
     "typer",
     "httpx",
+    "fastapi>=0.162",
+    "uvicorn[standard]>=0.54",
+    "sse-starlette>=3.6",
 ]
 
 [project.scripts]
@@ -67,5 +70,8 @@ disallow_untyped_defs = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["data: needs a built graph under WORST_ROUTE_DATA; skipped by the gate"]
+markers = [
+    "data: needs a built graph under WORST_ROUTE_DATA; skipped by the gate",
+    "slow: starts real worker processes; a few seconds, still run by the gate",
+]
 addopts = "-ra --strict-markers --timeout=300"

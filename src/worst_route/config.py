@@ -11,9 +11,11 @@ tier definitions, class allowlists and defaults join this module as their steps 
 
 `HighwayClass` numbers the road classes a build keeps (stored per edge as `edge_highway`) and
 `TIERS` lists each tier's classes (`docs/PLAN.md` §2.6). `DEFAULT_BACKEND` names the graph
-backend the engine searches with unless told otherwise.
+backend the engine searches with unless told otherwise. The `API_*` numbers are the API's job
+limits and streaming cadence (`docs/reference/api.md`).
 """
 
+import os
 from enum import IntEnum
 from functools import cache
 from pathlib import Path
@@ -274,3 +276,20 @@ TIER_MIN_RETAINED = 0.95
 # share of one-way motorway and trunk length, cleanup kept SCC_MIN_RETAINED of the nodes, and
 # every tier TIER_MIN_RETAINED of its own.
 QA_TWIN_COVERAGE_MIN = 0.95
+
+# The API (`docs/reference/api.md`). At most API_MAX_JOBS jobs run at once, each in a worker
+# process, and API_MAX_QUEUED wait; a running job is killed API_KILL_GRACE_S after its budget.
+# A job's record is kept API_JOB_TTL_S after it ends. A job whose SSE subscribers have all gone
+# for API_ORPHAN_S (once one had connected) is cancelled, or dropped if still queued. Progress
+# is sent at most once per API_COALESCE_S, with a full snapshot every API_SNAPSHOT_EVERY
+# progress events, simplified to API_SIMPLIFY_M. The API's default max_iterations leaves the
+# seconds budget to end a run (the CLI keeps DEFAULT_MAX_ITERATIONS).
+API_MAX_JOBS = max(1, (os.cpu_count() or 1) - 2)
+API_MAX_QUEUED = 8
+API_KILL_GRACE_S = 30.0
+API_JOB_TTL_S = 3600.0
+API_ORPHAN_S = 15.0
+API_COALESCE_S = 0.1
+API_SNAPSHOT_EVERY = 50
+API_SIMPLIFY_M = 1.0
+API_DEFAULT_MAX_ITERATIONS = 1_000_000

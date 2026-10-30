@@ -1,9 +1,9 @@
 # Worst Route — project overview
 
-Last updated: 2026-10-30. Snapshot taken after the frontend landed: the plan is written; the
-project scaffolding, every pipeline step, the graph package, the engine, the API and the
-frontend are built; Portland has a saved build, and the M1 acceptance run on it passes (§2.2):
-M1 is built.
+Last updated: 2026-10-30. Snapshot taken after the slowest time and the turn constraints
+landed: the plan is written; the project scaffolding, every pipeline step, the graph package,
+the engine, the API and the frontend are built; Portland has a saved build, and the M1
+acceptance run on it passes (§2.2): M1 is built, and M3's first two modes are.
 
 This file answers three questions: what the project is meant to become, how far along it is, and
 what has been decided. It is written for a human reader and for an AI agent picking up the
@@ -45,9 +45,11 @@ Claude: Python for the pipeline, engine, API and rendering; TypeScript + MapLibr
   that shows the route getting worse live, settings, reroll, make it worse. `docs/PLAN.md` §4–5.
   The API and the frontend are built for the distance mode and its targets
   (`docs/reference/api.md`, `docs/reference/frontend.md`); M2's acceptance is next.
-- **Modes** (Planned): longest distance, slowest time, never/only turn left, collect toll booths /
-  rail crossings / roundabouts / bridges, brand pilgrimage, alphabet route, hard mode (targets
-  by ratio or duration are built, for the distance mode).
+- **Modes** (In progress): longest distance, slowest time, never/only turn left, collect toll
+  booths / rail crossings / roundabouts / bridges, brand pilgrimage, alphabet route, hard mode.
+  Built: longest distance, slowest time, and never turn left / right as constraints on either
+  (soft: each such turn costs a kilometre; strict: none), with targets by ratio or duration;
+  the frontend offers the distance mode only so far.
 - **Presentation** (Planned): directions, stat toasts, comparisons, states and towns, share image.
 - **Scale** (Planned): Portland → Oregon → national at a tier to be decided at M5.
 
@@ -108,6 +110,15 @@ shrinking a route already past it, through `plan --target` (and `--base` to cont
 route) and the API's `target`; on Portland, Powell's → Reed reaches 20× or 3 h in under half a
 second and 9 h in about a second, and a 62.43× route shrinks to 30.58× in 5 s. Golden routes
 freeze the engine's output on a test lattice, a max run and a run to each kind of target.
+The slowest-time objective and the turn constraints are built (M3 steps 1–2;
+`docs/reference/engine.md`, **Objectives**, **Turns**, **Constraints**): `plan --objective
+time` and the API's `objective: "time"` score driving time plus the delays at signals and
+stop signs (on Portland, Powell's → Reed reaches 52.18× the baseline's experienced time, 67.55×
+its driving time, and a 9 h duration within ±2 %); turns are
+classed by their change of bearing and counted in every route's metrics; `--no-left` /
+`--no-right` (the API's `constraints`) make each such turn cost a kilometre of score, and
+`--strict` allows none, refused in every search including the Numba kernels', which take a set of
+banned turn classes. Two more golden routes freeze the slowest time and soft no-left.
 The API is built (`docs/reference/api.md`, M2 step 2): `worst-route serve` runs a FastAPI app
 that plans each request as a job in a worker process of its own, streams the route as it grows
 over Server-Sent Events (splices, periodic snapshots, resumable with `Last-Event-ID`), stores
@@ -144,7 +155,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 |---|---|---|
 | M1 — Portland, distance mode, CLI | Built | bootstrap, every pipeline step (download to qa; Portland's build passes QA), the graph package and the engine (snapping, seed route, transition-aware searches, splice loop, distance objective, validator, `worst-route plan` / `validate`). The acceptance run (`docs/PLAN.md` §7 M1 step 9; `uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` on build e4b3b4ad90db, `graph_version` 45f650e868fa, the reference backend: 20 random Portland pairs 3–15 km apart): all 20 plan and the validator passes all 20; the median ratio is 21.5× (3.3–45.2×); seeds 1 and 2 share 10–16% of their edges (Jaccard on 5 pairs, all < 0.3); the cul-de-sac via moves 86 m to the nearest through street with its note. Powell's → Reed gives 58–62×, PDX → Beaverton 7.3× (`docs/reference/engine.md`, **On Portland**) |
 | M2 — API + map, live growth | In progress | CSR + Numba backend built, its transition-aware kernels included (the default on every build; byte-identical to the reference: on Portland the acceptance's 20 routes and Powell's → Reed reproduce exactly, at 7,200–8,200 attempts/s); the API built (jobs in worker processes, SSE progress, the route store, make it worse, `worst-route serve`); targets by ratio and duration built (engine, CLI `--target`/`--base`, API), a 13-minute Portland drive to 9 h within ±2 % in 1.8 s over the API; the MapLibre frontend built (stops by click, the route growing live, run controls, settings with the targets, links); remaining: the acceptance |
-| M3 — Modes and constraints | Planned | turn-aware kernel, never/only-left; slowest time; collectibles; brands; hard mode; the search honouring stage B transitions (built at M1); alphabet search |
+| M3 — Modes and constraints | In progress | built: the turn classes, never turn left / right (soft by default, `strict` for none; engine, CLI, API), the kernels refusing banned turn classes, slowest time (engine, CLI, API); on Portland strict no-left plans 4 of the 20 acceptance pairs and soft no-left 20 at a median of 5.33× (§2.3; on a build re-enriched at pipeline version 2, whose bearings describe the roads, not cleanup's stubs); the search honouring stage B transitions was built at M1. Remaining: collectibles; brands; hard mode; alphabet search; the frontend's controls for the new modes; the acceptance |
 | M4 — Presentation | In progress | directions, stats, toasts, comparisons, share image, geocoding proxy, share links; built: the geocoding proxy (`GET /geocode`, Nominatim behind a cache and 1 request/s) and the place search in the stop list |
 | M5 — Scaling up | Planned | Oregon; array-based simplify/consolidate; US at T1; the national decision gate; public-hosting prep |
 | M6 — Stretch | Planned | certified worst (CP-SAT), turn restrictions, stop reordering, portfolio runs |
@@ -170,9 +181,28 @@ The risks the plan anticipates are `docs/PLAN.md` §8.3. Found on the Portland b
 - **Delays mostly undercount**: of Portland's 5,960 stop signs, 4,471 are mapped on the
   approach as shape points, as are 829 of 3,377 signals, and add no delay in M1.
 - **Junction collectibles** count on the node's lowest-id out-edge only, and **bearings** at a
-  cluster or super-junction include the stub to its centre: 15% of the edges leaving a stage A
-  cluster have a `bearing_out` more than 30° off the road's own, 55% at interchanges, whose
-  stubs run 66 m (median) to the centroid. Both are M3's to refine, before turn modes.
+  cluster or super-junction included the stub to its centre: 15% of the edges leaving a stage A
+  cluster had a `bearing_out` more than 30° off the road's own, 55% at interchanges, whose
+  stubs run 66 m (median) to the centroid. Both are M3's to refine, before turn modes; the
+  bearings are refined (pipeline version 2): they describe the road less the stub, and a turn
+  at a merged node classes as the road's in all but 0.2–0.5% of cases, the coordinates'
+  rounding, as at plain nodes (`docs/reference/pipeline.md`, enrich).
+- **Strict turn constraints are rarely satisfiable** on a street grid together with the rule
+  that no junction repeats: a net left turn without left turns is three rights round a block,
+  which comes back through its junction. On Portland strict no-left plans 4 of the 20
+  acceptance pairs and strict no-right 3 (Powell's → Reed refuses). **Soft ones make routes
+  less bad**, since nearly every detour adds such a turn: medians of 5.33× (no-left) and 6.47×
+  (no-right) on the same pairs at a kilometre a turn (`TURN_PENALTY_M`), against 21.5× without
+  (1.12× and 1.10× at 10⁶). Under the slowest time a left turn costs 90 s (`TURN_PENALTY_S`),
+  and soft no-left gives Powell's → Reed 28.48× the experienced time with 1.09 left turns a km,
+  more than the distance mode's 0.62, since a detour's time gain counts its delays too; 180 s
+  and 300 s keep them rarer but at 11.66× and 4.67×. **A soft route barely shrinks** toward a
+  smaller target, since shrinking may not add a net avoided turn and a shorter way round mostly
+  needs one: Powell's → Reed's 16.77× soft no-left route, sent toward 3×, converges at 11.04×
+  (`stopped_because: "converged"`, outside the band). That is the price of the rule, accepted
+  by the coordinator at M3's review; letting a shrinking splice add an avoided turn when the
+  route's density of them does not rise is a later option (`docs/reference/engine.md`,
+  **Constraints**, **Limitations**, **On Portland**).
 - **A possible stage B over-restriction**: the I-84 / NE Halsey super-junction (node 65437 of
   the 2026-10-30 Portland build) forbids NE 42nd Ave → NE Sandy Blvd, a turn that looks
   drivable; to investigate in the next cleanup fold.
@@ -204,6 +234,19 @@ Product decisions the owner made on 2026-10-30 while the plan was written:
   and a deployable shape are planned, not built early.
 - **OSM turn restrictions are ignored for now**; they plug into the same transition table as
   super-junctions later (`docs/PLAN.md` §3.13).
+- **Turn constraints are soft by default, and a banned turn costs a kilometre** (decided by
+  the coordinator at M3 from the Portland numbers; the owner may revisit (strict planned 3/20
+  and 1/20 pairs; at 10⁶ soft gave 1.1×)): never turn left makes each left turn (and U-turn) a
+  pair term of minus a kilometre's worth of the objective's score (1,000 m, `TURN_PENALTY_M`;
+  90 s under the slowest time, `TURN_PENALTY_S`), the searches avoiding them where they can,
+  the seed unconstrained; `strict` keeps none at all, every search refusing them, the validator
+  proving it, and an unreachable stop saying so. Never turn right is the same for right turns;
+  both at once is refused. A ratio target under a constraint compares the objective's primary
+  quantity, and under the slowest time that is the experienced time, driving and the delays at
+  signals and stop signs, over the baseline's; a duration target measures the experienced time
+  under every objective, and so do the time ratio and the arrival the API and the CLI show, the
+  driving time and the delays being reported apart (decided by the coordinator at M3's review:
+  what the driver sits through).
 - **Frontend is vanilla TypeScript + Vite with MapLibre GL JS**, not Leaflet, for GPU rendering
   of long live-updating routes and a self-hostable vector basemap (`docs/PLAN.md` §5.1).
 - **uv with Python pinned to 3.12.**
@@ -254,7 +297,8 @@ brief):
   objective; strict improvement for max modes; a stopping rule for target modes.
 - **Targets as built for M2** (2026-10-30, at the targets plan): `Target(kind, value)` with
   `max`, `ratio` (length over the baseline's, more than 1; not for a round trip) and `duration`
-  (`time_s`, at most 7 days), reached within ±2 % (`TARGET_TOLERANCE`); a `Goal` replaces
+  (`time_s`, at most 7 days; since M3's review the experienced time, delays included), reached
+  within ±2 % (`TARGET_TOLERANCE`); a `Goal` replaces
   `Objective.better` and owns "better" and "done" by values, so the API's follower applies it
   too. Growing, a detour is taken when it gains and its value rises to at most the band's top;
   shrinking, when it loses and its value falls to at least the band's bottom, with the radius at

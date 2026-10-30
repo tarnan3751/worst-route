@@ -27,7 +27,9 @@ the validator, and `worst-route plan` / `validate` on a saved build. So is the A
 (`docs/reference/api.md`, M2's second step): `worst-route serve`, jobs in worker processes, the
 route streamed over Server-Sent Events, the route store and "make it worse". So are the
 inefficiency targets (M2's fourth step): a ratio or a duration, reached within ±2 %, from
-`plan --target` and the API. So is the frontend (`docs/reference/frontend.md`, M2's third
+`plan --target` and the API. So are M3's first two modes: the slowest time (`--objective
+time`) and the turn constraints (`--no-left`, `--no-right`, soft unless `--strict`), from
+`plan` and the API. So is the frontend (`docs/reference/frontend.md`, M2's third
 step): a MapLibre map on which stops are clicked, the route drawn growing live from the stream,
 the run controls, the settings (the targets among them) and links. So is the geocoding proxy
 (M4's first piece): a place search in the stop list, answered by `GET /geocode` from Nominatim
@@ -76,7 +78,7 @@ Every command below exists. One a later milestone adds is marked with that miles
 | Lint and format check | `uv run ruff check . && uv run ruff format --check .` |
 | Types | `uv run mypy src` |
 | Pipeline, one step (all eight are real, run in this order; `filter` and `build` also take `--source PATH`, `cleanup` and `tiers` take `--allow-fragmented`) | `uv run worst-route pipeline <download\|filter\|build\|cleanup\|enrich\|tiers\|save\|qa> --region portland` |
-| Plan a route from the CLI, validated (`--target ratio:20` or `duration:9h` aims for a target within ±2 %; `--base route.json` continues a saved route) | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
+| Plan a route from the CLI, validated (`--target ratio:20` or `duration:9h` aims for a target within ±2 %; `--base route.json` continues a saved route; `--objective time` the slowest; `--no-left` / `--no-right` such turns at a kilometre each, `--strict` none) | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
 | Validate a saved route | `uv run worst-route validate route.json` |
 | API server (the coordinator only; agents use `--port 0` or a port of their own, `--store` in their own tree, and `--geocoder none` or `--nominatim-url` pointed at a local stub: no agent calls Nominatim) | `uv run worst-route serve --region portland` |
 | Frontend dev server / build / typecheck (with the prettier check) / tests / format (the dev server proxies `/api` to `WORST_ROUTE_API`, default `http://127.0.0.1:8000`; agents point it at their own server and add `-- --port <free>`) | `cd frontend && npm run dev` / `npm run build` / `npm run typecheck` / `npm test` / `npm run format` |
@@ -99,7 +101,7 @@ first built and listed here when it exists.
 | Pipeline: download, filter, build, exclusions, simplify, consolidate (stages A and B), carriageway twins, connectivity, enrich, tiers, save (to the graph package's build format), qa | `src/worst_route/pipeline/` | §2 | `docs/reference/pipeline.md` |
 | Graph: a build's arrays and on-disk format, the backend protocol, the reference and CSR backends, Numba kernels, spatial (snapping, leash, bubbles), test builders, loader | `src/worst_route/graph/` | §2.7, §3.5, §3.9, §3.10 | `docs/reference/graph.md` |
 | Engine: `Route`, snapping, the seed route, detours, the worsen loop, the validator, exact mode | `src/worst_route/engine/` | §3.1–3.4, §3.11–3.13 | `docs/reference/engine.md` |
-| Objectives and constraints: the interface, each mode, the alphabet search | `src/worst_route/engine/objectives/`, `alphabet_search.py` | §3.6–3.8 | `docs/reference/engine.md` (**Objectives**) |
+| Objectives and constraints: the interface, each mode, turns and the turn constraints, the alphabet search | `src/worst_route/engine/objectives/`, `turns.py`, `constraints.py`, `alphabet_search.py` | §3.6–3.8 | `docs/reference/engine.md` (**Objectives**, **Turns**, **Constraints**) |
 | API: jobs, SSE, routes, geocode proxy, workers | `src/worst_route/api/`, `geocode/` | §4 | `docs/reference/api.md` |
 | Presentation: directions, stats, comparisons, share image, jokes | `src/worst_route/presentation/` | §4.3, M4 | *(when built)* `docs/reference/presentation.md` |
 | Frontend: map, stops, settings, run controls, toasts, directions, share | `frontend/src/` | §5 | `docs/reference/frontend.md` |

@@ -1,9 +1,15 @@
-# Powell's Books → Reed College on Portland's latest build, read through WORST_ROUTE_DATA, on both
-# backends. Run on demand with `uv run pytest -m data`; skipped when there is no build.
+# Powell's Books → Reed College on Portland's latest build, read through WORST_ROUTE_DATA: on both
+# backends, then the slowest time and the turn constraints. Run on demand with
+# `uv run pytest -m data`; skipped when there is no build.
 import pytest
 
+from worst_route.engine.constraints import Constraints
 from worst_route.engine.plan import plan_route
 from worst_route.engine.request import RouteRequest
+from worst_route.engine.route import Route
+from worst_route.engine.snap import InfeasibleTurnConstraint
+from worst_route.engine.target import Target
+from worst_route.engine.turns import count_turns
 from worst_route.graph.csr_backend import CsrBackend
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
@@ -42,3 +48,48 @@ def test_both_backends_plan_the_same_route_on_portland(portland: GraphData) -> N
     ]
     assert [s.node for s in one.snaps] == [s.node for s in two.snaps]
     assert one.baseline.length_m == two.baseline.length_m
+
+
+def test_the_slowest_time_reaches_nine_hours_on_portland(portland: GraphData) -> None:
+    # on build 506f747d7458 (pipeline version 2), seed 1: 8 h 55 min, 6 h 16 min of driving and
+    # 2 h 39 min of delays (24.64x the baseline's 21 min 44 s, 205.63 km)
+    nine_hours = Target(kind="duration", value=9 * 3600)
+    request = RouteRequest(
+        stops=[POWELLS, REED], objective="time", seed=1, budget_s=120, max_iterations=10**6,
+        target=nine_hours,
+    )  # fmt: skip
+    result = plan_route(portland, request)
+    assert result.run.stopped_because == "target"
+    route = result.route
+    reached = result.goal.value(route.score, route.metrics)
+    assert reached == route.metrics.time_s + route.metrics.delay_s  # the experienced time
+    assert result.goal.reached(reached) and result.report.ok
+
+
+def test_a_soft_no_left_route_keeps_left_turns_rare_on_portland(portland: GraphData) -> None:
+    # on build 506f747d7458, seed 1: 16.77x (129.40 km) with 80 left turns of 1,291, 0.62 a km,
+    # where the seed had 10 in 7.71 km, 1.30 a km; converged after 48,152 attempts
+    request = RouteRequest(
+        stops=[POWELLS, REED], seed=1, budget_s=120, max_iterations=10**6,
+        constraints=Constraints(no_left=True),
+    )  # fmt: skip
+    starts: list[Route] = []
+    result = plan_route(portland, request, on_start=lambda *a: starts.append(a[3]))
+    route, seed = result.route, starts[0]
+
+    def per_km(r: Route) -> float:
+        return count_turns(portland, r.edges)["left"] / r.metrics.length_m * 1000
+
+    assert per_km(route) < per_km(seed) and result.report.ok
+    assert route.metrics.length_m > 5 * result.baseline.length_m
+
+
+def test_strict_no_left_refuses_powells_to_reed_in_one_line(portland: GraphData) -> None:
+    request = RouteRequest(
+        stops=[POWELLS, REED], seed=1, constraints=Constraints(no_left=True, strict=True)
+    )
+    with pytest.raises(InfeasibleTurnConstraint) as refused:
+        plan_route(portland, request)
+    message = str(refused.value)
+    assert "\n" not in message and message.endswith("under the strict no-left constraint")
+    assert refused.value.constraint == "no_left"

@@ -12,10 +12,10 @@ Code: `src/worst_route/graph/`. The design it implements is `docs/PLAN.md` §2.6
 |---|---|
 | `data.py` | `GraphData`, `Strings`, `ARRAY_SPECS` (the format), `NodeKind`, `EdgeFlag`, `validate()` |
 | `store.py` | `write_build`, `read_build`, `graph_version` |
-| `backend.py` | the `GraphBackend` protocol, the `Path` type, and what every backend shares: `check_ends`, `WeightCheck`, `as_cost`, `as_limits`, `enterable`, `banned_mask`, `largest_scc_mask` |
+| `backend.py` | the `GraphBackend` protocol, the `Path` type, and what every backend shares: `check_ends`, `WeightCheck`, `as_cost`, `as_limits`, `enterable`, `banned_mask`, `largest_scc_mask`, the turn classes (`TURN_CLASS`, `as_turn_classes`, `check_turn_edges`) |
 | `python_backend.py` | `PythonBackend`, the reference implementation |
 | `csr_backend.py` | `CsrBackend`, the production implementation, over `kernels.py` |
-| `kernels.py` | the Numba kernels `dijkstra_masked`, `simple_paths_dfs`, `dijkstra_edges_masked`, `simple_paths_dfs_turns` and their turn check `turn_allowed` |
+| `kernels.py` | the Numba kernels `dijkstra_masked`, `simple_paths_dfs`, `dijkstra_edges_masked`, `simple_paths_dfs_turns` and their turn checks `turn_allowed` and `turn_class_allowed` |
 | `backends.py` | `make_backend` |
 | `loader.py` | `load_build`, `Loaded`, `BuildNotFound` |
 | `spatial.py` | `SpatialIndex` (`project`, `snap`, `leash_mask`, `bubble_mask`), `Snap`, `SnapError`, `active_mask` |
@@ -50,7 +50,7 @@ lists the arrays in a fixed order, the order of the fields, the files and the ha
 | | `edge_unit` | i32[m] | road unit (the two directions of a two-way road), in [0, m) |
 | | `edge_flags` | u8[m] | `EdgeFlag` bits: 1 bridge, 2 tunnel, 4 toll, 8 roundabout, 16 link |
 | | `edge_toll_booths`, `edge_level_crossings` | u8[m] | counts on the edge |
-| | `edge_bearing_in`, `edge_bearing_out` | i16[m] | degrees clockwise from north, 0–359: arriving at v, leaving u |
+| | `edge_bearing_in`, `edge_bearing_out` | i16[m] | degrees clockwise from north, 0–359: arriving at v, leaving u, over the road's last and first 20 m (the road, not the stub cleanup added to reach a merged node: `docs/reference/pipeline.md`, enrich) |
 | | `way_indptr`, `way_osm_ids` | i64[m+1], i64[] | original OSM way ids of each edge (≥ 1 each) |
 | adjacency | `out_indptr`, `out_edges` | i64[n+1], i32[m] | each node's out-edges, ascending edge id |
 | | `in_indptr`, `in_edges` | i64[n+1], i32[m] | each node's in-edges, ascending edge id |
@@ -181,7 +181,7 @@ edges, the lower id.
 
 **The transition-aware search** (`dijkstra_edges`; `docs/PLAN.md` §3.5) searches edge states,
 so it sees the transition table: a turn from e into f is allowed iff head(e) has no rows or
-lists (e, f). `entry_edge` is the edge the path continues (it must end at `src`), `exit_edge`
+lists (e, f), and its class is not among `banned_turn_classes` (below). `entry_edge` is the edge the path continues (it must end at `src`), `exit_edge`
 the edge it hands over to (it must start at `dst`); both are optional (−1), and neither is
 driven, banned or costed. A bad one is a `ValueError`.
 
@@ -203,8 +203,17 @@ driven, banned or costed. A bad one is a `ValueError`.
 On a build with no transition rows it finds a path whenever `dijkstra` does, at the same cost
 (Dijkstra's tree of edge states never repeats a node when every turn is allowed), and the same
 path whenever the two tie rules pick the same one (always when the cheapest path is unique).
-The engine calls it only on builds that have rows (`docs/reference/engine.md`, **Searches**),
-so on every other build the backends' node-state results stay what they were.
+The engine calls it on builds that have rows, and on any build when a turn constraint refuses
+or avoids a class of turns (`docs/reference/engine.md`, **Searches**), so on every other build,
+without constraints, the backends' node-state results stay what they were.
+
+**Turn classes.** `dijkstra_edges` and `simple_paths_dfs` take `banned_turn_classes`, a set of
+class bits (default 0, which changes nothing): a turn from e into f whose class is in the set is
+refused like one the table does not list, the turn from `entry_edge` and into `exit_edge`
+included, and `src == dst` too. The class is `TURN_CLASS[(edge_bearing_out[f] −
+edge_bearing_in[e]) mod 360]` (`backend.py`; the bearings are whole degrees), a 360-entry table
+of the rule `docs/reference/engine.md` describes (**Turns**): straight 0 (never banned), left
+1, right 2, U-turn 4. A set outside [0, 7] is a `ValueError` (`as_turn_classes`, shared).
 
 **`PythonBackend(data)`** turns the adjacency into Python lists once (tens of MB at Portland
 scale), and the transition table into a list of which nodes have rows and a set of allowed
@@ -245,7 +254,8 @@ call.
   and `nodes[offsets[p] + p : offsets[p + 1] + p + 1]`, in buffers that double when full.
   `CsrBackend` unpacks them into the list of `Path`s.
 - `dijkstra_edges_masked(out_indptr, out_edges, edge_u, edge_v, weights, enter_u8, banned_u8,
-  trans_indptr, trans_key, src, dst, entry_edge, exit_edge, max_cost) -> (found, nodes, edges)`:
+  trans_indptr, trans_key, bearing_in, bearing_out, turn_class, banned_turns, src, dst,
+  entry_edge, exit_edge, max_cost) -> (found, nodes, edges)`:
   the transition-aware search exactly (**The transition-aware search**), with a binary heap of
   (cost, edge id) entries in two arrays. With non-negative weights each state is pushed at most
   once (its cost is its predecessor's plus its own weight, and states pop in non-decreasing cost,
@@ -261,13 +271,19 @@ call.
   unless its path enters a node twice (found by sorting a copy of the path's nodes): then nothing
   is found.
 - `simple_paths_dfs_turns(out_indptr, out_edges, edge_v, enter_u8, banned_u8, trans_indptr,
-  trans_key, src, dst, entry_edge, exit_edge, max_depth, max_paths) -> (offsets, nodes, edges)`:
-  `simple_paths_dfs` with every turn checked, from `entry_edge` (when given) or the path's last
-  edge into each edge it tries, and from an edge into `dst` into `exit_edge` (when given).
+  trans_key, bearing_in, bearing_out, turn_class, banned_turns, src, dst, entry_edge, exit_edge,
+  max_depth, max_paths) -> (offsets, nodes, edges)`: `simple_paths_dfs` with every turn
+  checked, from `entry_edge` (when given) or the path's last edge into each edge it tries, and
+  from an edge into `dst` into `exit_edge` (when given). `CsrBackend` uses it on a build with
+  rows, with a turn edge, or with turn classes banned.
 - `turn_allowed(trans_indptr, trans_key, edge_v, e, f) -> bool`: the turn from e into f at
   head(e): allowed when the node has no rows, else a binary search for `e * m + f` among its rows
   (at most 304, at a Portland super-junction). Both turn kernels call it, and so does
   `CsrBackend` for `src == dst`.
+- `turn_class_allowed(bearing_in, bearing_out, turn_class, banned_turns, e, f) -> bool`: the
+  turn's class is not in `banned_turns`; `True` at once when the set is empty. The turn kernels
+  call it beside `turn_allowed`, with the build's bearings and `TURN_CLASS` as they are
+  (zero-copy, read-only int16 and uint8).
 
 **The parity contract.** For arguments of the declared types (int node ids and limits, a real
 `max_cost`, float64 weights, bool masks), `CsrBackend` returns `PythonBackend`'s results byte
@@ -282,8 +298,8 @@ tests, which run on both backends.
 signature whose arrays are read-only and of any layout. Memory-mapped builds, read-only cached
 weights and fresh writeable masks therefore share one specialization. `cache=True` keeps it in
 `src/worst_route/graph/__pycache__/` (gitignored). The first import after a change to
-`kernels.py`, or in a fresh clone or CI run, compiles its six functions (the four kernels,
-`turn_allowed` and the heap's push): about 3 s on the dev machine (1.4 s for the two
+`kernels.py`, or in a fresh clone or CI run, compiles its seven functions (the four kernels,
+the two turn checks and the heap's push): about 3 s on the dev machine (1.4 s for the two
 node-state kernels alone). Every later process loads them from the cache in about 0.3 s.
 `NUMBA_DISABLE_JIT=1` runs the kernels as plain Python for debugging: slow on a real build, but
 the whole test suite passes that way. `NUMBA_BOUNDSCHECK=1` turns an out-of-range index into an
@@ -460,6 +476,12 @@ parity tests compare the two backends byte for byte:
 - 300 transition-aware searches on a 30 × 30 grid with one-way streets, tables at a third of
   its junctions and tied weights, with turn edges, masks and budgets (heaps that grow);
 - the simple paths across a 5 × 5 grid whose nodes 6, 12 and 18 allow only straight on, corner
-  to corner, between two of those nodes through turn edges, and under a mask and limits.
+  to corner, between two of those nodes through turn edges, and under a mask and limits;
+- with banned turn classes: the same semantics tests (the tie rule, the cheapest legal walk,
+  every simple path) on hypothesis graphs with random bearings (the class bands' edges often)
+  and random sets, classed by the rule written out in the test; 300 hypothesis cases of both
+  searches compared byte for byte, a set of 0 against the call without it; 300 searches on the
+  one-way town with tables and a set drawn per search, the DFS compared too; a crafted junction
+  driven round by three rights, a U-turn refused, bad sets refused.
 
 Run them with `uv run pytest tests/graph`.

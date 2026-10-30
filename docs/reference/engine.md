@@ -1,10 +1,11 @@
 # Engine
 
 How a route is planned, made worse and proven legal: the route model and its one mutation, the
-request and its masks, snapping, the seed route and the baseline, the objective interface and
-the distance mode, the detour strategies, the worsen loop and its targets, the validator, route
-files and the `plan` / `validate` commands. Code: `src/worst_route/engine/`. The design it
-implements is `docs/PLAN.md` §3.1–3.6, §3.9, §3.11 and §8.1; the conventions are `CLAUDE.md`.
+request and its masks, snapping, the seed route and the baseline, the objective interface, the
+distance and slowest-time modes, turns and the turn constraints, the detour strategies, the
+worsen loop and its targets, the validator, route files and the `plan` / `validate` commands.
+Code: `src/worst_route/engine/`. The design it implements is `docs/PLAN.md` §3.1–3.7, §3.9,
+§3.11 and §8.1; the conventions are `CLAUDE.md`.
 Everything runs on a build's `GraphData` through `GraphBackend` and `SpatialIndex`
 (`docs/reference/graph.md`): `CsrBackend` by default, `PythonBackend` when asked, with the same
 routes either way, on every build, transition tables included (**Searches**).
@@ -13,12 +14,14 @@ routes either way, on every build, transition tables included (**Searches**).
 |---|---|
 | `route.py` | `Route`, `Splice`, `Metrics`, the `IllegalSplice` refusals, `check_route`, `splice_arrays`, `twins_of` |
 | `validator.py` | `validate_route`, `ValidationReport`, `Check`, `ValidationFailed`, `RouteLike` |
-| `request.py` | `RouteRequest`, `RequestMasks`, `request_masks`, `auto_tier`, `auto_leash_m` |
+| `request.py` | `RouteRequest`, `ObjectiveKey`, `RequestMasks`, `request_masks`, `auto_tier`, `auto_leash_m` |
 | `target.py` | `Target` (a request's target), `Goal` (what a run is after: better, done, its phases) |
 | `snap.py` | `snap_stops`, `resnap`, `apart_from`, `role_of`, `is_round_trip`, `StopUnreachable` |
 | `search.py` | `shortest_path`, `simple_paths`: which backend search builds a path |
 | `seed_route.py` | `resolve_stops`, `baseline_route` / `Baseline`, `seed_route` / `SeedRoute` |
-| `objectives/` | `base.py` (`Objective`, `BaseObjective`), `distance.py` (`Distance`), `OBJECTIVES`, `make_objective` |
+| `objectives/` | `base.py` (`Objective`, `BaseObjective`, `route_delay_s`), `distance.py` (`Distance`), `time.py` (`SlowestTime`), `composite.py` (`Composite`), `OBJECTIVES`, `make_objective` |
+| `turns.py` | `turn_classes`, `count_turns` |
+| `constraints.py` | `Constraints`, `TurnConstraint`, `NoLeft`, `NoRight`, `constrain`, `NO_CONSTRAINTS` |
 | `detour.py` | `find_detour`, `pick_strategy`, `waypoint_path`, `random_weight_path`, `local_exhaustive_paths` |
 | `worsen.py` | `worsen`, `run_worsen`, `pick_segment`, `UnusedNodes`, `Budget`, `ProgressEvent`, `WorsenResult` |
 | `plan.py` | `plan_route`, `PlanResult`, `check_base`, `BaseRouteMismatch` |
@@ -34,7 +37,8 @@ weights, radii) are in `config.py`.
 `nodes[k + 1]`), `stop_idx` (the stops' positions: strictly increasing, the first 0, the last
 `len(nodes) - 1`), `used_nodes` (bool[n]), `banned_edges` (bool[m]: the route's edges and
 their twins), `ban_count` (int32[m]: how many of the route's edges ban each edge, as itself or
-as a twin), `score` and `metrics` (`Metrics(length_m, time_s, counters)`), `seed` and the
+as a twin), `score` and `metrics` (`Metrics(length_m, time_s, counters, delay_s=)`: the delays
+at its signals and stop signs, every mode's), `seed` and the
 build's `graph_version`. A round trip has `nodes[0] == nodes[-1]`; nothing else repeats.
 
 **`Route.splice(data, i, j, nodes, edges, *, score, metrics, extra_banned=None)` is the only
@@ -72,8 +76,10 @@ already a repeated node.
 ## Requests
 
 `RouteRequest` (pydantic, frozen, JSON round trip): `stops` as (lat, lon) in order, at least
-two (identical first and last points make a round trip); `objective` (a key of `OBJECTIVES`,
-default `"distance"`); `tier` (`"auto"` or `"T0"`..`"T4"`); `leash_km` (`"auto"` or in
+two (identical first and last points make a round trip); `objective` (`"distance"`, the
+default, or `"time"`: the keys of `OBJECTIVES`; another is "unknown objective"); `constraints`
+(**Constraints**: `{no_left, no_right, strict}`, none by default, and then left out of the
+request's JSON, so a request reads as it did before constraints existed); `tier` (`"auto"` or `"T0"`..`"T4"`); `leash_km` (`"auto"` or in
 (0, 150]); `budget_s` (in (0, 120], default 20) and `max_iterations` (default 5000); `seed`
 (≥ 0); and `target` (**Targets**: `max`, the default, `ratio` or `duration`; a ratio target is
 refused for a round trip, whose baseline is 0 m). Every number must be finite, so a request
@@ -128,6 +134,14 @@ The transition-aware search answers None when the cheapest legal path passes a n
 table can make the cheapest legal way a loop round a block); such a path is illegal for a route
 anyway, so the caller's fallback applies as for no path at all.
 
+**Turn classes.** `shortest_path` and `simple_paths` take `banned_turn_classes` and
+`avoided_turn_classes` (sets of class bits, **Turns**), which `find_detour` passes from the
+objective (**Constraints**) and the seed from a strict constraint. Either set makes the search
+the transition-aware one, on any build, refusing a turn of those classes at every junction,
+the two ends included. A search with avoided classes is made again without them when it finds
+nothing, so a soft constraint's turns are avoided where they can be and taken where they must;
+the banned ones never are.
+
 **Twins.** A path a route is made of (a seed leg, the waypoint strategy's two searches, the
 random-weight search) is searched with `avoid_twins`: when it drives an edge and one of its
 twins (both carriageways of one road, as in a U-turn across a median), the later edge of the
@@ -155,7 +169,8 @@ saved route with it; the cost is a few seed builds.
    built so far and every other stop's node, and bans their edges' twins. Each continues the
    leg before it (`entry_edge`, its last edge) and hands over to the leg after it when that one
    is built (`exit_edge`, its first edge, which matters when the penalty re-solve rebuilds an
-   earlier leg), so the turn at every via is one the tables allow. A leg driving an edge and
+   earlier leg), so the turn at every via is one the tables allow (and, under a strict turn
+   constraint, none it refuses: **Constraints**; a soft one leaves the seed alone). A leg driving an edge and
    its twin is searched again without the later one (**Searches**), and a round trip's leg
    whose other legs drive a single edge avoids that edge's road unit, so a trip to a neighbour
    and back is not one road out and back.
@@ -192,13 +207,20 @@ only this interface:
 - **Hooks.** `feasible_pair` and `feasible_window` (constraints), `banned_edges(G, route, i, j)`
   (bans per window), `search_weights` and `waypoint_pool` (search guidance), and
   `initial_radius` and `search_budget(radius)` (default 8 × radius, `SEARCH_BUDGET_FACTOR`).
-- **The rest.** `target_value` (the mode's own quantity, which no target reads yet: a ratio
-  target reads the length, a duration target the time, from the route's metrics) and
-  `describe` (mode numbers for the presentation). Which route is better, and when a run is
-  done, belongs to the run's goal (**Targets**), not to the objective.
+- **Turn classes.** `banned_turn_classes`, the classes its `feasible_pair` refuses, which no
+  search for it proposes; `avoided_turn_classes`, the classes its pair terms penalise, which
+  the searches try without first (**Searches**). Both 0 for a mode; a turn constraint's.
+- **The rest.** `primary(metrics)`, the quantity a ratio target compares with the baseline's
+  (the length for the base class and `Distance`, the experienced time, driving and delays, for
+  `SlowestTime`), a static method, so the API's follower reads it from the class without
+  making the objective; `constraint_delta(route, i, j, nodes, edges)`, the part of `delta` its
+  constraints add (a soft one's penalties, 0 for a mode alone), which a shrinking target reads
+  (**Targets**); `target_value` (the mode's own quantity) and `describe` (mode numbers for the
+  presentation). Which route is better, and when a run is done, belongs to the run's goal
+  (**Targets**), not to the objective.
 
-`BaseObjective(data, *, baseline_length_m, r_max)` gives every hook a neutral default and
-caches its term vectors for the build. It implements, once for every mode:
+`BaseObjective(data, *, baseline, r_max)` (the baseline's `Metrics`) gives every hook a neutral
+default and caches its term vectors for the build. It implements, once for every mode:
 
 - `evaluate(nodes, edges) -> (score, Metrics)`;
 - `score(route)`;
@@ -208,17 +230,107 @@ caches its term vectors for the build. It implements, once for every mode:
 and the detour; pair terms at both boundaries and inside; the global term re-evaluated on the
 spliced arrays. Everything is summed with `math.fsum`, so `delta` equals
 `score(after) − score(before)` to rounding, and a change of nothing scores exactly 0. Its
-`initial_radius` is a quarter of the baseline length, at least 1 km and at most `r_max`.
+`initial_radius` is a quarter of the baseline length, at least 1 km and at most `r_max`. Its
+metrics are the length and the driving time (`time_s`, the edges' `edge_time_s`), summed with
+`math.fsum`, and the delays (`delay_s`, `route_delay_s`: the nodes' `node_delay_s`, start and
+end included, a round trip's start once), whatever the mode.
 
 **`Distance`** scores the length: its edge terms are `edge_length_m`, and it has no node,
-pair or global terms. It searches on length, draws waypoints anywhere, and its target value and
-`describe` are the length.
+pair or global terms. It searches on length, draws waypoints anywhere, and its target value,
+primary quantity and `describe` are the length.
+
+**`SlowestTime`** (`"time"`) scores the time: its edge terms are `edge_time_s`, its node terms
+`node_delay_s` (the 30 s signals and 10 s stop signs the pipeline merges into each node), and
+it has no pair or global terms. It searches on length × speed / 60 km/h (`SEARCH_SPEED_KMH`):
+a road at 60 km/h weighs its length, a slower one less, a faster one more, so a search on its
+way prefers slow roads. Its waypoints are drawn from the slow nodes, those at least half of
+whose out-edges are of class unclassified or slower (residential, living street, alley),
+worked out once per build. Its first radius is the base class's; its primary quantity and its
+target value are the experienced time, `time_s + delay_s`, so a ratio target under it is the
+route's experienced time over the baseline's, as a duration target measures it under any mode
+(**Targets**). `describe` gives `time_s`,
+`delay_s_total` and `slowest_edge_class_share` (the share of the length on those slow
+classes). On Portland it converges where the distance does (**On Portland**): both fill the
+area the leash allows, and either's experienced time is about 52× the baseline's (67× its
+driving time).
 
 **A new mode** is a subclass of `BaseObjective` that overrides the terms and hooks it needs,
-registered in `OBJECTIVES` under its request key. `tests/engine/test_objectives.py` holds
-`delta` to a full re-score with a test objective that has every kind of term; a new mode gets
-the same test. A constraint is an objective with hooks and no terms. Composing objectives and
-constraints (`docs/PLAN.md` §3.7) arrives with M3.
+registered in `OBJECTIVES` under its request key (and in `ObjectiveKey`).
+`tests/engine/test_objectives.py` holds `delta` to a full re-score with a test objective that
+has every kind of term; a new mode gets the same test (`SlowestTime` has it, node terms
+included). A constraint is an objective about turns (**Constraints**); `Composite(objective,
+constraints)` (`objectives/composite.py`) is the one objective the engine runs when a request
+has any: the sum of every part's score and `delta`, the objective's metrics, guidance, target
+value and primary quantity, every part's feasibility (all must agree), the union of their
+bans and of their turn classes, and as its `constraint_delta` the sum of the constraints'
+`delta`s.
+
+## Turns
+
+`turns.py` classes a turn from edge e into edge f by its change of bearing, `delta =
+wrap(bearing_out(f) − bearing_in(e))` in (−180, 180] degrees clockwise: **straight** when
+|delta| ≤ 30 (`TURN_STRAIGHT_DEG`), **right** when 30 < delta ≤ 160 (`TURN_UTURN_DEG`), **left**
+when −160 ≤ delta < −30, a **U-turn** beyond. The bearings are the build's, over the last and
+the first 20 m (`BEARING_SAMPLE_M`) of the two roads, cleanup's stubs to a merged node's
+position left out (`docs/reference/pipeline.md`, enrich), so a junction is classed by how its
+roads arrive and leave; at a super-junction (an interchange or a roundabout, one node) that is
+the
+edge that enters it and the edge that leaves it, whatever the way through it looks like
+(coarse: a cloverleaf's loop ramp from east to north counts as a left turn). The rule is one
+table by delta modulo 360, `graph.backend.TURN_CLASS`, which the backends' searches read too;
+a class's code is its bit in a set of classes: left 1, right 2, U-turn 4, and straight 0, which
+no set holds. `turn_classes(data, e_in, e_out)` classes many turns at once and
+`count_turns(data, edges)` counts a route's, `{left, right, straight, u_turn}`, for its metrics
+(**Route files**). The validator reads them only to prove a strict constraint (**The
+validator**, `constraints`).
+
+## Constraints
+
+`constraints.py`: a request's `Constraints(no_left, no_right, strict)` adds turn constraints
+to its objective; `no_left` and `no_right` together is refused ("straight only is not a
+route"). Each is a `TurnConstraint`, an objective about two classes: `NoLeft` about left turns
+and U-turns, `NoRight` about right turns and U-turns. `constrain(objective, constraints, data)`
+gives the objective the engine runs: the objective alone without constraints, else a
+`Composite` of it and them. The baseline is never constrained (a sane GPS turns left), and a
+ratio target under a constraint compares the objective's primary quantity as before; shrinking
+toward a target, a splice must not add a net avoided turn (**Targets**).
+
+- **Soft** (the default): "few such turns". Each such turn, the two boundaries of a window
+  included, is a pair term of minus a kilometre's worth of the objective's score,
+  `turn_penalty_for(objective)` (the one place that knows it, keyed on the objective's primary
+  quantity): 1,000 m (`TURN_PENALTY_M`), or 90 s under the slowest time (`TURN_PENALTY_S`, a
+  kilometre at 40 km/h). So the loop takes a detour that adds one only for more than that, and
+  one that removes one even at a loss of up to that. Its classes
+  are its `avoided_turn_classes`: every detour search tries without them first (**Searches**).
+  The seed is the plain one, and the route's metrics count its turns.
+- **Strict** (`strict`): none at all. Its classes are its `banned_turn_classes`, which every
+  search for the route refuses: the seed's legs (and the penalty re-solve and the stops'
+  fallback, so `resolve_stops` and `worst-route validate` re-derive the same stops), the
+  round-trip loop and every detour strategy; `feasible_pair` and `feasible_window` (the turns
+  into and out of the detour included) refuse them too, the safety net. A leg that cannot be
+  built is `InfeasibleTurnConstraint` (a `StopUnreachable` naming its `constraint`, the API's
+  `INFEASIBLE_TURN_CONSTRAINT`), its message ending "under the strict no-left constraint"
+  (`Constraints.note`), when the seed's legs can be built without the constraint (one more
+  build, on failure only); when they cannot either, the constraint is not the reason, and it
+  is the plain `StopUnreachable`. A stop the fallback moves notes "nearer nodes cannot be reached
+  under the strict no-left constraint"; `check_base` refuses a base route with such a turn (a
+  soft constraint takes any base). The validator proves it from the raw data (**The
+  validator**, `constraints`). `strict` without `no_left` or `no_right` is refused ("strict
+  needs no_left or no_right").
+
+**Why strict is rarely satisfiable.** On a street grid a net left turn without left turns is
+three rights round a block, which comes back through the junction it left, and no junction may
+repeat; a node-simple way must spiral outward round the trip's own start, mostly beyond the
+leash, and the edge-state search answers None for the cheapest walk that loops (**Searches**).
+On Portland, strict no-left plans 4 of the 20 acceptance pairs and strict no-right 3 (the
+others fail at the seed, after the stops' fallback), and Powell's → Reed refuses (**On
+Portland**). The same geometry bounds a soft run: a detour that adds no left turn needs right
+turns at both ends of its window, or two inside it, so where a left turn costs more than any
+detour gains the route barely grows. Hence the penalty of a kilometre, not more: at 10⁶ (fewest
+left turns first) the soft modes gave a median of 1.12× on the acceptance pairs; at 1,000 they
+give 5.33× (no-left) and 6.47× (no-right), against 21.5× without (**On Portland**). And a soft
+route barely shrinks toward a smaller target: a shorter way round mostly needs the left turn
+its three rights stood for, which shrinking may not add (**Targets**).
 
 ## Detours
 
@@ -266,10 +378,12 @@ round-trip seed).
   transition-aware search could answer None where a legal path exists (when its cheapest walk
   passes a node twice). The paths are ranked by
   `objective.delta` (stable, so ties keep the DFS order), and the first the splice accepts is
-  returned. A run shrinking toward a target (`shrink`, its goal) keeps only the paths that lose
-  (`delta` < 0, the only ones it can take, so a longer path that is faster never shadows a
-  shorter one for a duration) and ranks them by how close each would bring the route to the
-  target's band (`Goal.shrink_rank`: 0 inside it, the distance above it, last below it).
+  returned. A run shrinking toward a target (`shrink`, its goal) keeps only the paths it can
+  take, those that lose on the objective's own part (`delta − constraint_delta` < 0) and add
+  no net avoided turn (`constraint_delta` ≥ 0; **Targets**), so a longer path that is faster
+  never shadows a shorter one for a duration, and ranks them by how close each would bring the
+  route to the target's band (`Goal.shrink_rank`: 0 inside it, the distance above it, last
+  below it).
 
 **Why the local-exhaustive cap.** With the reference backend, the DFS grows exponentially with
 the ball. Measured on a 100 m grid with depth 25 and 5000 paths:
@@ -344,14 +458,17 @@ empty ones. The same rule holds in every phase of a target run.
 
 A request's `target` (`target.py`) says how much worse: `max` (as bad as the budget allows,
 the default), `ratio` (the route's length as `value` × the baseline's, more than 1) or
-`duration` (`value` seconds of driving, more than 0 and at most 7 days,
-`TARGET_MAX_DURATION_S`). A target is reached within ±2 % (`TARGET_TOLERANCE`): the band
-[T × 0.98, T × 1.02], ends included. The quantities are the distance objective's metrics,
-length over the baseline's length and `time_s`; a slowest-time objective is M3.
+`duration` (`value` seconds, more than 0 and at most 7 days, `TARGET_MAX_DURATION_S`). A target
+is reached within ±2 % (`TARGET_TOLERANCE`): the band [T × 0.98, T × 1.02], ends included. A
+ratio is the objective's primary quantity over the baseline's (`Objective.primary`: the length
+for distance, the experienced time for the slowest time); a duration is always the experienced
+time, `time_s + delay_s`: the driving and the waiting at the route's signals and stop signs.
 
-`Goal(target, data, baseline_length_m=)` is what the loop asks, by a route's **value** (the
-score for `max`; the ratio; the time): `better`, `reached`, `phase`, `candidate` (a detour's
-value from its window, `math.fsum` of its edges' lengths or times less the removed ones'),
+`Goal(target, data, *, primary, baseline)` (the objective's `primary` and the baseline's
+`Metrics`) is what the loop asks, by a route's **value** (the score for `max`; the ratio of the
+primary quantities; the experienced time): `better`, `reached`, `phase`, `candidate` (a
+detour's value from its window: `math.fsum` of its edges' lengths and times less the removed
+ones', and the delays at the nodes it passes less those at the nodes it removes),
 `accepts`, `overshoots`, `shrink_rank` and `describe`. Its rules take values, not routes, so the
 API's follower applies them to the splices it is sent (`docs/reference/api.md`, **Jobs**).
 `plan_route` makes it once the baseline is known; `PlanResult.goal` holds it.
@@ -362,8 +479,10 @@ API's follower applies them to the splices it is sent (`docs/reference/api.md`, 
   without passing the band's top. A detour that would pass it is a failure, so the radius
   halves after 20 of them as after any 20 failures, and later detours are smaller.
 - **shrink**, above the band (a base route past a smaller target, or after an overshoot): a
-  replacement is taken when it loses (`delta < 0`) and its value falls without passing the
-  band's bottom. The radius stays at its floor (300 m), windows are longer, and the
+  replacement is taken when its objective's part of the score loses (`delta −
+  constraint_delta < 0`), its constraints' part does not (`constraint_delta ≥ 0`: no net
+  avoided turn added, which a soft constraint's penalty would otherwise pay for), and its value
+  falls without passing the band's bottom. The radius stays at its floor (300 m), windows are longer, and the
   local-exhaustive paths that lose are ranked by closeness to the band (**Detours**, **The
   loop**).
 - **done**, inside the band: the run stops with `"target"`, also before its first attempt.
@@ -485,8 +604,10 @@ check reports `ok`, the first offending index and a detail. `report.ok` is their
    the first node to the last. For a saved route, `stop_nodes` are re-derived from its request
    (`resolve_stops`), not read from the file, so a file cut short and edited to agree with
    itself still fails here, naming the stop.
-7. **`constraints`**: every node in `node_mask`, and no edge in `banned_edges` (the request's
-   tier bans).
+7. **`constraints`**: every node in `node_mask`, no edge in `banned_edges` (the request's
+   tier bans), and, under a strict turn constraint (`banned_turn_classes`, from the request's
+   constraints), no turn of a class it refuses, each turn classed again from the edges'
+   bearings with the configured thresholds rather than the engine's table.
 8. **`metrics`**: the reported length and time are finite and equal the ones recomputed with
    `math.fsum` within a relative 1e-6 (the comparison is written so that NaN fails).
 
@@ -495,13 +616,16 @@ check reports `ok`, the first offending index and a detail. `report.ok` is their
 **`route.json`** (`route_document`; `worst-route plan --out`) holds:
 
 - `graph_version`, `region`, `build_id`, `seed`, `engine_version`;
-- `request`, the `RouteRequest` as JSON;
+- `request`, the `RouteRequest` as JSON (its `constraints` only when it has some);
 - `stops`: `[{lat, lon, node, moved_m, note}]`, the snapped node's position;
 - `nodes`, `edges`, `stop_idx`;
-- `metrics`: `{length_m, time_s, baseline_length_m, baseline_time_s, ratio}` (`ratio` is null
-  for a round trip), plus the objective's counters, and for a ratio or duration target
+- `metrics`: `{length_m, time_s, delay_s, baseline_length_m, baseline_time_s,
+  baseline_delay_s, ratio, turns: {left, right, straight, u_turn}}` (`ratio` is null for a
+  round trip; `delay_s` and `baseline_delay_s` the waiting at signals and stop signs, which
+  `time_s` and `baseline_time_s`, the driving, leave out; `turns` by **Turns**), plus the
+  objective's counters, and for a ratio or duration target
   `target: {kind, value, achieved, within_tolerance}` (`Goal.describe`: the target, the route's
-  ratio or seconds, and whether that is within ±2 %);
+  ratio or its experienced time in seconds, and whether that is within ±2 %);
 - `run`: `{attempts, accepted, stopped_because, elapsed_s, backend}` (`backend` is `"csr"` or
   `"python"`; every backend gives the same route).
 
@@ -525,6 +649,7 @@ has a null geometry.
 worst-route plan --region R [--build-id ID] --from LAT,LON --to LAT,LON [--via LAT,LON]...
                  [--seed N] [--budget SECONDS] [--max-iterations N] [--leash-km X|auto]
                  [--tier auto|T0..T4] [--target max|ratio:X|duration:TIME]
+                 [--objective distance|time] [--no-left | --no-right] [--strict]
                  [--out route.json] [--geojson route.geojson] [--backend auto|csr|python]
 worst-route plan --region R --base route.json [--build-id ID] [--seed N] [--budget SECONDS]
                  [--max-iterations N] [--target ...] [--out ...] [--geojson ...] [--backend ...]
@@ -545,10 +670,18 @@ to stderr on an accepted splice, at most one line every 2 s. On stdout it prints
 
 - the build;
 - the tier, leash, seed and budget;
+- the objective and the constraints, when not the default: `objective: time, few left turns`
+  (`no left turns` with `--strict`);
 - each stop with its node, position, how far it moved, and the note;
 - the baseline, the base route with `--base` (`base: FILE: 481.59 km, 14 h 42 min, 62.43x`)
   and the worst route (length and time);
-- the ratio;
+- the ratio, and the time ratio with its breakdown: `time ratio: 52.18x (drive 14 h 42 min +
+  delays 4 h 11 min = 18 h 53 min)`. Time, wherever a ratio or an arrival is shown, is the
+  experienced time, the driving and the delays at signals and stop signs, against the
+  baseline's, as the API's `time_ratio` and `arrival`; the driving time and the delays are
+  reported apart (`worst:`, `turns:`);
+- the turns and the delays: `turns: 80 left, 144 right, 1067 straight, 0 u-turns; delays 2 h
+  0 min`;
 - for a ratio or duration target, the target and what was achieved:
   `target: ratio 20x → achieved 19.60x (within ±2 %)`,
   `target: duration 9 h 0 min → achieved 8 h 50 min (within ±2 %)` (or `outside ±2 %`);
@@ -559,8 +692,16 @@ to stderr on an accepted splice, at most one line every 2 s. On stdout it prints
 
 It writes the files it is asked for. A stop that cannot be snapped or reached is one line,
 `cannot plan: ` and the error (for an unreachable stop, the leg and the stops it moved), and
-exit 1. A route that fails the validator is reported as an engine bug, exit
-1, and never printed. A bad argument is exit 2.
+exit 1; under `--strict`, "cannot plan: no route from stop 0 to stop 1 without repeating a
+road, after moving stop 1 up to 10 times, under the strict no-left constraint; try without
+--strict". A route that fails the validator is reported as an engine bug, exit 1, and never
+printed. A bad argument is exit 2: `--no-left` with `--no-right`, an objective other than
+`distance` or `time`, and `--strict` without `--no-left` or `--no-right` (one line, "--strict
+needs --no-left or --no-right").
+
+**`--objective`** is `distance` (the default) or `time` (**Objectives**); **`--no-left`** and
+**`--no-right`** make each such turn cost a kilometre of route, **`--strict`** allows none
+(**Constraints**).
 
 **`--target`** is `max` (the default), `ratio:<x>` (× the baseline, more than 1) or
 `duration:<time>`, where a time is `9h`, `90m`, `2h30m`, `45s` or a number of seconds (at most
@@ -568,9 +709,11 @@ exit 1. A route that fails the validator is reported as an engine bug, exit
 for a round trip, which prints `invalid --target: a round trip has no ratio target`.
 
 **`--base route.json`** continues a saved route, as the API's `base_route_id` does ("make it
-worse", toward the new target, with the new seed and budget). The stops, tier, leash and
-objective come from the file; `--from`, `--to`, `--via`, `--tier` or `--leash-km` beside it is
-exit 2, and so is a `--base` path that does not exist. The build is the file's (`--build-id` names another); a file it cannot read, one made by
+worse", toward the new target, with the new seed and budget). The stops, tier, leash,
+objective and constraints come from the file; `--from`, `--to`, `--via`, `--tier` or
+`--leash-km` beside it is exit 2 ("--base takes the stops, tier and leash from its route: drop
+…"), `--objective`, `--no-left`, `--no-right` or `--strict` too ("--base takes the objective
+and constraints from its route: drop …"), and so is a `--base` path that does not exist. The build is the file's (`--build-id` names another); a file it cannot read, one made by
 another engine version, on another region or on another `graph_version`, is one line and exit
 1, and so is a base `check_base` refuses (`cannot plan: the base route's stops are not the ones
 the request resolves to`) or whose route is not legal. The route.json it writes records the new
@@ -615,11 +758,11 @@ Reed, `--max-iterations 1000000`; every route validates, `worst-route validate` 
 | Request | Result |
 |---|---|
 | `--target ratio:20`, seeds 1–3 | 19.60×, 20.17×, 19.61× (151–156 km), `target` after 1,017–1,201 attempts, 0.3–0.4 s |
-| `--target duration:3h`, seeds 1–3 | 3 h 3 min, 2 h 57 min, 2 h 57 min (102–106 km, 13.3–13.7×), `target` after 362–616 attempts, 0.2 s |
-| `--target duration:9h`, seed 1 | 8 h 50 min (289.75 km, 37.56×), `target` after 5,287 attempts, 1.1 s |
+| `--target duration:3h`, seeds 1–3 | 2 h 58 min, 2 h 58 min, 3 h 1 min of experienced time (64.94–66.08 km, 8.42–8.57×; 1 h 5 min–1 h 13 min of it delays), `target` after 43–137 attempts, 0.1–0.2 s (driving time alone, before M3: 3 h 3 min, 2 h 57 min, 2 h 57 min, 102–106 km) |
+| `--target duration:9h`, seed 1 | 8 h 51 min (6 h 19 min of driving, 2 h 31 min of delays; 212.49 km, 27.55×), `target` after 2,440 attempts, 1.1 s (driving alone: 8 h 50 min, 289.75 km) |
 | max, seed 1 (`--budget 120`) | 62.43×, the same route.json as before targets but the request's `target` key |
 | `--base` of that route, `--target ratio:30`, seed 1 | 30.58× (235.89 km), `target` after 30,158 attempts and 728 shrinking splices, 5.0 s |
-| `--base` of that route, `--target duration:7h`, seed 1 | 7 h 8 min (241.38 km), `target` after 30,247 attempts and 686 shrinking splices, 4.2 s |
+| `--base` of that route, `--target duration:7h`, seed 1 | 7 h 8 min of experienced time (180.74 km), `target` after 44,486 attempts and 876 shrinking splices, 14.6 s on a busy machine (driving alone: 7 h 8 min, 241.38 km, 30,247 attempts) |
 
 A target run gives the same bytes on both backends and twice. Before the shrinking windows and
 ranking (**Targets**), the 62.43× → 30× shrink converged at 34.59× after 228,329 attempts
@@ -647,6 +790,54 @@ run, so a rate compares only with the run made just before or after it):
   scanning each new random-weight array (`docs/reference/graph.md`, **The CSR backend**); the
   turn DFS 8,110 times, 71 µs against 20 µs. Most searches are small, so a kernel 8–10× faster on
   large searches makes a whole run about 1.2× faster; the rest of a run is the loop's own work.
+
+**The slowest time and the turn constraints on Portland** (build 506f747d7458, `graph_version`
+f7c6ebdd303d: the same extract re-enriched at pipeline version 2, so its turn classes are the
+roads', not the stubs'; engine version 2, 2026-10-30, `CsrBackend`, Powell's → Reed with
+`worst-route plan --seed 1 --budget 120 --max-iterations 1000000`; every route validates;
+other lanes ran beside it, so no time here compares with those above). The baseline is 7.71 km,
+13 min 4 s of driving and 8 min 40 s of delays, 21 min 44 s experienced; the plain seed turns
+left 10 times, 1.30 a km, and right 11.
+
+| Request | Result |
+|---|---|
+| `--objective time` | 479.83 km, 14 h 42 min of driving and 4 h 11 min of delays: 52.18× the experienced time (67.55× the driving time, 62.20× the length); converged after 66,578 attempts (the distance route: the same bytes as on build e4b3b4ad90db, 62.43×, 52.29× the experienced time) |
+| `--objective time --target duration:9h` | 8 h 55 min (6 h 16 min of driving, 2 h 39 min of delays; 205.63 km, 24.64×), `target` after 1,575 attempts |
+| `--objective time --target ratio:20` | 20.14× the experienced time (165.80 km), `target` after 668 attempts |
+| `--no-left` | 129.40 km, 16.77×, with 80 left turns of 1,291 (0.62 a km, the seed's 1.30) and no U-turn; converged after 48,152 attempts |
+| `--no-right` | 49.05 km, 6.36×, with 31 right turns of 511 (0.63 a km, the seed's 1.43) and no U-turn |
+| `--base` of the `--no-left` route, `--target ratio:3` (or `ratio:8`), seed 1 | converged at 11.04× (85.18 km, outside the band) after 36,754 attempts and 132 shrinking splices, its left turns 80 → 45: below that every shorter way round needs a left turn the route's rights stood for, which shrinking may not add (shrinking on the score alone, as it did before M3's review, such a run gained left turns) |
+| `--objective time --no-left` | 228.78 km, 28.48× the experienced time (29.66× the length), 250 left turns of 2,359 (1.09 a km) and 2 U-turns, converged after 46,597 attempts: a left turn costs 90 s here, cheaper against the time a detour gains (its delays included) than a kilometre is against its length, so more stay than under the distance (**the penalty** below) |
+| `--no-left --strict` (or `--no-right --strict`) | one line, exit 1: "cannot plan: no route from stop 0 to stop 1 without repeating a road, after moving stop 1 up to 10 times, under the strict no-left constraint; try without --strict" |
+
+On the 20 acceptance pairs (pair seed 2026, seed 1, 30 s each, the same build): soft no-left
+plans all 20 at a median of 5.33× (2.54–11.04×, 0.54 left turns and U-turns a km), soft
+no-right all 20 at 6.47× (2.36–13.89×); strict no-left plans 4 (2.40×, 1.42×, 1.04×, 1.00×; 16
+fail at the seed), strict no-right 3 (1.59×, 1.49×, 1.21×); every route validates. No strict
+route turns the refused way by the roads' own geometry: the review's probe, which takes one
+stub off each merged end, flags one turn (strict no-right, pair 12, at an interchange), where
+the OSM nodes' positions show two stubs and a straight road (180° in, 206° out). On build
+e4b3b4ad90db, whose bearings included the stubs, the soft medians were 6.88× and 5.65× and
+strict planned 3 and 1, one of them turning left by the road at a stage A cluster.
+
+**The penalty.** How much the soft modes trade length for turns is the penalty; with the
+distance (`TURN_PENALTY_M`), on Powell's → Reed under no-left:
+
+| `TURN_PENALTY_M` | Result |
+|---|---|
+| 10⁶ (fewest left turns first) | 2.58×, 8 left turns of 208; acceptance pairs: medians 1.12× (no-left), 1.10× (no-right) (build e4b3b4ad90db) |
+| 1,000 (a left turn worth a kilometre; the value) | 16.77×, 80 of 1,291; acceptance pairs: medians 5.33×, 6.47× (on build e4b3b4ad90db: 11.63×, 57 of 918; 6.88×, 5.65×) |
+| 300 | 52.91×, 676 of 4,138 (build e4b3b4ad90db) |
+
+Under the slowest time (`TURN_PENALTY_S`), Powell's → Reed under no-left, tuned to keep left
+turns about as rare as under the distance (under 0.7 a km) at well above 10×; no value tried
+does both, so it stays 90 s:
+
+| `TURN_PENALTY_S` | Result |
+|---|---|
+| 90 (the value) | 28.48× the experienced time (228.78 km), 250 left turns, 1.09 a km |
+| 180 | 11.66× (70.44 km), 60 left turns, 0.85 a km |
+| 300 | 4.67× (29.43 km), 16 left turns, 0.54 a km |
 
 ## Limitations
 
@@ -678,9 +869,17 @@ run, so a rate compares only with the run made just before or after it):
   M2's tuning has the numbers.
 - **Targets.** A shrinking run only replaces windows (at most 24 edges) by shorter paths, so a
   base far past a small target can converge above the band, returning the closest route
-  (`"converged"`); a target beyond what the area holds converges below it. A duration target is
-  reached through the distance objective's detours, searched on length; a slowest-time
-  objective is M3.
+  (`"converged"`); a target beyond what the area holds converges below it.
+- **Turn constraints.** A strict one is rarely satisfiable on a street grid (4 and 3 of 20
+  Portland pairs plan), and a soft one makes routes less bad than no constraint (medians 5.33×
+  and 6.47× against 21.5×; **Constraints**). Under the slowest time a left turn costs 90 s,
+  and the time a detour gains counts its delays, so more left turns stay than under the
+  distance (1.09 a km on Powell's → Reed, against 0.62). A soft route shrinks toward a smaller
+  target only as far as it can without adding a net avoided turn, the price of the rule that
+  shrinking never adds one: Powell's → Reed's 16.77× soft no-left route, sent toward 3×,
+  converges at 11.04× (`stopped_because: "converged"`, outside the band, the closest route
+  returned). Letting a shrinking splice add an avoided turn when the route's density of them
+  does not rise is a later option. The turn classes are coarse at super-junctions (**Turns**).
 
 ## Tests
 
@@ -691,19 +890,21 @@ bytes).
 | Test file | What it covers |
 |---|---|
 | `test_route.py` | every refusal, round trips, and the release and the ban counts against a brute force on random twins |
-| `test_validator.py` | each violation caught by the right check, including a cluster entered twice through its members, a shared shape point and non-finite metrics |
-| `test_request.py` | the request model and its bounds (its target's too, and no ratio target for a round trip), tier and leash auto, the masks and the tier's edge bans |
-| `test_target.py` | the target's bounds; the goal's rules on values (the band's edges, phases, the closer route better and a tie to the later, growing and shrinking acceptance at the band, a duration moving one way, a candidate's value equal to the re-scored route's); and on lattices with `check_delta`: ratio and duration targets reached while only growing, a base past a target shrinking into it, a route already within it stopping before an attempt, an unreachable target converging with the closest route, the overshoot after an empty cycle (the closest route returned, and a run cut at its attempt the prefix ending with it), the same bytes on both backends and twice |
+| `test_validator.py` | each violation caught by the right check, including a cluster entered twice through its members, a shared shape point and non-finite metrics; a strict turn constraint proven from the bearings (a left turn failing strict no-left, a right turn strict no-right, nothing under a soft one) |
+| `test_request.py` | the request model and its bounds (its target's too, and no ratio target for a round trip), tier and leash auto, the masks and the tier's edge bans; the objective's keys, the constraints left out of the JSON when there are none, both at once refused |
+| `test_target.py` | the target's bounds; the goal's rules on values (the band's edges, phases, the closer route better and a tie to the later, growing and shrinking acceptance at the band, a duration moving one way, a candidate's value equal to the re-scored route's, a ratio and a duration under the slowest time and a duration under the distance on the experienced time, delays included); and on lattices with `check_delta`: ratio and duration targets reached while only growing, a base past a target shrinking into it, a route already within it stopping before an attempt, an unreachable target converging with the closest route, the overshoot after an empty cycle (the closest route returned, and a run cut at its attempt the prefix ending with it), the same bytes on both backends and twice; the slowest time reaching ratio and duration targets on its experienced time |
 | `test_snap.py` | roles, cul-de-sacs, stops kept apart, round trips only for identical points, an end near the start moved on, re-snapping |
 | `test_search.py` | the turn edges counting only on a build with rows, a path driving both carriageways searched again, and the rounds' limit |
 | `test_seed_route.py` | `resolve_stops` deterministic, node-disjoint legs, legs avoiding later stops, the penalty re-solve on a corridor, the baseline, the re-snap walk out of a one-entrance ring, the start never moving, a point-to-point trip never collapsing onto the start, a leg between two stops on one node, unreachable legs named by both ends, a leg going round a junction that allows only straight on, the turn at a via, the baseline's legal legs and its turn-blind fallback, a leg driving both carriageways going round, a round trip to a neighbour not one road out and back, round-trip loops (never back along the way out) |
-| `test_objectives.py` | `Distance`, the radius, and `delta` against a full re-score for every kind of term |
+| `test_objectives.py` | `Distance`, the radius, and `delta` against a full re-score for every kind of term; the delays in every mode's metrics; `SlowestTime`'s terms, weights, waypoint pool, `describe` and primary quantity (the experienced time), and its `delta` against a full re-score |
+| `test_turns.py` | the classes by the change of bearing (the bands' ends, across north), the table against the rule written out, a lattice route's counts, a U-turn and the stored bearings deciding |
+| `test_constraints.py` | the request's constraints (`strict` alone refused); strict ones refusing turns and windows (at their boundaries), soft ones scoring minus the penalty a turn, a kilometre's worth in the objective's units (`turn_penalty_for`); the composite summing scores and combining hooks, its `constraint_delta` the penalties, its `delta` against a full re-score; the searches avoiding a class when they can and taking it when they must, refusing it when banned; the strict seed (vias, an unreachable leg as `InfeasibleTurnConstraint` with its note, one no route covers without the constraint either as the plain `StopUnreachable`, a round-trip loop), the strict loop never turning the refused way, the soft loop adding an avoided turn only for more than a kilometre of route (and far fewer than the plain loop), both on both backends, one-way towns with tables; a soft no-left base shrunk toward smaller ratios never adding a left turn or U-turn (each splice replayed) |
 | `test_detour.py` | each strategy's legal detours and None when none exists, the strategy weights, random weight drawing only near the window, the local-exhaustive ranking and the refused-candidate skip, no turn refused on a lattice of straight-only junctions (and many when the searches are made turn-blind); shrinking toward a target, the local-exhaustive path closest to the band first, and never a longer one (a longer, faster path shadowed a shorter one for a duration) |
 | `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, a splice after two empty cycles and the run stopping only after three, the segment bias's rate and its anchors (the edges with the most unused nodes near), the unused-node grid's cap, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, and so do those with turn tables (no turn refused), a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable`; the same-seed test on both backends, and both backends planning the same route, splice for splice, on the grid and on one-way towns with and without turn tables; shrinking toward a target, runs of 6 edges on average and up to 24 |
-| `test_io.py` | the route files, the target in the request and, for a target run, in the metrics |
-| `test_plan.py` | `plan_route`'s hooks: `on_start` once before the loop with the route it starts from (every splice replays from it to the result), the same route without the hooks, a continuation from `base` that never scores less, is fixed by its seed on both backends, and refuses a base for other stops, one leaving the request's area (before the loop) and, in `check_base`, a node outside the mask or an edge the request bans |
-| `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32, `--backend` on both commands (the same route.json on both backends but the backend and the time), and the same on a build with turn tables, where `auto` is `csr` too, a file from another engine version refused; `--target` (its line, its parsing, its refusals) and `--base` (a continuation to a smaller target, the options it refuses, a file from another engine version, region or `graph_version`, a truncated or broken route, stops that do not resolve); a ratio target for a round trip, from the stops or the base, refused; an illegal route reported as the base file's fault only with `--base` |
-| `test_portland_data.py` | (`data`: Portland's latest build through `WORST_ROUTE_DATA`, skipped without one) Powell's → Reed, seed 1, 4,000 attempts: the same bytes on both backends, splice for splice, no turn refused |
+| `test_io.py` | the route files, the target in the request and, for a target run, in the metrics; the delays and the turns in the metrics |
+| `test_plan.py` | `plan_route`'s hooks: `on_start` once before the loop with the route it starts from (every splice replays from it to the result), the same route without the hooks, a continuation from `base` that never scores less, is fixed by its seed on both backends, and refuses a base for other stops, one leaving the request's area (before the loop) and, in `check_base`, a node outside the mask or an edge the request bans; a soft constraint starting from the plain seed and keeping left turns rarer than the plain run's, a strict one no route keeps as `InfeasibleTurnConstraint` with its note, one no route keeps without it either (two one-way rings) refused as without it, a stop the strict fallback moves noting why, a base refused for a turn a strict constraint refuses (taken by a soft one); a strict route validated against its constraint |
+| `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32, `--backend` on both commands (the same route.json on both backends but the backend and the time), and the same on a build with turn tables, where `auto` is `csr` too, a file from another engine version refused; `--target` (its line, its parsing, its refusals) and `--base` (a continuation to a smaller target, the options it refuses, a file from another engine version, region or `graph_version`, a truncated or broken route, stops that do not resolve); a ratio target for a round trip, from the stops or the base, refused; an illegal route reported as the base file's fault only with `--base`; `--objective`, `--no-left`, `--no-right` and `--strict` (their lines, the time ratio with its drive and delays, the route.json, `validate`, their refusals, `--strict` alone in one line, a strict refusal in one line ending "try without --strict", `--base` taking them from its file); `validate` failing a soft route's file edited to claim a strict constraint |
+| `test_portland_data.py` | (`data`: Portland's latest build through `WORST_ROUTE_DATA`, skipped without one) Powell's → Reed, seed 1, 4,000 attempts: the same bytes on both backends, splice for splice, no turn refused; the slowest time reaching 9 h within ±2 %; soft no-left with fewer left turns a kilometre than its seed, at more than 5×; strict no-left refusing in one line |
 
 **The acceptance run**, `tools/acceptance.py`, plans random stop pairs on a saved build, so it
 needs `WORST_ROUTE_DATA` and is not part of the gate:
@@ -729,9 +930,11 @@ a table row per pair and a summary (planned, validator passes, median ratio and 
 per second, the failures the transitions caused, the Jaccards), writes the JSON report, and
 exits 1 only when a planned route fails the validator. On Portland it takes under two minutes.
 
-`tests/golden/` freezes three routes (seed 7, three stops) on a 20 × 20 lattice whose lon/lat
+`tests/golden/` freezes five routes (seed 7, three stops) on a 20 × 20 lattice whose lon/lat
 are rounded to 1e-7°, so their bytes and pinned `graph_version` do not depend on PROJ's last
-bits: a max run of 400 attempts (`grid20_distance.json`), and runs to a 6× ratio and a 2,400 s
-duration target, each stopping within it (`grid20_ratio.json`, `grid20_duration.json`). Both
-backends must reproduce them. They change only under a tier A brief;
+bits: a max run of 400 attempts (`grid20_distance.json`); runs to a 6× ratio and a 2,400 s
+duration target, each stopping within it (`grid20_ratio.json`, `grid20_duration.json`); the
+slowest time, 400 attempts, on the lattice with a primary road every fourth row and column, 30 s
+signals where two cross and 10 s stop signs along them (`grid20_time.json`); and soft no-left,
+400 attempts, between inner nodes (`grid20_noleft.json`). Both backends must reproduce them. They change only under a tier A brief;
 `WORST_ROUTE_REGEN_GOLDEN=1 uv run pytest tests/golden` rewrites them.

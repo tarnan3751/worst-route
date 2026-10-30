@@ -3,7 +3,10 @@
 The build is a 20 × 20 lattice of 100 m streets whose lon/lat are rounded to 1e-7 degrees, so its
 bytes, and its pinned graph_version, do not depend on PROJ's last bits on the machine running
 the test. Every backend must reproduce it, byte for byte. Two more freeze target runs from the
-same stops and seed (a ratio and a duration target, each stopping within it). A golden file
+same stops and seed (a ratio and a duration target, each stopping within it), and two more the
+modes, with the same seed: the slowest time from the same stops on the lattice with a primary
+road every fourth row and column (signals where two cross, stop signs along them), and the
+distance with a soft no-left constraint between inner nodes. A golden file
 changes only under a tier A brief that says so; to rewrite one, run
 `WORST_ROUTE_REGEN_GOLDEN=1 uv run pytest tests/golden` and commit the file.
 """
@@ -19,6 +22,7 @@ import pytest
 from worst_route.engine.plan import PlanResult, plan_route
 from worst_route.engine.request import RouteRequest
 from worst_route.engine.target import Target
+from worst_route.engine.turns import count_turns
 from worst_route.graph.csr_backend import CsrBackend
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
@@ -30,6 +34,11 @@ GOLDEN = Path(__file__).with_name("grid20_distance.json")
 TARGETS = {
     "grid20_ratio.json": Target(kind="ratio", value=6),
     "grid20_duration.json": Target(kind="duration", value=2400),
+}
+# Mode runs with the same seed: (the request's fields, the stops, the lattice's primary roads).
+MODES: dict[str, tuple[dict[str, Any], tuple[int, ...], int]] = {
+    "grid20_time.json": ({"objective": "time"}, (0, 210, 399), 4),
+    "grid20_noleft.json": ({"constraints": {"no_left": True}}, (42, 210, 357), 0),
 }
 Backend = type[PythonBackend] | type[CsrBackend]
 
@@ -54,6 +63,21 @@ def test_grid_target_route_is_golden(backend_type: Backend, name: str) -> None:
     actual = golden_of(g, request, result)
     actual["time_s"] = result.route.metrics.time_s
     actual["stopped_because"] = result.run.stopped_because
+    compare(Path(__file__).with_name(name), actual)
+
+
+@pytest.mark.parametrize("name", sorted(MODES))
+@pytest.mark.parametrize("backend_type", [PythonBackend, CsrBackend], ids=["python", "csr"])
+def test_grid_mode_route_is_golden(backend_type: Backend, name: str) -> None:
+    fields, nodes, primary_every = MODES[name]
+    g = lattice(20, 20, rounded_lonlat=True, primary_every=primary_every)
+    stops = [at_node(g, v) for v in nodes]
+    request = RouteRequest(stops=stops, seed=7, max_iterations=400, budget_s=120, **fields)
+    result = plan_route(g, request, backend=backend_type(g), check_delta=True)
+    actual = golden_of(g, request, result)
+    actual["time_s"] = result.route.metrics.time_s
+    actual["delay_s"] = result.route.metrics.delay_s
+    actual["turns"] = count_turns(g, result.route.edges)
     compare(Path(__file__).with_name(name), actual)
 
 

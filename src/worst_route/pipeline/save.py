@@ -7,7 +7,8 @@ tier_nodes, meta)` turns the enriched graph into `GraphData`:
   (u, v, original order): each node's out-edges are one run of ascending ids, and its in-edges
   are listed in ascending id. A unit's id is the id of its key (`enrich`: the smaller of the
   two directions of a road).
-- **Nodes**: position, `kind` as `NodeKind`, `node_state` −1 (states arrive with places),
+- **Nodes**: position, `kind` as `NodeKind`, `node_state` −1 (a route's states come from the
+  Census polygons at presentation time, `presentation/places.py`, so it stays −1),
   `pass_through`, `delay_s`, and `members`.
 - **Edges**: the enriched attributes; `edge_highway` as `HighwayClass`; `edge_tier` the first
   tier whose classes hold the class; `edge_name` and `edge_ref` index the raw tags and

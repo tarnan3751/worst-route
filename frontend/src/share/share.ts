@@ -7,8 +7,8 @@
 // anything, its own request then giving the stops and settings. `UrlSync` keeps the URL in step
 // with what the app shows once it is started, which is after a `?route=` link has been opened,
 // or has failed to open (the parameter then stays). The share section copies a link to the
-// route shown.
-import { errorBody, getRoute, getRouteGeojson } from "../api/client";
+// route shown, and opens its share image (`GET /routes/{id}/share.png`) in a new tab.
+import { API_BASE, errorBody, getRoute, getRouteGeojson } from "../api/client";
 import type { LineString, Target, Tier } from "../api/types";
 import type { JobRunner } from "../run/controls";
 import {
@@ -192,13 +192,24 @@ export class UrlSync {
   }
 }
 
-/** The share section: a link to the route shown, and a button that copies it. */
+/** The share image of stored route `routeId`, as the API renders it. */
+export function shareImageUrl(routeId: string): string {
+  return `${API_BASE}/routes/${routeId}/share.png`;
+}
+
+/** The share section: a link to the route shown, a button that copies it, and its share
+ * image. */
 export function mountShare(root: HTMLElement, store: Store): void {
   const link = el("input", "link");
   link.readOnly = true;
   const copy = el("button", "", "Copy link");
   const hint = el("p", "hint", "Run a route to get a link to it.");
-  root.replaceChildren(el("h2", "", "Share"), hint, link, copy);
+  const image = el("a", "", "Open share image");
+  image.target = "_blank";
+  image.rel = "noopener";
+  const imageLine = el("p");
+  imageLine.append(image);
+  root.replaceChildren(el("h2", "", "Share"), hint, link, copy, imageLine);
   copy.addEventListener("click", async () => {
     link.select();
     try {
@@ -213,7 +224,10 @@ export function mountShare(root: HTMLElement, store: Store): void {
   store.watch(["route"], (state) => {
     const id = state.route?.route_id;
     hint.hidden = id !== undefined;
-    link.hidden = copy.hidden = id === undefined;
-    if (id !== undefined) link.value = `${location.origin}${location.pathname}?route=${id}`;
+    link.hidden = copy.hidden = imageLine.hidden = id === undefined;
+    if (id !== undefined) {
+      link.value = `${location.origin}${location.pathname}?route=${id}`;
+      image.href = shareImageUrl(id);
+    }
   });
 }

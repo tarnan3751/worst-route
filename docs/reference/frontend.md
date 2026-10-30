@@ -21,7 +21,7 @@ nothing there.
 | `stops/search.ts` | `PlaceSearch` (the place search, no DOM, so the tests drive it) and `mountPlaceSearch`, its field, button and results |
 | `settings/panel.ts` | the request's settings and the units |
 | `run/controls.ts` | `JobRunner`, a job's lifecycle (no DOM, so the tests drive it); `mountRunControls`, Go, Cancel, Reroll, Make it worse and the stat line |
-| `share/share.ts` | the URL state, `UrlSync`, `openRoute`, the share section (**Links**) |
+| `share/share.ts` | the URL state, `UrlSync`, `openRoute`, `shareImageUrl`, the share section (**Links**) |
 | `banner.ts` | the error banner |
 | `format.ts` | distances (mi/km), durations, ratios, counts |
 | `util/geo.ts`, `util/dom.ts` | rounding and bounds; building DOM with text, never HTML |
@@ -191,7 +191,9 @@ target as `max`, `ratio:<x>` or `duration:<seconds>`, rewritten (`history.replac
 `UrlSync`) whenever the stops or settings change, so a link reproduces the request (Go with the
 same seed plans the same route on the same build). A value that does not parse, or lies outside
 the API's limits, is ignored and the default kept. Once a route is shown, the URL
-also carries `route=<id>`; the share section offers `…/?route=<id>` with a copy button.
+also carries `route=<id>`; the share section offers `…/?route=<id>` with a copy button, and an
+"Open share image" link to `/api/routes/<id>/share.png` (`shareImageUrl`), the server's PNG of the
+route (`docs/reference/api.md`, **Share image**), opening in a new tab (`rel="noopener"`).
 
 `?route=<id>` opens a stored route without running anything (`openRoute`): `GET /routes/{id}`
 and `GET /routes/{id}/geojson` (for the baseline), the stops and settings from the route's own
@@ -214,7 +216,7 @@ follows the app again from the next change. The units are not in the URL.
 | `run/controls.test.ts` | `JobRunner` with `fetch` and `EventSource` stubbed: a TypeError from the client and an event the app cannot handle end the run as `CLIENT_ERROR` with the controls unlocked (the job cancelled), the server's `error` closes the stream; Make it worse keeps the route and its seed when nothing worse is found and tries the next seed, follows a worse route's seed; Go and Reroll send the settings' seed, then none; leaving the page cancels a job whose POST is in flight once it is answered, a running one at once; a ratio and a drive-time target sent, shown while running and with what was achieved (`target reached`), and Make it worse whose base already meets its target |
 | `api/client.test.ts` | the API's error bodies, `BAD_RESPONSE` for an HTML success, `HTTP_<status>`, `NETWORK`, `CLIENT_ERROR` |
 | `stops/search.test.ts` | `PlaceSearch` with `fetch` stubbed and a real store: nothing asked while typing, one `GET /api/geocode?q=&region=` on Search, nothing for a blank text or before the region; the candidates listed, an empty answer said; a pick placing the stop exactly as `placeStop` (a click) does, as the start and as a stop before the end, and clearing the field; nothing placed or asked while a job runs; a 429 in the banner, and a search closing it |
-| `share/share.test.ts` | the URL state round trip (every field, `auto`, seeds 0 and 2⁵³ − 1, clicked coordinates exactly), values it ignores, the app's state to the URL and back; a `?route=` link at startup: the URL untouched until the route opens, then written from its request, and kept, with the banner, when it does not open; targets in the URL, values ignored, and a ratio-target route opened by link |
+| `share/share.test.ts` | the URL state round trip (every field, `auto`, seeds 0 and 2⁵³ − 1, clicked coordinates exactly), values it ignores, the app's state to the URL and back; a `?route=` link at startup: the URL untouched until the route opens, then written from its request, and kept, with the banner, when it does not open; targets in the URL, values ignored, and a ratio-target route opened by link; the share image's URL |
 | `format.test.ts` | distances in both units and their thresholds, durations, ratios, counts; drive times typed as a target, read and written back |
 
 The drawn points are not the stored geometry point for point: a snapshot is simplified
@@ -304,5 +306,5 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
 - **Seeds above 2⁵³ − 1** cannot be typed: the API allows up to 2⁶³ − 1, but a JavaScript number
   is exact only up to 2⁵³. A stored route with a larger seed (from the CLI or a script) shows it
   rounded.
-- **Desktop layout only**; directions, toasts, the share image and the other objectives arrive
-  with their milestones.
+- **Desktop layout only**; directions, toasts and the other objectives arrive with their
+  milestones. The share image is a link to the server's PNG, not shown in the page.

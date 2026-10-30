@@ -518,8 +518,9 @@ build_dir)`. The arrays are `docs/reference/graph.md`'s; how they come from the 
 - **Edge ids** are the positions of the sorted edge keys `(u, v, key)`, the format's (u, v,
   original order); `out_edges` and `in_edges` list each node's edges in ascending id. A unit's
   id is the id of its key.
-- **Nodes**: `x, y, lon, lat`; `node_kind` from `kind` (`NodeKind`); `node_state` −1 (states
-  arrive with places, M4); `pass_through`; `delay_s`; `members`.
+- **Nodes**: `x, y, lon, lat`; `node_kind` from `kind` (`NodeKind`); `node_state` −1 (a route's
+  states come from the Census polygons at presentation time, `docs/reference/presentation.md`,
+  so it stays −1); `pass_through`; `delay_s`; `members`.
 - **Edges**: `length` and the enriched values; `edge_highway` from the class string
   (`HighwayClass`); `edge_tier` the first tier holding the class; `edge_name` and `edge_ref`
   index the raw `name` and `ref` tags, `edge_identity` the identities, each table sorted;

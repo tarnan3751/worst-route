@@ -34,7 +34,11 @@ and the API. So is the frontend (`docs/reference/frontend.md`, M2's third
 step): a MapLibre map on which stops are clicked, the route drawn growing live from the stream,
 the run controls, the settings (the targets among them) and links. So is the geocoding proxy
 (M4's first piece): a place search in the stop list, answered by `GET /geocode` from Nominatim
-behind a cache and a one-request-a-second limit. The plan (`docs/PLAN.md`,
+behind a cache and a one-request-a-second limit. So are more of the presentation
+(`docs/reference/presentation.md`): the Census places index (`tools/fetch_census.sh`,
+`worst-route aux places`) naming the states and towns a route passes through, the comparison
+lines, and the share image (`GET /routes/{id}/share.png`, matplotlib, cached per route).
+The plan (`docs/PLAN.md`,
 2026-10-30) is written and its open questions answered as far as `docs/project_overview.md` §3
 records. **M1 is built**: in the acceptance run on the
 Portland build (`uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20
@@ -55,8 +59,8 @@ every build, Portland's turn tables included; it plans the reference's routes by
   **shapely 2**, **scipy**, **pyarrow**; **FastAPI** + **uvicorn** with SSE for progress;
   **matplotlib** for the share image; **typer** for the CLI; **pytest** + **hypothesis**.
 - **Frontend: Vite + TypeScript, no framework, MapLibre GL JS.** `npm` only under `frontend/`.
-- **Data: Geofabrik state extracts**, never the 11 GB US file. Census boundaries and Gazetteer
-  for states and towns.
+- **Data: Geofabrik state extracts**, never the 11 GB US file. Census cartographic boundary
+  files (states and places polygons, 2025) for states and towns.
 
 Check before writing library calls. **OSMnx 1.x versus 2.x** API drift is the most common
 mistake here (`consolidate_intersections` and `simplify_graph` changed parameter names in 2.0),
@@ -79,6 +83,8 @@ Every command below exists. One a later milestone adds is marked with that miles
 | Lint and format check | `uv run ruff check . && uv run ruff format --check .` |
 | Types | `uv run mypy src` |
 | Pipeline, one step (all eight are real, run in this order; `filter` and `build` also take `--source PATH`, `cleanup` and `tiers` take `--allow-fragmented`) | `uv run worst-route pipeline <download\|filter\|build\|cleanup\|enrich\|tiers\|save\|qa> --region portland` |
+| Fetch the Census boundary files (a person, never the gate or an agent; FIPS codes of the states whose places to fetch) | `tools/fetch_census.sh 41 53` |
+| Write the places index (states, outlines, the region's towns) from them | `uv run worst-route aux places --region portland` |
 | Plan a route from the CLI, validated (`--target ratio:20` or `duration:9h` aims for a target within ±2 %; `--base route.json` continues a saved route; `--objective time` the slowest; `--no-left` / `--no-right` such turns at a kilometre each, `--strict` none; `--objective collect --item bridge` collects bridges, or `toll_booth`, `level_crossing`, `roundabout`) | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
 | Validate a saved route | `uv run worst-route validate route.json` |
 | API server (the coordinator only; agents use `--port 0` or a port of their own, `--store` in their own tree, and `--geocoder none` or `--nominatim-url` pointed at a local stub: no agent calls Nominatim) | `uv run worst-route serve --region portland` |
@@ -104,7 +110,7 @@ first built and listed here when it exists.
 | Engine: `Route`, snapping, the seed route, detours, the worsen loop, the validator, exact mode | `src/worst_route/engine/` | §3.1–3.4, §3.11–3.13 | `docs/reference/engine.md` |
 | Objectives and constraints: the interface, each mode, turns and the turn constraints, the alphabet search | `src/worst_route/engine/objectives/`, `turns.py`, `constraints.py`, `alphabet_search.py` | §3.6–3.8 | `docs/reference/engine.md` (**Objectives**, **Turns**, **Constraints**) |
 | API: jobs, SSE, routes, geocode proxy, workers | `src/worst_route/api/`, `geocode/` | §4 | `docs/reference/api.md` |
-| Presentation: directions, stats, comparisons, share image, jokes | `src/worst_route/presentation/` | §4.3, M4 | *(when built)* `docs/reference/presentation.md` |
+| Presentation: places (states, towns), directions, stats, comparisons, share image, jokes | `src/worst_route/presentation/`, `api/share_api.py` | §4.3, M4 | `docs/reference/presentation.md` |
 | Frontend: map, stops, settings, run controls, toasts, directions, share | `frontend/src/` | §5 | `docs/reference/frontend.md` |
 | Testing and tools: the gate, lanes, landing, fixtures, benchmarks | `tests/`, `tools/` | §8 | `docs/reference/testing-tools.md` |
 
@@ -172,7 +178,8 @@ really gives the same route), so treat them as hard rules.
 - Nominatim: backend proxy only, ≤ 1 request/s, a search button (no type-ahead), cached,
   `User-Agent: worst-route/<version> (<contact>)`. OSM raster tiles: hobby volume locally,
   a vector basemap before anything public. **No test, gate, agent or fixture calls either.**
-- Downloads happen only through `pipeline download`, run by a person, never by the gate.
+- Downloads happen only through `pipeline download` and `tools/fetch_census.sh`, run by a
+  person, never by the gate.
 
 ## Folder layout
 
@@ -183,7 +190,7 @@ data/            gitignored: raw/, filtered/, aux/, graphs/<region>/<build_id>/
 src/worst_route/ config, cli; pipeline/, graph/, engine/ (objectives/), presentation/, geocode/, api/
 frontend/        Vite + TS app: src/{main,state,api,map,stops,settings,run,toasts,directions,share}
 tests/           fixtures/osm/*.osm, unit/, graph/, pipeline/, engine/, api/, property/, golden/, bench/
-tools/           gates.sh, land_series.sh, acceptance.py (the M1 acceptance run); later: fetch_census.sh, bench
+tools/           gates.sh, land_series.sh, acceptance.py (the M1 acceptance run), fetch_census.sh; later: bench
 .claude/agents/  scout, researcher, developer, reviewer
 .github/         workflows/gate.yml: the gate on every push and pull request
 ```

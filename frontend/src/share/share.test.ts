@@ -10,6 +10,7 @@ import {
   encodeUrlState,
   openRoute,
   settingsFrom,
+  shareImageUrl,
   urlStateOf,
   type UrlState,
 } from "./share";
@@ -204,5 +205,11 @@ describe("a ratio-target route opened by its link", () => {
     expect(store.state.settings).toMatchObject({ target: "ratio", ratio: 25 });
     expect(store.state.run.outcome).toMatchObject({ kind: "ratio", within_tolerance: true });
     expect(encodeUrlState(urlStateOf(store.state))).toContain("&target=ratio:25&");
+  });
+});
+
+describe("the share image", () => {
+  it("is the API's share.png of the route, through the /api proxy", () => {
+    expect(shareImageUrl("5ea844bffd40")).toBe("/api/routes/5ea844bffd40/share.png");
   });
 });

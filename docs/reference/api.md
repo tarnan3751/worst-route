@@ -10,15 +10,17 @@ else: every route it returns has passed the validator.
 | Module | What it holds |
 |---|---|
 | `app.py` | `create_app`, `ApiSettings`, `Api` (the app's state), `geocoder_user_agent`, the error handlers |
-| `routes_api.py` | the endpoints, the checks `POST /jobs` makes before a job exists, `ApiError`, `api_of`, `region_of`, `bbox_of` |
+| `routes_api.py` | the endpoints, the checks `POST /jobs` makes before a job exists, `ApiError`, `api_of`, `region_of`, `bbox_of`, `stored_route`, `build_of`, `stored_delays` |
 | `geocode_api.py` | `GET /geocode` (**Geocoding**) |
+| `share_api.py` | `GET` and `HEAD /routes/{id}/share.png`, `SHARE_IMAGE_VERSION` (**Share image**) |
 | `schemas.py` | the request and response models (pydantic), the SSE payloads |
 | `jobs.py` | `JobManager`, `JobSettings`, `Job`, `Subscription`, `prepare`, `TooManyJobs` |
 | `worker.py` | `run_job` (what a worker process runs), `JobSpec`, `RouteArrays`, the worker's messages |
 | `sse.py` | `Event`, `path_points`, the payload builders, `server_sent` |
 | `store.py` | `RouteStore`, `StoredRoute`, `route_id` |
 
-The geocoding proxy's backend is the `geocode/` package (**Geocoding**).
+The geocoding proxy's backend is the `geocode/` package (**Geocoding**); the share image's is
+the `presentation/` package (`docs/reference/presentation.md`).
 
 Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in requests; every number is metric
 (metres, seconds). There is no `/api` prefix: the frontend's dev server proxies to the root.
@@ -38,7 +40,10 @@ in that process's memory, and each runs in a worker process of its own, `--worke
 (default `API_MAX_JOBS`, cores − 2). The routes go to `--store`, by default
 `<WORST_ROUTE_DATA>/routes.sqlite`; a lane that reads the main tree's builds through
 `WORST_ROUTE_DATA` points `--store` into its own tree, and runs with `--geocoder none` or
-`--nominatim-url` pointed at a stub of its own (no agent calls Nominatim). `--port 0` binds a free port, which
+`--nominatim-url` pointed at a stub of its own (no agent calls Nominatim). The share images are
+cached in `share/` beside the route store, so a lane's stay in its own tree too. At startup it
+loads the region's places index if `worst-route aux places` has written it under
+`<WORST_ROUTE_DATA>/aux/places/` (**Share image**). `--port 0` binds a free port, which
 uvicorn's log line names. The job manager's own lines (a job cancelled for want of a subscriber,
 a worker's traceback) go to the same log. `--backend` is the engine's
 (`docs/reference/graph.md`, **Choosing a backend**), and `serve` prints the one it took as
@@ -135,7 +140,7 @@ FastAPI's `detail`):
 | 429 | `RATE_LIMITED` (+ `retry_after_s`) | a place search that finds the geocoder's queue full: five already queued for a turn (**Geocoding**); the message is "the geocoder is busy, try again in a few seconds" |
 | 502 | `GEOCODER_ERROR` | Nominatim failed: an error status, a timeout, no connection, an answer that does not parse; or refused (429, 403), which pauses the geocoder 60 s, during which a search the cache cannot answer gets this at once ("the geocoder refused; paused for N s") |
 | 503 | `GEOCODER_DISABLED` | a place search on a server whose geocoder is `none` |
-| 404 | `NOT_FOUND` | an unknown (or expired) job, an unknown route, an unknown path |
+| 404 | `NOT_FOUND` | an unknown (or expired) job, an unknown route (for a share image, also an id that is not 12 lowercase hex digits), an unknown path |
 | 405 | `METHOD_NOT_ALLOWED` | a method a path does not take |
 | 409 | `BUILD_UNAVAILABLE` | a stored route whose build is no longer on disk at its `graph_version` |
 | any other | `HTTP_<status>` | any other HTTP error Starlette raises, its status in the code |
@@ -169,6 +174,7 @@ later.
 | GET | `/routes/{id}/geojson` | the FeatureCollection `engine.io.feature_collection` makes: the route, the baseline (null for a round trip) and the stops |
 | POST | `/routes/{id}/validate` | `{route_id, graph_version, ok, checks: [{name, ok, index, detail}]}`, the stops re-derived from the stored request (by this engine version only) |
 | GET | `/geocode` | `{query, region, candidates: [{label, lat, lon, category}], cached}`, for `?q=&region=` (**Geocoding**) |
+| GET, HEAD | `/routes/{id}/share.png` | the route's share image, a 1200 × 630 PNG (`image/png`), cached; HEAD the same headers without it (**Share image**) |
 
 **`/snap`** judges the stop in the tier's nodes and every node within `BUBBLE_KM` (3 km) of it,
 as a job's masks do near a stop (`auto` is T4); its `note` says why a stop moved ("moved 214 m
@@ -479,6 +485,46 @@ came back. Meanwhile a search the cache cannot answer is refused at once, withou
 `GeocodeError` "the geocoder refused; paused for N s" (N the whole seconds left; the refused
 search itself is answered the same, with 60). Like the rate limit, the pause is per process.
 
+## Share image
+
+**`GET /routes/{id}/share.png`** answers the route's share image (`docs/reference/presentation.md`,
+**Share image**): a 1200 × 630 PNG drawn from our own data (the ratio, the comparison line, the
+route and its baseline over the build's roads and the state outlines, no basemap), as `image/png`
+with `Cache-Control: public, max-age=86400`. Its big number is the route's ratio of lengths, "less
+efficient than the sensible route", except for a route planned for the slowest time (its request's
+`objective` is `"time"`), which shows its document's `time_ratio`, "slower than the sensible route";
+a round trip shows its length ("to end up where it started"). **`HEAD`** answers the same headers,
+its `Content-Length` the image's, without the body (link unfurlers ask that way first); it renders
+the image as a GET would, if it is not cached yet.
+
+- An id that is not a route id (12 lowercase hex digits) is 404 `NOT_FOUND` before any file is
+  looked at.
+- An image already rendered is read from `share/<id>-v<SHARE_IMAGE_VERSION>.png` in the share
+  directory, `share/` beside the route store (`Api.share_dir`), and served as it is, whatever has
+  happened to its build since.
+- Otherwise the route is read from the store (404 `NOT_FOUND`) and the endpoint takes the route's
+  lock (`Api.share_locks`, an `asyncio.Lock` per route), so concurrent first requests render once:
+  the first renders in a worker thread (`asyncio.to_thread`), on the route's build at its
+  `graph_version` (409 `BUILD_UNAVAILABLE`, as `GET /routes/{id}` answers), with `comparison_line`
+  of its length, the places index's outlines, its request's objective and the document's
+  `time_ratio` (computed as `GET /routes/{id}` does: `stored_delays` and `sse.time_ratio`); it
+  writes the file whole (a temporary name of its own, then a rename, so two writers, two servers on
+  one store, never share a part file); the others then find the file. The lock is forgotten once the
+  request that took it is done, whatever happened (an image written, a 409, a render that failed,
+  which is a 500 and leaves no file): the next request starts afresh.
+- The places index (`Api.places`) is loaded once, at startup, for the served region:
+  `worst-route aux places --region R` writes it (`docs/reference/presentation.md`, **Places**).
+  Without one the images have no state outlines; nothing fails.
+
+The drawing (`presentation/share_image.py`) is imported, and with it matplotlib, by the first
+render, never at startup: matplotlib's first import may build its font cache, which took 11 s on
+a cold machine, and the API starts without it. So the first image after a start takes about two
+seconds (**Measured**).
+
+`SHARE_IMAGE_VERSION` (in `share_api.py`) goes up whenever the drawing changes, so images drawn
+by an older version are left behind rather than served. A route's id names its content (**The
+store**), so its image never needs drawing again for the same version.
+
 ## Measured
 
 On Portland (build e4b3b4ad90db, engine version 2), `serve` with the default backend (`auto`,
@@ -520,6 +566,12 @@ machine, with curl:
   worse" from it with a 30× ratio, seed 1, `done` after 5.7 s at 30.58×, every `progress` lower
   than the one before, its `/validate` ok. Each target job's `done` and document carry its
   `target`.
+- **Share images** (`serve --port 0`, csr, 2026-10-30, with the Portland places index, a warm
+  font cache): Powell's → Reed, seed 1 (`5ea844bffd40`, 62.43×): 489 kB in 2.0 s for the first
+  image after the start (matplotlib's import included), 8 ms from the cache (the same bytes), one
+  file `share/5ea844bffd40-v1.png`, and `HEAD` the same headers with no body; Powell's → Hayden
+  Island, seed 3 (52.40×), next, 1.4 s; an unknown id and `nope` 404 `NOT_FOUND`. A job's worker
+  process had loaded neither matplotlib nor geopandas (nor FastAPI nor pandas).
 
 ## Tests
 
@@ -534,6 +586,7 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 | `test_jobs.py` | the manager with inline workers: event order and ids, a client replay equal to the stored route, late subscribers (after a worker that died with splices waiting too: they come before its `error`, ids rising strictly), `Last-Event-ID` resync, cancel (validated, stored, reproduced by its attempts), the queue and its limit, cancel before the route exists, continuations, the time limit, orphans running and queued, a worker that raises, a store failure while cancelling (by hand and by the sweep, which goes on), a worker that does not start (the queue moves on), the TTL; a target run whose best is not its last route (an overshoot on a 5 × 5 lattice): a snapshot of the stored route before `done`, for live and late clients, and a cancel after the overshoot storing the closest route, reproduced by its attempts |
 | `test_worker_process.py` (`slow`) | real spawned workers: a run to `done`, a cancel mid-run, a worker killed from outside (`WORKER_FAILED`), a fake worker that dies 60 kB into a 2 MB message (`WORKER_FAILED`, then a clean `stop()`), and a worker whose API process (a probe) is killed exiting within 3 s; about 4 s |
 | `test_geocode_api.py` | `GET /geocode` with a `FakeGeocoder`: the answer's shape, at most five candidates, the cache across casing and spacing (one upstream call), each refusal (an empty, blank, missing or too long query; a missing or unknown region; `RATE_LIMITED` from a full queue with its `retry_after_s`, a cached query still answered; `GEOCODER_ERROR`; a 429 upstream, on an `httpx.MockTransport`, pausing the geocoder, the next search refused without a request; `GEOCODER_DISABLED`, with no cache file); the default service, its client on a `MockTransport` (`offline_clients`): Nominatim at its URL with the User-Agent and contact, the cache beside the store, the limits and the pause, its client closed by the lifespan. The other API tests serve with `geocoder="none"`, so they build no geocoder |
+| `test_share_api.py` | `GET /routes/{id}/share.png` with and without a places index: a 1200 × 630 `image/png` with its Cache-Control, two concurrent first requests rendering once (a counted render) and getting the same bytes, one file, no lock left, a later request served from the file; `HEAD` first (it renders), its headers a GET's with no body; unknown and malformed ids (404, no file); a route whose build is gone (409, no lock left); a render that fails (no file, no lock, the next request draws it); two servers on one store rendering the same route at once, each part written before either rename (a barrier in `os.replace`), leaving one file and no part; on a lattice with signals, a slowest-time route's image headed by its document's `time_ratio`, "slower than the sensible route", and a distance route's by its `ratio`; `import worst_route.api.app` in a fresh interpreter leaving matplotlib out of `sys.modules` |
 | `test_routes_api.py` | every endpoint over `httpx.AsyncClient` in-process, every refusal code, cancel over HTTP, a closed stream cancelling its job, a stream that subscribes only once it runs, make it worse and its mismatches (a base outside its request's masks included), a continuation that changes nothing reporting the stored route; ratio and duration jobs ending `target` with the target in `done` and the document (none for max), a target out of bounds or a ratio for a round trip refused, make it worse with a smaller target shrinking; a stored route differing from the drawn one by a parallel edge sent as a snapshot before `done`, with `GET /jobs/{id}` agreeing; a ratio target for a round trip refused before anything else, for a base route too; `Infinity` and `NaN` in a body refused; a slowest-time job under a soft no-left constraint, its turns and delays in `done` and the document; a strict constraint refusing a base route that turns left, a soft one taking it; a leg a strict constraint cannot drive answered `INFEASIBLE_TURN_CONSTRAINT` with its leg and constraint, one no route covers without it either (two one-way rings) `STOP_UNREACHABLE_WITHOUT_REPEAT` with strict set too; a body cut short refused without a `field`; `strict` alone and both constraints refused on `field: "constraints"`; on a lattice with signals, the document's `time_ratio`, `done`'s, and `arrival` counting the delays, the route's and the baseline's, for a route stored before the documents carried `baseline_delay_s` too; a collect job counting its bridges in every `progress` and in `done`, the document's `items` agreeing (a distance job's too), and the item and target refusals naming their field |
 
 `tests/engine/test_plan.py` covers `plan_route`'s hooks, `tests/graph/test_loader.py` the loader,
@@ -574,3 +627,6 @@ over a real socket by hand (**Measured**).
   which the frontend shows "Searching…".
 - **Spawn cost**: a job's first events after `snapped` wait for a fresh process (0.26–1.4 s
   measured).
+- **Share images are kept forever** in `share/`, one per route and drawing version; nothing
+  removes them, and an image drawn before the places index was written keeps no outlines until
+  `share/` is cleared.

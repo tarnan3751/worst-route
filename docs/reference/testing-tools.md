@@ -22,7 +22,13 @@ which httpx's dependency anyio provides) and the app driven in-process over `htt
 `FakeGeocoder` or a `NominatimGeocoder` on an `httpx.MockTransport` answering the jsonv2 bodies
 under `tests/fixtures/geocode/` (`support.offline_clients` puts code that makes its own client on
 one too, so no test builds a real HTTP client), and a fake clock for the cache, the rate limit
-and the pause (`docs/reference/api.md`, **Geocoding**); `tests/golden/`, the golden routes, frozen per build and
+and the pause (`docs/reference/api.md`, **Geocoding**); `tests/presentation/`, the presentation's
+tests (the places index, the comparison lines, the share image, and `tools/fetch_census.sh`
+against a `curl` stand-in on PATH), whose `support.py` writes the places index from
+`tests/fixtures/census/`, hand-written GeoJSON with the Census's columns: two fake states across
+the API tests' lattice and four places in two per-state files, one a CDP
+(`docs/reference/presentation.md`, **Tests**); `tests/golden/`, the golden routes, frozen per
+build and
 `graph_version` and rewritten only under a tier A brief; and `tests/fixtures/osm/`, hand-written
 OSM XML that pyosmium reads directly, with no conversion (`docs/reference/pipeline.md`,
 **Fixtures**). `tests/` and every test folder under it are packages (an empty `__init__.py`

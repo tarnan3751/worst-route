@@ -68,7 +68,7 @@ worst-route/
 ├── data/                       # gitignored
 │   ├── raw/<state>-latest.osm.pbf
 │   ├── filtered/<region>.roads.osm.pbf, <region>.pois.parquet
-│   ├── aux/                    # Census state boundaries, Gazetteer places, maxspeed defaults
+│   ├── aux/                    # census/ (the Census files), places/ (the places index), maxspeed defaults
 │   └── graphs/<region>/<build_id>/   # see §2.7
 ├── src/worst_route/
 │   ├── config.py               # pydantic-settings: data dir, regions, budgets, geocoder, UA string
@@ -110,7 +110,8 @@ worst-route/
 │   │   ├── exact.py            # stretch: CP-SAT certified worst for tiny subgraphs
 │   │   └── validator.py        # the proof-of-legality checker
 │   ├── presentation/
-│   │   ├── directions.py  stats.py  comparisons.py  share_image.py  jokes.py
+│   │   ├── places.py  comparisons.py  share_image.py   # as built (M4)
+│   │   ├── directions.py  stats.py  jokes.py
 │   ├── geocode/
 │   │   ├── base.py  nominatim.py  cache.py  limiter.py  service.py  fake.py   # as built (M4); photon.py later
 │   └── api/
@@ -120,7 +121,7 @@ worst-route/
 │   ├── fixtures/osm/*.osm      # hand-written OSM XML: grid, divided highway, cloverleaf, roundabout, cul-de-sac, private roads
 │   ├── unit/  graph/  pipeline/  engine/  api/  property/
 │   └── bench/
-└── scripts/                    # one-off helpers (fetch Census files)
+└── tools/                      # the gate, landing, the M1 acceptance run, fetch_census.sh (the Census files)
 ```
 
 ### 1.3 Python dependencies
@@ -224,8 +225,8 @@ Built for M1 without brands, states and places (M3, M4); how it works and Portla
 - **Bearings:** `bearing_out` over the first 20 m of the geometry (leaving u) and `bearing_in` over the last 20 m (arriving at v), as §3.6's turn rule reads them. As built in M3, the geometry less the stubs cleanup added to reach a merged node, so that a turn there is the road's (`docs/reference/pipeline.md`, enrich).
 - **Collectibles:** toll booths and level crossings are nodes on ways; map each to the simplified edges whose original node list contains it (both directions of a two-way road; a route uses one) → `toll_booth_n`, `level_crossing_n` per edge; one at a junction counts on the node's lowest-id out-edge until node collectibles (M3). `bridge=yes` per edge. Roundabout → super-node flag; as built, `save` keeps each super-junction's count of rings as `node_roundabouts`, so an interchange that holds a ring counts it. Stop signs/signals → node delay.
 - **Brands:** POIs with `brand` or `brand:wikidata`; snap each to the nearest kept edge within 50 m (STRtree nearest on edge geometries). Table `pois(brand_key, wikidata, name, lon, lat, edge_id, offset_m)`; `brand_key` = `brand:wikidata` when present else normalized brand name. Index by brand for the `/brands` autocomplete.
-- **States:** Census cartographic boundary file `cb_2024_us_state_500k` → `state_fips` per node (STRtree `contains` on node points).
-- **Places:** Census Gazetteer `2024_Gaz_place_national.txt` (GEOID, NAME, LSAD, ALAND, INTPTLAT/INTPTLONG). Store as a table with `radius_m = clamp(sqrt(ALAND/π), 400 m, 12 km)`. "Passed through" is evaluated at request time (§3.9).
+- **States:** built outside the build, with the places (M4; `docs/reference/presentation.md`, **Places**): a route's states are the Census 5m state polygons (`cb_2025_us_state_5m`) its line intersects, in the order it first meets them (§3.9), not a `state_fips` per node; `node_state` stays −1 in the format.
+- **Places:** built outside the build, as the places index (M4; `docs/reference/presentation.md`, **Places**): `worst-route aux places` writes the Census cartographic boundary polygons (2025: the 5m states, the 20m outlines, and each state's `place_500k` places meeting the region's bbox, CDPs included) under `data/aux/places/`, and the route's states and towns are the polygons its line intersects, in the order it first meets them (§3.9). Not the Gazetteer's centres and radii.
 - **Pass-through capability** per node: exists `u→v→w` with `u ≠ w` (needed for intermediate stops, §3.2).
 
 ### 2.6 `tiers`
@@ -267,7 +268,6 @@ data/graphs/<region>/<build_id>/
   later, with their steps:
   internal_paths     coordinate runs for drawing through super-junctions (stage B)
   pois.parquet       brand POIs (§2.5)
-  places.parquet     Gazetteer places with radius_m (national file, shared)
   qa/                snapping oddities; qa.html summary
 ```
 
@@ -494,8 +494,8 @@ Letters like Q, X and Z are rare, so the realistic outcome is "got to W, then dr
 
 - **Leash mask:** node allowed iff distance to the polyline through the stops ≤ `L`. `L` auto = `clamp(0.6 × straight-line trip length, 3 km, 150 km)`, user-adjustable. Computed vectorised with shapely 2 (`distance` of all active nodes to one LineString; ~0.5 s for 5M nodes).
 - **Tier + bubbles:** §2.6.
-- **Towns passed through:** `places` whose centre lies within `radius_m` of the route geometry (STRtree on place circles vs route LineString). Count distinct, list the first 10 by order encountered.
-- **States visited:** distinct `state_fips` over route nodes, in order of first appearance.
+- **Towns passed through:** as built (M4, `presentation/places.py`), the Census place polygons (CDPs included) the route's LineString intersects, by an STRtree, in the order the route first meets each; the stats choose how many to list.
+- **States visited:** as built, the same over the 5m state polygons.
 - **Network fraction:** route length ÷ total edge length of the active mask.
 
 ### 3.10 Graph backend protocol
@@ -552,7 +552,7 @@ FastAPI, JSON bodies validated by pydantic. All coordinates are `[lon, lat]` in 
 | GET | `/routes/{route_id}` | full route document |
 | GET | `/routes/{route_id}/directions` | turn-by-turn only *(M4)* |
 | GET | `/routes/{route_id}/geojson` | geometry only (for "open in …") |
-| GET | `/routes/{route_id}/share.png?w=1200&h=630` | server-rendered share image *(M4)* |
+| GET | `/routes/{route_id}/share.png` | server-rendered share image, 1200 × 630, cached (built, M4) |
 | POST | `/routes/{route_id}/validate` | runs the validator, returns the report (debug/CI) |
 
 Every error answers `{code, message, ...}` (the error's own fields beside them), 422 for a request that cannot be planned, 429 when the server is full, 404 for an unknown job or route, 409 for a stored route whose build is gone.
@@ -637,6 +637,8 @@ As built for M2:
 }
 ```
 
+The share image is built (M4; `docs/reference/api.md`, **Share image**): `GET /routes/{route_id}/share.png` renders the route once (its ratio, `comparison_line` of its length, the route and baseline over the build's roads and the Census state outlines, no basemap) and serves it from `share/` beside the route store afterwards. The places index and the comparison lines it uses (`docs/reference/presentation.md`) are what the document's `states`, `towns` and `comparisons` will come from.
+
 M4 adds to `metrics` `extra_fuel_gal`, `extra_cost_usd`, `states`, `towns`, `towns_n`, `network_fraction`, `turns`, `items`, `alphabet` and `letters`, and to the document `directions` (`[{"step":1,"text":"Head northeast on W Burnside St","distance_m":412,"time_s":55,"edge_range":[0,3],"kind":"depart"}, …]`), `toasts` (`["42.9× less efficient than the sensible route.", …]`) and `comparisons` (`["Longer than driving the entire length of I-5 once.", …]`).
 
 ### 4.4 Geocoding proxy
@@ -690,7 +692,7 @@ frontend/
 │   ├── stops/search.ts       # (M4, built) the place search: a field and a button, not type-ahead; a pick places a stop as a click
 │   ├── settings/panel.ts     # seed, budget, inefficiency target, scale (tier auto/override, leash), objective mode, units; constraints (M3), vehicle, departure (M4)
 │   ├── run/controls.ts       # Go / Cancel / Reroll (new seed) / Make it worse; the live stat line with the ratio ticking up
-│   ├── share/share.ts        # URL state, ?route= links, copy link; open share.png, download GeoJSON (M4)
+│   ├── share/share.ts        # URL state, ?route= links, copy link, open share.png (M4, built); download GeoJSON (M4)
 │   ├── banner.ts             # API errors, non-modal
 │   ├── format.ts             # units (mi/km toggle), durations, numbers; money, dates (M4)
 │   ├── util/                 # geo (rounding, bounds), dom
@@ -705,7 +707,7 @@ Behaviour notes:
 - **Stop picker:** first click = start, second = end, further clicks = vias appended before the end; drag to move; the list shows snap notes.
 - **Settings** and the stops are serialised to the URL so a link reproduces the request (plus `seed`), and `?route=` loads a stored route directly.
 - **Reroll** = same request, new seed. **Make it worse** = `base_route_id` = current route, same seed+1 so it is also reproducible.
-- **Share image** is requested from the backend and shown in a modal with copy/download; no client-side rendering.
+- **Share image** is rendered by the backend; as built, the share section links to it, opening in a new tab. No client-side rendering.
 - Units default to miles for US users with a km toggle; all numbers from the API are metric.
 
 ---
@@ -801,9 +803,9 @@ Deliverable: `worst-route plan --region portland --from 45.5231,-122.6765 --to 4
 ### M4 — Presentation
 
 1. Directions generator (merge same-identity runs, turn words, ramps via super-junction internal paths, roundabout exits), deadpan jokes injected deterministically from the seed.
-2. Stats: ratio, arrival time, extra fuel/cost, states (Census boundaries), towns (Gazetteer), network fraction, turn counts; rotating toasts in the UI during and after the run.
-3. Curated comparison list (NYC–LA 2,790 mi; Route 66 2,448 mi; I-90 end to end 3,020 mi; Earth's circumference 24,901 mi; Earth–Moon 238,900 mi; …) with the funniest-fitting line chosen by ratio.
-4. Share image: matplotlib Agg, our own data only (route over faint active-network lines and Census outlines, big ratio, one comparison line), bundled OFL font, cached per route.
+2. Stats: ratio, arrival time, extra fuel/cost, states and towns (Census boundaries), network fraction, turn counts; rotating toasts in the UI during and after the run. Built: the places index the states and towns come from (`worst-route aux places`, the Census polygons, CDPs included; `tools/fetch_census.sh` for the files; `docs/reference/presentation.md`, **Places**).
+3. Curated comparison list (NYC–LA 2,790 mi; Route 66 2,448 mi; I-90 end to end 3,020 mi; Earth's circumference 24,901 mi; Earth–Moon 238,900 mi; …) with the funniest-fitting line chosen by length. Built: fifteen things from the Golden Gate Bridge to the Moon, the longest one the route exceeds, "N×" from twice its length (`docs/reference/presentation.md`, **Comparisons**).
+4. Share image: matplotlib Agg, our own data only (route over faint active-network lines and Census outlines, big ratio, one comparison line), cached per route. Built: `GET /routes/{id}/share.png`, 1200 × 630, in DejaVu Sans as matplotlib ships it (no bundled font), no basemap, a link in the share section (`docs/reference/presentation.md`, **Share image**).
 5. Geocoding proxy with cache and rate limit; search box in the UI.
 6. Units toggle, URL state, share link.
 
@@ -869,7 +871,7 @@ Checks:
 | Target-duration overshoot | "exactly 9 hours" is 9h20 | Radius shrink near target + run replacement trimming; ±2% tolerance shown honestly |
 | Alphabet mode rarely finishes the alphabet | Disappointment | Report letters reached; free connectors and free final leg; wrap-around |
 | Python 3.12 pin vs future wheels | Upgrade friction | Lockfile; revisit at M5 |
-| Census file formats change year to year | Pipeline breaks | Pin the 2024 vintage URLs in `scripts/fetch_census.sh`; parse by column name |
+| Census file formats change year to year | Pipeline breaks | The 2025 vintage pinned in `tools/fetch_census.sh`, with sha256 sums; parsed by column name |
 
 ---
 
@@ -881,14 +883,14 @@ Assumptions made in this plan; each can be flipped without restructuring.
 2. **"Only turn left" semantics:** interpreted as "never turn right", straights allowed. Confirm.
 3. **Alphabet mode:** unnamed roads and ramps are free connectors; wrap Z→A; final leg to the destination is free. Confirm.
 4. **Brand set:** index every object with `brand` / `brand:wikidata` (thousands of brands) rather than a curated list. Confirm, or name a shortlist.
-5. **Share image style:** route over our own faint network + Census outlines, no third-party basemap (avoids tile policy and looks deliberate). Or do you want a basemap behind it?
-6. **Towns definition:** Gazetteer places of all LSAD types including CDPs, "passed through" = within an area-equivalent radius of the place centre. Polygons (`cb_2024_us_place_500k`) would be more accurate at the cost of a bigger aux file. Which?
+5. **Share image style:** route over our own faint network + Census outlines, no third-party basemap (avoids tile policy and looks deliberate). Or do you want a basemap behind it? Answered: no basemap (built, M4).
+6. **Towns definition:** Gazetteer places of all LSAD types including CDPs, "passed through" = within an area-equivalent radius of the place centre. Polygons (`cb_2024_us_place_500k`) would be more accurate at the cost of a bigger aux file. Which? Answered: polygons (`cb_2025_<FIPS>_place_500k`), every LSAD including CDPs, "passed through" = the route intersects the polygon (built, M4).
 7. **National end state:** M5.3 recommends one US all-roads master graph if the array pipeline makes it a few hours. Is a ~6 GB data directory and a 32 GB box for public hosting acceptable, or should national stop at T3?
 8. **Alaska/Hawaii:** include in national builds?
 9. **Round trips** (start == end): supported as described; worth exposing in the UI as "take me nowhere, slowly"?
 10. **Vehicle stats:** MPG and gas price only, or also EV (kWh/mi, $/kWh)?
 11. **Public geocoder:** self-hosted Photon vs a paid provider when the time comes.
-12. **Licensing/attribution text** for OSM (ODbL) and Census data in the UI and share image: a footer line is planned; any other requirements?
+12. **Licensing/attribution text** for OSM (ODbL) and Census data in the UI and share image: a footer line is planned; any other requirements? The share image's footer is built ("worst-route · © OpenStreetMap contributors (ODbL) · Boundaries: U.S. Census Bureau"); anything beyond it is open.
 
 ---
 

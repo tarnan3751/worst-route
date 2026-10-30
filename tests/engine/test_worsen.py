@@ -67,7 +67,12 @@ def start(data: GraphData, stops: Sequence[tuple[float, float]], seed: int) -> S
     found = seed_route(backend, spatial, data, snaps, masks.active, masks.banned, rng, r_max=r_max)
     stop_nodes = [s.node for s in snaps]
     baseline = baseline_route(backend, data, stop_nodes, masks.active, masks.banned)
-    objective = make_objective("distance", data, baseline_length_m=baseline.length_m, r_max=r_max)
+    objective = make_objective(
+        "distance",
+        data,
+        baseline=baseline.metrics,
+        r_max=r_max,
+    )
     score, metrics = objective.evaluate(found.nodes, found.edges)
     route = Route.new(
         data, found.nodes, found.edges, found.stop_idx, score=score, metrics=metrics, seed=seed

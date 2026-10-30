@@ -5,12 +5,14 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
+from worst_route.config import HighwayClass
 from worst_route.engine.detour import find_detour
 from worst_route.engine.objectives import OBJECTIVES, make_objective
 from worst_route.engine.objectives.base import BaseObjective, FloatArray, Objective, route_delay_s
 from worst_route.engine.objectives.distance import Distance
+from worst_route.engine.objectives.time import SlowestTime
 from worst_route.engine.request import RouteRequest
-from worst_route.engine.route import IntArray, Route
+from worst_route.engine.route import IntArray, Metrics, Route, splice_arrays
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
 from worst_route.graph.spatial import SpatialIndex
@@ -41,7 +43,7 @@ class Busy(BaseObjective):
 
 
 def distance(data: GraphData = GRID, baseline: float = 500.0, r_max: float = 10_000.0) -> Distance:
-    return Distance(data, baseline_length_m=baseline, r_max=r_max)
+    return Distance(data, baseline=Metrics(baseline, 0.0), r_max=r_max)
 
 
 def test_distance_scores_the_length() -> None:
@@ -87,8 +89,10 @@ def test_initial_radius(baseline: float, r_max: float, radius: float) -> None:
 
 
 def test_the_registry_and_the_request_know_distance() -> None:
-    assert set(OBJECTIVES) == {"distance"}
-    objective: Objective = make_objective("distance", GRID, baseline_length_m=500.0, r_max=9000.0)
+    assert set(OBJECTIVES) == {"distance", "time"}
+    objective: Objective = make_objective(
+        "distance", GRID, baseline=Metrics(500.0, 45.0), r_max=9000.0
+    )
     assert isinstance(objective, Distance) and objective.key == "distance"
     with pytest.raises(ValidationError, match="unknown objective"):
         RouteRequest(stops=[(45.5, -122.6), (45.6, -122.5)], objective="slowest", seed=0)
@@ -109,7 +113,7 @@ def _arrays(g: GraphData, nodes: list[int]) -> tuple[IntArray, IntArray]:
 
 def test_a_round_trip_counts_its_start_once() -> None:
     route = route_on(GRID, [0, 1, 7, 6, 0])
-    busy = Busy(GRID, baseline_length_m=0.0, r_max=1e4)
+    busy = Busy(GRID, baseline=Metrics(0.0, 0.0), r_max=1e4)
     nodes = [0, 1, 7, 6]
     expected = math.fsum([v % 3 for v in nodes] + [50.0] * 4 + [7.0] * 3 + [5.0**1.5])
     assert busy.score(route) == pytest.approx(expected)
@@ -123,7 +127,7 @@ def test_delta_equals_a_full_rescore_on_random_splices(seed: int) -> None:
     if seed % 2:
         snake = [0, 1, 2, 3, 9, 8, 7, 6, 0]  # a round trip
     route = route_on(GRID, snake)
-    busy = Busy(GRID, baseline_length_m=500.0, r_max=1e4)
+    busy = Busy(GRID, baseline=Metrics(500.0, 45.0), r_max=1e4)
     route = Route.new(
         GRID,
         route.nodes,
@@ -157,5 +161,93 @@ def test_delta_equals_a_full_rescore_on_random_splices(seed: int) -> None:
             metrics=after.metrics,
             seed=0,
         )
+        checked += 1
+    assert checked >= 10
+
+
+# Slowest time ------------------------------------------------------------------------------
+
+TOWN = lattice(7, 7, primary_every=3)  # primary rows and columns 0, 3, 6; signals and stops
+
+
+def slowest(data: GraphData = TOWN) -> SlowestTime:
+    return SlowestTime(data, baseline=Metrics(600.0, 40.0), r_max=10_000.0)
+
+
+def test_slowest_time_scores_the_driving_time_and_the_delays() -> None:
+    # east along primary row 0 (5 s a block), up primary column 3, then west along residential
+    # row 2 (9 s a block)
+    nodes = [0, 1, 2, 3, 10, 17, 16, 15]
+    objective = slowest()
+    score, metrics = objective.evaluate(*_arrays(TOWN, nodes))
+    times = TOWN.edge_time_s[edges_of(TOWN, nodes)].astype(np.float64)
+    assert metrics.time_s == math.fsum(times.tolist()) == pytest.approx(5 * 5 + 2 * 9)
+    assert metrics.delay_s == 30 + 10 + 10 + 30 + 10 + 10 + 0 + 0
+    assert score == pytest.approx(metrics.time_s + metrics.delay_s)
+    assert metrics.length_m == 700.0 and metrics.counters == {}
+    route = Route.new(
+        TOWN, *_arrays(TOWN, nodes), (0, len(nodes) - 1), score=score, metrics=metrics, seed=0
+    )
+    assert objective.score(route) == score
+    experienced = metrics.time_s + metrics.delay_s
+    assert objective.target_value(TOWN, route) == objective.primary(metrics) == experienced
+    assert SlowestTime.primary(metrics) == experienced and Distance.primary(metrics) == 700.0
+    assert objective.describe(TOWN, route) == {
+        "time_s": metrics.time_s,
+        "delay_s_total": 100.0,
+        "slowest_edge_class_share": 200.0 / 700.0,  # the residential stretch of row 2
+    }
+
+
+def test_slowest_time_searches_slow_roads_and_draws_slow_waypoints() -> None:
+    objective = slowest()
+    weights = objective.search_weights(TOWN)
+    primary = TOWN.edge_highway == HighwayClass.PRIMARY
+    assert np.allclose(weights[primary], 100 * 72 / 60) and np.allclose(
+        weights[~primary], 100 * 40 / 60
+    )
+    pool = objective.waypoint_pool(TOWN, route_on(TOWN, [8, 9]))
+    assert pool is not None
+    # a node qualifies when at least half its out-edges are residential: off the primary roads,
+    # and on one where its two side streets are half its four out-edges, not at a crossing of
+    # two or on the lattice's rim (two primary out-edges of three, or both of a corner's two)
+    rows, cols = np.divmod(np.arange(TOWN.n), 7)
+    on_primary = (rows % 3 == 0) | (cols % 3 == 0)
+    crossing = (rows % 3 == 0) & (cols % 3 == 0)
+    rim = (rows % 6 == 0) | (cols % 6 == 0)
+    assert pool.tolist() == np.flatnonzero(~on_primary | (~crossing & ~rim)).tolist()
+    assert objective.node_terms(TOWN) is not None and objective.pair_term(TOWN, 0, 1) == 0.0
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_slowest_time_delta_equals_a_full_rescore(seed: int) -> None:
+    rng = np.random.Generator(np.random.PCG64(seed))
+    backend, spatial = PythonBackend(TOWN), SpatialIndex(TOWN)
+    snake = [0, 1, 2, 3, 4, 5, 6, 13, 12, 11, 10, 9, 8, 7, 14, 15, 16, 17, 18, 19, 20]
+    if seed % 2:
+        snake = [24, 25, 26, 33, 32, 31, 30, 23, 24]  # a round trip from a stop sign
+    objective = slowest()
+    route = route_on(TOWN, snake)
+    score, metrics = objective.evaluate(route.nodes, route.edges)
+    route = Route.new(
+        TOWN, route.nodes, route.edges, route.stop_idx, score=score, metrics=metrics, seed=0
+    )
+    checked = 0
+    for _ in range(150):
+        i = int(rng.integers(len(route.edges)))
+        j = min(i + int(rng.integers(1, 4)), len(route.edges))
+        forbid, banned = route.release(TOWN, i, j)
+        found = find_detour(
+            backend, spatial, TOWN, route, i, j,
+            forbid=forbid, banned=banned, node_mask=np.ones(TOWN.n, dtype=bool),
+            radius=300.0, objective=objective, rng=rng, entry_edge=-1, exit_edge=-1,
+        )  # fmt: skip
+        if found is None:
+            continue
+        delta = objective.delta(route, i, j, *found)
+        nodes, edges = splice_arrays(route, i, j, *found)
+        score, metrics = objective.evaluate(nodes, edges)
+        assert delta == pytest.approx(score - route.score, abs=1e-9)
+        route = route.splice(TOWN, i, j, *found, score=score, metrics=metrics)
         checked += 1
     assert checked >= 10

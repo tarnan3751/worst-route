@@ -2,25 +2,30 @@
 **Targets**).
 
 `Target(kind, value)` is what a request asks for: `max` (as bad as the budget allows; no value),
-`ratio` (the route's length as `value` × the baseline's, more than 1) or `duration` (`value`
-seconds of driving, at most `TARGET_MAX_DURATION_S`). A target is reached within
-±`TARGET_TOLERANCE` of its value: the band [T × (1 − tol), T × (1 + tol)], ends included.
+`ratio` (the route's primary quantity as `value` × the baseline's, more than 1: its length, or
+its experienced time, driving and delays, under the slowest-time objective) or `duration`
+(`value` seconds of experienced time, `time_s + delay_s`, at most `TARGET_MAX_DURATION_S`). A
+target is reached within ±`TARGET_TOLERANCE` of its value: the band [T × (1 − tol), T × (1 +
+tol)], ends included.
 
-`Goal(target, data, baseline_length_m=)` is what the worsen loop asks about a route, by its
-value: the score for `max`, length / baseline for `ratio`, `time_s` for `duration` (the
-distance objective's metrics). Its rules work on values, not routes, so the API's follower can
-apply them to the score and metrics of each splice it is sent.
+`Goal(target, data, primary=, baseline=)` is what the worsen loop asks about a route, by its
+value: the score for `max`; for `ratio`, `primary(metrics)` (the objective's,
+`Objective.primary`, which a caller reads from its class) over the baseline's
+`primary(baseline)`; `time_s + delay_s` for `duration`. Its rules work on values, not routes,
+so the API's follower can apply them to the score and metrics of each splice it is sent.
 
 - `better(a, b)`: a higher score for `max`; for a target, no farther from it (ties go to a, the
   later route).
 - `reached(v)` and `phase(v)`: `grow` below the band, `shrink` above it, `done` inside; `max` is
   always `grow` and never reached.
 - `candidate(route, i, j, edges, gain)`: the value after replacing nodes[i..j] by a detour,
-  from the window alone (`math.fsum` of the edges' lengths or times).
+  from the window alone (`math.fsum` of the edges' lengths and times and of the delays at the
+  nodes it adds and removes).
 - `accepts(value, gain, candidate)`: for `max`, a gain (`gain > 0`). Growing, a gain that moves
   the value up without passing the band's top; shrinking, a loss (`gain < 0`) that moves it down
-  without passing the band's bottom. Both conditions hold for a ratio on the distance objective
-  at once; for a duration they keep the value monotone when a longer detour is faster.
+  without passing the band's bottom. Both conditions hold at once for a ratio of the score's
+  own quantity (the distance objective's length); otherwise (a duration under distance) they
+  keep the value monotone when the score and the value disagree.
 - `overshoots(value, gain, candidate)`: growing, a gain that would pass the band's top; the loop
   keeps the smallest one and takes it only when a whole cycle found nothing it accepts.
 - `shrink_rank(candidate)`: shrinking, how close a detour would bring the route to the band (0
@@ -29,8 +34,11 @@ apply them to the score and metrics of each splice it is sent.
 """
 
 import math
+from collections.abc import Callable
 from typing import Any, Literal
 
+import numpy as np
+from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from worst_route.config import TARGET_MAX_DURATION_S, TARGET_TOLERANCE
@@ -68,22 +76,31 @@ class Target(BaseModel):
 class Goal:
     """What a run is after, for one build and baseline; see the module docstring."""
 
-    def __init__(self, target: Target, data: GraphData, *, baseline_length_m: float) -> None:
+    def __init__(
+        self,
+        target: Target,
+        data: GraphData,
+        *,
+        primary: Callable[[Metrics], float],
+        baseline: Metrics,
+    ) -> None:
         self.target = target
-        self.baseline_length_m = baseline_length_m
+        self.primary = primary
+        self.baseline = primary(baseline)
         self.maximise = target.kind == "max"
         self.value_wanted = target.value if target.value is not None else math.inf
         self.low = self.value_wanted * (1 - TARGET_TOLERANCE)
         self.high = self.value_wanted * (1 + TARGET_TOLERANCE)
-        # the build's own array, read per window (float32 → Python float is exact)
-        self._per_edge = data.edge_time_s if target.kind == "duration" else data.edge_length_m
+        # the build's own arrays, read per window (float32 → Python float is exact)
+        self._lengths, self._times = data.edge_length_m, data.edge_time_s
+        self._delays, self._heads = data.node_delay_s, data.edge_v
 
     def value(self, score: float, metrics: Metrics) -> float:
         """The quantity this goal compares, of a route with this score and these metrics."""
         if self.target.kind == "ratio":
-            return metrics.length_m / self.baseline_length_m
+            return self.primary(metrics) / self.baseline
         if self.target.kind == "duration":
-            return metrics.time_s
+            return metrics.time_s + metrics.delay_s
         return score
 
     def better(self, a: float, b: float) -> bool:
@@ -106,10 +123,14 @@ class Goal:
         """The value after replacing nodes[i..j] of `route` by a detour along `edges`."""
         if self.maximise:
             return route.score + gain
-        terms = self._per_edge[edges].tolist() + (-self._per_edge[route.edges[i:j]]).tolist()
-        if self.target.kind == "ratio":
-            return (route.metrics.length_m + math.fsum(terms)) / self.baseline_length_m
-        return route.metrics.time_s + math.fsum(terms)
+        removed = route.edges[i:j]
+        passed = self._heads[edges[:-1]]  # the detour's interior nodes
+        after = Metrics(
+            route.metrics.length_m + _change(self._lengths, edges, removed),
+            route.metrics.time_s + _change(self._times, edges, removed),
+            delay_s=route.metrics.delay_s + _change(self._delays, passed, route.nodes[i + 1 : j]),
+        )
+        return self.value(route.score + gain, after)
 
     def accepts(self, value: float, gain: float, candidate: float) -> bool:
         """Whether the loop takes a detour of this gain and resulting value."""
@@ -145,3 +166,9 @@ class Goal:
             "achieved": value,
             "within_tolerance": self.reached(value),
         }
+
+
+def _change(values: NDArray[np.float32], added: IntArray, removed: IntArray) -> float:
+    """What replacing the `removed` edges (or nodes) by the `added` ones changes a sum over them
+    by."""
+    return math.fsum(values[added].tolist() + (-values[removed]).tolist())

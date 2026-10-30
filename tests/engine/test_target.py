@@ -1,6 +1,7 @@
 """Targets and the goal a run pursues: the target's bounds, the goal's rules on values, and the
 loop toward a target on lattices."""
 
+import dataclasses
 import math
 
 import numpy as np
@@ -9,6 +10,7 @@ from pydantic import ValidationError
 
 from worst_route.config import CONVERGED_FAILS, TARGET_MAX_DURATION_S, TARGET_TOLERANCE
 from worst_route.engine.objectives import make_objective
+from worst_route.engine.objectives.distance import Distance
 from worst_route.engine.plan import PlanResult, plan_route
 from worst_route.engine.request import RouteRequest
 from worst_route.engine.route import Metrics, Route, splice_arrays
@@ -24,7 +26,10 @@ GRID = lattice(4, 4)
 
 
 def goal(kind: str, value: float | None = None, baseline_length_m: float = 1000.0) -> Goal:
-    return Goal(Target(kind=kind, value=value), GRID, baseline_length_m=baseline_length_m)
+    objective = Distance(GRID, baseline=Metrics(baseline_length_m, 90.0), r_max=1e4)
+    return Goal(
+        Target(kind=kind, value=value), GRID, primary=objective.primary, baseline=objective.baseline
+    )
 
 
 def test_a_target_is_max_by_default_and_round_trips() -> None:
@@ -157,7 +162,7 @@ def test_a_candidate_s_value_is_the_value_after_the_splice(
     # 0 -> 3 -> 4 -> 5 -> 8, its window 3..8 (i = 1, j = 4) replaced by a detour as long and
     # faster (along the top row), or longer
     g = town()
-    objective = make_objective("distance", g, baseline_length_m=400.0, r_max=1000.0)
+    objective = make_objective("distance", g, baseline=Metrics(400.0, 36.0), r_max=1000.0)
     nodes = np.array([0, 3, 4, 5, 8], dtype=np.int32)
     score, metrics = objective.evaluate(nodes, edges_of(g, nodes.tolist()))
     route = Route.new(
@@ -165,12 +170,52 @@ def test_a_candidate_s_value_is_the_value_after_the_splice(
     )
     path, edges = np.array(detour, dtype=np.int32), edges_of(g, detour)
     gain = objective.delta(route, 1, 4, path, edges)
-    target = Goal(Target(kind=kind, value=value), g, baseline_length_m=400.0)
+    target = Goal(
+        Target(kind=kind, value=value), g, primary=objective.primary, baseline=objective.baseline
+    )
     after = target.value(*objective.evaluate(*splice_arrays(route, 1, 4, path, edges)))
     assert target.candidate(route, 1, 4, edges, gain) == pytest.approx(after, rel=1e-12)
     if len(detour) == 4:  # as long, and faster: only the duration's value moves (down)
         before = target.value(score, metrics)
         assert gain == 0 and (after < before if kind == "duration" else after == before)
+
+
+@pytest.mark.parametrize(("kind", "value"), [("ratio", 3.0), ("duration", 60.0)])
+@pytest.mark.parametrize("detour", [[3, 6, 7, 8], [3, 6, 7, 4, 5, 8]])
+def test_under_slowest_time_a_target_measures_the_experienced_time(
+    kind: str, value: float, detour: list[int]
+) -> None:
+    # every node waits 5 s (a signal at 4, the window's middle, 20 s), so the detours change
+    # the delays as well as the driving time
+    g = town()
+    delays = np.full(g.n, 5.0, dtype=np.float32)
+    delays[4] = 20.0
+    g = dataclasses.replace(g, node_delay_s=delays)
+    objective = make_objective("time", g, baseline=Metrics(400.0, 48.0, delay_s=12.0), r_max=1e3)
+    target = Goal(
+        Target(kind=kind, value=value), g, primary=objective.primary, baseline=objective.baseline
+    )
+    assert target.baseline == 60.0  # driving and waiting
+    metrics = Metrics(length_m=1200.0, time_s=96.0, delay_s=24.0)
+    assert target.value(120.0, metrics) == (2.0 if kind == "ratio" else 120.0)
+    nodes = np.array([0, 3, 4, 5, 8], dtype=np.int32)
+    score, metrics = objective.evaluate(nodes, edges_of(g, nodes.tolist()))
+    route = Route.new(
+        g, nodes, edges_of(g, nodes.tolist()), (0, 4), score=score, metrics=metrics, seed=0
+    )
+    path, edges = np.array(detour, dtype=np.int32), edges_of(g, detour)
+    gain = objective.delta(route, 1, 4, path, edges)
+    after = target.value(*objective.evaluate(*splice_arrays(route, 1, 4, path, edges)))
+    assert target.candidate(route, 1, 4, edges, gain) == pytest.approx(after, rel=1e-12)
+    # a duration target under the distance objective measures the same experienced time
+    distance = make_objective("distance", g, baseline=objective.baseline, r_max=1e3)
+    lengths = Goal(
+        Target(kind="duration", value=60.0), g, primary=distance.primary, baseline=metrics
+    )
+    assert lengths.value(*distance.evaluate(nodes, route.edges)) == metrics.time_s + metrics.delay_s
+    assert lengths.candidate(route, 1, 4, edges, distance.delta(route, 1, 4, path, edges)) == (
+        pytest.approx(after if kind == "duration" else after * 60.0, rel=1e-12)
+    )
 
 
 # The loop toward a target ------------------------------------------------------------------
@@ -188,9 +233,11 @@ def plan(
     base: Route | None = None,
     attempts: int = 10**6,
     backend_type: type[PythonBackend] | type[CsrBackend] = PythonBackend,
+    objective: str = "distance",
 ) -> PlanResult:
     request = RouteRequest(
         stops=[at_node(g, v) for v in stops],
+        objective=objective,
         seed=seed,
         max_iterations=attempts,
         budget_s=120,
@@ -309,3 +356,26 @@ def test_a_target_run_is_the_same_bytes_on_both_backends_and_twice(target: Targe
     ]
     assert shrunk[0].route.nodes.tobytes() == shrunk[1].route.nodes.tobytes()
     assert shrunk[0].run.attempts == shrunk[1].run.attempts
+
+
+SLOW_GRID = lattice(20, 20, rounded_lonlat=True, primary_every=4)
+
+
+@pytest.mark.parametrize("seed", range(3))
+@pytest.mark.parametrize(
+    "target", [Target(kind="ratio", value=4), Target(kind="duration", value=1800)], ids=str
+)
+def test_slowest_time_reaches_a_target_on_its_experienced_time(target: Target, seed: int) -> None:
+    result = plan(SLOW_GRID, (0, 399), target, seed, objective="time")
+    assert result.run.stopped_because == "target"
+    goal, route, baseline = result.goal, result.route, result.baseline
+    value = goal.value(route.score, route.metrics)
+    expected = route.metrics.time_s + route.metrics.delay_s
+    if target.kind == "ratio":
+        expected /= baseline.time_s + baseline.delay_s
+    assert value == expected and goal.reached(value)
+    assert route.score == pytest.approx(route.metrics.time_s + route.metrics.delay_s)
+    seen = [goal.value(e.score, e.metrics) for e in result.run.events]
+    assert all(b > a for a, b in zip(seen, seen[1:], strict=False))  # growing: never falls
+    twice = plan(SLOW_GRID, (0, 399), target, seed, objective="time", backend_type=CsrBackend)
+    assert twice.route.edges.tobytes() == route.edges.tobytes()

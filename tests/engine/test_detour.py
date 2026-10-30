@@ -61,7 +61,7 @@ def detour(
         banned=banned,
         node_mask=np.ones(data.n, dtype=bool),
         radius=300.0,
-        objective=Distance(data, baseline_length_m=700.0, r_max=5000.0),
+        objective=Distance(data, baseline=Metrics(700.0, 63.0), r_max=5000.0),
         rng=rng(seed),
         entry_edge=int(route.edges[i - 1]) if i > 0 else -1,
         exit_edge=int(route.edges[j]) if j < len(route.edges) else -1,
@@ -160,7 +160,10 @@ def test_shrinking_local_exhaustive_returns_the_path_closest_to_the_band() -> No
     route = Route.new(
         g, on.nodes, on.edges, on.stop_idx, score=700.0, metrics=Metrics(700.0, 63.0), seed=0
     )
-    goal = Goal(Target(kind="ratio", value=5), g, baseline_length_m=100.0)
+    distance = Distance(g, baseline=Metrics(100.0, 9.0), r_max=1e4)
+    goal = Goal(
+        Target(kind="ratio", value=5), g, primary=distance.primary, baseline=distance.baseline
+    )
     assert goal.phase(7.0) == "shrink"
     found = detour(route, 0, 7, "local_exhaustive", 0, data=g, shrink=goal)
     assert found is not None and float(g.edge_length_m[found[1]].sum()) == 500.0
@@ -187,7 +190,10 @@ def test_shrinking_local_exhaustive_never_offers_a_longer_path() -> None:
     route = Route.new(
         g, on.nodes, on.edges, on.stop_idx, score=300.0, metrics=Metrics(300.0, 36.0), seed=0
     )
-    goal = Goal(Target(kind="duration", value=16), g, baseline_length_m=200.0)
+    distance = Distance(g, baseline=Metrics(200.0, 24.0), r_max=1e4)
+    goal = Goal(
+        Target(kind="duration", value=16), g, primary=distance.primary, baseline=distance.baseline
+    )
     assert goal.phase(36.0) == "shrink"
     found = detour(route, 0, 3, "local_exhaustive", 0, data=g, shrink=goal)
     assert found is not None and found[0].tolist() == [a, z, b]

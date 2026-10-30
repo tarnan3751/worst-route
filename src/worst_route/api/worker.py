@@ -75,6 +75,7 @@ class Started:
     baseline_length_m: float
     baseline_time_s: float
     baseline_edges: IntArray
+    baseline_delay_s: float
 
 
 @dataclass(frozen=True, eq=False)
@@ -156,7 +157,16 @@ def run_job(
     ) -> None:
         check()
         arrays = RouteArrays(route.nodes, route.edges, route.stop_idx, route.metrics)
-        out.put(Started(arrays, route.score, baseline.length_m, baseline.time_s, baseline.edges))
+        out.put(
+            Started(
+                arrays,
+                route.score,
+                baseline.length_m,
+                baseline.time_s,
+                baseline.edges,
+                baseline.delay_s,
+            )
+        )
 
     def progress(event: ProgressEvent, baseline: Baseline) -> None:
         check()

@@ -233,7 +233,8 @@ def worsen(
     """Make `route` worse, one accepted splice per event, toward `goal` (default: max); returns
     the run's result."""
     start = time.monotonic()
-    goal = goal if goal is not None else Goal(Target(), data, baseline_length_m=0.0)
+    if goal is None:  # max: the value is the score, and the baseline is not read
+        goal = Goal(Target(), data, primary=objective.primary, baseline=Metrics(0.0, 0.0))
     r_min = min(RADIUS_MIN_M, r_max)
     value = goal.value(route.score, route.metrics)
     shrinking = goal.phase(value) == "shrink"

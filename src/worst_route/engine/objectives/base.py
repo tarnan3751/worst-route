@@ -9,13 +9,17 @@ terms over each two consecutive edges (only when `has_pair`), the global term ov
 route (only when `has_global`). Feasibility hooks (`feasible_pair`, `feasible_window`) and
 per-window bans (`banned_edges`) constrain it; search guidance (`search_weights`,
 `waypoint_pool`, `initial_radius`, `search_budget`) steers the detours; `target_value` is the
-mode's own quantity for target modes; `describe` gives mode-specific numbers. Which route is
-better, and when a run is done, is the run's goal (`engine.target.Goal`), not the objective's.
-A constraint is an objective with hooks and no terms. The worsen loop sees only this interface.
+mode's own quantity for target modes; `describe` gives mode-specific numbers. `primary(metrics)`
+is the quantity a ratio target compares with the baseline's (the length for the base class and
+distance, the experienced time, driving and delays, for slowest time), a static method, so a
+caller can read it from the class without making the objective. Which route is better, and
+when a run is done, is the run's goal (`engine.target.Goal`), not the objective's. A constraint
+is an objective with hooks and no terms. The worsen loop sees only this interface.
 
 `global_term` takes the route's node and edge arrays rather than a `Route`, so a candidate can
-be scored before it is spliced. `BaseObjective(data, baseline_length_m=, r_max=)` gives every
-hook a neutral default and caches its term vectors for the build. It implements, once for every
+be scored before it is spliced. `BaseObjective(data, baseline=, r_max=)` (the baseline's
+`Metrics`) gives every hook a neutral default and caches its term vectors for the build. It
+implements, once for every
 mode, `evaluate(nodes, edges)` (the score and the `Metrics`: length, time and, by
 `route_delay_s`, the delays at the route's nodes, whatever the mode), `score(route)` and
 `delta(route, i, j, nodes, edges)`: the terms a splice removes and adds (node and edge terms
@@ -107,6 +111,10 @@ class Objective(Protocol):
         """Mode-specific numbers for the presentation."""
         ...
 
+    def primary(self, metrics: Metrics) -> float:
+        """The quantity a ratio target compares with the baseline's."""
+        ...
+
     def evaluate(self, nodes: IntArray, edges: IntArray) -> tuple[float, Metrics]:
         """The score and metrics of a route's arrays."""
         ...
@@ -127,9 +135,9 @@ class BaseObjective:
     has_pair = False
     has_global = False
 
-    def __init__(self, data: GraphData, *, baseline_length_m: float, r_max: float) -> None:
+    def __init__(self, data: GraphData, *, baseline: Metrics, r_max: float) -> None:
         self.data = data
-        self.baseline_length_m = baseline_length_m
+        self.baseline = baseline
         self.r_max = r_max
         self._lengths = data.edge_length_m.astype(np.float64)
         self._times = data.edge_time_s.astype(np.float64)
@@ -182,7 +190,7 @@ class BaseObjective:
 
     def initial_radius(self, route: Route) -> float:
         """A quarter of the baseline, at least 1 km, at most r_max."""
-        wanted = max(RADIUS_INITIAL_FRACTION * self.baseline_length_m, RADIUS_INITIAL_MIN_M)
+        wanted = max(RADIUS_INITIAL_FRACTION * self.baseline.length_m, RADIUS_INITIAL_MIN_M)
         return min(wanted, self.r_max)
 
     def search_budget(self, radius: float) -> float:
@@ -196,6 +204,11 @@ class BaseObjective:
     def describe(self, G: GraphData, route: Route) -> dict[str, float]:  # noqa: N803
         """Nothing beyond the metrics."""
         return {}
+
+    @staticmethod
+    def primary(metrics: Metrics) -> float:
+        """The length."""
+        return metrics.length_m
 
     def evaluate(self, nodes: IntArray, edges: IntArray) -> tuple[float, Metrics]:
         """The score and metrics of a route's arrays."""

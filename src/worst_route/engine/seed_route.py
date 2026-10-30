@@ -58,8 +58,9 @@ from worst_route.config import (
     SNAP_FALLBACK_CANDIDATES,
 )
 from worst_route.engine.detour import waypoint_path
+from worst_route.engine.objectives.base import route_delay_s
 from worst_route.engine.request import RequestMasks, RouteRequest
-from worst_route.engine.route import IllegalSplice, IntArray, check_route, twins_of
+from worst_route.engine.route import IllegalSplice, IntArray, Metrics, check_route, twins_of
 from worst_route.engine.search import shortest_path
 from worst_route.engine.snap import (
     StopUnreachable,
@@ -78,12 +79,18 @@ BoolArray = NDArray[np.bool_]
 
 @dataclass(frozen=True, eq=False)
 class Baseline:
-    """The unconstrained shortest route through the stops, with its length and time."""
+    """The unconstrained shortest route through the stops, with its length, time and delays."""
 
     length_m: float
     time_s: float
     nodes: IntArray
     edges: IntArray
+    delay_s: float
+
+    @property
+    def metrics(self) -> Metrics:
+        """Its length, time and delays as `Metrics`."""
+        return Metrics(self.length_m, self.time_s, delay_s=self.delay_s)
 
 
 @dataclass(frozen=True, eq=False)
@@ -121,12 +128,13 @@ def baseline_route(
             raise StopUnreachable((k, k + 1), "nor any route in the request's area")
         nodes.append(path[0][1:])
         edges.append(path[1])
-    all_edges = np.concatenate(edges)
+    all_edges, all_nodes = np.concatenate(edges), np.concatenate(nodes)
     return Baseline(
         length_m=math.fsum(data.edge_length_m[all_edges].astype(np.float64).tolist()),
         time_s=math.fsum(data.edge_time_s[all_edges].astype(np.float64).tolist()),
-        nodes=np.concatenate(nodes),
+        nodes=all_nodes,
         edges=all_edges,
+        delay_s=route_delay_s(data, all_nodes),
     )
 
 

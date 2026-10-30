@@ -2,8 +2,8 @@
 
 The score is the route's length (edge terms = `edge_length_m`); there are no node, pair or
 global terms. The detours search on length and draw waypoints anywhere; the first radius is the
-base class's, a quarter of the baseline within [1 km, r_max]. Its target value and its one
-described number are the length.
+base class's, a quarter of the baseline within [1 km, r_max]. Its target value, its primary
+quantity (the base class's) and its one described number are the length.
 """
 
 from worst_route.engine.objectives.base import BaseObjective, FloatArray

@@ -3,10 +3,10 @@
 `plan_route(data, request, ...)` computes the request's masks (`request_masks`), makes one
 `numpy.random.Generator(PCG64(request.seed))` for every random draw that follows, settles the
 stops (`resolve_stops`: snapping and its fallback, which may move stops), builds the seed route
-and the baseline on them, makes the request's objective with the baseline length and the radius
-bound r_max = min(leash, the active area's extent) and its goal (`target.Goal`, the request's
-target against that baseline), and runs the worsen loop toward that goal within the request's
-budget, handing each accepted splice and the baseline to `on_progress`. It searches
+and the baseline on them, makes the request's objective with the baseline's metrics and
+the radius bound r_max = min(leash, the active area's extent) and its goal (`target.Goal`, the
+request's target against that baseline), and runs the worsen loop toward that goal within the
+request's budget, handing each accepted splice and the baseline to `on_progress`. It searches
 with the backend it is given, else `make_backend`'s default (`config.DEFAULT_BACKEND`); every
 backend gives the same route, and the result records which one searched. The best
 route is then validated against the request's masks and the resolved stops; a route that fails
@@ -101,10 +101,8 @@ def plan_route(
         check_base(base, masks, stop_nodes)
         nodes, edges, stop_idx = base.nodes, base.edges, base.stop_idx
     baseline = baseline_route(backend, data, stop_nodes, masks.active, masks.banned)
-    objective = make_objective(
-        request.objective, data, baseline_length_m=baseline.length_m, r_max=r_max
-    )
-    goal = Goal(request.target, data, baseline_length_m=baseline.length_m)
+    objective = make_objective(request.objective, data, baseline=baseline.metrics, r_max=r_max)
+    goal = Goal(request.target, data, primary=objective.primary, baseline=baseline.metrics)
     score, metrics = objective.evaluate(nodes, edges)
     try:
         route = Route.new(

@@ -107,6 +107,7 @@ from worst_route.config import (
     BackendName,
 )
 from worst_route.engine import ENGINE_VERSION
+from worst_route.engine.objectives import OBJECTIVES
 from worst_route.engine.request import RequestMasks, RouteRequest, request_masks
 from worst_route.engine.route import IntArray, Metrics
 from worst_route.engine.seed_route import resolve_stops
@@ -475,7 +476,9 @@ class JobManager:
         job.baseline_length_m, job.baseline_time_s = m.baseline_length_m, m.baseline_time_s
         job.baseline_edges = m.baseline_edges
         data = job.loaded.data
-        job.goal = Goal(job.request.target, data, baseline_length_m=m.baseline_length_m)
+        baseline = Metrics(m.baseline_length_m, m.baseline_time_s, delay_s=m.baseline_delay_s)
+        primary = OBJECTIVES[job.request.objective].primary  # no objective to make for it
+        job.goal = Goal(job.request.target, data, primary=primary, baseline=baseline)
         job.best, job.best_value = m.route, job.goal.value(m.score, m.route.metrics)
         self._emit(
             job,

@@ -1,0 +1,22 @@
+# Data: raw extracts, filtered files, aux downloads, built graphs (gigabytes, built per machine)
+data/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Tool output (screenshots, benchmark results, scratch routes)
+tools/out/
+*.route.json
+
+.DS_Store

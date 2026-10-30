@@ -1,0 +1,860 @@
+# Worst Route — Project Plan
+
+The least efficient way to get anywhere in the US. The user sets a start, an end, and optional stops; the app computes a hilariously inefficient route that **never repeats an intersection and never drives the same road twice**, respecting one-way streets.
+
+Plan written 2026-10-30. No code exists yet.
+
+## 0. Decisions already made
+
+| Question | Decision |
+|---|---|
+| Prototype city / state | Portland, OR / Oregon (Geofabrik `oregon-latest.osm.pbf`, 243 MB) |
+| Route crosses itself on an overpass (no shared node) | **Not a violation.** The rule is about nodes and road units. |
+| Hard mode highway identity | **`ref` first, `name` fallback**, both normalized |
+| Stop order | **Fixed**, as given. Reordering is a possible later toggle. |
+| Hosting | **Local now, designed for public later** |
+| OSM turn restrictions (`restriction=*` relations) | **Ignored for now.** Designed-in hook, later milestone. |
+| Frontend | **Vanilla TypeScript + Vite**, map library **MapLibre GL JS** (justified in §5) |
+| Python tooling | **uv**, Python pinned to **3.12** |
+| Dev machine | Apple M5, 10 cores, 24 GB RAM, ~138 GB free disk |
+
+Stack push-backs (details in §1.3):
+
+1. **networkx is the reference backend, not the production one.** The engine's hot loop is "bounded Dijkstra with forbidden node/edge masks". Neither igraph nor rustworkx offers masked search without copying the graph, so the swap target is a **CSR array backend with Numba kernels**, defined behind a `GraphBackend` protocol from day one. igraph/rustworkx stay possible implementations of the protocol but are not expected to be needed.
+2. **OSMnx is used for its cleanup algorithms, not for loading.** It cannot read `.osm.pbf`. We parse with pyosmium, build a `MultiDiGraph` in OSMnx's attribute conventions, then call `simplify_graph` and `consolidate_intersections`. At national scale networkx memory is prohibitive, so those two steps get array-based reimplementations in the scaling milestone.
+3. **Never download `us-latest.osm.pbf` (11.4 GB).** Download the 50 state extracts instead. Same bytes in total, but each state is filtered independently, cached, resumable, and parallelizable. Ways that cross state lines appear in both extracts and are deduplicated by OSM id when merged.
+
+---
+
+## 1. Architecture overview and repo layout
+
+### 1.1 Runtime shape
+
+```
+ browser (MapLibre, TS)  ──HTTP/JSON + SSE──▶  FastAPI (uvicorn, asyncio)
+                                                   │
+                                                   ├── geocode proxy (Nominatim now, Photon later) + sqlite cache
+                                                   ├── job manager: queue, cancel, progress fan-out
+                                                   │        │
+                                                   │        ▼
+                                                   │   ProcessPool workers (N = cores − 2)
+                                                   │     each mmaps data/graphs/<region>/<build>/*.npz  (shared page cache)
+                                                   │     runs engine.worsen(...) as a generator → progress events
+                                                   │
+                                                   ├── route store (sqlite): route_id → request, seed, node ids, graph build id
+                                                   └── presentation: directions, stats, comparisons, share.png (matplotlib)
+
+ offline:  pipeline CLI  download → filter → build → cleanup → enrich → tiers → save → qa
+```
+
+Key properties:
+
+- **One master graph per region, tiers and leash are masks.** The engine never copies the graph. A request builds a node mask (leash ∧ (tier ∨ local bubbles around stops)) and the Dijkstra kernels take masks as arguments.
+- **Graph files are memory-mapped NumPy arrays.** Worker processes share them through the OS page cache, so N workers cost ~1× graph memory, not N×.
+- **The engine is a generator.** Every accepted detour yields a `ProgressEvent`. The CLI prints them, the API streams them as Server-Sent Events, tests consume them as a list.
+- **Routes are data, not sessions.** A route is `(graph_build_id, seed, request, node_ids)`. "Make it worse", share links and the validator all take that tuple.
+
+### 1.2 Repo layout
+
+```
+worst-route/
+├── pyproject.toml              # uv project, src layout, [project.scripts] worst-route = "worst_route.cli:app"
+├── uv.lock
+├── .python-version             # 3.12
+├── README.md
+├── docs/
+│   ├── PLAN.md                 # this file
+│   └── adr/                    # short decision records as decisions get revisited
+├── data/                       # gitignored
+│   ├── raw/<state>-latest.osm.pbf
+│   ├── filtered/<state>.roads.osm.pbf, <state>.pois.parquet
+│   ├── aux/                    # Census state boundaries, Gazetteer places, maxspeed defaults
+│   └── graphs/<region>/<build_id>/   # see §2.7
+├── src/worst_route/
+│   ├── config.py               # pydantic-settings: data dir, regions, budgets, geocoder, UA string
+│   ├── cli.py                  # typer app: `pipeline ...`, `plan ...`, `validate ...`, `serve`, `bench`
+│   ├── pipeline/
+│   │   ├── download.py         # Geofabrik fetch + md5 + cache
+│   │   ├── filter.py           # pyosmium tag filters → roads pbf + POI parquet
+│   │   ├── build.py            # pbf → nodes/ways tables → raw MultiDiGraph (OSMnx conventions)
+│   │   ├── exclusions.py       # highway allowlist, access/service rules, implied oneway
+│   │   ├── simplify.py         # degree-2 contraction (OSMnx now, arrays later)
+│   │   ├── consolidate.py      # stage A: OSMnx consolidate; stage B: interchange + roundabout super-junctions
+│   │   ├── carriageways.py     # divided-highway twin detection
+│   │   ├── connectivity.py     # SCC per tier, fragmentation report
+│   │   ├── enrich.py           # maxspeed, identities, collectibles, brands, states, places
+│   │   ├── tiers.py            # tier masks
+│   │   ├── store.py            # save/load the on-disk format (§2.7)
+│   │   └── qa.py               # GeoJSON/HTML QA report per build
+│   ├── graph/
+│   │   ├── backend.py          # GraphBackend protocol + Route-independent primitives
+│   │   ├── nx_backend.py       # networkx reference implementation (M1, tests)
+│   │   ├── csr_backend.py      # NumPy CSR + Numba kernels (M2+)
+│   │   ├── kernels.py          # numba: masked bounded dijkstra (node-based), edge-state dijkstra (turn-aware), bounded DFS
+│   │   ├── spatial.py          # cKDTree snapping, leash mask, bubble mask
+│   │   └── loader.py           # mmap load, LRU of loaded builds
+│   ├── engine/
+│   │   ├── route.py            # Route dataclass, splice(), used-sets, metrics cache
+│   │   ├── snap.py             # stop snapping incl. pass-through capability + outward fallback
+│   │   ├── seed_route.py       # initial shortest route through stops with node-disjoint legs
+│   │   ├── detour.py           # find_detour strategies: waypoint, random-weight, local-exhaustive
+│   │   ├── worsen.py           # the splice loop (generator), budget, acceptance, ambition radius
+│   │   ├── objectives/
+│   │   │   ├── base.py         # Objective protocol, Terms (node/edge/pair/global), Composite
+│   │   │   ├── distance.py  time.py  turns.py  collect.py  brand.py  hardmode.py  alphabet.py
+│   │   ├── alphabet_search.py  # constructive search for alphabet mode (not splice-based)
+│   │   ├── exact.py            # stretch: CP-SAT certified worst for tiny subgraphs
+│   │   └── validator.py        # the proof-of-legality checker
+│   ├── presentation/
+│   │   ├── directions.py  stats.py  comparisons.py  share_image.py  jokes.py
+│   ├── geocode/
+│   │   ├── base.py  nominatim.py  photon.py  cache.py
+│   └── api/
+│       ├── app.py  schemas.py  jobs.py  routes_api.py  sse.py  errors.py
+├── frontend/                   # Vite + TS, see §5
+├── tests/
+│   ├── fixtures/osm/*.osm      # hand-written OSM XML: grid, divided highway, cloverleaf, roundabout, cul-de-sac, private roads
+│   ├── unit/  pipeline/  engine/  api/  property/
+│   └── bench/
+└── scripts/                    # one-off helpers (fetch Census files, make fixture pbfs)
+```
+
+### 1.3 Python dependencies
+
+Core: `pyosmium` (4.x), `osmnx` (2.1, brings `networkx`, `geopandas`, `shapely` 2, `pandas`), `numpy`, `scipy` (cKDTree, sparse csgraph for SCC), `numba`, `pyarrow` (Parquet), `pydantic` 2, `fastapi`, `uvicorn`, `sse-starlette`, `httpx`, `typer`, `matplotlib` + `pillow` (share image), `pyproj`.
+Dev: `pytest`, `hypothesis`, `ruff`, `mypy`, `pytest-benchmark`.
+Optional/stretch: `ortools` (certified-worst mode), `python-igraph` or `rustworkx` only if a second backend is ever wanted.
+
+Why Python 3.12: numba, pyosmium, osmnx and shapely all ship wheels for it; 3.14 wheels for the geo stack are still uneven.
+
+---
+
+## 2. Data pipeline
+
+Every step is a `worst-route pipeline <step>` subcommand with `--region`, `--build-id`, and `--force`. Steps are idempotent and cache on content hashes, so re-running a later step reuses earlier outputs. A `justfile` chains them. Regions are named configs: `portland` (bbox clipped from Oregon), `oregon`, `us-t1`, `us`.
+
+### 2.1 `download`
+
+- Fetch `https://download.geofabrik.de/north-america/us/<state>-latest.osm.pbf` + `.md5` into `data/raw/`. Verify md5, skip if present.
+- Record the Geofabrik timestamp (`osmium.io.Reader` header) in the build metadata.
+- National: loop over the 50 states + DC with 4 parallel downloads. Alaska/Hawaii optional (flag), they only matter if a user puts a stop there.
+
+### 2.2 `filter`
+
+pyosmium 4 `FileProcessor` with C++-side filters, output via `BackReferenceWriter` so node references are completed:
+
+```python
+fp = osmium.FileProcessor(src, osmium.osm.WAY).with_filter(osmium.filter.KeyFilter("highway"))
+with osmium.BackReferenceWriter(dst, ref_src=src) as w:
+    for way in fp:
+        if way.tags["highway"] in KEEP_CLASSES and not excluded(way.tags):
+            w.add(way)
+```
+
+- **Kept classes:** `motorway, motorway_link, trunk, trunk_link, primary, primary_link, secondary, secondary_link, tertiary, tertiary_link, unclassified, residential, living_street`. Also `service` **only** when `service=alley` (named alleys are real streets in Portland); every other `service` way is dropped.
+- **Dropped at filter time** (cheap, before anything touches memory): `footway, path, track, cycleway, steps, pedestrian, bridleway, corridor, busway, bus_guideway, raceway, escape, construction, proposed, abandoned, platform, rest_area, services, road`; `area=yes`; `access in {private, no}` unless `motor_vehicle=yes` or `motorcar=yes`; `motor_vehicle=no`; `motorcar=no`; `service in {driveway, parking_aisle, drive-through, emergency_access}`. Ferries are `route=ferry`, never `highway=*`, so they never enter.
+- **Second pass for POIs and collectible nodes** (same `FileProcessor`, `NODE|WAY`, `TagFilter`): `barrier=toll_booth`, `railway=level_crossing`, `highway in {stop, traffic_signals}` (for the slowest-time mode), and any object with `brand` or `brand:wikidata`. Written to `data/filtered/<state>.pois.parquet` with lon/lat (ways: centroid via `osmium.geom`/area assembler, or first node).
+- **Portland:** clip the Oregon roads pbf to the metro bbox (`45.25..45.72 N, -123.05..-122.35 W`) with a pyosmium `GeoInterfaceFilter`/bbox check on node coordinates before `BackReferenceWriter`. Keep complete ways that touch the bbox so the clip edge has no dangling half-ways.
+- Cross-state ways appear in two state files; `build` dedupes by way id.
+- Expected sizes: Oregon roads pbf ~40–60 MB; all states combined ~2.5–3 GB (all drivable), ~0.7 GB at tertiary and up.
+
+### 2.3 `build` — pbf → raw directed graph
+
+1. Stream nodes into arrays (`id → lon, lat`) and ways into (`way_id, node_ids[], tags`) with pyosmium. Use `osmium.index` location store only if needed; for roads-only files an in-memory dict/array is fine up to state scale, a sorted `int64` array + `searchsorted` beyond.
+2. **Junction detection:** a node is a junction if it is referenced by ≥2 kept ways or is an endpoint of a way. Everything else is a shape point.
+3. **Split ways at junctions** into segments; each segment is one raw edge (plus its reverse if two-way). Store original way id, tags, and the ordered OSM node ids of the segment (geometry).
+4. **One-way rules:** `oneway in {yes, true, 1}` → forward only; `oneway=-1` or `reverse` → backward only; `junction in {roundabout, circular}` → forward only; `highway in {motorway, motorway_link}` with no `oneway` tag → forward only (OSM convention, same as OSRM's car profile); `oneway=no` → both; `oneway=reversible/alternating` → both (joke app, accept).
+5. Output a networkx `MultiDiGraph` with OSMnx's attribute conventions (`x`, `y` on nodes; `osmid`, `length`, `oneway`, `highway`, `name`, `ref`, `geometry` on edges; `G.graph["crs"]`), so OSMnx functions apply unchanged. Project to a local CRS (UTM 10N for Oregon; EPSG:5070 CONUS Albers nationally) before any metric step.
+
+### 2.4 `cleanup`
+
+Order matters: exclusions → simplify → consolidate (A then B) → carriageway twins → connectivity.
+
+**a. Exclusions** (`exclusions.py`): anything the filter could not decide at way level, e.g. drop edges inside `access=private` areas later if needed. Mostly a no-op after §2.2 but kept as a separate step so rules are testable.
+
+**b. Simplify** (`simplify.py`): `osmnx.simplification.simplify_graph(G, edge_attrs_differ=["name", "ref", "highway", "oneway", "bridge", "tunnel", "junction"], track_merged=True, remove_rings=False)`.
+Keeping endpoints where name/ref/class change keeps every edge **homogeneous**: one name, one ref set, one class. The alphabet mode, hard mode, directions and the twin detector all rely on that. The cost is more nodes than a pure topological simplification (roughly +30%), which is fine.
+Each simplified edge keeps: summed `length`, the full coordinate list, the list of original way ids, and the list of original OSM node ids (needed by the validator, §8).
+
+**c. Consolidate, stage A — signal clusters and divided-arterial crossings** (`consolidate.py`):
+`osmnx.simplification.consolidate_intersections(G, tolerance=tol_by_node, rebuild_graph=True, max_length=60, dead_ends=True, reconnect_edges=True)`.
+- `tolerance` is a per-node dict (OSMnx 2.1 supports this): 15 m for nodes touching `primary`/`secondary`/`trunk` at-grade (medians 20–30 m wide create 4-node crossings), 8 m for everything else. Buffers overlap at 2× tolerance, so Portland's 61 m downtown blocks never merge.
+- `max_length=60` means nodes only merge when they are also connected by edges ≤ 60 m. This is what prevents a cloverleaf's 300 m loop ramps from fusing endpoints. It also prevents merging the two ends of a short overpass (no connecting edge).
+- `dead_ends=True`: OSMnx's default *removes* dead-end nodes; we need them (stops at cul-de-sacs).
+- Original node ids of merged nodes land in `osmid_original`; we keep them as `cluster_members`.
+
+**d. Consolidate, stage B — interchanges and roundabouts become super-junctions** (`consolidate.py`):
+This is the piece the no-repeat rule actually depends on, and OSMnx does not do it.
+1. Build the undirected graph of **ramp edges** (`*_link`) plus **roundabout edges** (`junction=roundabout|circular`).
+2. Each connected component of that subgraph, together with the mainline/cross-road nodes where its ramps attach, is a candidate cluster.
+3. Guard: if a cluster's bounding diameter exceeds 1.5 km (collector-distributor lanes can chain interchanges), split it with DBSCAN (`eps=300 m`) on the attachment nodes. Roundabout clusters are never split.
+4. Replace the cluster's nodes with **one super-node** at the centroid. Edges entirely inside the cluster (ramps, the mainline through the interchange, the roundabout ring) leave the routing graph but their geometry is retained in an `internal_paths` table.
+5. **Allowed transitions:** for each (in-edge, out-edge) pair of the super-node, compute whether an internal directed path exists in the original cluster. Store the pair set and the internal path (for drawing and for "take the ramp toward …" directions). M1 may skip this and allow all pairs; it is the same table that OSM turn restrictions will use later.
+Result: passing under an interchange on the mainline and later looping through its ramps both touch the super-node, so the second is impossible. Two mainlines crossing on a plain overpass with no ramps share no node and stay independent, matching the overpass decision.
+A roundabout is one junction: the route can enter it once. This also makes "most roundabouts" a per-node collectible.
+
+**e. Divided-highway twins** (`carriageways.py`):
+OSM maps each direction of a divided road as a separate one-way way. Going north on I-5 and later south on the same stretch would otherwise be legal.
+Detection, per state, on the **original way segments** (between consecutive shape points, before simplification) because the two carriageways' junctions never line up 1:1:
+1. Candidates: segments of one-way, non-`_link` ways with class ≥ `tertiary`.
+2. Signature: normalized ref set (see §3.6 for normalization) if any ref, else normalized name. Segments with neither are candidates only if class ∈ {motorway, trunk}.
+3. Spatial index: `shapely.STRtree` on candidate segments. For each segment `s`, query within `D` (motorway 100 m, trunk 80 m, primary 50 m, others 35 m).
+4. Pair `s` with `t` when: same signature; mean bearings differ by 180° ± 30°; the midpoint of each projects onto the other within `D` (symmetric lateral test); `s` and `t` are not on the same way.
+5. Propagate to simplified edges: `twins(E) = { F : some segment of E pairs with some segment of F }`. Stored as a CSR adjacency, symmetric.
+Semantics: **using edge E bans every edge in twins(E).** This is conservative (a 1 km edge twinned with a 600 m and a 400 m edge bans both entirely), which is the right direction for a "never" rule. QA emits a GeoJSON of pairs for eyeballing; the unit test uses a synthetic divided highway with mismatched junctions.
+`dual_carriageway=yes` is rare and unreliable; it is a hint, not the detector.
+
+**f. Connectivity** (`connectivity.py`):
+- Strongly connected components with `scipy.sparse.csgraph.connected_components(connection="strong")` on the CSR arrays. Keep the largest. Report dropped node count, total dropped length, and the 20 largest dropped components as GeoJSON — a large dropped component means a filtering bug (e.g. a town whose only access got excluded), not noise.
+- Thresholds that fail the build: all-roads graph must retain ≥ 99% of nodes; each tier ≥ 95% of its own nodes.
+- Fragmentation test for tiers: a fixture list of city pairs per region (Portland–Salem, Portland–Bend, …) must be mutually reachable at every tier that is supposed to cover that trip length.
+
+### 2.5 `enrich`
+
+- **Speed:** parse `maxspeed` ("45 mph", "35", "signals", "none" → class default; multi-values take the first). Defaults by class (mph): motorway 65, trunk 55, primary 45, secondary 35, tertiary 30, unclassified 25, residential 25, living_street 15, alley 10, `_link` 35. `time_s = length / speed`. Node delay for `highway=stop` (10 s) and `traffic_signals` (30 s) feeds the slowest-time mode.
+- **Identity (hard mode):** `identity_id` per edge: normalized ref set if present (`"I 5"`, `"I-5"`, `"Interstate 5"` → `I 5`; `"US 26;OR 8"` → both refs, identity = the first after sorting by class I > US > state), else normalized name (case-folded, abbreviations expanded: `St→Street`, `NE→Northeast`, directional suffixes kept). Dictionary of identities saved with the build.
+- **Twin units:** `unit_id` groups the forward/backward edges of a two-way road (already implied by node-simplicity; stored for uniformity) and the twins table from §2.4e.
+- **Collectibles:** toll booths and level crossings are nodes on ways; map each to the simplified edge whose original node list contains it → `toll_booth_n`, `level_crossing_n` per edge. `bridge=yes` per edge. Roundabout → super-node flag. Stop signs/signals → node delay.
+- **Brands:** POIs with `brand` or `brand:wikidata`; snap each to the nearest kept edge within 50 m (STRtree nearest on edge geometries). Table `pois(brand_key, wikidata, name, lon, lat, edge_id, offset_m)`; `brand_key` = `brand:wikidata` when present else normalized brand name. Index by brand for the `/brands` autocomplete.
+- **States:** Census cartographic boundary file `cb_2024_us_state_500k` → `state_fips` per node (STRtree `contains` on node points).
+- **Places:** Census Gazetteer `2024_Gaz_place_national.txt` (GEOID, NAME, LSAD, ALAND, INTPTLAT/INTPTLONG). Store as a table with `radius_m = clamp(sqrt(ALAND/π), 400 m, 12 km)`. "Passed through" is evaluated at request time (§3.9).
+- **Pass-through capability** per node: exists `u→v→w` with `u ≠ w` (needed for intermediate stops, §3.2).
+
+### 2.6 `tiers`
+
+| Tier | Classes | Auto-selected for straight-line trip length |
+|---|---|---|
+| T0 | motorway, trunk (+links) | > 800 km |
+| T1 | + primary (+links) | 250–800 km |
+| T2 | + secondary (+links) | 60–250 km |
+| T3 | + tertiary (+links) | 15–60 km |
+| T4 | + residential, unclassified, living_street, alleys | < 15 km |
+
+Each tier is an edge mask on the master graph plus a node mask after re-running SCC within the tier. Node ids never change across tiers, so a manual override at runtime is just a different mask.
+**Local bubbles:** at request time, the active mask is `leash ∧ (tier_mask ∨ within(R, any stop))` with `R` = 3 km of all-roads graph around each stop, so a cross-state trip still starts from the user's actual street instead of snapping 10 km to the nearest primary road.
+
+### 2.7 `save` — on-disk format
+
+Recommendation: **Parquet for attribute tables + NPZ for the hot arrays + JSON metadata**, one directory per build. Not GraphML (XML, slow, Portland alone would be hundreds of MB), not networkx pickle (Python-object-heavy, version-fragile, ~1.5 KB per edge, cannot be memory-mapped).
+
+```
+data/graphs/<region>/<build_id>/
+  meta.json          build params, source files + md5 + OSM timestamp, counts, CRS, tier definitions, sha256 "graph_version"
+  nodes.parquet      id, lon, lat, x, y, kind (plain|clusterA|interchange|roundabout), state_fips, pass_through, delay_s
+  node_members.npz   CSR: original OSM node ids per node (cluster_members)
+  edges.parquet      id, u, v, length_m, speed_kmh, time_s, highway (enum), tier, name, ref, identity_id, unit_id,
+                     bridge, tunnel, toll, toll_booth_n, level_crossing_n, bearing_in, bearing_out, osm_way_ids
+  csr.npz            indptr_out, edges_out (edge ids sorted by source), indptr_in, edges_in, edge_u, edge_v (int32),
+                     length (float32), time (float32), tier (uint8), bearing_in/out (int16 degrees)
+  geometry.npz       coord_indptr (int64 per edge), coords (float32 [N,2] lon/lat), osmnode_indptr, osmnode_ids (int64)
+  twins.npz          CSR adjacency edge → twin edges
+  transitions.npz    CSR: for super-nodes, allowed (in_edge, out_edge) pairs + internal path ids
+  internal_paths.npz coordinate runs for drawing through super-junctions
+  pois.parquet       brand POIs (§2.5)
+  places.parquet     Gazetteer places with radius_m (national file, shared)
+  tiers/T0..T4.npz   node_mask, edge_mask after SCC
+  qa/                GeoJSON: twin pairs, super-junctions, dropped components, snapping oddities; qa.html summary
+```
+
+Why: `np.load(mmap_mode="r")` makes load time ~0 and lets worker processes share memory; DuckDB and QGIS read Parquet directly for debugging; the format is language-neutral if a Rust kernel ever replaces Numba. The networkx backend is built from these arrays on demand (seconds at city scale).
+
+### 2.8 `qa`
+
+Per build: counts by class and tier, SCC drop report, twin-pair statistics (pairs per class, unpaired one-way motorway length — should be near zero), super-junction count and size histogram, 50 random snap tests, and a map HTML with the GeoJSON layers. The build is "accepted" only when the QA thresholds in §2.4f pass. This is the fastest way to catch the classic failures (a ramp class missing, all of I-84 unpaired, a bridge tagged `access=private`).
+
+---
+
+## 3. Engine design
+
+### 3.1 Data model
+
+```python
+@dataclass
+class Route:
+    nodes: list[int]            # vertex-simple across the whole trip
+    edges: list[int]            # len(nodes) - 1; edges[k] goes nodes[k] → nodes[k+1]
+    stop_idx: list[int]         # positions of the stops in `nodes`; stop_idx[0] == 0, stop_idx[-1] == len(nodes)-1
+    used_nodes: BitMask         # numpy bool array sized n_nodes (fast membership for kernels)
+    banned_edges: BitMask       # edges used ∪ twins(used) ∪ objective.banned_edges()
+    score: float
+    metrics: Metrics            # length_m, time_s, per-objective counters; recomputed lazily
+    seed: int
+    graph_version: str
+
+@dataclass
+class Splice:                   # the only mutation
+    i: int; j: int              # replace nodes[i..j] inclusive run's interior, i < j, by detour
+    detour_nodes: list[int]     # starts with nodes[i], ends with nodes[j]
+    detour_edges: list[int]
+```
+
+Rules enforced by `Route.splice()` and re-checked by the validator:
+
+- interior nodes of the detour ∉ `used_nodes` after removing the interior of `nodes[i..j]`;
+- no detour edge ∈ `banned_edges` (minus the bans contributed by the removed run);
+- stops are never interior to a removed run (`i` and `j` may equal stop positions; stop positions are shifted after the splice);
+- super-node transitions (`in_edge, out_edge`) allowed at every junction, including the two boundary junctions of the splice;
+- round trips (start == end) are allowed: the end node is exempt from the used-check only as the final node.
+
+### 3.2 Snapping stops
+
+- KD-tree on projected node coordinates of the active mask (cKDTree built at load, ~2 s for 5M nodes; cached per build).
+- Start needs `out_degree ≥ 1`, end needs `in_degree ≥ 1`, intermediate stops need `pass_through` (exists `u→v→w`, `u ≠ w`). A stop at the end of a cul-de-sac cannot be passed through without reusing the mouth node, so it snaps to the nearest pass-through node and the response says so: `"Stop 2 moved 140 m to the nearest through street"`.
+- Dead-end *neighbourhoods* (a subdivision with one entrance) cannot be detected cheaply per node, so the seed-route step handles them: if a leg cannot be built, re-snap that stop to the next-nearest candidates (k = 1..10, expanding radius) and retry. After 10 candidates, fail with `STOP_UNREACHABLE_WITHOUT_REPEAT` and name the stop.
+- Snap distance and the chosen node are returned in the `snapped` event so the UI can show the marker jump.
+
+### 3.3 Seed route: shortest path through all stops with node-disjoint legs
+
+Finding a simple path a→b→c in a directed graph is NP-hard in general (two vertex-disjoint paths), so this is heuristic too, but it almost always works on road networks:
+
+```
+def seed_route(G, stops, mask):
+    used = {}                                   # nodes used by committed legs
+    legs = []
+    for (s, t) in consecutive(stops):
+        p = dijkstra(G, s, t, weight=length, forbid_nodes=used - {s}, mask=mask)
+        if p is None:
+            # penalty re-solve: push earlier legs away from what this leg needs
+            for round in 1..4:
+                q = dijkstra(G, s, t, weight=length, mask=mask)             # unconstrained
+                conflict = set(q) ∩ used
+                re-solve the earlier legs that own `conflict` with penalty ×8 on conflict nodes
+                recompute used; p = constrained dijkstra again
+                if p: break
+        if p is None: raise LegInfeasible(stop_index)   # caller re-snaps per §3.2
+        legs.append(p); used |= set(p)
+    return concat(legs)
+```
+
+The baseline for the inefficiency ratio is the **unconstrained** shortest route through the stops in order (sum of plain Dijkstra legs), which is what a sane GPS would do.
+
+### 3.4 The worsen loop (splice heuristic)
+
+```
+def worsen(G, route, objective, budget, rng, mask) -> Iterator[ProgressEvent]:
+    best = route
+    radius = objective.initial_radius(route)        # "ambition": how far a detour may wander, metres
+    fail_streak = 0
+    while not budget.exhausted(route):
+        # 1. choose a segment to replace: a single edge (j = i+1) most of the time,
+        #    a short run of up to K=4 edges sometimes (frees interior nodes, lets the route shrink/reshape)
+        i, j = pick_segment(route, rng, K)           # never spans a stop as an interior node
+        freed = interior nodes of route.nodes[i..j]
+        forbid = route.used_nodes - freed - {nodes[i], nodes[j]}
+        banned = route.banned_edges - bans_from(route.edges[i..j-1]) | objective.banned_edges(route, i, j)
+
+        # 2. find a candidate detour
+        detour = find_detour(G, nodes[i], nodes[j], forbid, banned, mask, radius, objective, rng,
+                             entry_edge=route.edges[i-1], exit_edge=route.edges[j])
+        if detour is None: fail_streak += 1; radius = max(radius/2, r_min) if fail_streak % 20 == 0 else radius; continue
+
+        # 3. score it
+        delta = objective.delta(G, route, i, j, detour)   # exact for node/edge/pair terms; global terms re-evaluated
+        cand_ok = objective.feasible_window(G, route, i, j, detour)   # hard mode stretch check, turn feasibility at boundaries
+        if not cand_ok or not accept(delta, route, objective, budget): fail_streak += 1; continue
+
+        # 4. commit
+        route = route.splice(i, j, detour); fail_streak = 0; radius = min(radius * 1.5, r_max)
+        yield ProgressEvent(iter, route.score, route.metrics, splice=(i, j, detour))
+        if objective.better(route, best): best = route
+        if budget.target_reached(route): break
+    return best
+```
+
+`accept()`:
+
+- **maximise** modes: strict improvement `delta > 0`.
+- **target** modes (ratio or duration): accept if the new value does not overshoot `target × 1.02`; when it would, shrink `radius` and retry; when within `[0.98, 1.02] × target`, stop. If the route is above target (after "make it worse" with a new, smaller target) run-replacement with a *shorter* detour (`delta < 0`) is accepted until under target.
+- Optional later: simulated-annealing acceptance for run replacements to escape local optima. Not in M1.
+
+`budget`: wall-clock seconds (default 20, max 120), max iterations, and a no-improvement cutoff (`fail_streak > 400 and radius == r_min`). Always returns the best route so far. `ProgressEvent` carries the splice so the client can apply it to its own copy; every 50th event carries a full snapshot for resync.
+
+**Why routes do not converge to "the same giant snake":** the leash and tier bound the arena, the ambition radius bounds each detour, and both the segment pick and the waypoint sample are seeded. Two seeds on the same request should give edge sets with Jaccard similarity < 0.3; this is a test (§8).
+
+### 3.5 `find_detour`: three strategies, mixed by the objective
+
+All three run on the active mask with `forbid`/`banned` masks passed to the kernels (no graph copies).
+
+1. **Waypoint** (default weight 60%). Sample a waypoint `w` from allowed, unused nodes with probability ∝ `exp(-dist(w, midpoint(a,b)) / radius)`; `w` is drawn from the objective's preferred pool when it has one (uncollected toll booths, brand POIs, slow residential nodes). Then `p1 = dijkstra(a → w)` and `p2 = dijkstra(w → b, forbid ∪ p1)`, both bounded by `max_cost = 4 × radius` so a hopeless search stops early. Detour = `p1 + p2`. Expected gain scales with `radius`, which is what makes "target duration" controllable.
+2. **Random-weight Dijkstra** (30%). `dijkstra(a → b)` with per-edge weights `length × U(0.2, 5.0)` drawn from the seeded rng. Produces plausible wiggles and usually succeeds when waypoint search fails.
+3. **Local exhaustive** (10%, and always when `dist(a,b) < 800 m`). Bounded DFS enumerating simple paths `a → b` within a ball of radius `3 × dist(a,b)`, depth ≤ 25 edges, cap 5,000 paths; pick the best by `objective.delta`. This is the exact local optimiser and the same code path the certified mode generalises.
+
+Search weights come from `objective.search_weights(G)` so e.g. the slowest-time mode runs Dijkstra on `length × speed` (prefers slow roads on the way to the waypoint).
+
+When the objective has pair constraints (turn modes) or a transition table matters, strategies 1–2 use the **edge-state Dijkstra kernel** (state = edge, relax only to successor edges with an allowed pair), seeded from `entry_edge` and accepted only on an edge whose pair with `exit_edge` is allowed. Otherwise the cheaper node-state kernel is used.
+
+### 3.6 Objective interface
+
+```python
+class Objective(Protocol):
+    key: str
+
+    # additive terms, precomputed per build as vectors (None = zero)
+    def node_terms(self, G) -> np.ndarray | None: ...      # e.g. roundabout = 1, signal delay = 30 s
+    def edge_terms(self, G) -> np.ndarray | None: ...      # e.g. length, time, toll_booth_n, brand POI count
+    # consecutive-edge term and feasibility (turn direction, bridge-run counting)
+    def pair_term(self, G, e_in: int, e_out: int) -> float: ...
+    def feasible_pair(self, G, e_in: int, e_out: int) -> bool: ...
+    # anything non-additive; evaluated on the whole route
+    def global_term(self, G, route) -> float: ...
+    def feasible_window(self, G, route, i, j, detour) -> bool: ...
+    def banned_edges(self, G, route, i, j) -> BitMask | None: ...   # extra bans beyond twins
+    # search guidance
+    def search_weights(self, G) -> np.ndarray: ...
+    def waypoint_pool(self, G, route) -> np.ndarray | None: ...     # candidate node ids, or None = any
+    def initial_radius(self, route) -> float: ...
+    # targets and reporting
+    def target_value(self, G, route) -> float: ...                  # the quantity the target modes compare
+    def describe(self, G, route) -> dict: ...                       # mode-specific numbers for toasts
+
+score(route) = Σ node_terms[v] + Σ edge_terms[e] + Σ pair_term(e_k, e_k+1) + global_term(route)
+```
+
+`Objective.delta(route, i, j, detour)` is implemented once in the base class: it sums node/edge terms over the removed run and the detour, re-evaluates the pair terms at the two boundaries plus inside the detour, and calls `global_term` on the candidate only if the objective declares `has_global = True`. `Composite(primary, secondary)` implements lexicographic objectives as `primary × 10⁹ + secondary` (lengths are < 10⁷ m, so no overflow in float64).
+
+Turn classification (used by `pair_term`/`feasible_pair` and by directions): `delta = wrap(bearing_out(e_out) − bearing_in(e_in))` in `(−180, 180]`; straight `|delta| ≤ 30`, right `30 < delta ≤ 160`, left `−160 ≤ delta < −30`, U-turn beyond. Bearings are the first/last 20 m of each edge's geometry, stored per edge.
+
+Normalisation of refs for identities: strip spaces/hyphens, uppercase, map `INTERSTATE→I`, `US HIGHWAY|US HWY→US`, `STATE ROUTE|SR|OR|WA…→<state>`; multi-value refs (`;`) keep all; the identity is the highest-class ref.
+
+### 3.7 How each mode plugs in
+
+| Mode | Terms | Search guidance | Fits splice? |
+|---|---|---|---|
+| **Longest distance** (default) | `edge_terms = length_m` | weights = length; waypoints anywhere | Yes, perfectly |
+| **Slowest time** | `edge_terms = time_s`, `node_terms = signal/stop delay` | weights = `length × speed` (prefers slow roads); waypoint pool biased to residential/living_street nodes | Yes |
+| **Never turn left** | constraint: `feasible_pair` rejects left and U-turn-left; objective = distance (or any) | edge-state Dijkstra; boundary pairs checked in `feasible_window` | Yes, with the edge-state kernel. Can make a stop unreachable (report `INFEASIBLE_TURN_CONSTRAINT`, suggest relaxing). |
+| **Only turn left** | interpreted as **never turn right**; straight is allowed (otherwise four lefts on a grid return to the start node and the mode is dead on arrival) | same | Yes, same caveat |
+| **Collect: toll booths, rail crossings** | `edge_terms = count on edge`, Composite with length | waypoint pool = edges with uncollected items; `initial_radius` larger | Yes. Items on an edge are counted once because an edge is used once. |
+| **Collect: bridges** | `pair_term = 1` when `e_out.bridge and not e_in.bridge` (counts bridge *runs*, so a bridge split by a junction counts once) | waypoint pool = bridge edges | Yes |
+| **Collect: roundabouts** | `node_terms = 1` on roundabout super-nodes | waypoint pool = roundabout nodes | Yes, **only because** roundabouts are super-nodes (§2.4d). Without that, the route could use two different arcs of the same ring. |
+| **Brand pilgrimage** | `edge_terms = POI count for brand_key on edge`, Composite with length | waypoint pool = POI edges | Yes. "Pass" = drive the edge the POI is snapped to (≤ 50 m). |
+| **Hard mode** (constraint, any objective) | `banned_edges` = every edge whose `identity_id` is already in the route, except identities of `edges[i−1]` and `edges[j]` (so a stretch can be extended at the splice boundary); `feasible_window` recounts stretches in the changed window and rejects if any identity has > 1 maximal run | — | Yes, with the window check. Base rule (twins) is a special case of this with identity = carriageway pair. |
+| **Alphabet route** | letters completed, then length | — | **No.** See §3.8. |
+| **Target ratio / duration** | not an objective: a stopping rule on `target_value` (length or time) plus the acceptance rule in §3.4 | radius shrinks as the target nears | Yes |
+
+Objectives and constraints compose: `objective = Composite(Collect("toll_booth"), Distance)`, `constraints = [NoLeft(), HardMode()]`. Constraints are objectives with zero terms and only feasibility/ban hooks; the engine chains their `feasible_*` and `banned_edges`.
+
+### 3.8 Alphabet route: constructive search instead of splicing
+
+Splicing a detour into the middle of an alphabet route breaks the letter sequence of everything after it, so this mode runs a different driver on the same graph, kernels and validator.
+
+Definition: along the route, the sequence of **named** roads (consecutive edges with the same name collapse to one) must start with letters A, B, C, … in order, wrapping Z→A. Unnamed roads and `_link` ramps are free connectors. Score = letters completed, then length. The final leg from the last alphabet road to the destination is a free leg (otherwise the mode almost never arrives).
+
+```
+def alphabet_route(G, start, end, mask, rng, budget):
+    best = None
+    for restart in budget:                                   # restarts with different rng draws
+        pos = start; used = {start}; k = 0; route = []
+        while True:
+            # candidate next roads: edges reachable from `pos` via current-name edges or free connectors,
+            # whose name starts with letter(k) — found with a masked multi-target Dijkstra limited to those edge classes
+            cands = reachable_named_edges(G, pos, letter(k), allowed=current_name ∪ free, forbid=used, radius=R)
+            if not cands: break
+            # Warnsdorff-style choice: prefer candidates with many letter(k+1) roads nearby, with rng noise
+            e = weighted_choice(cands, key=lookahead_count(letter(k+1)), rng)
+            path = connect(pos, e)                           # the Dijkstra path, node-simple
+            route += path; used |= path; pos = head(e); k += 1
+            # ride the chosen road as far as useful (random stop point), then continue
+        tail = dijkstra(pos → end, forbid=used, mask)         # free leg; if None, try end from an earlier prefix
+        if tail: candidate = route + tail; best = max(best, candidate, key=(letters, length))
+    return best
+```
+
+Letters like Q, X and Z are rare, so the realistic outcome is "got to W, then drove to the destination". The UI reports the letters achieved. `budget` and progress events work the same way (each completed letter yields an event). "Make it worse" on an alphabet route = more restarts, keep best.
+
+### 3.9 Request-time masks and stats
+
+- **Leash mask:** node allowed iff distance to the polyline through the stops ≤ `L`. `L` auto = `clamp(0.6 × straight-line trip length, 3 km, 150 km)`, user-adjustable. Computed vectorised with shapely 2 (`distance` of all active nodes to one LineString; ~0.5 s for 5M nodes).
+- **Tier + bubbles:** §2.6.
+- **Towns passed through:** `places` whose centre lies within `radius_m` of the route geometry (STRtree on place circles vs route LineString). Count distinct, list the first 10 by order encountered.
+- **States visited:** distinct `state_fips` over route nodes, in order of first appearance.
+- **Network fraction:** route length ÷ total edge length of the active mask.
+
+### 3.10 Graph backend protocol
+
+```python
+class GraphBackend(Protocol):
+    n_nodes: int; n_edges: int
+    def out_edges(self, v) -> ndarray[int]        # edge ids
+    def in_edges(self, v) -> ndarray[int]
+    def head(self, e) -> int; def tail(self, e) -> int
+    def dijkstra(self, src, dst, weights, forbid_nodes, banned_edges, mask, max_cost) -> Path | None
+    def dijkstra_edge_state(self, entry_edge, dst, exit_edge, weights, forbid_nodes, banned_edges, mask, max_cost, pair_ok) -> Path | None
+    def multi_target(self, src, targets_mask, weights, forbid_nodes, banned_edges, mask, max_cost) -> list[Path]
+    def simple_paths_dfs(self, src, dst, forbid_nodes, banned_edges, mask, max_depth, max_paths) -> list[Path]
+    def scc_mask(self, edge_mask) -> node_mask
+```
+
+- `NetworkXBackend` (M1): wraps a `MultiDiGraph`; forbids via a weight function returning `None` (networkx treats that as a hidden edge). ~5–10 µs per relaxed edge.
+- `CSRBackend` (M2+): NumPy arrays + Numba kernels; ~0.1–0.5 µs per relaxed edge. Kernels take the masks as `uint8` arrays, use a binary heap, support `max_cost` early exit, and return parent arrays for path reconstruction. This is the production backend; igraph/rustworkx would be strictly worse for masked search.
+
+### 3.11 Determinism and reproducibility
+
+`numpy.random.Generator(PCG64(seed))` everywhere; no iteration over Python sets in the hot loop (arrays only); the route result records `seed`, `graph_version` (sha256 in `meta.json`), engine version and request. Same tuple → same route, enforced by a golden test on the Portland fixture.
+
+### 3.12 Stretch: certified worst (tiny areas)
+
+For a user-drawn box of ≤ ~300 nodes / ~1,000 directed edges:
+
+- **OR-Tools CP-SAT with `add_circuit`:** one literal per arc `(u, v)`, a self-loop literal `(v, v)` per node meaning "skipped", a dummy arc `end → start` forced true; CP-SAT's circuit constraint then enforces a single Hamiltonian cycle over the non-skipped nodes, i.e. a simple `start → end` path. Objective: maximise Σ `length × lit` (+ item terms). Twin bans: `lit_e + lit_f ≤ 1`. Turn constraints need the line-graph formulation (one node per edge), fine at this size. Time limit 60 s; report `optimal` or `best bound / gap`.
+- Fallback without the dependency: pruned DFS with the bound "current length + total length of edges still reachable from here without used nodes", good to ~60 nodes.
+
+### 3.13 Hooks for later: turn restrictions and stop reordering
+
+- OSM `restriction=*` relations become entries in the same `transitions` table as super-junction transitions (banned `(in_edge, out_edge)` pairs); the edge-state kernel already checks that table, so enabling restrictions is a pipeline change only. Consolidation must map `via` nodes to their cluster, which is why this waits until stage A/B are stable.
+- Reordering stops: brute-force permutations for ≤ 7 stops, run the seed route for each, keep the worst baseline-feasible order. Engine unchanged.
+
+---
+
+## 4. API
+
+FastAPI, JSON bodies validated by pydantic. All coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in request objects. Long computations are **jobs**; progress is streamed with **Server-Sent Events** (one-directional, works through plain `fetch`/`EventSource`, no WebSocket upgrade or proxy headaches; cancellation is a separate `DELETE`).
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/health` | liveness + loaded builds |
+| GET | `/regions` | regions, tiers, bbox, `graph_version`, counts |
+| GET | `/geocode?q=&bbox=` | address → candidates (proxied, cached, rate-limited; §4.4) |
+| POST | `/snap` | `{lat, lon, tier?, role: start\|via\|end}` → snapped node |
+| GET | `/brands?q=` | brand autocomplete for the pilgrimage mode (local index, not Nominatim) |
+| POST | `/jobs` | create a route job → `{job_id, events_url}` |
+| GET | `/jobs/{id}/events` | SSE stream |
+| GET | `/jobs/{id}` | status + latest snapshot (polling fallback) |
+| DELETE | `/jobs/{id}` | cancel; the best-so-far route is still stored |
+| GET | `/routes/{route_id}` | full route document |
+| GET | `/routes/{route_id}/directions` | turn-by-turn only |
+| GET | `/routes/{route_id}/geojson` | geometry only (for "open in …") |
+| GET | `/routes/{route_id}/share.png?w=1200&h=630` | server-rendered share image |
+| POST | `/routes/{route_id}/validate` | runs the validator, returns the report (debug/CI) |
+
+### 4.1 `POST /jobs` request
+
+```json
+{
+  "region": "portland",
+  "stops": [
+    {"lat": 45.5231, "lon": -122.6765, "label": "Powell's"},
+    {"lat": 45.4817, "lon": -122.6263, "label": "Reed College"}
+  ],
+  "objective": {"mode": "distance"},
+  "constraints": {"no_left": false, "no_right": false, "hard_mode": false},
+  "scale": {"tier": "auto", "leash_km": "auto"},
+  "target": {"kind": "max"},
+  "budget": {"seconds": 20, "max_iterations": 5000},
+  "seed": 12345,
+  "vehicle": {"mpg": 24, "gas_price_usd": 3.89},
+  "departure": "2026-10-31T09:00:00-07:00",
+  "base_route_id": null
+}
+```
+
+- `objective.mode` ∈ `distance | time | collect | brand | alphabet`; `collect` adds `"item": "toll_booth" | "level_crossing" | "roundabout" | "bridge"`; `brand` adds `"brand_key"`.
+- `target.kind` ∈ `max | ratio | duration` with `"value": 50` (×) or `"seconds": 32400`.
+- `scale.tier` ∈ `auto | T0..T4`; `scale.leash_km` ∈ `auto | number`.
+- `base_route_id` set → "Make it worse": the job starts from that route (same stops; objective, target and budget may differ). `seed` omitted → random, returned in the response.
+
+Response `202`: `{"job_id": "j_…", "events_url": "/jobs/j_…/events", "seed": 12345}`.
+Errors (`422`): `STOP_OUTSIDE_REGION`, `STOP_UNREACHABLE_WITHOUT_REPEAT {stop_index}`, `INFEASIBLE_TURN_CONSTRAINT`, `UNKNOWN_BRAND`, `BUDGET_TOO_LARGE`.
+
+### 4.2 SSE events
+
+```
+event: snapped
+data: {"stops":[{"input":{"lat":..,"lon":..},"node":1234,"lat":..,"lon":..,"moved_m":12.4,"note":null}, ...],
+       "tier":"T4","leash_km":6.2,"active_nodes":118230}
+
+event: baseline
+data: {"length_m":7420,"time_s":1130,"geometry":{"type":"LineString","coordinates":[...]}}
+
+event: progress                       # coalesced to ≤ 10/s; `splices` lists every accepted splice since the last event
+data: {"iter":412,"score":38210,"metrics":{"length_m":38210,"time_s":5020,"ratio":5.15,"items":0},
+       "splices":[{"i":17,"j":18,"coords":[[lon,lat],...],"node_count":9}, ...]}
+
+event: snapshot                       # every 50th progress event and on reconnect: full geometry, simplified to 1 m
+data: {"iter":450,"geometry":{"type":"LineString","coordinates":[...]},"node_count":812,"metrics":{...}}
+
+event: done
+data: {"route_id":"r_…","final":{"metrics":{...}},"stopped_because":"budget|target|converged|cancelled"}
+
+event: error
+data: {"code":"STOP_UNREACHABLE_WITHOUT_REPEAT","stop_index":1,"message":"..."}
+```
+
+The client applies each splice to its own coordinate array (indexed by route node position, which the server reports) and redraws; a `snapshot` replaces it wholesale. `Last-Event-ID` on reconnect returns a `snapshot` first.
+
+### 4.3 `GET /routes/{route_id}`
+
+```json
+{
+  "route_id": "r_…", "graph_version": "sha256:…", "seed": 12345, "request": {…},
+  "stops": [{"label":"Powell's","node":1234,"lat":..,"lon":..,"route_index":0}, …],
+  "geometry": {"type":"LineString","coordinates":[…]},
+  "legs": [{"from_stop":0,"to_stop":1,"node_range":[0,812]}],
+  "metrics": {
+    "length_m": 318402, "baseline_length_m": 7420, "ratio": 42.9,
+    "time_s": 41880, "baseline_time_s": 1130, "time_ratio": 37.1,
+    "departure": "…", "arrival": "…",
+    "extra_fuel_gal": 8.05, "extra_cost_usd": 31.31,
+    "states": ["OR"], "towns": ["Portland","Milwaukie","Gresham"], "towns_n": 3,
+    "network_fraction": 0.031, "turns": {"left": 212, "right": 198, "straight": 402},
+    "items": {"toll_booth": 0, "level_crossing": 14, "roundabout": 3, "bridge": 9},
+    "alphabet": null, "letters": null
+  },
+  "directions": [{"step":1,"text":"Head northeast on W Burnside St","distance_m":412,"time_s":55,"edge_range":[0,3],"kind":"depart"}, …],
+  "toasts": ["42.9× less efficient than the sensible route.", "You arrive Tuesday at 8:38 PM.", …],
+  "comparisons": ["Longer than driving the entire length of I-5 once.", …],
+  "validation": {"ok": true, "checked_at": "…"}
+}
+```
+
+### 4.4 Geocoding proxy
+
+Nominatim's public policy (verified 2026-10-30): max **1 request/s per application across all users**, **no client-side autocomplete**, identifying `User-Agent` required, results must be cached, repeated identical queries get blocked. Plan:
+
+- Backend proxy only; the browser never talks to Nominatim. Token bucket at 1 rps; a search **button**, not type-ahead; sqlite cache keyed by `(normalised query, bbox)` with a 30-day TTL; `User-Agent: worst-route/<version> (<contact email>)`; `countrycodes=us`, `viewbox` = region bbox, `bounded=1`.
+- Map click / marker drag is the primary way to set stops, so geocoding is a convenience, not a dependency.
+- Public hosting: either self-hosted **Photon** (Java + OpenSearch; the US-only index is tens of GB, workable on a small VPS) or a paid geocoder with a free tier. Interface `Geocoder.search(q, bbox) -> list[Candidate]` so this is a config switch.
+
+### 4.5 Jobs and workers
+
+- `ProcessPoolExecutor(max_workers = cores − 2)`, `spawn` start method (macOS default); each worker memory-maps the build on first use (`loader.py` LRU by `graph_version`).
+- Engine events go worker → `multiprocessing.Queue` → asyncio reader → per-job `asyncio.Queue`s for SSE subscribers. Coalesce at 100 ms.
+- Job records live in memory with a 1 h TTL; finished routes persist in sqlite (`routes` table: id, created, graph_version, seed, request JSON, node ids as a blob). Share links are `?route=r_…`.
+- Limits (public): 1 running job per client IP, 3 queued, budget ≤ 60 s, leash ≤ 300 km. The CLI bypasses these.
+
+---
+
+## 5. Frontend
+
+### 5.1 Map library: MapLibre GL JS (recommended over Leaflet)
+
+- **Long, live-updating routes.** A 9-hour route is thousands of edges and tens of thousands of vertices, redrawn ~10×/s while it grows. MapLibre renders that on the GPU; `source.setData()` on a GeoJSON source is cheap. Leaflet draws polylines as SVG/Canvas on the main thread and gets choppy past ~20k vertices with frequent updates.
+- **`line-gradient` with `lineMetrics: true`** colours the route by progress along it, which makes "watch it get worse" legible, and fits the share image's visual identity.
+- **Vector basemap, self-hostable.** OSM's raster tile policy forbids heavy use and demands correct `Referer`/`User-Agent` handling; it is fine for local hobby volume but not for a public joke that might go viral. With MapLibre the basemap is a vector style; locally use any free style, publicly serve **Protomaps PMTiles** (one static file for the US, served from object storage, no tile server) or MapTiler/Stadia. Switching is a style URL in config. A muted basemap style also makes the route pop.
+- **Camera tricks** (fit bounds with padding, slow fly-along for the share "flyover") come free.
+- Leaflet's advantages (smaller API, raster simplicity, plugin ecosystem) do not matter here, and the raster-tile policy would push us to a provider anyway.
+
+### 5.2 Structure (Vite + TypeScript, no framework)
+
+```
+frontend/
+├── index.html
+├── vite.config.ts            # dev proxy /api → localhost:8000
+├── src/
+│   ├── main.ts               # bootstrap, URL state (?route=, ?seed=), wiring
+│   ├── state.ts              # tiny typed store on EventTarget: stops, settings, job status, route, metrics
+│   ├── api/client.ts         # fetch wrappers + SSE subscription with reconnect and Last-Event-ID
+│   ├── map/map.ts            # MapLibre init, style, attribution, layer order
+│   ├── map/routeLayer.ts     # baseline (grey dashed) + worst route (gradient) sources; applySplice(), setSnapshot()
+│   ├── map/stopsLayer.ts     # draggable markers, numbered, snapped-position ghost + "moved 140 m" tooltip
+│   ├── stops/stopList.ts     # ordered list: add by click, geocode search box (button, not type-ahead), reorder, remove
+│   ├── settings/panel.ts     # inefficiency target, scale (tier auto/override, leash), objective mode, constraints, vehicle, departure
+│   ├── run/controls.ts       # Go / Stop / Reroll (new seed) / Make it worse; progress bar with ratio ticking up
+│   ├── toasts/toasts.ts      # rotating stat toasts during and after the run; jokes interleaved
+│   ├── directions/panel.ts   # scrollable turn list; hovering a step highlights the edge range on the map
+│   ├── share/share.ts        # copy link, open share.png, download GeoJSON
+│   └── format.ts             # units (mi/km toggle), durations, money, dates
+└── public/                   # favicon, fonts
+```
+
+Behaviour notes:
+
+- **Live growth:** on each `progress` event apply splices in order; flash the new segment for 400 ms; update the ratio counter. On `snapshot` replace. On `done` fetch `/routes/{id}` for directions, toasts and comparisons.
+- **Stop picker:** first click = start, second = end, further clicks = vias appended before the end; drag to move; the list shows snap notes.
+- **Settings** are serialised to the URL so a link reproduces the request (plus `seed`), and `?route=` loads a stored route directly.
+- **Reroll** = same request, new seed. **Make it worse** = `base_route_id` = current route, same seed+1 so it is also reproducible.
+- **Share image** is requested from the backend and shown in a modal with copy/download; no client-side rendering.
+- Units default to miles for US users with a km toggle; all numbers from the API are metric.
+
+---
+
+## 6. Performance estimates and bottlenecks
+
+Rough graph sizes after simplification and consolidation (±50%):
+
+| Graph | Junction nodes | Directed edges | Source |
+|---|---|---|---|
+| Portland metro, all drivable | ~120k | ~330k | Oregon extract, bbox clip |
+| Oregon, all drivable | ~700k | ~1.8M | 243 MB extract |
+| US, T1 (primary and up) | ~1.5M | ~3.5M | 1.9M ways |
+| US, T3 (tertiary and up) | ~3.5M | ~8M | 4.2M ways |
+| US, all drivable | ~20M | ~55M | ~16M ways |
+
+Memory per directed edge: CSR + attributes ~40 B, geometry ~50 B (avg 6 coords, float32) → ~100 B/edge. networkx: ~1.5 KB/edge.
+
+| | CSR (mmap) | networkx |
+|---|---|---|
+| Portland | ~35 MB | ~0.5 GB |
+| Oregon | ~0.2 GB | ~2.7 GB |
+| US T3 | ~0.8 GB | ~12 GB (not viable with workers) |
+| US all | ~5.5 GB | impossible on this machine |
+
+Pipeline wall-clock on the M5 (single process unless noted):
+
+| Step | Portland | Oregon | US T3 | US all |
+|---|---|---|---|---|
+| download | — | 1 min | ~20 min (parallel) | same |
+| filter (pyosmium, C++ filters) | 1 min | 1–2 min | ~30 min total across states | ~40 min |
+| build + simplify (OSMnx) | 1–3 min | 20–40 min | not viable | not viable |
+| consolidate A (OSMnx) | 1–2 min | 20–60 min | not viable | not viable |
+| consolidate B + twins + SCC + enrich (ours, arrays) | 1 min | 5–10 min | 30–60 min | 2–4 h |
+| array-based simplify/consolidate (M5 rewrite) | — | ~5 min | ~30 min | 1–2 h |
+
+Engine throughput:
+
+- One bounded masked Dijkstra over a ~50k-node ball: ~20–50 ms with Numba, ~1–2 s with networkx.
+- Waypoint attempt = 2 searches; expect **10–20 attempts/s/core** with CSR at city scale, **~0.5/s** with networkx. Success rate ~50%.
+- 20 s budget → CSR: 100–200 accepted splices, ratios of 20–100× for a cross-town trip. networkx M1: ~5–10 splices, enough to prove the approach, not enough for a satisfying demo, which is why the CSR backend is the first task of M2.
+- At state/national leashes the search ball grows (100 km on T2 ≈ 300k nodes ≈ 0.3 s/search). The ambition radius bounds searches, not the leash, so attempts stay ~50–100 ms; the number of splices needed for a "9 hour" route is only a few hundred.
+- Leash mask: ~0.5 s for 5M nodes (shapely 2 vectorised). Snapping: µs after the KD-tree exists; tree build ~2 s for 5M nodes, cached.
+
+Expected bottlenecks, in order of likelihood:
+
+1. **OSMnx/networkx memory and time at state and national scale** — the reason the array pipeline rewrite is scheduled, not optional, for national.
+2. **Consolidation correctness.** Too little: interchanges leak repeats. Too much: downtown blocks fuse and routes become impossible. Per-node tolerances, `max_length`, and the fixture tests exist for this.
+3. **Twin detection recall on arterials** (odd geometry, missing refs). Measured by "unpaired one-way motorway/trunk length" in QA; motorways should be ~100% paired.
+4. **Dijkstra attempts/s.** Numba kernels; later an A*-style heuristic (straight-line bound) and reusing the `a → *` search tree across several waypoint draws.
+5. **Progress bandwidth** on public hosting: coalescing + deltas keep it to a few KB/s per job.
+6. **Share image** (~0.3–0.5 s each, matplotlib Agg): cache by route id.
+7. **Worker memory on macOS** (`spawn` + mmap is fine; accidental non-mmap loads would multiply memory by worker count).
+
+---
+
+## 7. Milestones
+
+Each milestone ends with something runnable and a checklist. Estimates assume part-time work and are relative, not promises.
+
+### M1 — Portland, distance mode, CLI (the proof)
+
+Deliverable: `worst-route plan --region portland --from 45.5231,-122.6765 --to 45.4817,-122.6263 --seed 1 --budget 30` prints baseline length, worst length, ratio, node/edge counts, and writes `route.geojson` (open in geojson.io or QGIS).
+
+1. Repo bootstrap: `uv init`, src layout, ruff/mypy/pytest, `justfile`, `.gitignore` for `data/`, CI running tests on fixtures only (no downloads).
+2. Pipeline `download → filter → build` for `portland` (bbox clip from Oregon).
+3. Cleanup: exclusions, OSMnx simplify, consolidate stage A, **stage B as plain merge (all transitions allowed)**, twin detection, SCC + report.
+4. Enrich: length, speed defaults (needed for time stats later anyway), identities, `pass_through`.
+5. Save/load in the §2.7 format; `qa` report with GeoJSON layers.
+6. `GraphBackend` protocol + `NetworkXBackend`.
+7. Engine: snapping with fallback, seed route with disjoint legs, `Route.splice`, `worsen` loop with the three detour strategies, distance objective, budget, progress events to stdout.
+8. **Validator** (§8.1) and the fixture suite (§8.2). The CLI runs the validator on every result and refuses to print a route that fails.
+9. Acceptance: on 20 random Portland stop pairs, 30 s budget: validator passes 20/20; median ratio ≥ 10× with the networkx backend; two seeds give Jaccard < 0.3; a cul-de-sac intermediate stop produces a snap note instead of a failure.
+
+### M2 — API + map, live growth
+
+1. `CSRBackend` + Numba kernels (node-state Dijkstra, bounded DFS); parity tests against the networkx backend on fixtures; benchmark ≥ 10 attempts/s at Portland scale.
+2. FastAPI app: `/regions`, `/snap`, `/jobs` + SSE, `/routes/{id}`, `/routes/{id}/geojson`, sqlite route store, worker pool.
+3. Frontend: map, stop picker, run controls, route layer with splice application, ratio counter; settings panel with inefficiency target (max / ratio / duration), tier override, leash; Reroll; Make it worse.
+4. Target modes (ratio and duration) in the engine, including run replacement for trimming.
+5. Acceptance: a 15-minute Portland drive becomes a 9-hour route within ±2% of target in < 20 s; the map shows it growing; closing the tab cancels the job.
+
+### M3 — Objective modes and constraints
+
+1. Edge-state Dijkstra kernel (turn-aware); `feasible_pair`; never-left / never-right constraints; infeasibility reporting.
+2. Slowest-time objective with node delays.
+3. Collectibles pipeline (toll booths, crossings, bridges, roundabout super-nodes) + collect objectives with waypoint pools.
+4. Brand index + pilgrimage objective + `/brands`.
+5. Hard mode (identity bans + window stretch check). Stage B transition tables (ramp reachability) land here too, since hard mode and turn modes make junction realism visible.
+6. Alphabet mode via constructive search.
+7. Acceptance: each mode has a fixture test proving its invariant (no left turns in the result, each identity in ≤ 1 stretch, letters strictly increasing, every counted item lies on a route edge).
+
+### M4 — Presentation
+
+1. Directions generator (merge same-identity runs, turn words, ramps via super-junction internal paths, roundabout exits), deadpan jokes injected deterministically from the seed.
+2. Stats: ratio, arrival time, extra fuel/cost, states (Census boundaries), towns (Gazetteer), network fraction, turn counts; rotating toasts in the UI during and after the run.
+3. Curated comparison list (NYC–LA 2,790 mi; Route 66 2,448 mi; I-90 end to end 3,020 mi; Earth's circumference 24,901 mi; Earth–Moon 238,900 mi; …) with the funniest-fitting line chosen by ratio.
+4. Share image: matplotlib Agg, our own data only (route over faint active-network lines and Census outlines, big ratio, one comparison line), bundled OFL font, cached per route.
+5. Geocoding proxy with cache and rate limit; search box in the UI.
+6. Units toggle, URL state, share link.
+
+### M5 — Scaling up
+
+1. **Oregon** build with the OSMnx path; measure; fix tier fragmentation; local bubbles; tier auto-select tuned on real trips (Portland–Bend, Astoria–Ontario).
+2. **Array-based simplify and consolidate** (replace OSMnx for big builds): degree-2 chain contraction in NumPy, stage A as cKDTree clustering with the `max_length` connectivity check, same outputs, parity test against OSMnx on Portland.
+3. **US at T1** (primary and up, ~3.5M edges): validates the national pipeline cheaply. Local bubbles need an all-roads graph with the same node ids, which a T1-only national build does not have. Decision gate: either (a) build **US all-roads** as the single master graph (~5.5 GB mmap, 2–4 h pipeline, bubbles and tiers as masks — the clean end state), or (b) keep T1 national + per-state all-roads builds and accept that cross-state trips start from the nearest primary road. Recommendation: (a) if M5.2's throughput makes it a few hours; otherwise (b).
+4. Public-hosting prep: Dockerfile, Protomaps PMTiles basemap, Photon or paid geocoder, per-IP limits, attribution text, `User-Agent` strings, structured logs. Deploy target can be a single 8–16 GB VPS for T3 national or a 32 GB box for all-roads.
+
+### M6 — Stretch
+
+Certified-worst mode (CP-SAT); OSM turn restrictions via the transitions table; stop reordering; portfolio runs (K seeds in parallel, stream the best); simulated-annealing acceptance.
+
+---
+
+## 8. Risks and testing strategy
+
+### 8.1 The validator (`engine/validator.py`)
+
+Input: a route (`nodes`, `edges`, `stop_idx`), the build, the request (constraints, leash, tier). Output: a report with every check and the first offending index. It is pure and fast (O(route length)) so it runs on every CLI result, every API result (stored in the route document), and in every engine test.
+
+Checks:
+
+1. **Edge chain:** `tail(edges[k]) == nodes[k]` and `head(edges[k]) == nodes[k+1]` for all k; every edge exists in the active mask; one-way direction is therefore enforced by construction.
+2. **Vertex-simple:** `len(set(nodes)) == len(nodes)` (round trips: allow `nodes[0] == nodes[-1]` only).
+3. **Edge-simple and no twin reuse:** for every pair of route edges `(e, f)`, `f ∉ twins(e)` and `e ≠ f`. Implemented as: mark `e ∪ twins(e)` while walking; any edge already marked fails.
+4. **Consolidated junctions (the proof at the raw-data level):** expand the route to original OSM node ids via each edge's `osmnode_ids` plus the super-junction internal paths; assert no original OSM node id appears twice, and assert every `cluster_members` group appears in at most one contiguous run. This proves that neither a merged carriageway crossing nor a consolidated interchange/roundabout is entered twice, independently of the engine's own bookkeeping.
+5. **Transitions:** every `(edges[k], edges[k+1])` pair at a super-node is in its allowed set.
+6. **Stops:** `nodes[stop_idx[s]]` equals the snapped stop node, in order; no stop is interior to a removed run (checked by construction in `splice`, re-checked here).
+7. **Constraints:** turn classes against `no_left`/`no_right`; hard-mode stretches (`identity → number of maximal runs ≤ 1`); leash (every node within `L` of the stop polyline); tier/bubble membership.
+8. **Metrics:** recomputed length/time/items equal the reported ones within 1e-6.
+
+`worst-route validate route.json` runs it from the CLI; `POST /routes/{id}/validate` from the API.
+
+### 8.2 Test layers
+
+- **Fixtures** (`tests/fixtures/osm/*.osm`, converted to pbf by a script with `osmium.SimpleWriter`): 10×10 grid with some one-ways; divided highway with mismatched side junctions; cloverleaf; diamond interchange; roundabout with 4 arms; cul-de-sac neighbourhood with one entrance; private road + driveway + parking aisle; overpass with no ramps; a road whose `ref` changes mid-way. Each fixture has expected counts after each pipeline step.
+- **Pipeline unit tests:** one-way rules, exclusions, implied oneway on motorways, maxspeed parsing, ref/name normalisation, twin detection on the divided-highway fixture (exact expected pairs), stage B cluster membership on the cloverleaf fixture, SCC report.
+- **Engine unit tests:** splice bookkeeping, snapping fallbacks, seed route disjointness and the penalty re-solve, each detour strategy returns only legal paths, objective `delta` equals full re-score (checked on every accepted splice in test mode).
+- **Property tests** (hypothesis): random strongly-connected digraphs with random twins → `worsen()` output always passes the validator; score never decreases in max modes; target modes land within tolerance or report why.
+- **Backend parity:** networkx vs CSR kernels give identical paths on fixtures (ties broken by edge id in both).
+- **Determinism/golden:** fixed seed on the Portland build → identical node list; recorded in `tests/golden/` with the `graph_version` (regenerated deliberately when the build changes).
+- **Variety:** two seeds → Jaccard(edge sets) < 0.3 on the Portland acceptance pairs.
+- **API tests:** httpx `AsyncClient` against the app with a fixture build; SSE event order; cancel; reconnect with `Last-Event-ID`.
+- **Benchmarks** (`tests/bench`, not in CI): attempts/s per backend, pipeline step timings, written to `docs/bench.md`.
+- **QA gates** per build (§2.8) run in `pipeline qa` and fail the build on threshold breaches.
+
+### 8.3 Risks
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| Heuristic routes look samey ("the snake") | Joke falls flat | Leash, ambition radius, seeded waypoints, variety test, run replacement, later annealing |
+| Consolidation wrong in either direction | False violations or impossible routes | Per-node tolerance, `max_length`, fixtures, QA map; validator check 4 catches leaks |
+| Twin detection misses pairs | Same highway both ways | Motorway pairing coverage metric in QA; conservative bans; hard mode as a user-facing fallback |
+| OSM data quality (missing `oneway` on ramps, `access` on bridges) | Odd routes, dropped components | SCC report with map; implied-oneway rules; per-region override file for known bad ways |
+| networkx too slow for a good demo | M1 underwhelms | Expected; CSR backend is M2 step 1 |
+| OSMnx cannot scale to national | Blocks M5 | Array rewrite scheduled with parity tests |
+| macOS multiprocessing (`spawn`) + large graphs | Memory blow-up | mmap-only loads, loader test asserting RSS per worker |
+| Nominatim policy violations | Blocked geocoding | Proxy, 1 rps bucket, cache, UA string, button not type-ahead, Photon when public |
+| OSM raster tile policy when public | Blocked tiles, bad citizenship | MapLibre vector basemap (PMTiles) before any public launch |
+| Turn-constrained modes infeasible near stops | Confusing errors | Explicit error codes with the offending stop; suggest relaxing or moving the stop |
+| Target-duration overshoot | "exactly 9 hours" is 9h20 | Radius shrink near target + run replacement trimming; ±2% tolerance shown honestly |
+| Alphabet mode rarely finishes the alphabet | Disappointment | Report letters reached; free connectors and free final leg; wrap-around |
+| Python 3.12 pin vs future wheels | Upgrade friction | Lockfile; revisit at M5 |
+| Census file formats change year to year | Pipeline breaks | Pin the 2024 vintage URLs in `scripts/fetch_census.sh`; parse by column name |
+
+---
+
+## 9. Remaining open questions
+
+Assumptions made in this plan; each can be flipped without restructuring.
+
+1. **Compute budget defaults:** 20 s default, 120 s max locally, 60 s max public. OK?
+2. **"Only turn left" semantics:** interpreted as "never turn right", straights allowed. Confirm.
+3. **Alphabet mode:** unnamed roads and ramps are free connectors; wrap Z→A; final leg to the destination is free. Confirm.
+4. **Brand set:** index every object with `brand` / `brand:wikidata` (thousands of brands) rather than a curated list. Confirm, or name a shortlist.
+5. **Share image style:** route over our own faint network + Census outlines, no third-party basemap (avoids tile policy and looks deliberate). Or do you want a basemap behind it?
+6. **Towns definition:** Gazetteer places of all LSAD types including CDPs, "passed through" = within an area-equivalent radius of the place centre. Polygons (`cb_2024_us_place_500k`) would be more accurate at the cost of a bigger aux file. Which?
+7. **National end state:** M5.3 recommends one US all-roads master graph if the array pipeline makes it a few hours. Is a ~6 GB data directory and a 32 GB box for public hosting acceptable, or should national stop at T3?
+8. **Alaska/Hawaii:** include in national builds?
+9. **Round trips** (start == end): supported as described; worth exposing in the UI as "take me nowhere, slowly"?
+10. **Vehicle stats:** MPG and gas price only, or also EV (kWh/mi, $/kWh)?
+11. **Public geocoder:** self-hosted Photon vs a paid provider when the time comes.
+12. **Licensing/attribution text** for OSM (ODbL) and Census data in the UI and share image: a footer line is planned; any other requirements?
+
+---
+
+## Appendix A — Sources checked while writing this plan
+
+- Geofabrik North America/US extracts: Oregon 243 MB, Texas 692 MB, Pennsylvania 333 MB, Minnesota 276 MB, California 1.2 GB, `us-latest.osm.pbf` 11.4 GB — https://download.geofabrik.de/north-america/us.html
+- OSMnx 2.1.1 `simplify_graph` (`edge_attrs_differ`, `track_merged`, `edge_attr_aggs`) and `consolidate_intersections` (per-node `tolerance` dict, `max_length`, `dead_ends`, `reconnect_edges`, `node_attr_aggs`) — https://osmnx.readthedocs.io/en/stable/user-reference.html
+- pyosmium 4: `FileProcessor.with_filter`, `KeyFilter`/`TagFilter`, `IdTracker`, `BackReferenceWriter(ref_src=…)`; the author reports ~13 min for a tag filter over the full planet — https://docs.osmcode.org/pyosmium/latest/ and https://docs.osmcode.org/pyosmium/latest/cookbooks/Filtering-Data-By-Tags/
+- Nominatim usage policy (1 rps, no autocomplete, UA, caching) — https://operations.osmfoundation.org/policies/nominatim/
+- OSM tile usage policy (no bulk/prefetch, UA/Referer, alternatives incl. vector tiles) — https://operations.osmfoundation.org/policies/tiles/
+- OR-Tools CP-SAT circuit constraint with self-loop literals for optional nodes: the official Python reference page returned 404 when fetched; semantics taken from the C++ doc comments quoted at https://activimetrics.com/blog/ortools/cp_sat/two_circuit_constraints/ — re-verify against the installed `ortools` before M6

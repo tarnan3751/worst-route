@@ -58,6 +58,7 @@ Path = tuple[NDArray[np.int32], NDArray[np.int32]]  # (nodes, edges); len(edges)
 class GraphBackend(Protocol):
     """Masked searches over one build's graph."""
 
+    name: str  # "python", "csr": what a route records it was searched with
     data: GraphData
 
     def dijkstra(

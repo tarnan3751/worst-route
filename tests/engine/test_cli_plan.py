@@ -1,5 +1,7 @@
 import json
 import math
+import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -85,6 +87,59 @@ def test_the_same_seed_plans_the_same_route(data_dir: Path, tmp_path: Path) -> N
         assert code == 0
         files.append(json.loads(out.read_text()))
     assert files[0]["nodes"] == files[1]["nodes"]
+
+
+def test_the_backend_is_chosen_printed_and_recorded(data_dir: Path, tmp_path: Path) -> None:
+    save(data_dir, GRID, "b1")
+    trip = ["--from", latlon(GRID, 0), "--to", latlon(GRID, 99), "--seed", "4"]
+    code, stdout, _ = plan(*trip, "--max-iterations", "20")
+    assert code == 0 and "backend: csr" in stdout.splitlines()  # auto, when numba imports
+    docs = {}
+    for name in ("python", "csr"):
+        out = tmp_path / f"{name}.json"
+        code, stdout, stderr = plan(
+            *trip, "--max-iterations", "150", "--backend", name, "--out", str(out)
+        )
+        assert code == 0, stdout + stderr
+        assert f"backend: {name}" in stdout.splitlines()
+        docs[name] = json.loads(out.read_text())
+        assert docs[name]["run"]["backend"] == name
+        result = runner.invoke(app, ["validate", str(out), "--backend", name])
+        assert result.exit_code == 0, result.output
+        assert result.stdout.splitlines()[1] == f"backend: {name}"
+    for key in ("nodes", "edges", "stop_idx", "stops", "metrics"):
+        assert docs["python"][key] == docs["csr"][key]
+    assert docs["python"]["run"]["accepted"] == docs["csr"]["run"]["accepted"]
+
+    code, _, stderr = plan(*trip, "--backend", "numpy")
+    assert code == 2 and "unknown backend 'numpy'" in stderr
+
+
+def test_the_csr_backend_without_numba_is_one_line(data_dir: Path, tmp_path: Path) -> None:
+    # a fresh interpreter in which `import numba` fails (the data_dir fixture's environment is
+    # inherited, so the subprocess reads the same build)
+    save(data_dir, GRID, "b1")
+    no_numba = "import sys; sys.modules['numba'] = None; from worst_route.cli import app; app()"
+
+    def cli(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-c", no_numba, *args], capture_output=True, text=True, check=False
+        )
+
+    trip = ["--from", latlon(GRID, 0), "--to", latlon(GRID, 99), "--seed", "4"]
+    out = tmp_path / "route.json"
+    planned = cli(
+        "plan", "--region", "portland", *trip, "--max-iterations", "20", "--out", str(out)
+    )
+    assert planned.returncode == 0, planned.stderr
+    assert "backend: python" in planned.stdout.splitlines()  # auto falls back
+    for args in (["plan", "--region", "portland", *trip, "--backend", "csr"],
+                 ["validate", str(out), "--backend", "csr"]):  # fmt: skip
+        failed = cli(*args)
+        assert failed.returncode == 1 and failed.stdout == ""
+        lines = failed.stderr.splitlines()
+        assert len(lines) == 1
+        assert lines[0].startswith("the csr backend needs numba, which did not import: ")
 
 
 def test_a_random_seed_is_printed_and_recorded(data_dir: Path, tmp_path: Path) -> None:

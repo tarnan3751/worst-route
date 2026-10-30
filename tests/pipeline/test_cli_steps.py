@@ -223,7 +223,7 @@ def test_build_needs_its_input(data_dir: Path) -> None:
 
 
 def test_importing_the_cli_does_not_load_the_geo_stack() -> None:
-    heavy = ["httpx", "networkx", "numpy", "osmium", "pyarrow", "pyproj", "shapely"]
+    heavy = ["httpx", "networkx", "numba", "numpy", "osmium", "pyarrow", "pyproj", "shapely"]
     probe = f"import sys, worst_route.cli; print([m for m in {heavy!r} if m in sys.modules])"
     result = subprocess.run(
         [sys.executable, "-c", probe], capture_output=True, text=True, check=True

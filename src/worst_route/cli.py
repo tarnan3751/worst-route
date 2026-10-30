@@ -15,28 +15,37 @@ never overwrites one without `--force`; `qa` prints its thresholds, also when it
 do not load the geo stack.
 
 `plan` plans a route on a saved build (`docs/reference/engine.md`, **The CLI**): it prints the
-snapped stops, the baseline, the worst route, the ratio, the search and the validator's report,
-with a progress line on stderr on an accepted splice, at most one every 2 s, and writes
-`route.json` and GeoJSON when asked; a stop that cannot be snapped or reached, or a missing
-build, is one line and exit 1, and a route that fails the validator is never printed.
-`validate` re-checks a saved `route.json` against the build it names, with its stops re-derived
-from its request (`resolve_stops`), and exits 1 when a check fails. `serve` arrives with the
-API.
+snapped stops, the baseline, the worst route, the ratio, the search, the backend it searched
+with and the validator's report, with a progress line on stderr on an accepted splice, at most
+one every 2 s, and writes `route.json` and GeoJSON when asked; a stop that cannot be snapped or
+reached, or a missing build, is one line and exit 1, and a route that fails the validator is
+never printed. `validate` re-checks a saved `route.json` against the build it names, with its
+stops re-derived from its request (`resolve_stops`), and exits 1 when a check fails. Both take
+`--backend auto|csr|python` (`config.DEFAULT_BACKEND`) and print the one used, which changes
+only the speed; `csr` when numba does not import is one line and exit 1. `serve` arrives with
+the API.
 """
 
 import json
 import secrets
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, NoReturn
+from typing import TYPE_CHECKING, Annotated, Any, NoReturn, cast, get_args
 
 import typer
 
 from worst_route import __version__
-from worst_route.config import DEFAULT_BUDGET_S, DEFAULT_MAX_ITERATIONS, REGIONS
+from worst_route.config import (
+    DEFAULT_BACKEND,
+    DEFAULT_BUDGET_S,
+    DEFAULT_MAX_ITERATIONS,
+    REGIONS,
+    BackendName,
+)
 from worst_route.pipeline import PIPELINE_VERSION, layout
 
 if TYPE_CHECKING:
+    from worst_route.graph.backend import GraphBackend
     from worst_route.graph.data import GraphData
 
 app = typer.Typer(help="The least efficient way to get anywhere in the US.", no_args_is_help=True)
@@ -522,6 +531,22 @@ PROGRESS_EVERY_S = 2.0
 LatLonOption = Annotated[str, typer.Option(metavar="LAT,LON")]
 
 
+def _check_backend(value: str) -> str:
+    if value not in get_args(BackendName):
+        known = ", ".join(get_args(BackendName))
+        raise typer.BadParameter(f"unknown backend {value!r}; known: {known}")
+    return value
+
+
+BackendOption = Annotated[
+    str,
+    typer.Option(
+        help="Graph backend: csr, python, or auto (csr when numba imports).",
+        callback=_check_backend,
+    ),
+]
+
+
 def _latlon(text: str) -> tuple[float, float]:
     try:
         lat, lon = (float(part) for part in text.split(","))
@@ -533,6 +558,15 @@ def _latlon(text: str) -> tuple[float, float]:
 def _fail(message: str) -> NoReturn:
     typer.echo(message, err=True)
     raise typer.Exit(code=1)
+
+
+def _make_backend(data: "GraphData", name: str) -> "GraphBackend":
+    from worst_route.graph.backends import make_backend
+
+    try:
+        return make_backend(data, cast(BackendName, name))
+    except ImportError as error:  # only csr needs numba; auto falls back to python
+        _fail(f"the csr backend needs numba, which did not import: {error}")
 
 
 def _load_build(region: str, build_id: str | None) -> "GraphData":
@@ -574,6 +608,7 @@ def plan(
     tier: Annotated[str, typer.Option(help="auto or T0..T4.")] = "auto",
     out: Annotated[Path | None, typer.Option(help="Write the route.json here.")] = None,
     geojson: Annotated[Path | None, typer.Option(help="Write the GeoJSON here.")] = None,
+    backend: BackendOption = DEFAULT_BACKEND,
 ) -> None:
     """Plan the worst route between stops, validated."""
     from pydantic import ValidationError
@@ -603,6 +638,7 @@ def plan(
     except ValueError as error:
         raise typer.BadParameter(f"--leash-km: {error}") from None
     data = _load_build(region, build_id)
+    engine = _make_backend(data, backend)
 
     last = time.monotonic()
 
@@ -615,7 +651,7 @@ def plan(
             typer.echo(f"iteration {event.iteration}: ratio {ratio:.2f}x, {km:.2f} km", err=True)
 
     try:
-        result = plan_route(data, request, on_progress=progress)
+        result = plan_route(data, request, backend=engine, on_progress=progress)
     except (SnapError, StopUnreachable) as error:
         _fail(f"cannot plan: {error}")
     except ValidationFailed as error:
@@ -649,6 +685,7 @@ def plan(
         f"search: {run.attempts} attempts, {run.accepted} accepted, {run.elapsed_s:.1f} s, "
         f"stopped: {run.stopped_because}"
     )
+    typer.echo(f"backend: {result.backend}")
     names = ", ".join(c.name for c in result.report.checks)
     typer.echo(f"validator: ok ({names})")
     if out is not None:
@@ -666,6 +703,7 @@ def validate(
     ],
     region: Annotated[str | None, typer.Option(help="Region (default: the file's).")] = None,
     build_id: Annotated[str | None, typer.Option(help="Build id (default: the file's).")] = None,
+    backend: BackendOption = DEFAULT_BACKEND,
 ) -> None:
     """Re-check a saved route against its build, with its stops re-derived from its request."""
     from pydantic import ValidationError
@@ -675,7 +713,6 @@ def validate(
     from worst_route.engine.seed_route import resolve_stops
     from worst_route.engine.snap import StopUnreachable
     from worst_route.engine.validator import validate_route
-    from worst_route.graph.python_backend import PythonBackend
     from worst_route.graph.spatial import SnapError, SpatialIndex
 
     try:
@@ -690,8 +727,9 @@ def validate(
         )
     spatial = SpatialIndex(data)
     masks = request_masks(spatial, data, saved.request)
+    engine = _make_backend(data, backend)
     try:
-        stops = resolve_stops(data, spatial, PythonBackend(data), saved.request, masks)
+        stops = resolve_stops(data, spatial, engine, saved.request, masks)
     except (SnapError, StopUnreachable) as error:
         _fail(f"{route_file}: its request cannot be planned on this build: {error}")
     report = validate_route(
@@ -702,6 +740,7 @@ def validate(
         banned_edges=masks.banned,
     )
     typer.echo(f"{route_file}: {len(saved.nodes)} nodes on {saved.region}/{saved.build_id}")
+    typer.echo(f"backend: {engine.name}")
     for line in report.lines():
         typer.echo(line)
     if not report.ok:

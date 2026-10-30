@@ -32,6 +32,8 @@ from worst_route.graph.data import GraphData
 class PythonBackend:
     """The reference implementation of `GraphBackend`."""
 
+    name = "python"
+
     def __init__(self, data: GraphData) -> None:
         self.data = data
         self._check_weights = WeightCheck(data)

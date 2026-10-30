@@ -45,6 +45,7 @@ def test_route_json_round_trips(tmp_path: Path) -> None:
         "accepted": result.run.accepted,
         "stopped_because": "budget",
         "elapsed_s": result.run.elapsed_s,
+        "backend": "csr",  # plan_route's default when numba imports
     }
     masks = request_masks(SpatialIndex(GRID), GRID, saved.request)
     report = validate_route(

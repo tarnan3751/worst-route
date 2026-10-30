@@ -5,7 +5,9 @@
 stops (`resolve_stops`: snapping and its fallback, which may move stops), builds the seed route
 and the baseline on them, makes the request's objective with the baseline length and the radius
 bound r_max = min(leash, the active area's extent), and runs the worsen loop within the
-request's budget, handing each accepted splice and the baseline to `on_progress`. The best
+request's budget, handing each accepted splice and the baseline to `on_progress`. It searches
+with the backend it is given, else `make_backend`'s default (`config.DEFAULT_BACKEND`); every
+backend gives the same route, and the result records which one searched. The best
 route is then validated against the request's masks and the resolved stops; a route that fails
 raises `ValidationFailed` and is never returned. Errors a caller should expect: `SnapError` (no
 node near a stop can play its role) and `StopUnreachable` (a leg no route covers without
@@ -28,8 +30,8 @@ from worst_route.engine.snap import StopUnreachable
 from worst_route.engine.validator import ValidationFailed, ValidationReport, validate_route
 from worst_route.engine.worsen import Budget, ProgressEvent, WorsenResult, run_worsen
 from worst_route.graph.backend import GraphBackend
+from worst_route.graph.backends import make_backend
 from worst_route.graph.data import GraphData
-from worst_route.graph.python_backend import PythonBackend
 from worst_route.graph.spatial import Snap, SpatialIndex
 
 
@@ -44,6 +46,7 @@ class PlanResult:
     route: Route
     run: WorsenResult
     report: ValidationReport
+    backend: str  # the name of the backend that searched
 
 
 def plan_route(
@@ -56,7 +59,7 @@ def plan_route(
     check_delta: bool = False,
 ) -> PlanResult:
     """Plan, worsen and validate the route `request` asks for on this build."""
-    backend = backend if backend is not None else PythonBackend(data)
+    backend = backend if backend is not None else make_backend(data)
     spatial = spatial if spatial is not None else SpatialIndex(data)
     masks = request_masks(spatial, data, request)
     rng = np.random.Generator(np.random.PCG64(request.seed))
@@ -116,7 +119,7 @@ def plan_route(
     )
     if not report.ok:
         raise ValidationFailed(report)
-    return PlanResult(request, masks, tuple(snaps), baseline, run.best, run, report)
+    return PlanResult(request, masks, tuple(snaps), baseline, run.best, run, report, backend.name)
 
 
 def _refused(error: ValueError | IllegalSplice, stop_idx: Sequence[int] | None) -> StopUnreachable:

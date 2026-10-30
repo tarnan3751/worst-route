@@ -8,7 +8,7 @@
      nodes, edges, stop_idx,
      metrics:  {length_m, time_s, baseline_length_m, baseline_time_s, ratio (null for a round
                 trip, whose baseline is 0 m), and the objective's own numbers},
-     run:      {attempts, accepted, stopped_because, elapsed_s}}
+     run:      {attempts, accepted, stopped_because, elapsed_s, backend}}
 
 `read_route(path)` reads one back as a `SavedRoute`, which the validator reads like a `Route`:
 `worst-route validate` re-checks it against the build it names. A run that stopped on time is
@@ -84,6 +84,7 @@ def route_document(data: GraphData, result: PlanResult) -> dict[str, Any]:
             "accepted": run.accepted,
             "stopped_because": run.stopped_because,
             "elapsed_s": run.elapsed_s,
+            "backend": result.backend,
         },
     }
 

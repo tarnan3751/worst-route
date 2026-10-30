@@ -1,12 +1,14 @@
 """The M1 acceptance run on a saved build (`docs/PLAN.md` §7 M1 step 9).
 
     uv run python tools/acceptance.py --region portland [--build-id ID] [--pairs 20] [--seed 1]
-        [--budget 30] [--backend python] [--min-km 3] [--max-km 15] [--jaccard 5]
+        [--budget 30] [--backend python|csr] [--min-km 3] [--max-km 15] [--jaccard 5]
         [--pair-seed 2026] [--near-m 250] [--out tools/out/acceptance.json]
 
 It needs a build under `WORST_ROUTE_DATA`, so it is not part of the gate. M1's acceptance is
 `--region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` (the other options at their
-defaults).
+defaults). `--backend csr` runs it on the Numba kernels; the default stays the reference, which
+M1's numbers were measured on: a run bounded by time goes further on a faster backend, so the
+routes differ.
 
 **Drawing the pairs.** One `Generator(PCG64(--pair-seed))` draws every point, in order. A point
 is a latitude, then a longitude, each uniform within the region's bbox (the nodes' extent for a
@@ -49,13 +51,17 @@ from worst_route.engine.seed_route import resolve_stops
 from worst_route.engine.snap import StopUnreachable
 from worst_route.engine.validator import ValidationFailed
 from worst_route.graph.backend import GraphBackend
+from worst_route.graph.csr_backend import CsrBackend
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
 from worst_route.graph.spatial import SnapError, SpatialIndex
 from worst_route.graph.store import read_build
 from worst_route.pipeline import layout
 
-BACKENDS = {"python": PythonBackend}
+BACKENDS: dict[str, type[PythonBackend] | type[CsrBackend]] = {
+    "python": PythonBackend,
+    "csr": CsrBackend,
+}
 UNLIMITED = 10**9  # attempts: the budget in seconds bounds a run
 RESNAP_NOTE = "nearer nodes cannot be reached"
 

@@ -10,12 +10,14 @@ extract, optionally clipped to a bbox, with the projected CRS its metric steps u
 tier definitions, class allowlists and defaults join this module as their steps are built.
 
 `HighwayClass` numbers the road classes a build keeps (stored per edge as `edge_highway`) and
-`TIERS` lists each tier's classes (`docs/PLAN.md` §2.6).
+`TIERS` lists each tier's classes (`docs/PLAN.md` §2.6). `DEFAULT_BACKEND` names the graph
+backend the engine searches with unless told otherwise.
 """
 
 from enum import IntEnum
 from functools import cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -118,6 +120,12 @@ _T3 = _T2 | {HighwayClass.TERTIARY, HighwayClass.TERTIARY_LINK}
 
 # The classes of tiers T0..T4; each tier contains the one before it, T4 is every class.
 TIERS: tuple[frozenset[HighwayClass], ...] = (_T0, _T1, _T2, _T3, frozenset(HighwayClass))
+
+# The graph backend (`docs/reference/graph.md`, **Choosing a backend**): "csr" (the Numba
+# kernels), "python" (the reference) or "auto", csr when numba imports and python otherwise.
+# Both give the same routes; csr is the fast one.
+BackendName = Literal["auto", "csr", "python"]
+DEFAULT_BACKEND: BackendName = "auto"
 
 
 # The engine (`docs/reference/engine.md`). A request's defaults and the masks it implies: the

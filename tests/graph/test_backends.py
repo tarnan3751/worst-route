@@ -5,6 +5,7 @@ then ask `CsrBackend` for the reference's exact bytes, ties and Nones included.
 """
 
 import math
+import sys
 from dataclasses import dataclass
 
 import networkx as nx
@@ -13,7 +14,9 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from worst_route.config import DEFAULT_BACKEND
 from worst_route.graph.backend import GraphBackend, Path
+from worst_route.graph.backends import make_backend
 from worst_route.graph.csr_backend import CsrBackend
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
@@ -286,9 +289,22 @@ def test_largest_scc_matches_networkx(backend_type, case: Case) -> None:
 
 
 def test_the_backends_are_graph_backends() -> None:
-    for backend in (PythonBackend(GRID), CsrBackend(GRID)):
+    for backend, name in [(PythonBackend(GRID), "python"), (CsrBackend(GRID), "csr")]:
         typed: GraphBackend = backend
-        assert typed.data.n == 9
+        assert typed.data.n == 9 and typed.name == name
+
+
+def test_make_backend_makes_the_one_asked_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert DEFAULT_BACKEND == "auto"
+    assert isinstance(make_backend(GRID), CsrBackend)  # numba imports here
+    assert isinstance(make_backend(GRID, "csr"), CsrBackend)
+    assert isinstance(make_backend(GRID, "python"), PythonBackend)
+    with pytest.raises(ValueError, match="unknown backend 'numpy'"):
+        make_backend(GRID, "numpy")  # type: ignore[arg-type]
+    monkeypatch.setitem(sys.modules, "worst_route.graph.csr_backend", None)  # as if no numba
+    assert make_backend(GRID).name == "python"
+    with pytest.raises(ImportError):
+        make_backend(GRID, "csr")
 
 
 def test_ties_go_to_the_first_node_settled_then_the_lowest_edge(backend_type) -> None:

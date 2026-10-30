@@ -32,6 +32,8 @@ from worst_route.graph.data import GraphData
 class CsrBackend:
     """The Numba implementation of `GraphBackend`."""
 
+    name = "csr"
+
     def __init__(self, data: GraphData) -> None:
         self.data = data
         self._check_weights = WeightCheck(data)

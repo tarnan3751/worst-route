@@ -3,6 +3,7 @@
 // baseline, casing, route, flash) above the basemap; the stops are DOM markers above the canvas.
 import { Map as MapLibreMap, NavigationControl } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import type { Bounds } from "../util/geo";
 import { basemapStyle } from "./basemap";
 
 /** The map in `container`, showing the contiguous US until a region is known. */
@@ -16,4 +17,9 @@ export function createMap(container: HTMLElement): MapLibreMap {
   });
   map.addControl(new NavigationControl({ showCompass: false }), "top-right");
   return map;
+}
+
+/** Show `bounds` with room around them, at once. */
+export function fitTo(map: MapLibreMap, bounds: Bounds): void {
+  map.fitBounds(bounds, { padding: 48, duration: 0 });
 }

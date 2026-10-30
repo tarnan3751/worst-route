@@ -74,3 +74,134 @@ body {
   position: absolute;
   inset: 0;
 }
+
+/* Stops */
+
+.hint {
+  margin: 0 0 8px;
+  color: var(--muted);
+}
+
+.stop-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stop {
+  display: flex;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 6px;
+}
+
+.stop.has-error {
+  background: var(--error-bg);
+  outline: 1px solid var(--error-ink);
+}
+
+.stop .body {
+  flex: 1;
+  min-width: 0;
+}
+
+.stop .title {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+}
+
+.stop .coords {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.stop .snap {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.stop .remove {
+  border: none;
+  background: none;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.badge,
+.stop-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border-radius: 50%;
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  background: var(--via);
+}
+
+.stop-marker {
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 40%);
+  cursor: grab;
+}
+
+.role-start .badge,
+.stop-marker.role-start {
+  background: var(--start);
+}
+
+.role-end .badge,
+.stop-marker.role-end {
+  background: var(--end);
+}
+
+.stop-marker.has-error {
+  outline: 3px solid var(--error-ink);
+}
+
+.stop-ghost {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 70%);
+  border: 2px dashed var(--ink);
+}
+
+/* The error banner */
+
+#banner {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 60px;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--error-bg);
+  color: var(--error-ink);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 20%);
+}
+
+#banner[hidden] {
+  display: none;
+}
+
+#banner span {
+  flex: 1;
+}
+
+#banner .close {
+  border: none;
+  background: none;
+  font-size: 16px;
+  cursor: pointer;
+  color: inherit;
+}

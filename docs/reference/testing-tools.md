@@ -5,7 +5,14 @@ in `CLAUDE.md`, **Agent workflow**; this file is the how-it-works.
 
 ## Tests
 
-Not yet written. The shape, from `docs/PLAN.md` §8.2: `tests/fixtures/osm/*.osm` hand-written
+What exists: `tests/conftest.py`, which documents the `data` marker; `tests/unit/`, with the
+config and CLI tests (typer's `CliRunner`). `tests/` and `tests/unit/` are packages (an empty
+`__init__.py` each), so pytest's default import mode tolerates the same test file name in two
+folders and the `tests.*` mypy override applies; a new test folder gets an `__init__.py` too.
+The `data` marker is registered in `pyproject.toml`, which runs pytest with `--strict-markers`
+and a 300 s timeout per test.
+
+The planned shape, from `docs/PLAN.md` §8.2: `tests/fixtures/osm/*.osm` hand-written
 OSM XML (a grid with one-ways, a divided highway with mismatched junctions, a cloverleaf, a
 diamond, a roundabout, a cul-de-sac neighbourhood, private roads, an overpass, a ref change)
 converted to pbf by a script with `osmium.SimpleWriter`; `tests/unit/`, `pipeline/`, `engine/`,
@@ -24,6 +31,9 @@ under `src`, `tests`, `tools` and `frontend/src`. One line per gate, the failing
 full, non-zero exit on any failure. It never downloads and never reads `data/`. Before M1's
 bootstrap (no `pyproject.toml`) the Python gates report `skipped` and the gate passes on the
 leftover scan alone.
+
+`.github/workflows/gate.yml` runs `tools/gates.sh` on every push and pull request
+(ubuntu-latest, uv with Python 3.12, Node 22 for the frontend gate).
 
 ## Lanes
 

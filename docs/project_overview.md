@@ -1,7 +1,7 @@
 # Worst Route — project overview
 
-Last updated: 2026-10-30. Snapshot taken before any code exists: the plan is written, nothing
-is built.
+Last updated: 2026-10-30. Snapshot taken after M1's bootstrap landed: the plan is written and
+the project scaffolding is built; no part of the app exists yet.
 
 This file answers three questions: what the project is meant to become, how far along it is, and
 what has been decided. It is written for a human reader and for an AI agent picking up the
@@ -68,8 +68,11 @@ Out of scope for now: social features, accounts, mobile apps.
 
 ### 2.1 Built
 
-Nothing. The workflow scaffolding exists: `CLAUDE.md`, the four agents, `tools/gates.sh`,
-`tools/land_series.sh`, this overview, `docs/PLAN.md`.
+No part of the app yet. The workflow scaffolding exists: `CLAUDE.md`, the four agents,
+`tools/gates.sh`, `tools/land_series.sh`, this overview, `docs/PLAN.md`. The M1 bootstrap is
+built: the uv project (Python 3.12, `src` layout, the M1 dependencies), the gate running ruff,
+mypy and pytest for real, locally and in GitHub Actions, and the `worst-route` CLI skeleton
+(`version`, and `pipeline <step>` stubs that exit as not implemented yet).
 
 ### 2.2 Roadmap
 
@@ -77,7 +80,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 
 | Milestone | Status | Summary |
 |---|---|---|
-| M1 — Portland, distance mode, CLI | Planned | bootstrap; pipeline download→filter→build→cleanup→enrich→save→qa for Portland; networkx backend; snapping, seed route, splice loop, distance objective; the validator; `worst-route plan` prints a validated route and its ratio |
+| M1 — Portland, distance mode, CLI | In progress | bootstrap built; remaining: the Portland pipeline, the graph package (networkx backend), the engine (snapping, seed route, splice loop, distance objective), the validator, `worst-route plan` printing a validated route and its ratio |
 | M2 — API + map, live growth | Planned | CSR + Numba backend; FastAPI jobs + SSE; MapLibre frontend; targets by ratio and duration; reroll, make it worse |
 | M3 — Modes and constraints | Planned | turn-aware kernel, never/only-left; slowest time; collectibles; brands; hard mode; stage B transition tables; alphabet search |
 | M4 — Presentation | Planned | directions, stats, toasts, comparisons, share image, geocoding proxy, share links |

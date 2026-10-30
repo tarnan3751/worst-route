@@ -1,0 +1,19 @@
+# The gate, tools/gates.sh, on every push and pull request: sync, lint, types, tests, the
+# frontend typecheck and build (skipped until frontend/ exists), and the leftover scan.
+name: gate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv python install 3.12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: tools/gates.sh

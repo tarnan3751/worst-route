@@ -16,8 +16,10 @@ A section named in bold is a heading of this file or of a doc.
 
 ## Status
 
-**Nothing is built.** The plan (`docs/PLAN.md`, 2026-10-30) is written and its open questions
-answered as far as `docs/project_overview.md` §3 records. The next step is **M1**: the
+**The bootstrap is built**: the uv project, the gate wired to ruff, mypy and pytest, and the
+CLI skeleton with the pipeline steps as stubs; no part of the app exists yet. The plan
+(`docs/PLAN.md`, 2026-10-30) is written and its open questions answered as far as
+`docs/project_overview.md` §3 records. The next step is the rest of **M1**: the
 Portland build, the distance objective, a CLI that prints a route and its inefficiency ratio,
 and the validator. `docs/project_overview.md` holds the roadmap (§2.2) and the decisions (§3).
 
@@ -42,19 +44,20 @@ or grep `.venv/lib/python3.12/site-packages/`.
 
 ## Commands
 
-Until M1's bootstrap lands, only the gate and the landing script exist; the rest is the shape
-`docs/PLAN.md` commits to. A command that does not exist yet is marked *(M1)*.
+M1's bootstrap has landed: the project, the gate on the real tools and the CLI skeleton exist;
+the rest is the shape `docs/PLAN.md` commits to. A command that does not exist yet is marked
+with the milestone that adds it, *(M1)* or *(M2)*.
 
 | What | Command |
 |---|---|
 | The gate (sync, lint, types, tests, frontend build, leftovers) | `tools/gates.sh` |
 | Install / refresh the virtualenv | `uv sync` |
-| Run all tests | `uv run pytest` *(M1)* |
-| Run some tests | `uv run pytest -k splice` *(M1)* |
-| Tests that need a built graph (skipped by the gate) | `uv run pytest -m data` *(M1)* |
-| Lint and format check | `uv run ruff check . && uv run ruff format --check .` *(M1)* |
-| Types | `uv run mypy src` *(M1)* |
-| Pipeline, one step | `uv run worst-route pipeline <download\|filter\|build\|cleanup\|enrich\|tiers\|save\|qa> --region portland` *(M1)* |
+| Run all tests | `uv run pytest` |
+| Run some tests | `uv run pytest -k splice` |
+| Tests that need a built graph (skipped by the gate) | `uv run pytest -m data` |
+| Lint and format check | `uv run ruff check . && uv run ruff format --check .` |
+| Types | `uv run mypy src` |
+| Pipeline, one step (a skeleton for now: each step exits 2, not implemented yet) | `uv run worst-route pipeline <download\|filter\|build\|cleanup\|enrich\|tiers\|save\|qa> --region portland` |
 | Plan a route from the CLI, validated | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30` *(M1)* |
 | Validate a saved route | `uv run worst-route validate route.json` *(M1)* |
 | API server (the coordinator only; agents use ports of their own) | `uv run worst-route serve` *(M2)* |
@@ -160,6 +163,7 @@ frontend/        Vite + TS app: src/{main,state,api,map,stops,settings,run,toast
 tests/           fixtures/osm/*.osm, unit/, pipeline/, engine/, api/, property/, golden/, bench/
 tools/           gates.sh, land_series.sh; later: fetch_census.sh, make_fixture_pbfs.py, bench
 .claude/agents/  scout, researcher, developer, reviewer
+.github/         workflows/gate.yml: the gate on every push and pull request
 ```
 
 ## Python and TypeScript gotchas for this project

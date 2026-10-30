@@ -278,9 +278,12 @@ TIER_MIN_RETAINED = 0.95
 QA_TWIN_COVERAGE_MIN = 0.95
 
 # The API (`docs/reference/api.md`). At most API_MAX_JOBS jobs run at once, each in a worker
-# process, and API_MAX_QUEUED wait; a running job is killed API_KILL_GRACE_S after its budget.
-# A job's record is kept API_JOB_TTL_S after it ends. A job whose SSE subscribers have all gone
-# for API_ORPHAN_S (once one had connected) is cancelled, or dropped if still queued. Progress
+# process, and API_MAX_QUEUED wait; a running job is killed API_KILL_GRACE_S after its budget. A
+# job's record is kept API_JOB_TTL_S after it ends. A job whose SSE subscribers have all gone
+# for API_ORPHAN_S (once one had connected) is cancelled, or dropped if still queued; the
+# manager looks for those every API_SWEEP_S. A job's follower waits at most API_READ_GRACE_S on
+# its worker's pipe before it looks at the job's time limit and its worker again (a worker that
+# dies, even partway through a message, closes the pipe, which ends the wait at once). Progress
 # is sent at most once per API_COALESCE_S, with a full snapshot every API_SNAPSHOT_EVERY
 # progress events, simplified to API_SIMPLIFY_M. The API's default max_iterations leaves the
 # seconds budget to end a run (the CLI keeps DEFAULT_MAX_ITERATIONS).
@@ -289,6 +292,8 @@ API_MAX_QUEUED = 8
 API_KILL_GRACE_S = 30.0
 API_JOB_TTL_S = 3600.0
 API_ORPHAN_S = 15.0
+API_SWEEP_S = 1.0
+API_READ_GRACE_S = 0.1
 API_COALESCE_S = 0.1
 API_SNAPSHOT_EVERY = 50
 API_SIMPLIFY_M = 1.0

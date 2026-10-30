@@ -1,0 +1,725 @@
+"""The job manager: workers, their events, cancellation (`docs/reference/api.md`, **Jobs**).
+
+A job plans one request. `prepare(loaded, request)` is the pre-flight the endpoint runs before a
+job exists (the request's masks and `resolve_stops`, so a stop that cannot be snapped or reached
+is a 422, not a job); the worker repeats it, deterministically. `JobManager.submit` makes the job,
+emits its `snapped` event from the pre-flight, and starts its worker (`api/worker.py`) in a
+spawned process, or queues it when `max_jobs` are running; with `max_queued` waiting too it
+raises `TooManyJobs` (the endpoint's 429).
+
+While a job runs, its follower task reads the worker's queue (in a thread, so the event loop
+never blocks) and keeps the job's own copy of the route: the route the loop started from
+(`Started`, which emits `baseline` and a `snapshot` of iteration 0), then every accepted splice
+applied in order, as a client would. In a max mode every accepted splice raises the score, so
+that copy is the best route so far. Splices are sent as `progress` events at most once per
+`coalesce_s`, every `snapshot_every`-th followed by a `snapshot`. `Finished` stores the
+worker's validated route and emits `done`; `Failed` emits `error`.
+
+Event ids count up per job. A subscriber (`subscribe`, the SSE endpoint's) first gets the
+stored `snapped` and `baseline` events it has not seen (those after `Last-Event-ID`), then, once
+the route exists, a `snapshot` of it carrying the id of the latest event that changed the route
+(pending splices are flushed first, so no later `progress` repeats one), then the end event if
+the job has ended, then live events, so its ids rise strictly. A stream ends after `done` or
+`error`, and every pending splice is sent before either.
+
+`cancel` ends a job early: a queued job, or one whose route does not exist yet, ends in `error`
+`CANCELLED`; a running one has its worker terminated (its queue is never read again: a process
+killed while writing may leave it corrupt), and the manager's copy of the route is validated
+against the pre-flight's stops and masks, stored with `stopped_because: "cancelled"` and
+reported in `done` (its `run.attempts` is the attempt of the last splice applied, so planning
+again with that many attempts gives it back), or `error` `VALIDATION_FAILED` if it fails. A
+running job is stopped the same way `kill_grace_s` after its budget, as `"timeout"`
+(`WORKER_TIMEOUT` before its route exists). A worker that dies without a result is
+`WORKER_FAILED`: a process worker's messages come down a one-way pipe whose only write end is
+the worker's, so its death ends a read at once (EOF, even partway through a message), and every
+read waits at most `read_grace_s` (`poll`), so no thread is ever left blocked. A worker that
+does not start ends its job as `WORKER_FAILED` too, and the queue moves on. Every `sweep_s` the
+manager cancels a job whose subscribers have all gone for `orphan_s` (once one had connected; a
+queued one is dropped) and forgets an ended job after `ttl_s`; an error on one job ends that
+job as `WORKER_FAILED` and the sweep goes on.
+
+With `inline_workers` (tests), the worker runs in a thread of this process on a `queue.Queue`,
+and stopping it sets an Event it checks at its next accepted splice; everything else is the
+same code.
+"""
+
+import asyncio
+import logging
+import multiprocessing
+import queue
+import secrets
+import threading
+import time
+from collections import deque
+from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Protocol
+
+import numpy as np
+from pydantic import BaseModel
+
+from worst_route.api import sse
+from worst_route.api.schemas import (
+    Done,
+    ErrorBody,
+    JobState,
+    JobStatus,
+    LatLon,
+    Progress,
+    RouteMetrics,
+    Snapped,
+    Snapshot,
+    SpliceOut,
+    StopReason,
+    StopSnapped,
+)
+from worst_route.api.sse import Event
+from worst_route.api.store import RouteStore
+from worst_route.api.worker import (
+    Failed,
+    Finished,
+    JobSpec,
+    Message,
+    RouteArrays,
+    Spliced,
+    Started,
+    run_in_process,
+    run_job,
+)
+from worst_route.config import (
+    API_COALESCE_S,
+    API_JOB_TTL_S,
+    API_KILL_GRACE_S,
+    API_MAX_JOBS,
+    API_MAX_QUEUED,
+    API_ORPHAN_S,
+    API_READ_GRACE_S,
+    API_SIMPLIFY_M,
+    API_SNAPSHOT_EVERY,
+    API_SWEEP_S,
+    BackendName,
+)
+from worst_route.engine import ENGINE_VERSION
+from worst_route.engine.request import RequestMasks, RouteRequest, request_masks
+from worst_route.engine.route import IntArray, Metrics
+from worst_route.engine.seed_route import resolve_stops
+from worst_route.engine.validator import validate_route
+from worst_route.graph.loader import Loaded
+from worst_route.graph.spatial import Snap
+
+log = logging.getLogger(__name__)
+ENDS = ("done", "error")
+HEADER = ("snapped", "baseline")
+ROUTE_EVENTS = ("baseline", "snapshot", "progress")
+
+
+class TooManyJobs(Exception):  # noqa: N818 (the condition, as the 429 names it)
+    """Every worker is busy and the queue is full."""
+
+
+@dataclass(frozen=True)
+class JobSettings:
+    """The manager's limits and cadence (defaults: `config.API_*`)."""
+
+    max_jobs: int = API_MAX_JOBS
+    max_queued: int = API_MAX_QUEUED
+    inline_workers: bool = False
+    coalesce_s: float = API_COALESCE_S
+    snapshot_every: int = API_SNAPSHOT_EVERY
+    simplify_m: float = API_SIMPLIFY_M
+    kill_grace_s: float = API_KILL_GRACE_S
+    orphan_s: float = API_ORPHAN_S
+    ttl_s: float = API_JOB_TTL_S
+    sweep_s: float = API_SWEEP_S
+    read_grace_s: float = API_READ_GRACE_S
+
+
+@dataclass(frozen=True, eq=False)
+class Prepared:
+    """A request's masks and resolved stops, worked out before its job exists."""
+
+    request: RouteRequest
+    masks: RequestMasks
+    snaps: tuple[Snap, ...]
+
+
+def prepare(loaded: Loaded, request: RouteRequest) -> Prepared:
+    """The pre-flight: raises `SnapError` or `StopUnreachable` as the worker would."""
+    masks = request_masks(loaded.spatial, loaded.data, request)
+    snaps = resolve_stops(loaded.data, loaded.spatial, loaded.backend, request, masks)
+    return Prepared(request, masks, tuple(snaps))
+
+
+class _Worker(Protocol):
+    def get(self, timeout: float) -> Message: ...
+    def alive(self) -> bool: ...
+    def stop(self) -> None: ...
+    def close(self) -> None: ...
+
+
+class _ProcessWorker:
+    """A worker in a spawned process, its messages on a one-way pipe."""
+
+    def __init__(self, spec: JobSpec, name: str) -> None:
+        ctx = multiprocessing.get_context("spawn")
+        self._reader, writer = ctx.Pipe(duplex=False)
+        self._process = ctx.Process(
+            target=run_in_process, args=(spec, writer), name=name, daemon=True
+        )
+        self._process.start()
+        writer.close()  # the child's copy is the only one: its end is the pipe's end
+
+    def get(self, timeout: float) -> Message:
+        """The next message; `queue.Empty` after `timeout`; `EOFError` or `OSError` once the
+        worker has gone, at once even when it died partway through a message."""
+        if not self._reader.poll(timeout):
+            raise queue.Empty
+        message: Message = self._reader.recv()
+        return message
+
+    def alive(self) -> bool:
+        return self._process.is_alive()
+
+    def stop(self) -> None:
+        self._process.terminate()
+
+    def close(self) -> None:
+        self._process.join(5)
+        self._reader.close()
+
+
+class _ThreadWorker:
+    """A worker in a thread of this process (inline workers, for tests)."""
+
+    def __init__(self, spec: JobSpec, name: str) -> None:
+        self._queue: queue.Queue[Message] = queue.Queue()
+        self._cancel = threading.Event()
+        args = (spec, self._queue, self._cancel)
+        self._thread = threading.Thread(target=run_job, args=args, name=name, daemon=True)
+        self._thread.start()
+
+    def get(self, timeout: float) -> Message:
+        return self._queue.get(timeout=timeout)
+
+    def alive(self) -> bool:
+        return self._thread.is_alive()
+
+    def stop(self) -> None:
+        self._cancel.set()
+
+    def close(self) -> None:
+        pass
+
+
+@dataclass(eq=False)
+class Job:
+    """One job and everything the manager knows of it."""
+
+    id: str
+    loaded: Loaded
+    request: RouteRequest
+    snaps: tuple[Snap, ...]
+    masks: RequestMasks | None  # dropped when the job ends
+    input: dict[str, Any]
+    base: RouteArrays | None
+    created: datetime
+    status: JobState = "queued"
+    started: datetime | None = None
+    finished: datetime | None = None
+    started_at: float = 0.0
+    finished_at: float = 0.0
+    last_id: int = 0
+    state_id: int = 0  # the latest event that changed the route
+    header: list[Event] = field(default_factory=list)
+    end: Event | None = None
+    subscribers: set["Subscription"] = field(default_factory=set)
+    orphaned_since: float | None = None
+    route: RouteArrays | None = None
+    score: float = 0.0
+    iteration: int = 0
+    accepted: int = 0
+    elapsed_s: float = 0.0
+    baseline_length_m: float = 0.0
+    baseline_time_s: float = 0.0
+    baseline_edges: IntArray = field(default_factory=lambda: np.zeros(0, dtype=np.int32))
+    pending: list[SpliceOut] = field(default_factory=list)
+    progress_count: int = 0
+    last_flush: float = 0.0
+    route_id: str | None = None
+    stopped_because: StopReason | None = None
+    error: ErrorBody | None = None
+    worker: _Worker | None = None
+    follower: "asyncio.Task[None] | None" = None
+    closing: bool = False  # an end is under way; the worker's queue is no longer read
+
+
+class Subscription:
+    """One SSE client of a job: the events it gets first, then the job's live events."""
+
+    def __init__(self, first: list[Event], close: Callable[["Subscription"], None]) -> None:
+        self._queue: asyncio.Queue[Event] = asyncio.Queue()
+        self._close = close
+        for event in first:
+            self._queue.put_nowait(event)
+
+    def push(self, event: Event) -> None:
+        self._queue.put_nowait(event)
+
+    async def events(self) -> AsyncIterator[Event]:
+        """The events, until the job's `done` or `error`."""
+        while True:
+            event = await self._queue.get()
+            yield event
+            if event.name in ENDS:
+                return
+
+    def close(self) -> None:
+        """The client has gone."""
+        self._close(self)
+
+
+class JobManager:
+    """The jobs of one API process."""
+
+    def __init__(
+        self, settings: JobSettings, store: RouteStore, *, data_dir: Path, backend: BackendName
+    ) -> None:
+        self.settings = settings
+        self.store = store
+        self.data_dir = data_dir
+        self.backend = backend
+        self.jobs: dict[str, Job] = {}
+        self._running: set[str] = set()
+        self._queued: deque[Job] = deque()
+        self._sweeper: asyncio.Task[None] | None = None
+
+    async def start(self) -> None:
+        """Start the sweep (orphans, expired records)."""
+        self._sweeper = asyncio.create_task(self._sweep())
+
+    async def stop(self) -> None:
+        """Stop every worker; nothing is stored."""
+        if self._sweeper is not None:
+            self._sweeper.cancel()
+        jobs = [self.jobs[j] for j in self._running]
+        for job in jobs:
+            job.closing = True
+            if job.worker is not None:
+                job.worker.stop()
+            if job.follower is not None:
+                job.follower.cancel()
+        await asyncio.gather(
+            *(asyncio.to_thread(j.worker.close) for j in jobs if j.worker is not None),
+            return_exceptions=True,
+        )
+
+    def has_room(self) -> bool:
+        """Whether a job submitted now would run or wait rather than be refused."""
+        s = self.settings
+        return len(self._running) < s.max_jobs or len(self._queued) < s.max_queued
+
+    def submit(
+        self,
+        loaded: Loaded,
+        prepared: Prepared,
+        *,
+        input: dict[str, Any],
+        base: RouteArrays | None = None,
+    ) -> Job:
+        """Make a job for a prepared request, emit `snapped`, and start or queue it."""
+        if not self.has_room():
+            raise TooManyJobs
+        job = Job(
+            id=secrets.token_hex(6),
+            loaded=loaded,
+            request=prepared.request,
+            snaps=prepared.snaps,
+            masks=prepared.masks,
+            input=input,
+            base=base,
+            created=datetime.now(UTC),
+        )
+        self.jobs[job.id] = job
+        self._emit(job, "snapped", self._snapped(job, prepared.masks))
+        if len(self._running) < self.settings.max_jobs:
+            self._start(job)
+        else:
+            self._queued.append(job)
+        return job
+
+    def subscribe(self, job: Job, last_event_id: int | None = None) -> Subscription:
+        """A new SSE client of `job`, which had seen events up to `last_event_id`."""
+        self._flush(job)
+        first = [e for e in job.header if last_event_id is None or e.id > last_event_id]
+        if job.route is not None:
+            first.append(Event(job.state_id, "snapshot", self._snapshot(job).model_dump_json()))
+        if job.end is not None:
+            first.append(job.end)
+        subscription = Subscription(first, lambda s: self._unsubscribe(job, s))
+        if job.end is None:
+            job.subscribers.add(subscription)
+            job.orphaned_since = None
+        return subscription
+
+    async def cancel(self, job: Job) -> None:
+        """End `job` now, storing its route so far when it has one."""
+        try:
+            await self._end_early(job, "cancelled")
+        except Exception as error:
+            log.exception("job %s: cancelling it failed", job.id)
+            await self._fail_unended(job, error)
+
+    def status(self, job: Job, *, with_snapshot: bool) -> JobStatus:
+        """What `GET /jobs/{id}` reports."""
+        if job.started_at == 0.0:
+            elapsed = 0.0
+        else:
+            elapsed = (job.finished_at or time.monotonic()) - job.started_at
+        return JobStatus(
+            job_id=job.id,
+            status=job.status,
+            region=str(job.loaded.data.meta["region"]),
+            build_id=str(job.loaded.data.meta["build_id"]),
+            seed=job.request.seed,
+            created=job.created,
+            started=job.started,
+            finished=job.finished,
+            last_event_id=job.last_id,
+            iteration=job.iteration,
+            elapsed_s=elapsed,
+            metrics=self._metrics(job) if job.route is not None else None,
+            route_id=job.route_id,
+            stopped_because=job.stopped_because,
+            error=job.error,
+            snapshot=self._snapshot(job) if with_snapshot and job.route is not None else None,
+        )
+
+    # Running a job ------------------------------------------------------------------------
+
+    def _start(self, job: Job) -> None:
+        spec = JobSpec(
+            data_dir=self.data_dir,
+            region=str(job.loaded.data.meta["region"]),
+            build_id=str(job.loaded.data.meta["build_id"]),
+            backend=self.backend,
+            request=job.request,
+            base=job.base,
+        )
+        kind = _ThreadWorker if self.settings.inline_workers else _ProcessWorker
+        try:
+            job.worker = kind(spec, f"worst-route job {job.id}")
+        except Exception as error:
+            log.exception("job %s: its worker did not start", job.id)
+            message = f"the worker did not start: {type(error).__name__}: {error}"
+            job.error = ErrorBody(code="WORKER_FAILED", message=message)
+            self._emit(job, "error", job.error)
+            self._record_end(job, "error")
+            return
+        job.status = "running"
+        job.started = datetime.now(UTC)
+        job.started_at = time.monotonic()
+        self._running.add(job.id)
+        job.follower = asyncio.create_task(self._follow(job, job.worker))
+
+    async def _follow(self, job: Job, worker: _Worker) -> None:
+        """Read the worker's messages until the job ends."""
+        s = self.settings
+        deadline = job.started_at + job.request.budget_s + s.kill_grace_s
+        try:
+            while not job.closing:
+                alive = worker.alive()
+                wait = s.read_grace_s
+                if job.pending:
+                    due = job.last_flush + s.coalesce_s - time.monotonic()
+                    wait = min(wait, max(0.0, due))
+                messages, closed = await asyncio.to_thread(_drain, worker, wait)
+                if job.closing:
+                    return
+                for message in messages:
+                    if isinstance(message, Started):
+                        self._started(job, message)
+                    elif isinstance(message, Spliced):
+                        self._spliced(job, message)
+                    else:
+                        self._flush(job)
+                        if isinstance(message, Finished):
+                            await self._finished(job, message)
+                        else:
+                            await self._failed(job, message)
+                        return
+                if job.pending and time.monotonic() - job.last_flush >= s.coalesce_s:
+                    self._flush(job)
+                if time.monotonic() >= deadline:
+                    await self._end_early(job, "timeout")
+                elif closed or (not messages and not alive):
+                    lost = Failed("WORKER_FAILED", "the worker stopped without a result")
+                    await self._failed(job, lost)
+        except Exception as error:
+            log.exception("job %s: following its worker failed", job.id)
+            await self._fail_unended(job, error)
+
+    def _started(self, job: Job, m: Started) -> None:
+        job.route, job.score = m.route, m.score
+        job.baseline_length_m, job.baseline_time_s = m.baseline_length_m, m.baseline_time_s
+        job.baseline_edges = m.baseline_edges
+        data = job.loaded.data
+        self._emit(
+            job,
+            "baseline",
+            sse.baseline_out(data, m.baseline_length_m, m.baseline_time_s, m.baseline_edges),
+        )
+        self._emit(job, "snapshot", self._snapshot(job))
+        job.last_flush = time.monotonic()
+
+    def _spliced(self, job: Job, m: Spliced) -> None:
+        route = job.route
+        if route is None:
+            raise RuntimeError("a splice before the start")
+        nodes = np.concatenate((route.nodes[: m.i], m.nodes, route.nodes[m.j + 1 :]))
+        edges = np.concatenate((route.edges[: m.i], m.edges, route.edges[m.j :]))
+        shift = len(m.nodes) - (m.j - m.i + 1)
+        stop_idx = tuple(k if k <= m.i else k + shift for k in route.stop_idx)
+        job.route = RouteArrays(nodes.astype(np.int32), edges.astype(np.int32), stop_idx, m.metrics)
+        job.score, job.iteration, job.elapsed_s = m.score, m.iteration, m.elapsed_s
+        job.accepted += 1
+        job.pending.append(sse.splice_out(job.loaded.data, m.i, m.j, m.nodes, m.edges))
+
+    def _flush(self, job: Job) -> None:
+        """Send the splices not sent yet, and a snapshot every `snapshot_every` sends."""
+        if not job.pending:
+            return
+        progress = Progress(
+            iteration=job.iteration,
+            elapsed_s=job.elapsed_s,
+            score=job.score,
+            metrics=self._metrics(job),
+            splices=job.pending,
+        )
+        job.pending = []
+        job.last_flush = time.monotonic()
+        self._emit(job, "progress", progress)
+        job.progress_count += 1
+        if job.progress_count % self.settings.snapshot_every == 0:
+            self._emit(job, "snapshot", self._snapshot(job))
+
+    async def _finished(self, job: Job, m: Finished) -> None:
+        job.closing = True
+        rid = await asyncio.to_thread(
+            self.store.put, m.document, input=job.input, baseline_edges=m.baseline_edges
+        )
+        metrics = {k: v for k, v in m.document["metrics"].items() if not k.startswith("baseline_")}
+        await self._done(job, rid, m.document["run"]["stopped_because"], RouteMetrics(**metrics))
+
+    async def _failed(self, job: Job, m: Failed) -> None:
+        job.closing = True
+        if m.trace:
+            log.error("job %s failed: %s\n%s", job.id, m.message, m.trace)
+        await self._error(job, ErrorBody(code=m.code, message=m.message, **m.fields))
+
+    async def _end_early(self, job: Job, reason: StopReason) -> None:
+        """Cancel or time out `job`: store its route so far if it has one."""
+        if job.end is not None or job.closing:
+            return
+        job.closing = True
+        if job.status == "queued":
+            self._queued.remove(job)
+            message = "cancelled before it started"
+            await self._error(job, ErrorBody(code="CANCELLED", message=message))
+            return
+        if job.worker is not None:
+            job.worker.stop()
+        self._flush(job)
+        route, masks = job.route, job.masks
+        if route is None or masks is None:
+            if reason == "timeout":
+                body = ErrorBody(code="WORKER_TIMEOUT", message="no route before the time limit")
+            else:
+                body = ErrorBody(code="CANCELLED", message="cancelled before its route existed")
+            await self._error(job, body)
+            return
+        report = await asyncio.to_thread(
+            validate_route,
+            job.loaded.data,
+            route,
+            stop_nodes=[s.node for s in job.snaps],
+            node_mask=masks.active,
+            banned_edges=masks.banned,
+        )
+        if not report.ok:
+            failed = "; ".join(line for line in report.lines() if "FAILED" in line)
+            log.error("job %s: its route so far failed validation: %s", job.id, failed)
+            message = f"the route so far failed validation: {failed}"
+            await self._error(job, ErrorBody(code="VALIDATION_FAILED", message=message))
+            return
+        document = self._document(job, route, reason)
+        rid = await asyncio.to_thread(
+            self.store.put, document, input=job.input, baseline_edges=job.baseline_edges
+        )
+        await self._done(job, rid, reason, self._metrics(job))
+
+    async def _fail_unended(self, job: Job, error: Exception) -> None:
+        """End a job an unexpected error left without its `done` or `error`, so no stream hangs."""
+        if job.end is None:
+            if job.worker is not None:
+                job.worker.stop()
+            body = ErrorBody(code="WORKER_FAILED", message=f"{type(error).__name__}: {error}")
+            await self._error(job, body)
+
+    async def _done(self, job: Job, rid: str, reason: StopReason, metrics: RouteMetrics) -> None:
+        self._flush(job)  # no splice is ever sent after the end
+        job.route_id, job.stopped_because = rid, reason
+        self._emit(job, "done", Done(route_id=rid, stopped_because=reason, metrics=metrics))
+        await self._end(job, "done")
+
+    async def _error(self, job: Job, body: ErrorBody) -> None:
+        self._flush(job)  # no splice is ever sent after the end
+        job.error = body
+        self._emit(job, "error", body)
+        await self._end(job, "error")
+
+    async def _end(self, job: Job, status: JobState) -> None:
+        self._record_end(job, status)
+        while self._queued and len(self._running) < self.settings.max_jobs:
+            self._start(self._queued.popleft())  # a start that fails ends that job alone
+        if job.worker is not None:
+            await asyncio.to_thread(job.worker.close)
+
+    def _record_end(self, job: Job, status: JobState) -> None:
+        job.status = status
+        job.finished = datetime.now(UTC)
+        job.finished_at = time.monotonic()
+        job.masks = None
+        self._running.discard(job.id)
+
+    # Events -------------------------------------------------------------------------------
+
+    def _emit(self, job: Job, name: str, payload: BaseModel) -> None:
+        job.last_id += 1
+        event = Event(job.last_id, name, payload.model_dump_json())
+        if name in HEADER:
+            job.header.append(event)
+        if name in ROUTE_EVENTS:
+            job.state_id = event.id
+        for subscription in job.subscribers:
+            subscription.push(event)
+        if name in ENDS:
+            job.end = event
+            job.subscribers.clear()
+
+    def _unsubscribe(self, job: Job, subscription: Subscription) -> None:
+        job.subscribers.discard(subscription)
+        if not job.subscribers and job.end is None:
+            job.orphaned_since = time.monotonic()
+
+    async def _sweep(self) -> None:
+        while True:
+            await asyncio.sleep(self.settings.sweep_s)
+            for job in list(self.jobs.values()):
+                try:
+                    await self._sweep_job(job)
+                except Exception:  # one job's trouble never stops the sweep
+                    log.exception("job %s: the sweep failed on it", job.id)
+
+    async def _sweep_job(self, job: Job) -> None:
+        s, now = self.settings, time.monotonic()
+        if job.end is not None:
+            if now - job.finished_at >= s.ttl_s:
+                self.jobs.pop(job.id, None)
+        elif job.orphaned_since is not None and now - job.orphaned_since >= s.orphan_s:
+            log.info("job %s: no subscriber for %.0f s, cancelled", job.id, s.orphan_s)
+            await self.cancel(job)  # an error while cancelling ends it as WORKER_FAILED
+
+    # Payloads -----------------------------------------------------------------------------
+
+    def _snapped(self, job: Job, masks: RequestMasks) -> Snapped:
+        labels = [s.get("label") for s in job.input.get("stops") or []]
+        labels += [None] * (len(job.snaps) - len(labels))
+        stops = [
+            StopSnapped(
+                input=LatLon(lat=lat, lon=lon),
+                label=label,
+                node=s.node,
+                lat=s.lat,
+                lon=s.lon,
+                moved_m=s.moved_m,
+                note=s.note,
+            )
+            for (lat, lon), label, s in zip(job.request.stops, labels, job.snaps, strict=True)
+        ]
+        return Snapped(
+            stops=stops,
+            tier=masks.tier,
+            leash_km=masks.leash_m / 1000,
+            active_nodes=int(masks.active.sum()),
+        )
+
+    def _metrics(self, job: Job) -> RouteMetrics:
+        metrics = job.route.metrics if job.route is not None else Metrics(0.0, 0.0)
+        return sse.route_metrics(metrics, job.baseline_length_m)
+
+    def _snapshot(self, job: Job) -> Snapshot:
+        route = job.route
+        if route is None:
+            raise RuntimeError("no route yet")
+        return sse.snapshot(
+            job.loaded.data,
+            nodes=route.nodes,
+            edges=route.edges,
+            stop_idx=route.stop_idx,
+            iteration=job.iteration,
+            elapsed_s=job.elapsed_s,
+            metrics=self._metrics(job),
+            simplify_m=self.settings.simplify_m,
+        )
+
+    def _document(self, job: Job, route: RouteArrays, reason: StopReason) -> dict[str, Any]:
+        """The `route.json` of the manager's copy of the route (`engine/io.py`'s layout)."""
+        meta = job.loaded.data.meta
+        ratio = self._metrics(job).ratio
+        return {
+            "graph_version": meta["graph_version"],
+            "region": meta["region"],
+            "build_id": meta["build_id"],
+            "seed": job.request.seed,
+            "engine_version": ENGINE_VERSION,
+            "request": job.request.model_dump(mode="json"),
+            "stops": [
+                {"lat": s.lat, "lon": s.lon, "node": s.node, "moved_m": s.moved_m, "note": s.note}
+                for s in job.snaps
+            ],
+            "nodes": route.nodes.tolist(),
+            "edges": route.edges.tolist(),
+            "stop_idx": list(route.stop_idx),
+            "metrics": {
+                "length_m": route.metrics.length_m,
+                "time_s": route.metrics.time_s,
+                "baseline_length_m": job.baseline_length_m,
+                "baseline_time_s": job.baseline_time_s,
+                "ratio": ratio,
+                **route.metrics.counters,
+            },
+            "run": {
+                "attempts": job.iteration,
+                "accepted": job.accepted,
+                "stopped_because": reason,
+                "elapsed_s": job.elapsed_s,
+                "backend": job.loaded.backend.name,
+            },
+        }
+
+
+def _drain(worker: _Worker, wait: float) -> tuple[list[Message], bool]:
+    """The worker's messages, waiting up to `wait` for the first, then whatever is there; and
+    whether its pipe has closed (the worker has gone)."""
+    messages: list[Message] = []
+    try:
+        messages.append(worker.get(wait))
+        while len(messages) < 1000:
+            messages.append(worker.get(0.0))
+    except queue.Empty:
+        return messages, False
+    except (EOFError, OSError):
+        return messages, True
+    return messages, False

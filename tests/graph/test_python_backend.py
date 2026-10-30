@@ -1,0 +1,433 @@
+"""PythonBackend against networkx (the oracle) and against the semantics in graph/backend.py."""
+
+import math
+from dataclasses import dataclass
+
+import networkx as nx
+import numpy as np
+import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
+from worst_route.graph.backend import GraphBackend, Path
+from worst_route.graph.data import GraphData
+from worst_route.graph.python_backend import PythonBackend
+from worst_route.graph.testing import edge_id, grid_graph, make_graph
+
+EXAMPLES = settings(max_examples=200, deadline=None)
+
+
+@dataclass
+class Case:
+    g: GraphData
+    weights: np.ndarray
+    src: int
+    dst: int
+    node_mask: np.ndarray | None
+    forbid: np.ndarray | None
+    banned: np.ndarray | None
+
+    def enterable(self) -> np.ndarray:
+        enter = np.ones(self.g.n, dtype=bool) if self.node_mask is None else self.node_mask
+        return enter if self.forbid is None else enter & ~self.forbid
+
+    def oracle(self) -> nx.MultiDiGraph:
+        """The graph the masks leave, as networkx sees it; edge keys are edge ids."""
+        enter = self.enterable()
+        banned = np.zeros(self.g.m, dtype=bool) if self.banned is None else self.banned
+        graph = nx.MultiDiGraph()
+        graph.add_nodes_from(int(v) for v in np.flatnonzero(enter))
+        for e in range(self.g.m):
+            u, v = int(self.g.edge_u[e]), int(self.g.edge_v[e])
+            if enter[u] and enter[v] and not banned[e]:
+                graph.add_edge(u, v, key=e, weight=float(self.weights[e]))
+        return graph
+
+    def masks(self) -> dict[str, np.ndarray | None]:
+        return {
+            "node_mask": self.node_mask,
+            "forbid_nodes": self.forbid,
+            "banned_edges": self.banned,
+        }
+
+
+def optional_mask(size: int, *, default: bool) -> st.SearchStrategy[np.ndarray | None]:
+    """None, or a mask that is `default` except at up to a third of its positions."""
+
+    def build(flipped: set[int]) -> np.ndarray:
+        mask = np.full(size, default, dtype=bool)
+        mask[sorted(flipped)] = not default
+        return mask
+
+    flipped = st.sets(st.integers(0, size - 1), max_size=size // 3) if size else st.just(set())
+    return st.none() | flipped.map(build)
+
+
+WHOLE_WEIGHTS = st.integers(1, 9).map(float)
+
+
+@st.composite
+def cases(
+    draw: st.DrawFn,
+    max_nodes: int,
+    max_edges: int,
+    *,
+    min_nodes: int = 1,
+    edges_per_node: int = 1,
+    weight: st.SearchStrategy[float] = WHOLE_WEIGHTS,
+    distinct_ends: bool = False,
+) -> Case:
+    """A random multigraph (self-loops and parallel edges included), weights, masks."""
+    n = draw(st.integers(min_nodes, max_nodes))
+    node = st.integers(0, n - 1)
+    at_least = min(edges_per_node * n, max_edges)
+    pairs = draw(st.lists(st.tuples(node, node), min_size=at_least, max_size=max_edges))
+    lonlat = [(-122.0 + 0.001 * i, 45.0) for i in range(n)]
+    g = make_graph(
+        [(100.0 * i, 0.0) for i in range(n)], [(u, v, 1.0) for u, v in pairs], lonlat=lonlat
+    )
+    weights = np.array(draw(st.lists(weight, min_size=g.m, max_size=g.m)), dtype=np.float64)
+    src = draw(node)
+    return Case(
+        g=g,
+        weights=weights.reshape(g.m),
+        src=src,
+        dst=(src + draw(st.integers(1, n - 1))) % n if distinct_ends else draw(node),
+        node_mask=draw(optional_mask(n, default=True)),
+        forbid=draw(optional_mask(n, default=False)),
+        banned=draw(optional_mask(g.m, default=False)),
+    )
+
+
+def edge_sequences(paths: list[Path]) -> list[tuple[int, ...]]:
+    return [tuple(edges.tolist()) for _, edges in paths]
+
+
+def assert_legal(case: Case, path: Path) -> None:
+    nodes, edges = path
+    g = case.g
+    assert len(edges) == len(nodes) - 1
+    assert nodes[0] == case.src and nodes[-1] == case.dst
+    assert np.array_equal(g.edge_u[edges], nodes[:-1]) and np.array_equal(
+        g.edge_v[edges], nodes[1:]
+    )
+    assert len(set(nodes.tolist())) == len(nodes)
+    assert case.enterable()[nodes].all()
+    assert case.banned is None or not case.banned[edges].any()
+
+
+def unique_cheapest_edges(case: Case, graph: nx.MultiDiGraph) -> list[int] | None:
+    """The edges of the cheapest src → dst path if exactly one exists (weights are positive)."""
+    cost = nx.single_source_dijkstra_path_length(graph, case.src)
+    count = {case.src: 1}
+    via: dict[int, int] = {}
+    for v in sorted(cost, key=cost.__getitem__):
+        if v == case.src:
+            continue
+        tight = [
+            (u, e)
+            for u, _, e, w in graph.in_edges(v, keys=True, data="weight")
+            if u in cost and cost[u] + w == cost[v]
+        ]
+        count[v] = sum(count[u] for u, _ in tight)
+        via[v] = tight[0][1]
+    if count[case.dst] != 1:
+        return None
+    edges, v = [], case.dst
+    while v != case.src:
+        edges.append(via[v])
+        v = int(case.g.edge_u[via[v]])
+    return edges[::-1]
+
+
+@EXAMPLES
+@given(cases(max_nodes=10, max_edges=30))
+def test_dijkstra_matches_networkx(case: Case) -> None:
+    backend = PythonBackend(case.g)
+    path = backend.dijkstra(case.src, case.dst, case.weights, **case.masks())
+    graph = case.oracle()
+    reachable = case.src in graph and case.dst in graph and nx.has_path(graph, case.src, case.dst)
+    if not reachable:
+        assert path is None
+        return
+    assert path is not None
+    assert_legal(case, path)
+    cost = float(case.weights[path[1]].sum())
+    assert cost == nx.dijkstra_path_length(graph, case.src, case.dst)
+    unique = unique_cheapest_edges(case, graph) if case.src != case.dst else []
+    if unique is not None:
+        assert path[1].tolist() == unique
+    # max_cost: the optimum is found at its own cost and nowhere below it
+    at_cost = backend.dijkstra(case.src, case.dst, case.weights, max_cost=cost, **case.masks())
+    assert at_cost is not None and np.array_equal(at_cost[1], path[1])
+    if case.src != case.dst:
+        assert (
+            backend.dijkstra(case.src, case.dst, case.weights, max_cost=cost - 0.5, **case.masks())
+            is None
+        )
+
+
+def tie_rule_dijkstra(case: Case, max_cost: float) -> list[int] | None:
+    """The tie rule of graph/backend.py, written without a heap: settle the open node with the
+    least (cost, node), relax its out-edges in ascending edge id, and replace a predecessor
+    only on a strictly smaller cost. Returns the path's edges."""
+    g, enter = case.g, case.enterable()
+    banned = np.zeros(g.m, dtype=bool) if case.banned is None else case.banned
+    if max_cost < 0 or not (enter[case.src] and enter[case.dst]):
+        return None
+    cost: dict[int, float] = {case.src: 0.0}
+    pred: dict[int, int] = {}
+    settled: set[int] = set()
+    while True:
+        open_nodes = [(c, v) for v, c in cost.items() if v not in settled]
+        if not open_nodes:
+            return None
+        c, v = min(open_nodes)
+        if v == case.dst:
+            break
+        settled.add(v)
+        for e in sorted(g.out_edges[g.out_indptr[v] : g.out_indptr[v + 1]].tolist()):
+            w = int(g.edge_v[e])
+            if w in settled or banned[e] or not enter[w]:
+                continue
+            through = c + float(case.weights[e])
+            if through <= max_cost and through < cost.get(w, math.inf):
+                cost[w], pred[w] = through, e
+    edges: list[int] = []
+    while v != case.src:
+        edges.append(pred[v])
+        v = int(g.edge_u[pred[v]])
+    return edges[::-1]
+
+
+@EXAMPLES
+@given(
+    # weights in {0, 0.5, 1, 2} on dense graphs make equal costs common, zero-cost edges included
+    cases(
+        max_nodes=8,
+        max_edges=32,
+        min_nodes=2,
+        edges_per_node=3,
+        weight=st.sampled_from([0.0, 0.5, 1.0, 2.0]),
+        distinct_ends=True,
+    ),
+    st.sampled_from([0.0, 1.0, 1.5, 2.0, 3.0, math.inf]),
+)
+def test_dijkstra_follows_the_tie_rule(case: Case, max_cost: float) -> None:
+    path = PythonBackend(case.g).dijkstra(
+        case.src, case.dst, case.weights, max_cost=max_cost, **case.masks()
+    )
+    expected = tie_rule_dijkstra(case, max_cost)
+    if expected is None:
+        assert path is None
+        return
+    assert path is not None
+    assert path[1].tolist() == expected
+    assert_legal(case, path)
+
+
+@EXAMPLES
+@given(cases(max_nodes=6, max_edges=24), st.integers(0, 6).map(lambda d: 6 - d), st.integers(1, 20))
+def test_simple_paths_match_networkx(case: Case, max_depth: int, max_paths: int) -> None:
+    backend = PythonBackend(case.g)
+    every = backend.simple_paths_dfs(
+        case.src, case.dst, max_depth=max_depth, max_paths=10**6, **case.masks()
+    )
+    graph = case.oracle()
+    if case.src in graph and case.dst in graph:
+        expected = {
+            tuple(e for _, _, e in p)
+            for p in nx.all_simple_edge_paths(graph, case.src, case.dst, cutoff=max_depth)
+        }
+    else:
+        expected = set()
+    found = edge_sequences(every)
+    assert set(found) == expected and len(found) == len(expected)
+    assert found == sorted(found)
+    for path in every:
+        assert_legal(case, path)
+    first = backend.simple_paths_dfs(
+        case.src, case.dst, max_depth=max_depth, max_paths=max_paths, **case.masks()
+    )
+    assert edge_sequences(first) == found[:max_paths]
+
+
+@EXAMPLES
+@given(cases(max_nodes=12, max_edges=36))
+def test_largest_scc_matches_networkx(case: Case) -> None:
+    edge_mask = None if case.banned is None else ~case.banned  # keep most edges
+    mask = PythonBackend(case.g).largest_scc_mask(edge_mask)
+    graph = nx.DiGraph()
+    graph.add_nodes_from(range(case.g.n))
+    keep = np.ones(case.g.m, dtype=bool) if edge_mask is None else edge_mask
+    graph.add_edges_from(
+        zip(case.g.edge_u[keep].tolist(), case.g.edge_v[keep].tolist(), strict=True)
+    )
+    components = sorted(nx.strongly_connected_components(graph), key=len, reverse=True)
+    assert mask.dtype == np.bool_ and mask.shape == (case.g.n,)
+    assert mask.sum() == len(components[0])
+    assert set(np.flatnonzero(mask).tolist()) in components
+    if len(components) == 1 or len(components[1]) < len(components[0]):
+        assert set(np.flatnonzero(mask).tolist()) == components[0]
+
+
+def test_python_backend_is_a_graph_backend() -> None:
+    backend: GraphBackend = PythonBackend(grid_graph(2, 2, 10.0))
+    assert backend.data.n == 4
+
+
+def test_ties_go_to_the_first_node_settled_then_the_lowest_edge() -> None:
+    # A diamond 0 → {1, 2} → 3 with equal costs: node 1 settles before node 2, so 1 → 3 wins.
+    nodes = [(0.0, 0.0), (100.0, 100.0), (100.0, -100.0), (200.0, 0.0)]
+    g = make_graph(nodes, [(0, 1, 1.0), (0, 2, 1.0), (1, 3, 1.0), (2, 3, 1.0)])
+    path = PythonBackend(g).dijkstra(0, 3, g.edge_length_m.astype(np.float64))
+    assert path is not None
+    assert path[0].tolist() == [0, 1, 3]
+    assert path[1].tolist() == [edge_id(g, 0, 1), edge_id(g, 1, 3)]
+
+
+def test_equal_parallel_edges_take_the_lower_id() -> None:
+    g = make_graph([(0.0, 0.0), (100.0, 0.0)], [(0, 1, 5.0), (0, 1, 5.0)])
+    path = PythonBackend(g).dijkstra(0, 1, g.edge_length_m.astype(np.float64))
+    assert path is not None and path[1].tolist() == [0]
+
+
+def test_a_later_equal_cost_never_replaces_a_predecessor() -> None:
+    # 0 → 2 directly (2) and 0 → 1 → 2 (1 + 1): 2 is first reached by the direct edge.
+    g = make_graph(
+        [(0.0, 0.0), (50.0, 50.0), (100.0, 0.0)], [(0, 1, 1.0), (0, 2, 2.0), (1, 2, 1.0)]
+    )
+    path = PythonBackend(g).dijkstra(0, 2, g.edge_length_m.astype(np.float64))
+    assert path is not None
+    assert path[0].tolist() == [0, 2] and path[1].tolist() == [edge_id(g, 0, 2)]
+
+
+GRID = grid_graph(3, 3, 100.0)  # node r * 3 + c; 0 south-west, 8 north-east
+LENGTHS = GRID.edge_length_m.astype(np.float64)
+
+
+def nodes_of(path: Path | None) -> list[int] | None:
+    return None if path is None else path[0].tolist()
+
+
+def test_forbidden_nodes_and_banned_edges_are_avoided() -> None:
+    b = PythonBackend(GRID)
+    forbid = np.zeros(9, dtype=bool)
+    forbid[[1, 4]] = True
+    assert nodes_of(b.dijkstra(0, 2, LENGTHS, forbid_nodes=forbid)) == [0, 3, 6, 7, 8, 5, 2]
+    banned = np.zeros(GRID.m, dtype=bool)
+    banned[[edge_id(GRID, 0, 1), edge_id(GRID, 3, 4)]] = True
+    assert nodes_of(b.dijkstra(0, 2, LENGTHS, forbid_nodes=forbid, banned_edges=banned)) == [
+        0,
+        3,
+        6,
+        7,
+        8,
+        5,
+        2,
+    ]
+    banned[edge_id(GRID, 6, 7)] = True
+    assert b.dijkstra(0, 2, LENGTHS, forbid_nodes=forbid, banned_edges=banned) is None
+    mask = np.ones(9, dtype=bool)
+    mask[[3, 4, 5]] = False
+    assert b.dijkstra(0, 8, LENGTHS, node_mask=mask) is None
+    assert nodes_of(b.dijkstra(0, 2, LENGTHS, node_mask=mask)) == [0, 1, 2]
+
+
+def test_endpoints_obey_the_masks() -> None:
+    b = PythonBackend(GRID)
+    forbid = np.zeros(9, dtype=bool)
+    forbid[0] = True
+    assert b.dijkstra(0, 8, LENGTHS, forbid_nodes=forbid) is None
+    assert b.dijkstra(8, 0, LENGTHS, forbid_nodes=forbid) is None
+    assert b.simple_paths_dfs(0, 8, forbid_nodes=forbid, max_depth=8, max_paths=10) == []
+    assert b.dijkstra(0, 0, LENGTHS, forbid_nodes=forbid) is None
+
+
+def test_source_equals_destination() -> None:
+    b = PythonBackend(GRID)
+    path = b.dijkstra(4, 4, LENGTHS)
+    assert path is not None and path[0].tolist() == [4] and path[1].tolist() == []
+    assert nodes_of(b.dijkstra(4, 4, LENGTHS, max_cost=0.0)) == [4]
+    assert b.dijkstra(4, 4, LENGTHS, max_cost=-1.0) is None
+    assert b.dijkstra(4, 5, LENGTHS, max_cost=-1.0) is None
+    assert path[0].dtype == np.int32 and path[1].dtype == np.int32
+    paths = b.simple_paths_dfs(4, 4, max_depth=3, max_paths=5)
+    assert [(p[0].tolist(), p[1].tolist()) for p in paths] == [([4], [])]
+
+
+def test_max_cost_cuts_the_search() -> None:
+    b = PythonBackend(GRID)
+    assert nodes_of(b.dijkstra(0, 8, LENGTHS, max_cost=400.0)) is not None
+    assert b.dijkstra(0, 8, LENGTHS, max_cost=399.9) is None
+    assert nodes_of(b.dijkstra(0, 1, LENGTHS, max_cost=100.0)) == [0, 1]
+
+
+def test_one_way_streets_are_respected() -> None:
+    g = grid_graph(2, 3, 100.0, oneway_rows="+-", oneway_cols="...")
+    b = PythonBackend(g)
+    lengths = g.edge_length_m.astype(np.float64)
+    assert nodes_of(b.dijkstra(0, 2, lengths)) == [0, 1, 2]
+    assert nodes_of(b.dijkstra(2, 0, lengths)) == [2, 5, 4, 3, 0]
+
+
+def test_bad_arguments_are_rejected() -> None:
+    b = PythonBackend(GRID)
+    with pytest.raises(ValueError, match="weights"):
+        b.dijkstra(0, 8, LENGTHS[:-1])
+    with pytest.raises(ValueError, match="weights"):
+        b.dijkstra(0, 8, LENGTHS.astype(np.float32))
+    for bad in (np.nan, -1.0):
+        weights = LENGTHS.copy()
+        weights[3] = bad
+        with pytest.raises(ValueError, match="weights: must be non-negative and not NaN"):
+            b.dijkstra(0, 8, weights)
+    for src, dst in [(-1, 8), (0, -1), (9, 0), (0, 9)]:
+        with pytest.raises(ValueError, match=r"src, dst: node ids must lie in \[0, 9\)"):
+            b.dijkstra(src, dst, LENGTHS)
+        with pytest.raises(ValueError, match=r"src, dst: node ids must lie in \[0, 9\)"):
+            b.simple_paths_dfs(src, dst, max_depth=4, max_paths=1)
+    with pytest.raises(ValueError, match="forbid_nodes"):
+        b.dijkstra(0, 8, LENGTHS, forbid_nodes=np.zeros(9, dtype=np.uint8))
+    with pytest.raises(ValueError, match="node_mask"):
+        b.simple_paths_dfs(0, 8, node_mask=np.ones(8, dtype=bool), max_depth=4, max_paths=1)
+    with pytest.raises(ValueError, match="edge_mask"):
+        b.largest_scc_mask(np.ones(3, dtype=bool))
+
+
+def test_simple_paths_on_a_grid_match_networkx() -> None:
+    b = PythonBackend(GRID)
+    paths = b.simple_paths_dfs(0, 8, max_depth=100, max_paths=10**6)
+    graph = nx.DiGraph(zip(GRID.edge_u.tolist(), GRID.edge_v.tolist(), strict=True))
+    expected = {tuple(p) for p in nx.all_simple_paths(graph, 0, 8)}
+    found = [tuple(p[0].tolist()) for p in paths]
+    assert set(found) == expected and len(found) == len(expected) == 12
+    assert edge_sequences(paths) == sorted(edge_sequences(paths))
+
+
+def test_simple_paths_depth_and_count_limits() -> None:
+    b = PythonBackend(GRID)
+    every = b.simple_paths_dfs(0, 8, max_depth=100, max_paths=10**6)
+    for depth in range(9):
+        within = b.simple_paths_dfs(0, 8, max_depth=depth, max_paths=10**6)
+        assert edge_sequences(within) == [s for s in edge_sequences(every) if len(s) <= depth]
+    assert len(b.simple_paths_dfs(0, 8, max_depth=4, max_paths=10**6)) == 6
+    assert b.simple_paths_dfs(0, 8, max_depth=3, max_paths=10**6) == []
+    assert (
+        edge_sequences(b.simple_paths_dfs(0, 8, max_depth=100, max_paths=5))
+        == edge_sequences(every)[:5]
+    )
+    assert b.simple_paths_dfs(0, 8, max_depth=100, max_paths=0) == []
+
+
+def test_largest_scc_drops_one_way_stubs_and_masked_edges() -> None:
+    # The 2 × 2 square 0-1-3-2 two-way, a one-way stub 4 → 0 and a dead end 1 → 5.
+    nodes = [(0.0, 0.0), (100.0, 0.0), (0.0, 100.0), (100.0, 100.0), (-100.0, 0.0), (200.0, 0.0)]
+    two_way = [(0, 1), (1, 3), (3, 2), (2, 0)]
+    edges = [(a, b, 100.0) for a, b in two_way] + [(b, a, 100.0) for a, b in two_way]
+    g = make_graph(nodes, [*edges, (4, 0, 100.0), (1, 5, 100.0)])
+    b = PythonBackend(g)
+    assert b.largest_scc_mask().tolist() == [True, True, True, True, False, False]
+    keep = np.ones(g.m, dtype=bool)
+    keep[[edge_id(g, 0, 1), edge_id(g, 0, 2)]] = False  # node 0 can no longer be left
+    assert b.largest_scc_mask(keep).tolist() == [False, True, True, True, False, False]

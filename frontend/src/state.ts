@@ -9,7 +9,9 @@ import type {
   Region,
   RouteDocument,
   StopReason,
+  Target,
   TargetKind,
+  TargetMetrics,
   Tier,
 } from "./api/types";
 import type { Units } from "./format";
@@ -30,13 +32,24 @@ export interface Stop {
   snapped: SnapInfo | null;
 }
 
-/** The request's settings; null seed is a random one, picked by the server. */
+// The API's limits (docs/reference/api.md, **Requests and errors**).
+export const TIERS: readonly Tier[] = ["auto", "T0", "T1", "T2", "T3", "T4"];
+export const BUDGET_MAX_S = 120; // BUDGET_TOO_LARGE above
+export const LEASH_MAX_KM = 150;
+export const TARGET_TOLERANCE = 0.02; // a target is reached within ±2 %
+export const TARGET_MAX_DURATION_S = 7 * 24 * 3600;
+
+/** The request's settings; null seed is a random one, picked by the server. The target is
+ * `target`, with `ratio` (×, more than 1) or `durationS` as its number; each keeps its value
+ * while another kind is chosen. */
 export interface Settings {
   seed: number | null;
   budgetS: number;
   tier: Tier;
   leashKm: number | "auto";
   target: TargetKind;
+  ratio: number;
+  durationS: number;
   objective: Objective;
   units: Units;
 }
@@ -47,9 +60,18 @@ export const DEFAULT_SETTINGS: Settings = {
   tier: "auto",
   leashKm: "auto",
   target: "max",
+  ratio: 20,
+  durationS: 9 * 3600,
   objective: "distance",
   units: "mi",
 };
+
+/** The request's target for `settings`. */
+export function targetOf(settings: Settings): Target {
+  if (settings.target === "ratio") return { kind: "ratio", value: settings.ratio };
+  if (settings.target === "duration") return { kind: "duration", seconds: settings.durationS };
+  return { kind: "max" };
+}
 
 export type Phase = "idle" | "starting" | "running" | "done" | "failed";
 
@@ -57,11 +79,14 @@ export type Phase = "idle" | "starting" | "running" | "done" | "failed";
 export interface RunView {
   phase: Phase;
   jobId: string | null;
+  seed: number | null; // the job's, then the shown route's
   iteration: number; // the attempt of the last splice; a finished route's attempts
   elapsedS: number;
   metrics: Pick<Metrics, "length_m" | "time_s" | "ratio"> | null;
   stoppedBecause: StopReason | null;
   resolved: { tier: string; leashKm: number } | null; // what `auto` became, from `snapped`
+  goal: Target | null; // the run's target, null for max
+  outcome: TargetMetrics | null; // what it achieved, once done
   connection: "open" | "reconnecting" | "lost";
   note: string | null;
 }
@@ -69,11 +94,14 @@ export interface RunView {
 export const IDLE_RUN: RunView = {
   phase: "idle",
   jobId: null,
+  seed: null,
   iteration: 0,
   elapsedS: 0,
   metrics: null,
   stoppedBecause: null,
   resolved: null,
+  goal: null,
+  outcome: null,
   connection: "open",
   note: null,
 };

@@ -1,10 +1,14 @@
 // Bootstrap and wiring (docs/reference/frontend.md): the store, the map, the panel's parts;
-// the region's bbox from /regions; clicks on the map add stops.
+// the region's bbox from /regions; clicks on the map add stops; leaving the page cancels a
+// running job.
 import "./style.css";
 import { errorBody, getRegions } from "./api/client";
 import { mountBanner } from "./banner";
 import { createMap, fitTo } from "./map/map";
+import { RouteLayer } from "./map/routeLayer";
 import { StopsLayer } from "./map/stopsLayer";
+import { JobRunner, mountRunControls } from "./run/controls";
+import { mountSettings } from "./settings/panel";
 import { DEFAULT_SETTINGS, IDLE_RUN, Store, type Stop } from "./state";
 import { busy, mountStopList, withStopAdded } from "./stops/stopList";
 import { bboxBounds, round6 } from "./util/geo";
@@ -20,14 +24,19 @@ const store = new Store({
   error: null,
 });
 
-/** Change the stops. */
+const map = createMap(byId("map"));
+let routeLayer: RouteLayer | null = null;
+let runner: JobRunner | null = null;
+
+/** Change the stops; the route shown no longer goes through them. */
 function edit(stops: Stop[]): void {
-  store.update({ stops, error: null });
+  routeLayer?.clear();
+  store.update({ stops, error: null, route: null, run: IDLE_RUN });
 }
 
-const map = createMap(byId("map"));
 mountBanner(byId("banner"), store);
 mountStopList(byId("stops"), store, edit);
+mountSettings(byId("settings"), store);
 new StopsLayer(map, store, edit);
 
 map.on("click", (event) => {
@@ -36,9 +45,17 @@ map.on("click", (event) => {
   edit(withStopAdded(store.state.stops, round6(lat), round6(lng)));
 });
 
+map.once("load", () => {
+  routeLayer = new RouteLayer(map);
+  runner = new JobRunner(store, routeLayer, (bounds) => fitTo(map, bounds));
+  mountRunControls(byId("run"), store, runner);
+});
+
 getRegions()
   .then(([region]) => {
     store.update({ region });
     fitTo(map, bboxBounds(region.bbox));
   })
   .catch((error: unknown) => store.update({ error: errorBody(error) }));
+
+addEventListener("pagehide", () => runner?.leave());

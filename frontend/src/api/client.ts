@@ -120,8 +120,12 @@ export interface JobHandlers {
   connection(state: "open" | "reconnecting" | "lost"): void;
 }
 
+export interface Subscription {
+  close(): void;
+}
+
 /** Follow a job's events at `eventsUrl` (the 202's, without the /api prefix) to its end. */
-export function subscribe(eventsUrl: string, handlers: JobHandlers): void {
+export function subscribe(eventsUrl: string, handlers: JobHandlers): Subscription {
   const source = new EventSource(API_BASE + eventsUrl);
   const data = <T>(event: Event): T => JSON.parse((event as MessageEvent<string>).data) as T;
   source.addEventListener("snapped", (event) => handlers.snapped(data(event)));
@@ -141,4 +145,5 @@ export function subscribe(eventsUrl: string, handlers: JobHandlers): void {
     }
   });
   source.addEventListener("open", () => handlers.connection("open"));
+  return { close: () => source.close() };
 }

@@ -1,5 +1,6 @@
 // Numbers for people (docs/reference/frontend.md). The API's numbers are metric; miles are the
-// default, kilometres the toggle.
+// default, kilometres the toggle. A drive time typed as a target reads `9h`, `90m`, `2h30m` or
+// a number of minutes.
 
 export type Units = "mi" | "km";
 
@@ -51,4 +52,29 @@ export function formatCount(n: number): string {
 /** A coordinate as the stop list shows it. */
 export function formatLatLon(lat: number, lon: number): string {
   return `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+}
+
+/** A drive time typed by hand, in seconds: `9h`, `90m`, `2h30m`, `45s`, or a bare number of
+ * minutes; null when it is none of those. */
+export function parseDuration(text: string): number | null {
+  const compact = text.trim().toLowerCase().replace(/\s+/g, "");
+  if (/^\d+(\.\d+)?$/.test(compact)) return Number(compact) * 60;
+  const parts = /^(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m(?:in)?)?(?:(\d+(?:\.\d+)?)s)?$/.exec(
+    compact,
+  );
+  if (parts === null || parts.slice(1).every((part) => part === undefined)) return null;
+  const [hours, minutes, seconds] = parts.slice(1).map((part) => Number(part ?? 0));
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
+/** Seconds as `parseDuration` reads them back: `9h`, `2h30m`, `45m`, `1h0m30s`. */
+export function formatDurationInput(seconds: number): string {
+  const whole = Math.round(seconds);
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const rest = whole % 60;
+  let text = hours ? `${hours}h` : "";
+  if (minutes || (hours && rest)) text += `${minutes}m`;
+  if (rest) text += `${rest}s`;
+  return text || "0m";
 }

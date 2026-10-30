@@ -1,8 +1,8 @@
 # Worst Route — project overview
 
-Last updated: 2026-10-30. Snapshot taken after the graph package landed: the plan is written;
-the project scaffolding, the pipeline's first three steps and the graph package are built; the
-rest of the pipeline and the engine do not exist yet.
+Last updated: 2026-10-30. Snapshot taken after the engine landed: the plan is written; the
+project scaffolding, the pipeline's first three steps, the graph package and the engine are
+built; the rest of the pipeline does not exist yet, so there is no Portland build to plan on.
 
 This file answers three questions: what the project is meant to become, how far along it is, and
 what has been decided. It is written for a human reader and for an AI agent picking up the
@@ -35,9 +35,10 @@ Claude: Python for the pipeline, engine, API and rendering; TypeScript + MapLibr
 - **Data pipeline** (In progress): Geofabrik state extracts → filtered roads → graph → cleanup
   (simplify, consolidate junctions and interchanges, pair divided carriageways, keep the largest
   strongly connected component) → enrichment → tiers → an on-disk build. `docs/PLAN.md` §2.
-- **Engine** (Planned): a shortest route through the stops, then a seeded detour-splice
+- **Engine** (In progress): a shortest route through the stops, then a seeded detour-splice
   heuristic that makes it worse under a pluggable objective, with a validator that proves the
-  result legal. `docs/PLAN.md` §3.
+  result legal. `docs/PLAN.md` §3. Built for M1 on the reference backend with the distance
+  mode; the CSR + Numba backend, target modes and the other modes are later milestones.
 - **API and frontend** (Planned): FastAPI jobs with Server-Sent Events progress, a MapLibre map
   that shows the route getting worse live, settings, reroll, make it worse. `docs/PLAN.md` §4–5.
 - **Modes** (Planned): longest distance, slowest time, never/only turn left, collect toll booths /
@@ -77,6 +78,14 @@ The graph package is built (`docs/reference/graph.md`): a build's arrays and the
 memory-mapped on-disk format with its `graph_version`, the `GraphBackend` protocol and its
 pure-Python reference backend, snapping with the leash and bubble masks, and the builders tests
 use for small graphs.
+The engine is built (`docs/reference/engine.md`): the route model whose splice is its only
+mutation and refuses any repeat, the request with its tier, leash and bubble masks (a tier also
+bans lower-class roads away from the stops), snapping with the re-snap fallback, the baseline
+and the seed route with node-disjoint legs (and loops for round trips), the three detour
+strategies, the worsen loop with its ambition radius and budget, the objective interface with
+the distance mode, the validator that proves a route from the original OSM ids, route files,
+and `worst-route plan` / `validate`, which run on any saved build. A golden route freezes the
+engine's output on a test lattice.
 The workflow scaffolding exists: `CLAUDE.md`, the four agents,
 `tools/gates.sh`, `tools/land_series.sh`, this overview, `docs/PLAN.md`. The M1 bootstrap is
 built: the uv project (Python 3.12, `src` layout, the M1 dependencies), the gate running ruff,
@@ -90,7 +99,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 
 | Milestone | Status | Summary |
 |---|---|---|
-| M1 — Portland, distance mode, CLI | In progress | bootstrap, the pipeline's first three steps (download, filter, build) and the graph package built; remaining: the rest of the Portland pipeline (cleanup to qa), the engine (snapping, seed route, splice loop, distance objective), the validator, `worst-route plan` printing a validated route and its ratio |
+| M1 — Portland, distance mode, CLI | In progress | bootstrap, the pipeline's first three steps (download, filter, build), the graph package and the engine (snapping, seed route, splice loop, distance objective, validator, `worst-route plan` / `validate`) built; remaining: the rest of the Portland pipeline (cleanup to qa) and the acceptance run of `worst-route plan` on the Portland build |
 | M2 — API + map, live growth | Planned | CSR + Numba backend; FastAPI jobs + SSE; MapLibre frontend; targets by ratio and duration; reroll, make it worse |
 | M3 — Modes and constraints | Planned | turn-aware kernel, never/only-left; slowest time; collectibles; brands; hard mode; stage B transition tables; alphabet search |
 | M4 — Presentation | Planned | directions, stats, toasts, comparisons, share image, geocoding proxy, share links |

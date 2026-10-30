@@ -216,7 +216,7 @@ Semantics: **using edge E bans every edge in twins(E).** This is conservative (a
 
 - **Speed:** parse `maxspeed` ("45 mph", "35", "signals", "none" → class default; multi-values take the first). Defaults by class (mph): motorway 65, trunk 55, primary 45, secondary 35, tertiary 30, unclassified 25, residential 25, living_street 15, alley 10, `_link` 35. `time_s = length / speed`. Node delay for `highway=stop` (10 s) and `traffic_signals` (30 s) feeds the slowest-time mode.
 - **Identity (hard mode):** `identity_id` per edge: normalized ref set if present (`"I 5"`, `"I-5"`, `"Interstate 5"` → `I 5`; `"US 26;OR 8"` → both refs, identity = the first after sorting by class I > US > state), else normalized name (case-folded, abbreviations expanded: `St→Street`, `NE→Northeast`, directional suffixes kept). Dictionary of identities saved with the build.
-- **Twin units:** `unit_id` groups the forward/backward edges of a two-way road (already implied by node-simplicity; stored for uniformity) and the twins table from §2.4e.
+- **Twin units:** `unit_id` groups the forward/backward edges of a two-way road (implied by node-simplicity, except in a two-edge round trip out along a road and back, which `Route.splice` and the validator refuse by unit) and the twins table from §2.4e.
 - **Collectibles:** toll booths and level crossings are nodes on ways; map each to the simplified edge whose original node list contains it → `toll_booth_n`, `level_crossing_n` per edge. `bridge=yes` per edge. Roundabout → super-node flag. Stop signs/signals → node delay.
 - **Brands:** POIs with `brand` or `brand:wikidata`; snap each to the nearest kept edge within 50 m (STRtree nearest on edge geometries). Table `pois(brand_key, wikidata, name, lon, lat, edge_id, offset_m)`; `brand_key` = `brand:wikidata` when present else normalized brand name. Index by brand for the `/brands` autocomplete.
 - **States:** Census cartographic boundary file `cb_2024_us_state_500k` → `state_fips` per node (STRtree `contains` on node points).
@@ -234,7 +234,7 @@ Semantics: **using edge E bans every edge in twins(E).** This is conservative (a
 | T4 | + residential, unclassified, living_street, alleys | < 15 km |
 
 Each tier is an edge mask on the master graph plus a node mask after re-running SCC within the tier. Node ids never change across tiers, so a manual override at runtime is just a different mask.
-**Local bubbles:** at request time, the active mask is `leash ∧ (tier_mask ∨ within(R, any stop))` with `R` = 3 km of all-roads graph around each stop, so a cross-state trip still starts from the user's actual street instead of snapping 10 km to the nearest primary road.
+**Local bubbles:** at request time, the active mask is `leash ∧ (tier_mask ∨ within(R, any stop))` with `R` = 3 km of all-roads graph around each stop, so a cross-state trip still starts from the user's actual street instead of snapping 10 km to the nearest primary road. The request also bans every edge outside the tier's edge mask unless both its ends lie in a bubble, so a lower-class road between two of the tier's own nodes stays out away from the stops (`docs/reference/engine.md`, **Requests**).
 
 ### 2.7 `save` — on-disk format
 
@@ -285,7 +285,7 @@ class Route:
     edges: list[int]            # len(nodes) - 1; edges[k] goes nodes[k] → nodes[k+1]
     stop_idx: list[int]         # positions of the stops in `nodes`; stop_idx[0] == 0, stop_idx[-1] == len(nodes)-1
     used_nodes: BitMask         # numpy bool array sized n_nodes (fast membership for kernels)
-    banned_edges: BitMask       # edges used ∪ twins(used) ∪ objective.banned_edges()
+    banned_edges: BitMask       # edges used ∪ twins(used); the request's and the objective's bans are per window (§3.4)
     score: float
     metrics: Metrics            # length_m, time_s, per-objective counters; recomputed lazily
     seed: int
@@ -301,7 +301,7 @@ class Splice:                   # the only mutation
 Rules enforced by `Route.splice()` and re-checked by the validator:
 
 - interior nodes of the detour ∉ `used_nodes` after removing the interior of `nodes[i..j]`;
-- no detour edge ∈ `banned_edges` (minus the bans contributed by the removed run);
+- no detour edge ∈ `banned_edges` (minus the bans contributed by the removed run) or in the request's and objective's bans for the window, no two twins inside the detour, and no two-edge round trip out and back along one road unit;
 - stops are never interior to a removed run (`i` and `j` may equal stop positions; stop positions are shifted after the splice);
 - super-node transitions (`in_edge, out_edge`) allowed at every junction, including the two boundary junctions of the splice;
 - round trips (start == end) are allowed: the end node is exempt from the used-check only as the final node.
@@ -310,7 +310,8 @@ Rules enforced by `Route.splice()` and re-checked by the validator:
 
 - KD-tree on every node's projected coordinates (cKDTree built at load, ~2 s for 5M nodes; cached per build), filtered by the active mask at query time.
 - Start needs `out_degree ≥ 1`, end needs `in_degree ≥ 1`, intermediate stops need `pass_through` (exists `u→v→w`, `u ≠ w`). A stop at the end of a cul-de-sac cannot be passed through without reusing the mouth node, so it snaps to the nearest pass-through node and the response says so: `"Stop 2 moved 140 m to the nearest through street"`.
-- Dead-end *neighbourhoods* (a subdivision with one entrance) cannot be detected cheaply per node, so the seed-route step handles them: if a leg cannot be built, re-snap that stop to the next-nearest candidates (k = 1..10, expanding radius) and retry. After 10 candidates, fail with `STOP_UNREACHABLE_WITHOUT_REPEAT` and name the stop.
+- Dead-end *neighbourhoods* (a subdivision with one entrance) cannot be detected cheaply per node, so the seed-route step handles them: if a leg cannot be built, re-snap its earlier stop if it is a via, then its later stop (a via or the end; the start never moves), each to its next-nearest candidates (k = 1..10, expanding radius), retrying after each. After those candidates, fail with `STOP_UNREACHABLE_WITHOUT_REPEAT` and name the stop. A via trapped in such a subdivision walks out, and the stops after it stay.
+- Stops stay on distinct nodes: a via avoids the other stops' nodes, and so does the end, except in a round trip: a request whose start and end points are identical, where the end may take the start's node. A point-to-point request never becomes a round trip.
 - Snap distance and the chosen node are returned in the `snapped` event so the UI can show the marker jump.
 
 ### 3.3 Seed route: shortest path through all stops with node-disjoint legs
@@ -336,7 +337,9 @@ def seed_route(G, stops, mask):
     return concat(legs)
 ```
 
-The baseline for the inefficiency ratio is the **unconstrained** shortest route through the stops in order (sum of plain Dijkstra legs), which is what a sane GPS would do.
+As built (`docs/reference/engine.md`, **Seed and baseline**): each leg also avoids every other stop's node and bans the twins of the other legs' edges; a leg that still fails, or a seed refused by `check_route` (a turn the transition table forbids), re-snaps the leg's earlier stop up to 10 times if it is a via, then its later stop (a via or the end; never the start), then names the leg (`stop_index` stays its later stop, for the API's error). A round trip with no stop between its ends has no legs: its seed is a loop through a waypoint at least 500 m from the start.
+
+The baseline for the inefficiency ratio is the **unconstrained** shortest route through the stops in order (sum of plain Dijkstra legs, within the request's masks), which is what a sane GPS would do.
 
 ### 3.4 The worsen loop (splice heuristic)
 
@@ -377,7 +380,7 @@ def worsen(G, route, objective, budget, rng, mask) -> Iterator[ProgressEvent]:
 - **target** modes (ratio or duration): accept if the new value does not overshoot `target × 1.02`; when it would, shrink `radius` and retry; when within `[0.98, 1.02] × target`, stop. If the route is above target (after "make it worse" with a new, smaller target) run-replacement with a *shorter* detour (`delta < 0`) is accepted until under target.
 - Optional later: simulated-annealing acceptance for run replacements to escape local optima. Not in M1.
 
-`budget`: wall-clock seconds (default 20, max 120), max iterations, and a no-improvement cutoff (`fail_streak > 400 and radius == r_min`). Always returns the best route so far. `ProgressEvent` carries the splice so the client can apply it to its own copy; every 50th event carries a full snapshot for resync.
+`budget`: wall-clock seconds (default 20, max 120), max iterations, and a no-improvement cutoff (`fail_streak > 400 and radius == r_min`); the run reports `stopped_because` = `budget` (seconds or iterations) or `converged`. Always returns the best route so far. `ProgressEvent` carries the splice so the client can apply it to its own copy; every 50th event carries a full snapshot for resync.
 
 **Why routes do not converge to "the same giant snake":** the leash and tier bound the arena, the ambition radius bounds each detour, and both the segment pick and the waypoint sample are seeded. Two seeds on the same request should give edge sets with Jaccard similarity < 0.3; this is a test (§8).
 
@@ -386,8 +389,10 @@ def worsen(G, route, objective, budget, rng, mask) -> Iterator[ProgressEvent]:
 All three run on the active mask with `forbid`/`banned` masks passed to the kernels (no graph copies).
 
 1. **Waypoint** (default weight 60%). Sample a waypoint `w` from allowed, unused nodes with probability ∝ `exp(-dist(w, midpoint(a,b)) / radius)`; `w` is drawn from the objective's preferred pool when it has one (uncollected toll booths, brand POIs, slow residential nodes). Then `p1 = dijkstra(a → w)` and `p2 = dijkstra(w → b, forbid ∪ p1)`, both bounded by `max_cost = 4 × radius` so a hopeless search stops early. Detour = `p1 + p2`. Expected gain scales with `radius`, which is what makes "target duration" controllable.
-2. **Random-weight Dijkstra** (30%). `dijkstra(a → b)` with per-edge weights `length × U(0.2, 5.0)` drawn from the seeded rng. Produces plausible wiggles and usually succeeds when waypoint search fails.
-3. **Local exhaustive** (10%, and always when `dist(a,b) < 800 m`). Bounded DFS enumerating simple paths `a → b` within a ball of radius `3 × dist(a,b)`, depth ≤ 25 edges, cap 5,000 paths; pick the best by `objective.delta`. This is the exact local optimiser and the same code path the certified mode generalises.
+2. **Random-weight Dijkstra** (30%). `dijkstra(a → b)` with per-edge weights `length × U(0.2, 5.0)` drawn from the seeded rng for the edges leaving the nodes within `4 × radius` of the midpoint (the others keep their length, so the draws do not grow with the graph), bounded by the same `max_cost` in scaled cost. Produces plausible wiggles and usually succeeds when waypoint search fails; on a one- or two-edge window the scaled direct edge usually wins, which is no detour.
+3. **Local exhaustive** (10%, only when `dist(a,b) < 800 m`; for farther ends the draw is waypoint 2/3, random weight 1/3). Bounded DFS enumerating simple paths `a → b` within a ball of radius `3 × dist(a,b)` capped at 400 m, depth ≤ 25 edges, cap 5,000 paths, after a Dijkstra probe that skips the enumeration when `b` is unreachable; pick the best by `objective.delta`. This is the exact local optimiser and the same code path the certified mode generalises. The cap exists because the reference backend's DFS grows exponentially with the ball (a 4-edge window: 7–13 s uncapped, 0.3 s capped, `docs/reference/engine.md`); the M2 kernels may relax it.
+
+A candidate equal to the removed run is not a detour, and a candidate `Route.splice` would refuse (two twins inside it, a turn a transition table forbids) is a failed attempt.
 
 Search weights come from `objective.search_weights(G)` so e.g. the slowest-time mode runs Dijkstra on `length × speed` (prefers slow roads on the way to the waypoint).
 
@@ -406,7 +411,7 @@ class Objective(Protocol):
     def pair_term(self, G, e_in: int, e_out: int) -> float: ...
     def feasible_pair(self, G, e_in: int, e_out: int) -> bool: ...
     # anything non-additive; evaluated on the whole route
-    def global_term(self, G, route) -> float: ...
+    def global_term(self, G, nodes, edges) -> float: ...           # the route's arrays, so a candidate is scored before it is spliced
     def feasible_window(self, G, route, i, j, detour) -> bool: ...
     def banned_edges(self, G, route, i, j) -> BitMask | None: ...   # extra bans beyond twins
     # search guidance
@@ -417,7 +422,7 @@ class Objective(Protocol):
     def target_value(self, G, route) -> float: ...                  # the quantity the target modes compare
     def describe(self, G, route) -> dict: ...                       # mode-specific numbers for toasts
 
-score(route) = Σ node_terms[v] + Σ edge_terms[e] + Σ pair_term(e_k, e_k+1) + global_term(route)
+score(route) = Σ node_terms[v] + Σ edge_terms[e] + Σ pair_term(e_k, e_k+1) + global_term(nodes, edges)
 ```
 
 `Objective.delta(route, i, j, detour)` is implemented once in the base class: it sums node/edge terms over the removed run and the detour, re-evaluates the pair terms at the two boundaries plus inside the detour, and calls `global_term` on the candidate only if the objective declares `has_global = True`. `Composite(primary, secondary)` implements lexicographic objectives as `primary × 10⁹ + secondary` (lengths are < 10⁷ m, so no overflow in float64).
@@ -500,7 +505,7 @@ class GraphBackend(Protocol):
 
 ### 3.11 Determinism and reproducibility
 
-`numpy.random.Generator(PCG64(seed))` everywhere; no iteration over Python sets in the hot loop (arrays only); the route result records `seed`, `graph_version` (sha256 in `meta.json`), engine version and request. Same tuple → same route, enforced by a golden test on the Portland fixture.
+`numpy.random.Generator(PCG64(seed))` everywhere; no iteration over Python sets in the hot loop (arrays only); the route result records `seed`, `graph_version` (sha256 in `meta.json`), engine version and request. Same tuple → same route, enforced by a golden test (`tests/golden/`, on a test lattice until the Portland build exists). The clock decides only when a run stops: a run that stops on iterations is reproduced byte for byte, and one that stops on time is a prefix of the same sequence of splices, reproduced with `max_iterations` set to its recorded attempts.
 
 ### 3.12 Stretch: certified worst (tiny areas)
 
@@ -798,12 +803,12 @@ Checks:
 
 1. **Edge chain:** `tail(edges[k]) == nodes[k]` and `head(edges[k]) == nodes[k+1]` for all k; every edge exists in the active mask; one-way direction is therefore enforced by construction.
 2. **Vertex-simple:** `len(set(nodes)) == len(nodes)` (round trips: allow `nodes[0] == nodes[-1]` only).
-3. **Edge-simple and no twin reuse:** for every pair of route edges `(e, f)`, `f ∉ twins(e)` and `e ≠ f`. Implemented as: mark `e ∪ twins(e)` while walking; any edge already marked fails.
+3. **Edge-simple and no twin reuse:** for every pair of route edges `(e, f)`, `f ∉ twins(e)` and `e ≠ f`, and no road unit twice. Implemented as: mark `e ∪ twins(e)` while walking; any edge already marked fails.
 4. **Consolidated junctions (the proof at the raw-data level):** expand the route to original OSM node ids via each edge's `osmnode_ids` plus the super-junction internal paths; assert no original OSM node id appears twice, and assert every `cluster_members` group appears in at most one contiguous run. This proves that neither a merged carriageway crossing nor a consolidated interchange/roundabout is entered twice, independently of the engine's own bookkeeping.
 5. **Transitions:** every `(edges[k], edges[k+1])` pair at a super-node is in its allowed set.
-6. **Stops:** `nodes[stop_idx[s]]` equals the snapped stop node, in order; no stop is interior to a removed run (checked by construction in `splice`, re-checked here).
-7. **Constraints:** turn classes against `no_left`/`no_right`; hard-mode stretches (`identity → number of maximal runs ≤ 1`); leash (every node within `L` of the stop polyline); tier/bubble membership.
-8. **Metrics:** recomputed length/time/items equal the reported ones within 1e-6.
+6. **Stops:** `nodes[stop_idx[s]]` equals the snapped stop node, in order; no stop is interior to a removed run (checked by construction in `splice`, re-checked here). For a saved route the stop nodes are re-derived from its request, never read from the file.
+7. **Constraints:** turn classes against `no_left`/`no_right`; hard-mode stretches (`identity → number of maximal runs ≤ 1`); leash (every node within `L` of the stop polyline); tier/bubble membership of every node, and no edge the tier bans outside the bubbles.
+8. **Metrics:** the reported length/time/items are finite and equal the recomputed ones within 1e-6.
 
 `worst-route validate route.json` runs it from the CLI; `POST /routes/{id}/validate` from the API.
 
@@ -814,7 +819,7 @@ Checks:
 - **Engine unit tests:** splice bookkeeping, snapping fallbacks, seed route disjointness and the penalty re-solve, each detour strategy returns only legal paths, objective `delta` equals full re-score (checked on every accepted splice in test mode).
 - **Property tests** (hypothesis): random strongly-connected digraphs with random twins → `worsen()` output always passes the validator; score never decreases in max modes; target modes land within tolerance or report why.
 - **Backend parity:** the pure-Python reference backend and the CSR kernels give identical paths on fixtures (the same tie rule, `docs/reference/graph.md`); networkx checks the reference backend's costs and path sets.
-- **Determinism/golden:** fixed seed on the Portland build → identical node list; recorded in `tests/golden/` with the `graph_version` (regenerated deliberately when the build changes).
+- **Determinism/golden:** fixed seed on a fixture build (a 20 × 20 lattice now, the Portland build when it exists) → identical node list; recorded in `tests/golden/` with the `graph_version` (regenerated deliberately when the build changes).
 - **Variety:** two seeds → Jaccard(edge sets) < 0.3 on the Portland acceptance pairs.
 - **API tests:** httpx `AsyncClient` against the app with a fixture build; SSE event order; cancel; reconnect with `Last-Event-ID`.
 - **Benchmarks** (`tests/bench`, not in CI): attempts/s per backend, pipeline step timings, written to `docs/bench.md`.

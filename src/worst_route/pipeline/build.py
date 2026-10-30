@@ -33,7 +33,7 @@ import pyproj
 import shapely
 
 from worst_route.pipeline import PIPELINE_VERSION, layout
-from worst_route.pipeline.exclusions import HighwayClass, Tags, kept_class
+from worst_route.pipeline.exclusions import RoadClass, Tags, kept_class
 
 EDGE_TAGS = (
     "name",
@@ -71,7 +71,7 @@ class BuildStats:
 @dataclass
 class _Way:
     refs: tuple[int, ...]
-    road_class: HighwayClass
+    road_class: RoadClass
     rule: str
     forward: bool
     backward: bool

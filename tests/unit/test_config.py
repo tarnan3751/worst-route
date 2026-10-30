@@ -3,7 +3,14 @@ from pathlib import Path
 
 import pytest
 
-from worst_route.config import REGIONS, Settings, settings
+from worst_route.config import (
+    ALLEY_SERVICE,
+    KEPT_HIGHWAY,
+    REGIONS,
+    HighwayClass,
+    Settings,
+    settings,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -52,3 +59,8 @@ def test_settings_cached_until_cleared(monkeypatch: pytest.MonkeyPatch, tmp_path
 
 def test_user_agent_names_project_and_contact() -> None:
     assert settings().user_agent == "worst-route/0.1.0 (https://github.com/tarnan3751/worst-route)"
+
+
+def test_highway_classes_are_the_kept_classes() -> None:
+    # The format's class numbers and the pipeline's class strings name the same classes.
+    assert {c.name.lower() for c in HighwayClass} == KEPT_HIGHWAY | {ALLEY_SERVICE}

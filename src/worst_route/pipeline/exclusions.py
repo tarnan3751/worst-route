@@ -14,8 +14,9 @@ from typing import Protocol
 
 from worst_route.config import ALLEY_SERVICE, BLOCKING_ACCESS, KEPT_HIGHWAY
 
-# A kept road class: a `KEPT_HIGHWAY` value, or "alley".
-type HighwayClass = str
+# A kept road class, as a string: a `KEPT_HIGHWAY` value, or "alley" (`config.HighwayClass`
+# numbers the same classes for the on-disk format).
+type RoadClass = str
 
 ACCESS_KEYS = ("motorcar", "motor_vehicle", "access")  # most specific first
 
@@ -26,7 +27,7 @@ class Tags(Protocol):
     def get(self, key: str, /) -> str | None: ...
 
 
-def kept_class(tags: Tags) -> HighwayClass | None:
+def kept_class(tags: Tags) -> RoadClass | None:
     """The way's road class if the pipeline keeps it, else None."""
     highway = tags.get("highway")
     if highway is not None and highway in KEPT_HIGHWAY:

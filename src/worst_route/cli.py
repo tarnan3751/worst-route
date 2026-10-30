@@ -571,9 +571,9 @@ def _latlon(text: str) -> tuple[float, float]:
     return lat, lon
 
 
-def _fail(message: str) -> NoReturn:
+def _fail(message: str, code: int = 1) -> NoReturn:
     typer.echo(message, err=True)
-    raise typer.Exit(code=1)
+    raise typer.Exit(code=code)
 
 
 def _make_backend(data: "GraphData", name: str) -> "GraphBackend":
@@ -709,7 +709,7 @@ def plan(
     saved: SavedRoute | None = None
     if base is None:
         if from_ is None or to is None:
-            raise typer.BadParameter("--from and --to are needed, unless --base names a route")
+            _fail("--from and --to are needed, unless --base names a route", code=2)
         fields["stops"] = [_latlon(from_), *(_latlon(v) for v in via or []), _latlon(to)]
         fields["tier"] = tier
         try:
@@ -723,9 +723,10 @@ def plan(
             if source is not None and source.name != "DEFAULT":
                 given.append(f"--{name.replace('_', '-')}")
         if given:
-            raise typer.BadParameter(
+            message = (
                 f"--base takes the stops, tier and leash from its route: drop {', '.join(given)}"
             )
+            _fail(message, code=2)
         try:
             saved = read_route(base)
         except (KeyError, TypeError, ValueError, OverflowError, ValidationError) as error:
@@ -745,8 +746,7 @@ def plan(
             leash_km=saved.request.leash_km,
         )
     if fields["target"]["kind"] == "ratio" and is_round_trip(fields["stops"]):
-        typer.echo("invalid --target: a round trip has no ratio target", err=True)
-        raise typer.Exit(code=2)
+        _fail("invalid --target: a round trip has no ratio target", code=2)
     try:
         request = RouteRequest(**fields)
     except ValidationError as error:

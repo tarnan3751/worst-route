@@ -406,11 +406,17 @@ def test_base_takes_its_stops_and_scale_from_its_file(data_dir: Path, tmp_path: 
     first = tmp_path / "worst.json"
     trip = ["--from", latlon(GRID, 0), "--to", latlon(GRID, 99)]
     assert plan(*trip, "--seed", "1", "--max-iterations", "50", "--out", str(first))[0] == 0
-    for given in (trip, ["--via", latlon(GRID, 45)], ["--tier", "auto"], ["--leash-km", "3"]):
-        code, stdout, stderr = plan("--base", str(first), *given)
-        assert code == 2 and stdout == "" and "--base takes the stops" in stderr
-    code, _, stderr = plan("--to", latlon(GRID, 99))
-    assert code == 2 and "--from and --to are needed" in stderr
+    takes = "--base takes the stops, tier and leash from its route: drop"
+    for given, named in (
+        (trip, "--from, --to"),
+        (["--via", latlon(GRID, 45)], "--via"),
+        (["--tier", "auto"], "--tier"),
+        (["--leash-km", "3"], "--leash-km"),
+    ):
+        refused = plan("--base", str(first), *given)
+        assert refused == (2, "", f"{takes} {named}\n")  # one plain line, whatever the terminal
+    refused = plan("--to", latlon(GRID, 99))
+    assert refused == (2, "", "--from and --to are needed, unless --base names a route\n")
 
     doc = json.loads(first.read_text())
     for change, message in (

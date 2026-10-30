@@ -23,6 +23,8 @@ apply them to the score and metrics of each splice it is sent.
   at once; for a duration they keep the value monotone when a longer detour is faster.
 - `overshoots(value, gain, candidate)`: growing, a gain that would pass the band's top; the loop
   keeps the smallest one and takes it only when a whole cycle found nothing it accepts.
+- `shrink_rank(candidate)`: shrinking, how close a detour would bring the route to the band (0
+  inside it, infinity below it), by which `find_detour` ranks the local-exhaustive paths.
 - `describe(value)`: `{kind, value, achieved, within_tolerance}` for a target, None for `max`.
 """
 
@@ -125,6 +127,13 @@ class Goal:
         return (
             self.phase(value) == "grow" and not self.maximise and gain > 0 and candidate > self.high
         )
+
+    def shrink_rank(self, candidate: float) -> float:
+        """How a shrinking run ranks a detour of this value: 0 within the band, else how far above
+        it, and last (infinity) below it, where the run would not take it."""
+        if candidate < self.low:
+            return math.inf
+        return max(candidate - self.high, 0.0)
 
     def describe(self, value: float) -> dict[str, Any] | None:
         """The target and what was achieved, for a route's metrics; None for max."""

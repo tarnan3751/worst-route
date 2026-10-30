@@ -14,10 +14,11 @@ tables, so this should stay near zero). `run_worsen` drives it to the end.
 A target run (ratio or duration) has phases, by the route's value (`Goal.phase`): below the
 band it grows, taking detours that gain without passing the band's top; above it, it shrinks,
 taking shorter replacements that do not pass the band's bottom, with the radius held at its
-floor; inside it, the run stops ("target"), before its first attempt too. Growing, the
-smallest candidate that would pass the band's top is kept (from the last accepted splice on);
-when a whole cycle accepts nothing, it is spliced in as one more attempt, and the run goes on
-shrinking.
+floor, longer windows (`SHRINK_RUN_EDGES_MEAN`, at most `SHRINK_SEGMENT_RUN_MAX`) and the
+local-exhaustive paths ranked by how close they bring the route to the band; inside it, the
+run stops ("target"), before its first attempt too. Growing, the smallest candidate that would
+pass the band's top is kept (from the last accepted splice on); when a whole cycle accepts
+nothing, it is spliced in as one more attempt, and the run goes on shrinking.
 
 - The window is one edge (j = i + 1) with probability `SINGLE_EDGE_PROBABILITY`, else a run
   of 1 + a geometric number of edges (`RUN_EDGES_MEAN` on average, at most `SEGMENT_RUN_MAX`),
@@ -69,6 +70,8 @@ from worst_route.config import (
     SEGMENT_BIAS_PROBABILITY,
     SEGMENT_BIAS_TOP,
     SEGMENT_RUN_MAX,
+    SHRINK_RUN_EDGES_MEAN,
+    SHRINK_SEGMENT_RUN_MAX,
     SINGLE_EDGE_PROBABILITY,
     UNUSED_GRID_MAX_CELLS,
     WAYPOINT_BALL_FACTOR,
@@ -137,10 +140,15 @@ class _Overshoot:
 
 
 def pick_segment(
-    route: Route, rng: np.random.Generator, anchors: NDArray[np.intp] | None = None
+    route: Route,
+    rng: np.random.Generator,
+    anchors: NDArray[np.intp] | None = None,
+    *,
+    shrinking: bool = False,
 ) -> tuple[int, int]:
-    """A window (i, j) of the route: one edge mostly, sometimes a short run, no stop inside;
-    starting, with `SEGMENT_BIAS_PROBABILITY`, at one of the `anchors` (route edge positions)."""
+    """A window (i, j) of the route: one edge mostly, sometimes a short run (a longer one when
+    `shrinking`), no stop inside; starting, with `SEGMENT_BIAS_PROBABILITY`, at one of the
+    `anchors` (route edge positions)."""
     count = len(route.edges)
     biased = anchors is not None and rng.random() < SEGMENT_BIAS_PROBABILITY
 
@@ -152,7 +160,12 @@ def pick_segment(
     if rng.random() < SINGLE_EDGE_PROBABILITY:
         i = first()
         return i, i + 1
-    k = min(1 + int(rng.geometric(1 / (RUN_EDGES_MEAN - 1))), SEGMENT_RUN_MAX)
+    mean, most = (
+        (SHRINK_RUN_EDGES_MEAN, SHRINK_SEGMENT_RUN_MAX)
+        if shrinking
+        else (RUN_EDGES_MEAN, SEGMENT_RUN_MAX)
+    )
+    k = min(1 + int(rng.geometric(1 / (mean - 1))), most)
     i = first()
     next_stop = route.stop_idx[bisect_right(route.stop_idx, i)]
     return i, min(i + k, next_stop)
@@ -261,7 +274,7 @@ def worsen(
         else:
             if anchors_for != (accepted, radius):
                 anchors, anchors_for = unused.anchors(route, table, radius), (accepted, radius)
-            i, j = pick_segment(route, rng, anchors)
+            i, j = pick_segment(route, rng, anchors, shrinking=shrinking)
             forbid, banned = route.release(data, i, j)
             extra = _either(banned_edges, objective.banned_edges(data, route, i, j))
             if extra is not None:
@@ -282,6 +295,7 @@ def worsen(
                 entry_edge=int(route.edges[i - 1]) if i > 0 else -1,
                 exit_edge=int(route.edges[j]) if j < len(route.edges) else -1,
                 refused=refused,
+                shrink=goal if shrinking else None,
             )
             gain = 0.0 if detour is None else objective.delta(route, i, j, *detour)
             after = 0.0 if detour is None else goal.candidate(route, i, j, detour[1], gain)

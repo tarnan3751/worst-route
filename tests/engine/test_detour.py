@@ -1,3 +1,4 @@
+import math
 from collections import Counter
 from typing import Any
 
@@ -14,12 +15,13 @@ from worst_route.engine.detour import (
     waypoint_path,
 )
 from worst_route.engine.objectives.distance import Distance
-from worst_route.engine.route import IllegalSplice, Route, TransitionForbidden
+from worst_route.engine.route import IllegalSplice, Metrics, Route, TransitionForbidden
+from worst_route.engine.target import Goal, Target
 from worst_route.graph.backend import GraphBackend, Path
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
 from worst_route.graph.spatial import SpatialIndex
-from worst_route.graph.testing import edge_id, make_graph
+from worst_route.graph.testing import Edge, edge_id, make_graph
 
 from .graphs import X0, Y0, edges_of, lattice, route_on
 
@@ -43,6 +45,7 @@ def detour(
     data: GraphData = GRID,
     extra: np.ndarray | None = None,
     refused: Counter[type[IllegalSplice]] | None = None,
+    shrink: Goal | None = None,
 ) -> Path | None:
     forbid, banned = route.release(data, i, j)
     if extra is not None:
@@ -64,6 +67,7 @@ def detour(
         exit_edge=int(route.edges[j]) if j < len(route.edges) else -1,
         strategy=strategy,
         refused=refused,
+        shrink=shrink,
     )
 
 
@@ -143,6 +147,52 @@ def test_local_exhaustive_returns_the_longest_legal_path() -> None:
     assert found is not None
     # the lattice is bipartite and 0, 1 differ in colour: the longest path leaves one node out
     assert float(weights[found[1]].sum()) == best == 700.0
+
+
+def test_shrinking_local_exhaustive_returns_the_path_closest_to_the_band() -> None:
+    # the route rings a 3 × 3 lattice from 0 to 1 (700 m, 7 × a 100 m baseline); replacing it
+    # whole, the other paths 0 -> 1 are 100, 300, 500 and 700 m. Shrinking toward 5 × (490-510 m),
+    # a 500 m path comes first; the 100 and 300 m ones would pass the band, and the other 700 m
+    # ones lose nothing
+    g = lattice(3, 3)
+    ring = [0, 3, 6, 7, 8, 5, 2, 1]
+    on = route_on(g, ring)
+    route = Route.new(
+        g, on.nodes, on.edges, on.stop_idx, score=700.0, metrics=Metrics(700.0, 63.0), seed=0
+    )
+    goal = Goal(Target(kind="ratio", value=5), g, baseline_length_m=100.0)
+    assert goal.phase(7.0) == "shrink"
+    found = detour(route, 0, 7, "local_exhaustive", 0, data=g, shrink=goal)
+    assert found is not None and float(g.edge_length_m[found[1]].sum()) == 500.0
+    longest = detour(route, 0, 7, "local_exhaustive", 0, data=g)
+    assert longest is not None and float(g.edge_length_m[longest[1]].sum()) == 700.0
+    assert goal.shrink_rank(3.0) == math.inf and goal.shrink_rank(7.0) == 7.0 - goal.high
+
+
+def test_shrinking_local_exhaustive_never_offers_a_longer_path() -> None:
+    # the window a -> x -> y -> b (300 m at 30 km/h, 36 s) has two other ways: a -> z -> b
+    # (200 m, 24 s: shorter and faster) and a -> u -> v -> w -> b (400 m at 90 km/h, 16 s:
+    # longer, and faster still). Shrinking toward 16 s, the longer path would land in the band,
+    # but a shrinking run takes only a loss, so the shorter path comes first
+    a, x, y, b, z, u, v, w = range(8)
+    xy = [(0, 0), (0, 50), (100, 50), (100, 0), (50, -50), (0, -100), (50, -150), (100, -100)]
+    slow = [(a, x), (x, y), (y, b), (a, z), (z, b)]
+    fast = [(a, u), (u, v), (v, w), (w, b)]
+    g = make_graph(
+        [(X0 + px, Y0 + py) for px, py in xy],
+        [Edge(s, t, 100.0, speed_kmh=30.0) for s, t in slow]
+        + [Edge(s, t, 100.0, speed_kmh=90.0) for s, t in fast],
+    )
+    on = route_on(g, [a, x, y, b])
+    route = Route.new(
+        g, on.nodes, on.edges, on.stop_idx, score=300.0, metrics=Metrics(300.0, 36.0), seed=0
+    )
+    goal = Goal(Target(kind="duration", value=16), g, baseline_length_m=200.0)
+    assert goal.phase(36.0) == "shrink"
+    found = detour(route, 0, 3, "local_exhaustive", 0, data=g, shrink=goal)
+    assert found is not None and found[0].tolist() == [a, z, b]
+    longest = detour(route, 0, 3, "local_exhaustive", 0, data=g)
+    assert longest is not None and longest[0].tolist() == [a, u, v, w, b]
 
 
 def test_local_exhaustive_skips_a_candidate_the_splice_refuses() -> None:

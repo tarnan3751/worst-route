@@ -9,6 +9,8 @@ from worst_route.config import (
     CONVERGED_EMPTY_CYCLES,
     CONVERGED_FAILS,
     SEGMENT_RUN_MAX,
+    SHRINK_RUN_EDGES_MEAN,
+    SHRINK_SEGMENT_RUN_MAX,
     UNUSED_GRID_MAX_CELLS,
     HighwayClass,
 )
@@ -271,6 +273,20 @@ def test_pick_segment_never_spans_a_stop() -> None:
     # 4 of the 22 edges start right before a stop, where a run is cut to one edge
     assert sizes[1] / 3000 == pytest.approx(0.8 + 0.2 * 4 / 22, abs=0.03)
     assert set(sizes) <= set(range(1, SEGMENT_RUN_MAX + 1)) and max(sizes) > 4
+
+
+def test_shrinking_picks_longer_runs() -> None:
+    snake = list(range(20)) + list(range(39, 19, -1)) + list(range(40, 60))
+    route = route_on(GRID, snake)
+    rng = np.random.Generator(np.random.PCG64(2))
+    runs = []
+    for _ in range(20000):
+        i, j = pick_segment(route, rng, shrinking=True)
+        assert 0 <= i < j <= len(route.edges) and j - i <= SHRINK_SEGMENT_RUN_MAX
+        if j - i > 1 and i + SHRINK_SEGMENT_RUN_MAX <= len(route.edges):  # never cut at the end
+            runs.append(j - i)
+    assert np.mean(runs) == pytest.approx(SHRINK_RUN_EDGES_MEAN, abs=0.3)
+    assert max(runs) > SEGMENT_RUN_MAX
 
 
 def test_pick_segment_starts_at_an_anchor_at_the_bias_rate() -> None:

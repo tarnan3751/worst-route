@@ -187,6 +187,10 @@ ROUND_TRIP_SEED_TRIES = 20
 SINGLE_EDGE_PROBABILITY = 0.8
 RUN_EDGES_MEAN = 3.0
 SEGMENT_RUN_MAX = 12
+# Shrinking toward a target, a run is SHRINK_RUN_EDGES_MEAN edges on average, at most
+# SHRINK_SEGMENT_RUN_MAX: a longer run has more of the route's wanderings to cut.
+SHRINK_RUN_EDGES_MEAN = 6.0
+SHRINK_SEGMENT_RUN_MAX = 24
 # With SEGMENT_BIAS_PROBABILITY a window starts at one of the SEGMENT_BIAS_TOP route edges with
 # the most unused active nodes within WAYPOINT_BALL_FACTOR × the radius of their midpoint, counted
 # on a grid of SEGMENT_BIAS_CELL_M cells (a square window approximates the ball), or of the

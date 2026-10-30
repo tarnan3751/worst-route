@@ -29,8 +29,10 @@ weight 1/3); `strategy` forces one (tests, the round-trip seed).
   `LOCAL_EXHAUSTIVE_BALL_FACTOR × dist(a, b)` capped at `LOCAL_EXHAUSTIVE_BALL_MAX_M`, from
   `entry_edge` to `exit_edge`, after a Dijkstra probe that skips the enumeration when b cannot
   be reached at all (turns ignored: a legal path exists only if a turn-blind one does).
-  `find_detour` ranks them by `objective.delta` (stable, so ties keep the search's order) and
-  returns the first the splice accepts.
+  `find_detour` ranks them by `objective.delta` (stable, so ties keep the search's order), or,
+  for a run shrinking toward a target (`shrink`, its goal), keeps those that lose (`delta` < 0,
+  the only ones it can take) and ranks them by how close each would bring the route to the
+  target's band (`Goal.shrink_rank`); it returns the first the splice accepts.
 
 Every search goes through `search.py`, so on a build with transition rows each turn of a
 detour, its two boundary junctions included (`entry_edge` = edges[i − 1] into its first edge,
@@ -60,6 +62,7 @@ from worst_route.config import (
 from worst_route.engine.objectives.base import Objective
 from worst_route.engine.route import IllegalSplice, IntArray, Route, twins_of
 from worst_route.engine.search import shortest_path, simple_paths
+from worst_route.engine.target import Goal
 from worst_route.graph.backend import GraphBackend, Path
 from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import SpatialIndex
@@ -100,6 +103,7 @@ def find_detour(
     exit_edge: int,
     strategy: Strategy | None = None,
     refused: Counter[type[IllegalSplice]] | None = None,
+    shrink: Goal | None = None,
 ) -> Path | None:
     """A new detour for nodes[i..j] that the splice accepts, or None."""
     a, b = int(route.nodes[i]), int(route.nodes[j])
@@ -157,8 +161,15 @@ def find_detour(
             entry_edge=entry_edge,
             exit_edge=exit_edge,
         )
-        gains = np.array([objective.delta(route, i, j, *p) for p in paths], dtype=np.float64)
-        candidates = [paths[k] for k in np.argsort(-gains, kind="stable").tolist()]
+        gains = [objective.delta(route, i, j, *p) for p in paths]
+        if shrink is None:
+            order = np.argsort(-np.array(gains, dtype=np.float64), kind="stable").tolist()
+        else:  # only the paths a shrinking run can take (a loss), the closest to the band first
+            losing = [k for k, gain in enumerate(gains) if gain < 0]
+            after = [shrink.candidate(route, i, j, paths[k][1], gains[k]) for k in losing]
+            rank = np.array([shrink.shrink_rank(v) for v in after], dtype=np.float64)
+            order = [losing[k] for k in np.argsort(rank, kind="stable").tolist()]
+        candidates = [paths[k] for k in order]
     removed = route.edges[i:j]
     for nodes, edges in candidates:
         if np.array_equal(edges, removed):

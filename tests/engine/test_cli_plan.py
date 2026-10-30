@@ -146,8 +146,9 @@ def test_the_csr_backend_without_numba_is_one_line(data_dir: Path, tmp_path: Pat
 def test_on_a_build_with_turn_tables_auto_is_python_and_csr_one_line(
     data_dir: Path, tmp_path: Path
 ) -> None:
-    # the CSR kernels cannot search transition tables yet: auto takes the reference and says
-    # so; csr asked for by name is one line on both commands
+    # the CSR backend's DFS cannot check turns yet: auto takes the reference and says so; csr
+    # asked for by name cannot plan (one line), but validates: re-deriving the stops needs only
+    # the edge-state Dijkstra
     straight = [
         ((44, 45), (45, 46)),
         ((46, 45), (45, 44)),
@@ -168,7 +169,8 @@ def test_on_a_build_with_turn_tables_auto_is_python_and_csr_one_line(
     code, stdout, stderr = plan(*trip, "--backend", "csr")
     assert (code, stdout, stderr.splitlines()) == (1, "", [f"cannot plan: {refusal}"])
     result = runner.invoke(app, ["validate", str(out), "--backend", "csr"])
-    assert result.exit_code == 1 and result.stderr.splitlines() == [f"cannot validate: {refusal}"]
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines()[1] == "backend: csr"
 
 
 def test_validate_refuses_a_route_from_another_engine_version(

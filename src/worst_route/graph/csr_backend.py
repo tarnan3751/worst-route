@@ -7,12 +7,12 @@ reference's order, so a bad argument raises the same error; answers the trivial 
 reference does; then
 hands the CSR arrays (`out_indptr`, `out_edges`, `edge_u`, `edge_v`), the weights and the masks,
 as zero-copy uint8 views, to a kernel in `kernels.py`. `largest_scc_mask` is the reference's
-scipy call. Nothing is copied or precomputed at construction.
+scipy call. Nothing is copied at construction; the transition table is precomputed once into
+the two arrays the turn kernels read (`trans_indptr`, `trans_key`, `kernels.py`).
 
-The transition-aware search has no kernel yet: `dijkstra_edges` raises `NotImplementedError`
-(the engine calls it only on a build with transition rows, `engine/search.py`), and so does
-`simple_paths_dfs` on a build with rows; on a build without rows every turn is allowed, so the
-DFS's turn edges change nothing and the plain kernel answers.
+The turn DFS has no kernel yet: `simple_paths_dfs` raises `NotImplementedError` on a build with
+transition rows; on a build without rows every turn is allowed, so the DFS's turn edges change
+nothing and the plain kernel answers.
 """
 
 import math
@@ -45,6 +45,14 @@ class CsrBackend:
     def __init__(self, data: GraphData) -> None:
         self.data = data
         self._check_weights = WeightCheck(data)
+        # node v's transition rows are trans_indptr[v]:trans_indptr[v + 1] (sorted by node), and
+        # each row's key in_edge * m + out_edge ascends within them
+        self._trans_indptr = np.searchsorted(data.trans_node, np.arange(data.n + 1)).astype(
+            np.int64
+        )
+        self._trans_key = data.trans_in.astype(np.int64) * data.m + data.trans_out
+        self._trans_indptr.setflags(write=False)
+        self._trans_key.setflags(write=False)
 
     def dijkstra(
         self,
@@ -93,8 +101,37 @@ class CsrBackend:
         banned_edges: NDArray[np.bool_] | None = None,
         max_cost: float = math.inf,
     ) -> Path | None:
-        """Not yet: the edge-state kernel is a follow-up."""
-        raise NotImplementedError(NO_TURN_KERNEL)
+        """A cheapest path src → dst whose every turn is allowed, within the masks, or None."""
+        self._check_weights(weights)
+        check_ends(self.data, src, dst)
+        check_turn_edges(self.data, src, dst, entry_edge, exit_edge)
+        enter = enterable(self.data, node_mask, forbid_nodes)
+        banned = banned_mask(self.data, banned_edges)
+        max_cost = as_cost(max_cost)
+        if max_cost < 0 or not (enter[src] and enter[dst]):
+            return None
+        if src == dst:
+            if entry_edge >= 0 and exit_edge >= 0 and not self._turn_ok(entry_edge, exit_edge):
+                return None
+            return np.array([src], dtype=np.int32), np.array([], dtype=np.int32)
+        g = self.data
+        found, nodes, edges = kernels.dijkstra_edges_masked(
+            g.out_indptr,
+            g.out_edges,
+            g.edge_u,
+            g.edge_v,
+            weights,
+            enter.view(np.uint8),
+            banned.view(np.uint8),
+            self._trans_indptr,
+            self._trans_key,
+            src,
+            dst,
+            entry_edge,
+            exit_edge,
+            max_cost,
+        )
+        return (nodes, edges) if found else None
 
     def simple_paths_dfs(
         self,
@@ -142,3 +179,9 @@ class CsrBackend:
     def largest_scc_mask(self, edge_mask: NDArray[np.bool_] | None = None) -> NDArray[np.bool_]:
         """The nodes of the largest strongly connected component over `edge_mask`."""
         return largest_scc_mask(self.data, edge_mask)
+
+    def _turn_ok(self, e_in: int, e_out: int) -> bool:
+        """Whether the turn e_in → e_out is allowed at head(e_in)."""
+        return kernels.turn_allowed(
+            self._trans_indptr, self._trans_key, self.data.edge_v, e_in, e_out
+        )

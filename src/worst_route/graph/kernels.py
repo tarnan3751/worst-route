@@ -7,13 +7,27 @@ predecessor, and `max_cost` is inclusive. `CsrBackend` checks the arguments and 
 trivial cases (a negative `max_cost`, an end that may not be entered) before it calls a
 kernel, as `PythonBackend` does before it searches.
 
+The transition-aware search (`dijkstra_edges_masked`) is the same over edge states: its heap
+orders entries by (cost, edge id). It reads the transition table as `CsrBackend` precomputes
+it once per build: `trans_indptr`, each node's run of rows (rows sorted by node), and
+`trans_key`, each row's `in_edge * m + out_edge`, ascending within a node's run; `turn_allowed`
+answers a turn by a binary search in the run of the turn's node (a node without rows allows
+every turn).
+
 Masks arrive as uint8: zero-copy views of the bool masks (`mask.view(np.uint8)`). Each kernel
 is compiled once, eagerly, for one signature whose arrays are read-only of any layout, so
 memory-mapped builds, read-only cached weights and fresh writeable masks share one compiled
 specialization; `cache=True` keeps it in this package's `__pycache__`, so only the first
 process after a change to this file pays the compile. `NUMBA_DISABLE_JIT=1` runs the kernels
 as the plain Python below (slow, but the test suite passes that way, which helps debugging).
-Every search allocates its own work arrays: O(n) per call, as the masks already are.
+Every search allocates its own work arrays: O(n) per call, as the masks already are. The
+edge-state search keeps one uint8 state per edge and leaves its costs and predecessors
+uninitialised until a state is reached, so a small search does not pay to fill O(m) floats. Its
+heap holds at most m entries: a state's cost is its predecessor's plus its own weight, and
+states pop in non-decreasing cost, so with non-negative weights a state's first push is its only
+one. The heap still starts at 64 entries and doubles when full: a small search allocates little,
+and memory stays safe if a weights array changed in place after its cached check
+(`backend.py`, `WeightCheck`) holds a negative weight, which breaks the bound.
 """
 
 from collections.abc import Callable
@@ -38,9 +52,11 @@ def _readonly(dtype: Any) -> Any:
 _I8, _I4, _F8, _U1 = (_readonly(t) for t in (types.int64, types.int32, types.float64, types.uint8))
 _PATH = types.Tuple((types.boolean, types.int32[::1], types.int32[::1]))  # type: ignore[no-untyped-call]
 _PATHS = types.Tuple((types.int64[::1], types.int32[::1], types.int32[::1]))  # type: ignore[no-untyped-call]
+_HEAP = types.Tuple((types.float64[::1], types.int64[::1], types.int64))  # type: ignore[no-untyped-call]
 
 I32 = NDArray[np.int32]
 I64 = NDArray[np.int64]
+F64 = NDArray[np.float64]
 U8 = NDArray[np.uint8]
 
 
@@ -227,3 +243,182 @@ def simple_paths_dfs(
             cursor[depth] = out_indptr[w]
             on_path[w] = 1
     return offsets[: count + 1].copy(), nodes[:n_nodes].copy(), edges[:n_edges].copy()
+
+
+@_kernel(types.boolean(_I8, _I8, _I4, types.int64, types.int64))
+def turn_allowed(trans_indptr: I64, trans_key: I64, edge_v: I32, e: int, f: int) -> bool:
+    """Whether the turn from edge e into edge f is allowed at head(e): it has no rows, or a row
+    (head(e), e, f)."""
+    v = edge_v[e]
+    lo = trans_indptr[v]
+    end = trans_indptr[v + 1]
+    if lo == end:
+        return True
+    key = e * edge_v.shape[0] + f
+    hi = end
+    while lo < hi:  # the first row of the run whose key is not less than `key`
+        mid = (lo + hi) // 2
+        if trans_key[mid] < key:
+            lo = mid + 1
+        else:
+            hi = mid
+    return bool(lo < end and trans_key[lo] == key)
+
+
+@_kernel(_HEAP(types.float64[::1], types.int64[::1], types.int64, types.float64, types.int64))
+def _heap_push(
+    heap_cost: F64, heap_edge: I64, size: int, cost: float, edge: int
+) -> tuple[F64, I64, int]:
+    """Push (cost, edge) on the binary heap of `size` entries ordered by (cost, edge), doubling
+    its arrays when full: (heap_cost, heap_edge, size) after the push."""
+    if size == heap_cost.shape[0]:
+        bigger_cost = np.empty(2 * size, dtype=np.float64)
+        bigger_cost[:size] = heap_cost
+        heap_cost = bigger_cost
+        bigger_edge = np.empty(2 * size, dtype=np.int64)
+        bigger_edge[:size] = heap_edge
+        heap_edge = bigger_edge
+    i = size  # a new entry at the bottom, then up while less than its parent
+    while i > 0:
+        parent = (i - 1) // 2
+        if cost < heap_cost[parent] or (cost == heap_cost[parent] and edge < heap_edge[parent]):
+            heap_cost[i] = heap_cost[parent]
+            heap_edge[i] = heap_edge[parent]
+            i = parent
+        else:
+            break
+    heap_cost[i] = cost
+    heap_edge[i] = edge
+    return heap_cost, heap_edge, size + 1
+
+
+@_kernel(
+    _PATH(
+        _I8,
+        _I4,
+        _I4,
+        _I4,
+        _F8,
+        _U1,
+        _U1,
+        _I8,
+        _I8,
+        types.int64,
+        types.int64,
+        types.int64,
+        types.int64,
+        types.float64,
+    )
+)
+def dijkstra_edges_masked(
+    out_indptr: I64,
+    out_edges: I32,
+    edge_u: I32,
+    edge_v: I32,
+    weights: F64,
+    enter: U8,
+    banned: U8,
+    trans_indptr: I64,
+    trans_key: I64,
+    src: int,
+    dst: int,
+    entry_edge: int,
+    exit_edge: int,
+    max_cost: float,
+) -> tuple[bool, I32, I32]:
+    """(found, nodes, edges): a cheapest path src → dst over edge states whose every turn is
+    allowed, as `backend.py` defines it; src ≠ dst, both enterable, max_cost ≥ 0. Not found
+    when the first end state popped has a path that enters a node twice."""
+    m = out_edges.shape[0]
+    # Per edge state: 0 not reached, 1 reached (dist and pred hold its best so far), 2 settled.
+    state = np.zeros(m, dtype=np.uint8)
+    dist = np.empty(m, dtype=np.float64)
+    pred = np.empty(m, dtype=np.int32)
+    heap_cost = np.empty(64, dtype=np.float64)
+    heap_edge = np.empty(64, dtype=np.int64)
+    size = 0
+    # The start states: kept at their own weight when within max_cost, even an infinite one
+    # (no other state can reach them: no state enters src).
+    for k in range(out_indptr[src], out_indptr[src + 1]):
+        f = out_edges[k]
+        w = edge_v[f]
+        if w == src or banned[f] or not enter[w]:
+            continue
+        if entry_edge >= 0 and not turn_allowed(trans_indptr, trans_key, edge_v, entry_edge, f):
+            continue
+        c = weights[f]
+        if c <= max_cost:
+            state[f] = 1
+            dist[f] = c
+            pred[f] = -1
+            heap_cost, heap_edge, size = _heap_push(heap_cost, heap_edge, size, c, f)
+    while size > 0:
+        cost = heap_cost[0]
+        e = heap_edge[0]
+        size -= 1
+        if size > 0:  # the last entry to the root, then down while a child is less
+            last_cost = heap_cost[size]
+            last_edge = heap_edge[size]
+            i = 0
+            while True:
+                child = 2 * i + 1
+                if child >= size:
+                    break
+                right = child + 1
+                if right < size and (
+                    heap_cost[right] < heap_cost[child]
+                    or (
+                        heap_cost[right] == heap_cost[child] and heap_edge[right] < heap_edge[child]
+                    )
+                ):
+                    child = right
+                if heap_cost[child] < last_cost or (
+                    heap_cost[child] == last_cost and heap_edge[child] < last_edge
+                ):
+                    heap_cost[i] = heap_cost[child]
+                    heap_edge[i] = heap_edge[child]
+                    i = child
+                else:
+                    break
+            heap_cost[i] = last_cost
+            heap_edge[i] = last_edge
+        if state[e] == 2:
+            continue
+        state[e] = 2
+        v = edge_v[e]
+        if v == dst:
+            if exit_edge >= 0 and not turn_allowed(trans_indptr, trans_key, edge_v, e, exit_edge):
+                continue  # a dead end: any way on would pass dst twice
+            length = 1
+            x = e
+            while pred[x] >= 0:
+                x = pred[x]
+                length += 1
+            nodes = np.empty(length + 1, dtype=np.int32)
+            edges = np.empty(length, dtype=np.int32)
+            nodes[length] = v
+            x = e
+            for k in range(length - 1, -1, -1):
+                edges[k] = x
+                nodes[k] = edge_u[x]
+                x = pred[x]
+            order = np.sort(nodes)
+            for k in range(length):
+                if order[k] == order[k + 1]:  # a node entered twice: an illegal path
+                    return False, np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)
+            return True, nodes, edges
+        for k in range(out_indptr[v], out_indptr[v + 1]):
+            f = out_edges[k]
+            w = edge_v[f]
+            # (numba cannot type `w in (src, v)` on a tuple of an int64 and an int32)
+            if w == src or w == v or state[f] == 2 or banned[f] or not enter[w]:  # noqa: SIM109
+                continue
+            if not turn_allowed(trans_indptr, trans_key, edge_v, e, f):
+                continue
+            c = cost + weights[f]
+            if c <= max_cost and c < (dist[f] if state[f] == 1 else np.inf):
+                state[f] = 1
+                dist[f] = c
+                pred[f] = e
+                heap_cost, heap_edge, size = _heap_push(heap_cost, heap_edge, size, c, f)
+    return False, np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)

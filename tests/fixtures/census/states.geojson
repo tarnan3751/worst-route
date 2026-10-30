@@ -1,0 +1,4 @@
+{"type": "FeatureCollection", "features": [
+{"type": "Feature", "properties": {"STATEFP": "91", "STATENS": "09100000", "GEOIDFQ": "0400000US91", "GEOID": "91", "STUSPS": "WL", "NAME": "Westland", "LSAD": "00"}, "geometry": {"type": "Polygon", "coordinates": [[[-122.7, 45.5], [-122.674, 45.5], [-122.674, 45.54], [-122.7, 45.54], [-122.7, 45.5]]]}},
+{"type": "Feature", "properties": {"STATEFP": "92", "STATENS": "09200000", "GEOIDFQ": "0400000US92", "GEOID": "92", "STUSPS": "EL", "NAME": "Eastland", "LSAD": "00"}, "geometry": {"type": "Polygon", "coordinates": [[[-122.674, 45.5], [-122.64, 45.5], [-122.64, 45.54], [-122.674, 45.54], [-122.674, 45.5]]]}}
+]}

@@ -1,0 +1,4 @@
+{"type": "FeatureCollection", "features": [
+{"type": "Feature", "properties": {"STATEFP": "91", "PLACEFP": "00100", "GEOID": "9100100", "NAME": "Westville", "NAMELSAD": "Westville city", "STUSPS": "WL", "STATE_NAME": "Westland", "LSAD": "25"}, "geometry": {"type": "Polygon", "coordinates": [[[-122.685, 45.512], [-122.676, 45.512], [-122.676, 45.517], [-122.685, 45.517], [-122.685, 45.512]]]}},
+{"type": "Feature", "properties": {"STATEFP": "91", "PLACEFP": "00400", "GEOID": "9100400", "NAME": "Faraway", "NAMELSAD": "Faraway village", "STUSPS": "WL", "STATE_NAME": "Westland", "LSAD": "47"}, "geometry": {"type": "Polygon", "coordinates": [[[-122.699, 45.535], [-122.695, 45.535], [-122.695, 45.539], [-122.699, 45.539], [-122.699, 45.535]]]}}
+]}

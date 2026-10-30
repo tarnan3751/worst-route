@@ -356,3 +356,63 @@ GEOCODE_CACHE_TTL_S = 30 * 86400.0
 GEOCODE_LIMIT = 5
 GEOCODE_TIMEOUT_S = 10.0
 GEOCODE_MAX_QUERY_CHARS = 200
+
+
+# Census boundaries (`docs/reference/presentation.md`, **Places**). CENSUS_VINTAGE is the year of
+# the cartographic boundary files `tools/fetch_census.sh` fetches and `worst-route aux places`
+# reads; STATES maps each state's Geofabrik slug (a Region's `state`) to its USPS code and FIPS
+# code, for the 50 states and DC.
+CENSUS_VINTAGE = 2025
+STATES: dict[str, tuple[str, str]] = {
+    "alabama": ("AL", "01"),
+    "alaska": ("AK", "02"),
+    "arizona": ("AZ", "04"),
+    "arkansas": ("AR", "05"),
+    "california": ("CA", "06"),
+    "colorado": ("CO", "08"),
+    "connecticut": ("CT", "09"),
+    "delaware": ("DE", "10"),
+    "district-of-columbia": ("DC", "11"),
+    "florida": ("FL", "12"),
+    "georgia": ("GA", "13"),
+    "hawaii": ("HI", "15"),
+    "idaho": ("ID", "16"),
+    "illinois": ("IL", "17"),
+    "indiana": ("IN", "18"),
+    "iowa": ("IA", "19"),
+    "kansas": ("KS", "20"),
+    "kentucky": ("KY", "21"),
+    "louisiana": ("LA", "22"),
+    "maine": ("ME", "23"),
+    "maryland": ("MD", "24"),
+    "massachusetts": ("MA", "25"),
+    "michigan": ("MI", "26"),
+    "minnesota": ("MN", "27"),
+    "mississippi": ("MS", "28"),
+    "missouri": ("MO", "29"),
+    "montana": ("MT", "30"),
+    "nebraska": ("NE", "31"),
+    "nevada": ("NV", "32"),
+    "new-hampshire": ("NH", "33"),
+    "new-jersey": ("NJ", "34"),
+    "new-mexico": ("NM", "35"),
+    "new-york": ("NY", "36"),
+    "north-carolina": ("NC", "37"),
+    "north-dakota": ("ND", "38"),
+    "ohio": ("OH", "39"),
+    "oklahoma": ("OK", "40"),
+    "oregon": ("OR", "41"),
+    "pennsylvania": ("PA", "42"),
+    "rhode-island": ("RI", "44"),
+    "south-carolina": ("SC", "45"),
+    "south-dakota": ("SD", "46"),
+    "tennessee": ("TN", "47"),
+    "texas": ("TX", "48"),
+    "utah": ("UT", "49"),
+    "vermont": ("VT", "50"),
+    "virginia": ("VA", "51"),
+    "washington": ("WA", "53"),
+    "west-virginia": ("WV", "54"),
+    "wisconsin": ("WI", "55"),
+    "wyoming": ("WY", "56"),
+}

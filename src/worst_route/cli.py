@@ -44,6 +44,14 @@ job cancelled, a worker failed) go to the same log. `--geocoder nominatim|none` 
 `--nominatim-url` set the geocoding proxy (`docs/reference/api.md`, **Geocoding**), whose
 cache is `geocode.sqlite` beside the store; it prints the geocoder and the User-Agent it sends,
 the contact from `WORST_ROUTE_CONTACT` included.
+
+`aux places` writes the places index (`docs/reference/presentation.md`, **Places**) under
+`<WORST_ROUTE_DATA>/aux/places/` from the Census files `tools/fetch_census.sh` fetched into
+`--census-dir` (default `<WORST_ROUTE_DATA>/aux/census/`): the states, their outlines, and the
+places of every state's file present that meet the region's bbox (its latest build's
+`params.bbox`, else `config.REGIONS`'s). It prints what it wrote, with a warning line on stderr
+for each state the bbox meets whose places file is absent; a missing state file is one line and
+exit 1.
 """
 
 import json
@@ -1047,3 +1055,54 @@ def serve(
     log_config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
     log_config["loggers"]["worst_route"] = {"handlers": ["default"], "level": "INFO"}
     uvicorn.run(application, host=host, port=port, log_config=log_config)
+
+
+aux_app = typer.Typer(help="Data beside the builds: the Census places index.", no_args_is_help=True)
+app.add_typer(aux_app, name="aux")
+
+
+def _region_bbox(region: str) -> tuple[float, float, float, float] | None:
+    """The region's latest build's bbox (`params.bbox`), else its own in `config.REGIONS`."""
+    latest = layout.latest_file(region)
+    if latest.exists():
+        meta = layout.build_dir(region, latest.read_text().strip()) / "meta.json"
+        if meta.exists():
+            bbox = json.loads(meta.read_text())["params"].get("bbox")
+            if bbox is not None:
+                west, south, east, north = (float(v) for v in bbox)
+                return west, south, east, north
+    return REGIONS[region].bbox
+
+
+@aux_app.command("places")
+def aux_places(
+    region: RegionOption,
+    census_dir: Annotated[
+        Path | None,
+        typer.Option(help="The Census files (default: <data>/aux/census).", file_okay=False),
+    ] = None,
+) -> None:
+    """Write the places index (states, outlines, towns) from the Census files."""
+    from worst_route.presentation import places
+
+    directory = census_dir or places.census_dir()
+    states, outlines = places.state_files(directory)
+    for path in (states, outlines):
+        _require(path, "run `tools/fetch_census.sh` first")
+    written = places.write_places(
+        region,
+        _region_bbox(region),
+        states=states,
+        outlines=outlines,
+        places=places.place_files(directory),
+        out_dir=places.places_dir(),
+    )
+    typer.echo(f"wrote {written.states} ({written.n_states} states)")
+    typer.echo(f"wrote {written.outlines} ({written.n_outlines} outlines)")
+    for state in written.missing:
+        typer.echo(
+            f"missing places for {state.usps}: run tools/fetch_census.sh {state.fips}", err=True
+        )
+    by_state = ", ".join(f"{usps} {n}" for usps, n in written.by_state.items())
+    total = sum(written.by_state.values())
+    typer.echo(f"wrote {written.places} ({total} places{': ' + by_state if by_state else ''})")

@@ -1,0 +1,4 @@
+{"type": "FeatureCollection", "features": [
+{"type": "Feature", "properties": {"STATEFP": "92", "PLACEFP": "00200", "GEOID": "9200200", "NAME": "Middlefield", "NAMELSAD": "Middlefield CDP", "STUSPS": "EL", "STATE_NAME": "Eastland", "LSAD": "57"}, "geometry": {"type": "Polygon", "coordinates": [[[-122.673, 45.512], [-122.67, 45.512], [-122.67, 45.517], [-122.673, 45.517], [-122.673, 45.512]]]}},
+{"type": "Feature", "properties": {"STATEFP": "92", "PLACEFP": "00300", "GEOID": "9200300", "NAME": "Eastbrook", "NAMELSAD": "Eastbrook town", "STUSPS": "EL", "STATE_NAME": "Eastland", "LSAD": "43"}, "geometry": {"type": "Polygon", "coordinates": [[[-122.669, 45.518], [-122.664, 45.518], [-122.664, 45.523], [-122.669, 45.523], [-122.669, 45.518]]]}}
+]}

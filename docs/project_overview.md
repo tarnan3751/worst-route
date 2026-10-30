@@ -1,7 +1,8 @@
 # Worst Route — project overview
 
-Last updated: 2026-10-30. Snapshot taken after M1's bootstrap landed: the plan is written and
-the project scaffolding is built; no part of the app exists yet.
+Last updated: 2026-10-30. Snapshot taken after the graph package landed: the plan is written;
+the project scaffolding, the pipeline's first three steps and the graph package are built; the
+rest of the pipeline and the engine do not exist yet.
 
 This file answers three questions: what the project is meant to become, how far along it is, and
 what has been decided. It is written for a human reader and for an AI agent picking up the
@@ -72,6 +73,10 @@ The pipeline's first three steps are built (`docs/reference/pipeline.md`): `pipe
 fetches and md5-verifies a Geofabrik state extract, `filter` keeps the drivable roads, clipped
 to the region's bbox, and a POI table, and `build` makes the raw directed graph with the one-way
 rules applied, saved as an intermediate stage.
+The graph package is built (`docs/reference/graph.md`): a build's arrays and their
+memory-mapped on-disk format with its `graph_version`, the `GraphBackend` protocol and its
+pure-Python reference backend, snapping with the leash and bubble masks, and the builders tests
+use for small graphs.
 The workflow scaffolding exists: `CLAUDE.md`, the four agents,
 `tools/gates.sh`, `tools/land_series.sh`, this overview, `docs/PLAN.md`. The M1 bootstrap is
 built: the uv project (Python 3.12, `src` layout, the M1 dependencies), the gate running ruff,
@@ -85,7 +90,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 
 | Milestone | Status | Summary |
 |---|---|---|
-| M1 — Portland, distance mode, CLI | In progress | bootstrap and the pipeline's first three steps (download, filter, build) built; remaining: the rest of the Portland pipeline (cleanup to qa), the graph package (networkx backend), the engine (snapping, seed route, splice loop, distance objective), the validator, `worst-route plan` printing a validated route and its ratio |
+| M1 — Portland, distance mode, CLI | In progress | bootstrap, the pipeline's first three steps (download, filter, build) and the graph package built; remaining: the rest of the Portland pipeline (cleanup to qa), the engine (snapping, seed route, splice loop, distance objective), the validator, `worst-route plan` printing a validated route and its ratio |
 | M2 — API + map, live growth | Planned | CSR + Numba backend; FastAPI jobs + SSE; MapLibre frontend; targets by ratio and duration; reroll, make it worse |
 | M3 — Modes and constraints | Planned | turn-aware kernel, never/only-left; slowest time; collectibles; brands; hard mode; stage B transition tables; alphabet search |
 | M4 — Presentation | Planned | directions, stats, toasts, comparisons, share image, geocoding proxy, share links |
@@ -119,13 +124,15 @@ Product decisions the owner made on 2026-10-30 while the plan was written:
 Technical decisions the plan makes (the coordinator, 2026-10-30; any can be reversed as a tier A
 brief):
 
-- **networkx is the reference backend; CSR arrays + Numba are the production backend**, behind
-  a `GraphBackend` protocol from M1. igraph/rustworkx are not expected to be needed: the hot
-  loop is masked, bounded Dijkstra, which they do not offer without copying.
+- **The graph is CSR arrays behind a `GraphBackend` protocol**: a pure-Python reference
+  backend in M1, Numba kernels in production from M2, networkx only as the tests' oracle.
+  igraph/rustworkx are not expected to be needed: the hot loop is masked, bounded Dijkstra,
+  which they do not offer without copying.
 - **OSMnx for its cleanup algorithms, not for loading**; array-based replacements for
   `simplify_graph` and `consolidate_intersections` at national scale (M5).
 - **State extracts, never the full US file**; cross-border ways deduplicated by id.
-- **On-disk format: Parquet + NPZ + `meta.json`, memory-mapped**; not GraphML or pickle.
+- **On-disk format: one `.npy` per array + `strings.json` + `meta.json`, memory-mapped**; not
+  GraphML or pickle, and not NPZ (whose members NumPy cannot map) or Parquet for the graph.
 - **Consolidation in two stages**: OSMnx stage A with per-node tolerances (15 m on arterial
   crossings, 8 m elsewhere, `max_length=60`, dead ends kept) and a custom stage B that turns
   interchanges and roundabouts into super-junctions with allowed-transition tables.

@@ -2,7 +2,7 @@
 
 The least efficient way to get anywhere in the US. The user sets a start, an end, and optional stops; the app computes a hilariously inefficient route that **never repeats an intersection and never drives the same road twice**, respecting one-way streets.
 
-Plan written 2026-10-30. No code exists yet.
+Plan written 2026-10-30, before any code existed.
 
 ## 0. Decisions already made
 
@@ -20,7 +20,7 @@ Plan written 2026-10-30. No code exists yet.
 
 Stack push-backs (details in §1.3):
 
-1. **networkx is the reference backend, not the production one.** The engine's hot loop is "bounded Dijkstra with forbidden node/edge masks". Neither igraph nor rustworkx offers masked search without copying the graph, so the swap target is a **CSR array backend with Numba kernels**, defined behind a `GraphBackend` protocol from day one. igraph/rustworkx stay possible implementations of the protocol but are not expected to be needed.
+1. **networkx is the tests' oracle, not a backend.** The engine's hot loop is "bounded Dijkstra with forbidden node/edge masks". Neither igraph nor rustworkx offers masked search without copying the graph, so the graph is **CSR arrays**, searched behind a `GraphBackend` protocol from day one: a pure-Python reference backend over the arrays in M1, **Numba kernels** in production from M2. igraph/rustworkx stay possible implementations of the protocol but are not expected to be needed.
 2. **OSMnx is used for its cleanup algorithms, not for loading.** It cannot read `.osm.pbf`. We parse with pyosmium, build a `MultiDiGraph` in OSMnx's attribute conventions, then call `simplify_graph` and `consolidate_intersections`. At national scale networkx memory is prohibitive, so those two steps get array-based reimplementations in the scaling milestone.
 3. **Never download `us-latest.osm.pbf` (11.4 GB).** Download the 50 state extracts instead. Same bytes in total, but each state is filtered independently, cached, resumable, and parallelizable. Ways that cross state lines appear in both extracts and are deduplicated by OSM id when merged.
 
@@ -38,7 +38,7 @@ Stack push-backs (details in §1.3):
                                                    │        │
                                                    │        ▼
                                                    │   ProcessPool workers (N = cores − 2)
-                                                   │     each mmaps data/graphs/<region>/<build>/*.npz  (shared page cache)
+                                                   │     each mmaps data/graphs/<region>/<build>/*.npy  (shared page cache)
                                                    │     runs engine.worsen(...) as a generator → progress events
                                                    │
                                                    ├── route store (sqlite): route_id → request, seed, node ids, graph build id
@@ -84,15 +84,18 @@ worst-route/
 │   │   ├── connectivity.py     # SCC per tier, fragmentation report
 │   │   ├── enrich.py           # maxspeed, identities, collectibles, brands, states, places
 │   │   ├── tiers.py            # tier masks
-│   │   ├── store.py            # save/load the on-disk format (§2.7)
+│   │   ├── store.py            # the save step: the cleaned graph as GraphData, written by graph/store.py (§2.7)
 │   │   └── qa.py               # GeoJSON/HTML QA report per build
 │   ├── graph/
+│   │   ├── data.py             # GraphData: one build's arrays, the format table, validation
+│   │   ├── store.py            # write and mmap-read a build directory, graph_version (§2.7)
 │   │   ├── backend.py          # GraphBackend protocol + Route-independent primitives
-│   │   ├── nx_backend.py       # networkx reference implementation (M1, tests)
+│   │   ├── python_backend.py   # pure-Python reference implementation over the arrays (M1; networkx is the tests' oracle)
 │   │   ├── csr_backend.py      # NumPy CSR + Numba kernels (M2+)
 │   │   ├── kernels.py          # numba: masked bounded dijkstra (node-based), edge-state dijkstra (turn-aware), bounded DFS
 │   │   ├── spatial.py          # cKDTree snapping, leash mask, bubble mask
-│   │   └── loader.py           # mmap load, LRU of loaded builds
+│   │   ├── testing.py          # hand-built graphs for tests (make_graph, grid_graph)
+│   │   └── loader.py           # LRU of loaded builds over store.read_build
 │   ├── engine/
 │   │   ├── route.py            # Route dataclass, splice(), used-sets, metrics cache
 │   │   ├── snap.py             # stop snapping incl. pass-through capability + outward fallback
@@ -114,7 +117,7 @@ worst-route/
 ├── frontend/                   # Vite + TS, see §5
 ├── tests/
 │   ├── fixtures/osm/*.osm      # hand-written OSM XML: grid, divided highway, cloverleaf, roundabout, cul-de-sac, private roads
-│   ├── unit/  pipeline/  engine/  api/  property/
+│   ├── unit/  graph/  pipeline/  engine/  api/  property/
 │   └── bench/
 └── scripts/                    # one-off helpers (fetch Census files)
 ```
@@ -235,28 +238,35 @@ Each tier is an edge mask on the master graph plus a node mask after re-running 
 
 ### 2.7 `save` — on-disk format
 
-Recommendation: **Parquet for attribute tables + NPZ for the hot arrays + JSON metadata**, one directory per build. Not GraphML (XML, slow, Portland alone would be hundreds of MB), not networkx pickle (Python-object-heavy, version-fragile, ~1.5 KB per edge, cannot be memory-mapped).
+**One `.npy` file per array + JSON**, one directory per build; `docs/reference/graph.md` is the reference (every array with its dtype, shape and invariants). Not GraphML (XML, slow, Portland alone would be hundreds of MB), not networkx pickle (Python-object-heavy, version-fragile, ~1.5 KB per edge, cannot be memory-mapped), and neither NPZ nor Parquet for the arrays the engine reads: NumPy memory-maps `.npy` files only (`.npz` members are read whole), and Parquet is not mappable.
 
 ```
 data/graphs/<region>/<build_id>/
-  meta.json          build params, source files + md5 + OSM timestamp, counts, CRS, tier definitions, sha256 "graph_version"
-  nodes.parquet      id, lon, lat, x, y, kind (plain|clusterA|interchange|roundabout), state_fips, pass_through, delay_s
-  node_members.npz   CSR: original OSM node ids per node (cluster_members)
-  edges.parquet      id, u, v, length_m, speed_kmh, time_s, highway (enum), tier, name, ref, identity_id, unit_id,
-                     bridge, tunnel, toll, toll_booth_n, level_crossing_n, bearing_in, bearing_out, osm_way_ids
-  csr.npz            indptr_out, edges_out (edge ids sorted by source), indptr_in, edges_in, edge_u, edge_v (int32),
-                     length (float32), time (float32), tier (uint8), bearing_in/out (int16 degrees)
-  geometry.npz       coord_indptr (int64 per edge), coords (float32 [N,2] lon/lat), osmnode_indptr, osmnode_ids (int64)
-  twins.npz          CSR adjacency edge → twin edges
-  transitions.npz    CSR: for super-nodes, allowed (in_edge, out_edge) pairs + internal path ids
-  internal_paths.npz coordinate runs for drawing through super-junctions
+  meta.json          region, build_id, crs_epsg, created, pipeline_version, counts, params (build parameters),
+                     sources (files + md5 + OSM timestamp), sha256 "graph_version"
+  strings.json       names, refs, identities: the tables edge_name / edge_ref / edge_identity index into
+  arrays/<name>.npy  one file per array:
+    nodes            node_lon/lat/x/y, node_kind (plain|cluster|interchange|roundabout), node_state (FIPS),
+                     node_pass_through, node_delay_s; member_indptr + member_osm_ids (original OSM node ids per node)
+    edges            edge_u/v (int32), length_m, speed_kmh, time_s (float32), highway (enum), tier, name, ref,
+                     identity, unit, flags (bridge, tunnel, toll, roundabout, link), toll_booths, level_crossings,
+                     bearing_in/out (int16 degrees); way_indptr + way_osm_ids
+    adjacency        out_indptr + out_edges, in_indptr + in_edges (each node's edges in ascending edge id)
+    geometry         coord_indptr + coords (float32 [N,2] lon/lat), osmnode_indptr + osmnode_ids (int64)
+    twins            twin_indptr + twin_edges: CSR adjacency edge → twin edges, symmetric
+    transitions      trans_node, trans_in, trans_out: allowed (in_edge, out_edge) pairs at super-nodes, sorted
+    tiers            tier_node_mask [T0..T4, n], tier_edge_mask [T0..T4, m], after SCC
+  stages/            the pipeline's intermediate state between its steps (docs/reference/pipeline.md)
+  later, with their steps:
+  internal_paths     coordinate runs for drawing through super-junctions (stage B)
   pois.parquet       brand POIs (§2.5)
   places.parquet     Gazetteer places with radius_m (national file, shared)
-  tiers/T0..T4.npz   node_mask, edge_mask after SCC
   qa/                GeoJSON: twin pairs, super-junctions, dropped components, snapping oddities; qa.html summary
 ```
 
-Why: `np.load(mmap_mode="r")` makes load time ~0 and lets worker processes share memory; DuckDB and QGIS read Parquet directly for debugging; the format is language-neutral if a Rust kernel ever replaces Numba. The networkx backend is built from these arrays on demand (seconds at city scale).
+Edge ids are sorted by (u, v, original order), so each node's out-edges are one contiguous run of ascending ids. `graph_version` is the sha256 over each array's name, dtype, shape and bytes in a fixed order, then `strings.json`, then the build `params`; nothing else in `meta` enters it, so rewriting the same build reproduces it. `graph/store.py` writes a build into its build directory, beside the pipeline's `stages/`: it stages the files in a temporary sibling directory, moves `strings.json` and `arrays/` in, and moves `meta.json` in last as the commit marker, so a reader never sees half a build. A directory that already has `meta.json` is refused, so a build is never overwritten; `arrays/` or `strings.json` without `meta.json` are a crashed write's leftovers and are replaced.
+
+Why: `np.load(mmap_mode="r")` makes load time ~0 and lets worker processes share memory; `.npy` is language-neutral if a Rust kernel ever replaces Numba. Parquet exports of the node and edge tables, for DuckDB and QGIS, become a `qa` convenience later.
 
 ### 2.8 `qa`
 
@@ -298,7 +308,7 @@ Rules enforced by `Route.splice()` and re-checked by the validator:
 
 ### 3.2 Snapping stops
 
-- KD-tree on projected node coordinates of the active mask (cKDTree built at load, ~2 s for 5M nodes; cached per build).
+- KD-tree on every node's projected coordinates (cKDTree built at load, ~2 s for 5M nodes; cached per build), filtered by the active mask at query time.
 - Start needs `out_degree ≥ 1`, end needs `in_degree ≥ 1`, intermediate stops need `pass_through` (exists `u→v→w`, `u ≠ w`). A stop at the end of a cul-de-sac cannot be passed through without reusing the mouth node, so it snaps to the nearest pass-through node and the response says so: `"Stop 2 moved 140 m to the nearest through street"`.
 - Dead-end *neighbourhoods* (a subdivision with one entrance) cannot be detected cheaply per node, so the seed-route step handles them: if a leg cannot be built, re-snap that stop to the next-nearest candidates (k = 1..10, expanding radius) and retry. After 10 candidates, fail with `STOP_UNREACHABLE_WITHOUT_REPEAT` and name the stop.
 - Snap distance and the chosen node are returned in the `snapped` event so the UI can show the marker jump.
@@ -485,7 +495,7 @@ class GraphBackend(Protocol):
     def scc_mask(self, edge_mask) -> node_mask
 ```
 
-- `NetworkXBackend` (M1): wraps a `MultiDiGraph`; forbids via a weight function returning `None` (networkx treats that as a hidden edge). ~5–10 µs per relaxed edge.
+- `PythonBackend` (M1): pure Python + `heapq` over the build's CSR arrays; the reference implementation, which networkx checks in the tests. M1's surface is `dijkstra`, `simple_paths_dfs` and `largest_scc_mask` (this block's `scc_mask`); the other calls arrive with their users. ~0.3 µs per relaxed edge measured on the dev machine (`docs/reference/graph.md`).
 - `CSRBackend` (M2+): NumPy arrays + Numba kernels; ~0.1–0.5 µs per relaxed edge. Kernels take the masks as `uint8` arrays, use a binary heap, support `max_cost` early exit, and return parent arrays for path reconstruction. This is the production backend; igraph/rustworkx would be strictly worse for masked search.
 
 ### 3.11 Determinism and reproducibility
@@ -702,9 +712,9 @@ Pipeline wall-clock on the M5 (single process unless noted):
 
 Engine throughput:
 
-- One bounded masked Dijkstra over a ~50k-node ball: ~20–50 ms with Numba, ~1–2 s with networkx.
+- One bounded masked Dijkstra over a ~50k-node ball: ~20–50 ms with Numba, ~1–2 s with networkx. The pure-Python reference backend (M1) measures ~50 ms of CPU for a search across a 40k-node grid (~0.3 µs per relaxed edge, `docs/reference/graph.md`).
 - Waypoint attempt = 2 searches; expect **10–20 attempts/s/core** with CSR at city scale, **~0.5/s** with networkx. Success rate ~50%.
-- 20 s budget → CSR: 100–200 accepted splices, ratios of 20–100× for a cross-town trip. networkx M1: ~5–10 splices, enough to prove the approach, not enough for a satisfying demo, which is why the CSR backend is the first task of M2.
+- 20 s budget → CSR: 100–200 accepted splices, ratios of 20–100× for a cross-town trip. networkx: ~5–10 splices, enough to prove the approach, not enough for a satisfying demo, which is why the CSR backend is the first task of M2.
 - At state/national leashes the search ball grows (100 km on T2 ≈ 300k nodes ≈ 0.3 s/search). The ambition radius bounds searches, not the leash, so attempts stay ~50–100 ms; the number of splices needed for a "9 hour" route is only a few hundred.
 - Leash mask: ~0.5 s for 5M nodes (shapely 2 vectorised). Snapping: µs after the KD-tree exists; tree build ~2 s for 5M nodes, cached.
 
@@ -733,14 +743,14 @@ Deliverable: `worst-route plan --region portland --from 45.5231,-122.6765 --to 4
 3. Cleanup: exclusions, OSMnx simplify, consolidate stage A, **stage B as plain merge (all transitions allowed)**, twin detection, SCC + report.
 4. Enrich: length, speed defaults (needed for time stats later anyway), identities, `pass_through`.
 5. Save/load in the §2.7 format; `qa` report with GeoJSON layers.
-6. `GraphBackend` protocol + `NetworkXBackend`.
+6. `GraphBackend` protocol + `PythonBackend` (pure Python over the arrays; networkx as the tests' oracle).
 7. Engine: snapping with fallback, seed route with disjoint legs, `Route.splice`, `worsen` loop with the three detour strategies, distance objective, budget, progress events to stdout.
 8. **Validator** (§8.1) and the fixture suite (§8.2). The CLI runs the validator on every result and refuses to print a route that fails.
-9. Acceptance: on 20 random Portland stop pairs, 30 s budget: validator passes 20/20; median ratio ≥ 10× with the networkx backend; two seeds give Jaccard < 0.3; a cul-de-sac intermediate stop produces a snap note instead of a failure.
+9. Acceptance: on 20 random Portland stop pairs, 30 s budget: validator passes 20/20; median ratio ≥ 10× with the reference backend; two seeds give Jaccard < 0.3; a cul-de-sac intermediate stop produces a snap note instead of a failure.
 
 ### M2 — API + map, live growth
 
-1. `CSRBackend` + Numba kernels (node-state Dijkstra, bounded DFS); parity tests against the networkx backend on fixtures; benchmark ≥ 10 attempts/s at Portland scale.
+1. `CSRBackend` + Numba kernels (node-state Dijkstra, bounded DFS); parity tests against the reference backend on fixtures; benchmark ≥ 10 attempts/s at Portland scale.
 2. FastAPI app: `/regions`, `/snap`, `/jobs` + SSE, `/routes/{id}`, `/routes/{id}/geojson`, sqlite route store, worker pool.
 3. Frontend: map, stop picker, run controls, route layer with splice application, ratio counter; settings panel with inefficiency target (max / ratio / duration), tier override, leash; Reroll; Make it worse.
 4. Target modes (ratio and duration) in the engine, including run replacement for trimming.
@@ -803,7 +813,7 @@ Checks:
 - **Pipeline unit tests:** one-way rules, exclusions, implied oneway on motorways, maxspeed parsing, ref/name normalisation, twin detection on the divided-highway fixture (exact expected pairs), stage B cluster membership on the cloverleaf fixture, SCC report.
 - **Engine unit tests:** splice bookkeeping, snapping fallbacks, seed route disjointness and the penalty re-solve, each detour strategy returns only legal paths, objective `delta` equals full re-score (checked on every accepted splice in test mode).
 - **Property tests** (hypothesis): random strongly-connected digraphs with random twins → `worsen()` output always passes the validator; score never decreases in max modes; target modes land within tolerance or report why.
-- **Backend parity:** networkx vs CSR kernels give identical paths on fixtures (ties broken by edge id in both).
+- **Backend parity:** the pure-Python reference backend and the CSR kernels give identical paths on fixtures (the same tie rule, `docs/reference/graph.md`); networkx checks the reference backend's costs and path sets.
 - **Determinism/golden:** fixed seed on the Portland build → identical node list; recorded in `tests/golden/` with the `graph_version` (regenerated deliberately when the build changes).
 - **Variety:** two seeds → Jaccard(edge sets) < 0.3 on the Portland acceptance pairs.
 - **API tests:** httpx `AsyncClient` against the app with a fixture build; SSE event order; cancel; reconnect with `Last-Event-ID`.
@@ -818,7 +828,7 @@ Checks:
 | Consolidation wrong in either direction | False violations or impossible routes | Per-node tolerance, `max_length`, fixtures, QA map; validator check 4 catches leaks |
 | Twin detection misses pairs | Same highway both ways | Motorway pairing coverage metric in QA; conservative bans; hard mode as a user-facing fallback |
 | OSM data quality (missing `oneway` on ramps, `access` on bridges) | Odd routes, dropped components | SCC report with map; implied-oneway rules; per-region override file for known bad ways |
-| networkx too slow for a good demo | M1 underwhelms | Expected; CSR backend is M2 step 1 |
+| The pure-Python reference backend too slow for a good demo | M1 underwhelms | Expected; CSR backend is M2 step 1 |
 | OSMnx cannot scale to national | Blocks M5 | Array rewrite scheduled with parity tests |
 | macOS multiprocessing (`spawn`) + large graphs | Memory blow-up | mmap-only loads, loader test asserting RSS per worker |
 | Nominatim policy violations | Blocked geocoding | Proxy, 1 rps bucket, cache, UA string, button not type-ahead, Photon when public |

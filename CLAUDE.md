@@ -18,7 +18,9 @@ A section named in bold is a heading of this file or of a doc.
 
 **The bootstrap is built**: the uv project, the gate wired to ruff, mypy and pytest, and the
 CLI. Of the pipeline steps, `download`, `filter` and `build` are real
-(`docs/reference/pipeline.md`) and the rest are stubs; no other part of the app exists yet. The plan
+(`docs/reference/pipeline.md`) and the rest are stubs. The graph package is built too
+(`docs/reference/graph.md`): a build's arrays and on-disk format, the backend protocol and its
+pure-Python reference backend, snapping and masks. No other part of the app exists yet. The plan
 (`docs/PLAN.md`, 2026-10-30) is written and its open questions answered as far as
 `docs/project_overview.md` §3 records. The next step is the rest of **M1**: the
 Portland build, the distance objective, a CLI that prints a route and its inefficiency ratio,
@@ -30,7 +32,8 @@ and the validator. `docs/project_overview.md` holds the roadmap (§2.2) and the 
   wheels are uneven there.
 - **pyosmium 4** for reading `.osm.pbf`; **OSMnx 2.1** for `simplify_graph` and
   `consolidate_intersections` at city/state scale (it never loads data; it cannot read PBF);
-  **networkx** as the reference graph backend; **NumPy CSR + Numba** as the production backend;
+  **NumPy** CSR arrays as the graph, searched by a pure-Python reference backend (M1) and
+  **Numba** kernels in production (M2), with **networkx** as the tests' oracle;
   **shapely 2**, **scipy**, **pyarrow**; **FastAPI** + **uvicorn** with SSE for progress;
   **matplotlib** for the share image; **typer** for the CLI; **pytest** + **hypothesis**.
 - **Frontend: Vite + TypeScript, no framework, MapLibre GL JS.** `npm` only under `frontend/`.
@@ -80,7 +83,7 @@ first built and listed here when it exists.
 | Area | Code | Plan | Reference |
 |---|---|---|---|
 | Pipeline: download, filter, build, exclusions, simplify, consolidate (stages A and B), carriageway twins, connectivity, enrich, tiers, store, qa | `src/worst_route/pipeline/` | §2 | `docs/reference/pipeline.md` |
-| Graph: the backend protocol, networkx and CSR backends, Numba kernels, spatial (snapping, leash, bubbles), loader | `src/worst_route/graph/` | §3.5, §3.9, §3.10 | *(when built)* `docs/reference/graph.md` |
+| Graph: a build's arrays and on-disk format, the backend protocol, the reference and CSR backends, Numba kernels, spatial (snapping, leash, bubbles), test builders, loader | `src/worst_route/graph/` | §2.7, §3.5, §3.9, §3.10 | `docs/reference/graph.md` |
 | Engine: `Route`, snapping, the seed route, detours, the worsen loop, the validator, exact mode | `src/worst_route/engine/` | §3.1–3.4, §3.11–3.13 | *(when built)* `docs/reference/engine.md` |
 | Objectives and constraints: the interface, each mode, the alphabet search | `src/worst_route/engine/objectives/`, `alphabet_search.py` | §3.6–3.8 | *(when built)* `docs/reference/objectives.md` |
 | API: jobs, SSE, routes, geocode proxy, workers | `src/worst_route/api/`, `geocode/` | §4 | *(when built)* `docs/reference/api.md` |
@@ -118,7 +121,8 @@ really gives the same route), so treat them as hard rules.
 - The engine never copies or subgraphs the graph. Tier, leash, bubbles, forbidden nodes and
   banned edges are boolean masks passed to the kernels.
 - Only `graph/` touches the CSR arrays; objectives and the engine go through `GraphBackend`.
-  The networkx and CSR backends give identical paths on the fixtures (ties by edge id).
+  The reference (pure-Python) and Numba backends give identical paths on the fixtures (the
+  tie rule in `docs/reference/graph.md`); networkx is the tests' oracle.
 
 ### Objectives are terms, the engine is one loop
 
@@ -133,8 +137,8 @@ really gives the same route), so treat them as hard rules.
 - Steps are idempotent and content-hashed; `data/` is gitignored and never read by the gate.
 - **Tests use the fixtures** under `tests/fixtures/osm/`, never `data/`, and never the network.
   A test that needs a built graph carries `@pytest.mark.data`.
-- The on-disk format is `docs/PLAN.md` §2.7 (Parquet + NPZ + `meta.json`); a change to it
-  bumps the build id and is tier A.
+- The on-disk format is `docs/PLAN.md` §2.7 (one `.npy` per array, `strings.json`,
+  `meta.json`; `docs/reference/graph.md`); a change to it bumps the build id and is tier A.
 - Speeds, tier definitions, class allowlists and defaults live in `src/worst_route/config.py`
   or data files, not scattered in code.
 
@@ -161,7 +165,7 @@ docs/            PLAN.md (the design); project_overview.md (scope, status, roadm
 data/            gitignored: raw/, filtered/, aux/, graphs/<region>/<build_id>/
 src/worst_route/ config, cli; pipeline/, graph/, engine/ (objectives/), presentation/, geocode/, api/
 frontend/        Vite + TS app: src/{main,state,api,map,stops,settings,run,toasts,directions,share}
-tests/           fixtures/osm/*.osm, unit/, pipeline/, engine/, api/, property/, golden/, bench/
+tests/           fixtures/osm/*.osm, unit/, graph/, pipeline/, engine/, api/, property/, golden/, bench/
 tools/           gates.sh, land_series.sh; later: fetch_census.sh, bench
 .claude/agents/  scout, researcher, developer, reviewer
 .github/         workflows/gate.yml: the gate on every push and pull request
@@ -179,7 +183,8 @@ tools/           gates.sh, land_series.sh; later: fetch_census.sh, bench
 - Numba kernels take plain arrays and scalars; no Python objects, no dicts; masks are `uint8`.
 - `multiprocessing` on macOS uses `spawn`: workers import the package fresh and must mmap, never
   receive a graph by pickling.
-- Parquet via `pyarrow`; NPZ via `np.load(mmap_mode="r")` (not `allow_pickle`).
+- Build arrays are `.npy` files read with `np.load(mmap_mode="r", allow_pickle=False)`; NumPy
+  cannot memory-map `.npz` members. Parquet via `pyarrow`.
 - Bearings are degrees clockwise from north; turn deltas are wrapped to `(−180, 180]`.
 - GeoJSON is `[lon, lat]`. MapLibre's `LngLat` is `[lng, lat]`. Requests are `{lat, lon}`.
 - 4 spaces in Python, 2 in TypeScript (`.editorconfig`); ruff formats Python.

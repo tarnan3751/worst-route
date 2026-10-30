@@ -8,11 +8,14 @@ in `CLAUDE.md`, **Agent workflow**; this file is the how-it-works.
 What exists: `tests/conftest.py`, which documents the `data` marker; `tests/unit/`, with the
 config and CLI tests (typer's `CliRunner`); `tests/pipeline/`, with the pipeline step tests and a
 `conftest.py` whose autouse fixture fails any test that would reach the network and whose
-`data_dir` fixture points `WORST_ROUTE_DATA` at a temporary directory; and `tests/fixtures/osm/`,
-hand-written OSM XML that pyosmium reads directly, with no conversion (`docs/reference/pipeline.md`,
-**Fixtures**). `tests/`, `tests/unit/` and `tests/pipeline/` are packages (an empty
-`__init__.py` each), so pytest's default import mode tolerates the same test file name in two
-folders and the `tests.*` mypy override applies; a new test folder gets an `__init__.py` too.
+`data_dir` fixture points `WORST_ROUTE_DATA` at a temporary directory; `tests/graph/`, the graph
+package's tests, which build their graphs with `worst_route.graph.testing`
+(`docs/reference/graph.md`, **Test builders**) and check the reference backend against networkx
+with hypothesis; and `tests/fixtures/osm/`, hand-written OSM XML that pyosmium reads directly,
+with no conversion (`docs/reference/pipeline.md`, **Fixtures**). `tests/`, `tests/unit/`,
+`tests/pipeline/` and `tests/graph/` are packages (an empty `__init__.py` each), so pytest's
+default import mode tolerates the same test file name in two folders and the `tests.*` mypy
+override applies; a new test folder gets an `__init__.py` too.
 The `data` marker is registered in `pyproject.toml`, which runs pytest with `--strict-markers`
 and a 300 s timeout per test.
 

@@ -1,0 +1,70 @@
+[project]
+name = "worst-route"
+version = "0.1.0"
+description = "The least efficient way to get anywhere in the US: routes that never repeat an intersection or a road."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "osmium>=4,<5",
+    "osmnx>=2.0,<3",
+    "networkx",
+    "numpy",
+    "scipy",
+    "shapely>=2",
+    "pyproj",
+    "pyarrow",
+    "pandas",
+    "geopandas",
+    "pydantic>=2",
+    "pydantic-settings",
+    "typer",
+    "httpx",
+]
+
+[project.scripts]
+worst-route = "worst_route.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "hypothesis",
+    "ruff",
+    "mypy",
+    "pandas-stubs",
+    "types-shapely",
+    "pytest-timeout",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/worst_route"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# The docs' Python blocks are illustrative sketches, not code: keep ruff (which formats
+# code blocks inside Markdown by default) on the Python files.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["worst_route"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["data: needs a built graph under WORST_ROUTE_DATA; skipped by the gate"]
+addopts = "-ra --strict-markers --timeout=300"

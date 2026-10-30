@@ -7,14 +7,19 @@ A mode is an `Objective`. Its score is a sum of terms:
 node terms over the route's nodes (a round trip's start once), edge terms over its edges, pair
 terms over each two consecutive edges (only when `has_pair`), the global term over the whole
 route (only when `has_global`). Feasibility hooks (`feasible_pair`, `feasible_window`) and
-per-window bans (`banned_edges`) constrain it; search guidance (`search_weights`,
+per-window bans (`banned_edges`) constrain it, and `banned_turn_classes` names the turn classes
+its `feasible_pair` refuses, so the searches never propose them (`graph/backend.py`);
+`avoided_turn_classes` names those its pair terms penalise, which the searches try without
+first (`engine/search.py`); search guidance (`search_weights`,
 `waypoint_pool`, `initial_radius`, `search_budget`) steers the detours; `target_value` is the
 mode's own quantity for target modes; `describe` gives mode-specific numbers. `primary(metrics)`
 is the quantity a ratio target compares with the baseline's (the length for the base class and
 distance, the experienced time, driving and delays, for slowest time), a static method, so a
-caller can read it from the class without making the objective. Which route is better, and
-when a run is done, is the run's goal (`engine.target.Goal`), not the objective's. A constraint
-is an objective with hooks and no terms. The worsen loop sees only this interface.
+caller can read it from the class without making the objective. `constraint_delta` is the part
+of `delta` its constraints add (a soft one's penalties; 0 for a mode alone). Which route is
+better, and when a run is done, is the run's goal (`engine.target.Goal`), not the objective's.
+A constraint is an objective with hooks and no terms. The worsen loop sees only this
+interface.
 
 `global_term` takes the route's node and edge arrays rather than a `Route`, so a candidate can
 be scored before it is spliced. `BaseObjective(data, baseline=, r_max=)` (the baseline's
@@ -50,6 +55,8 @@ class Objective(Protocol):
     key: str
     has_pair: bool
     has_global: bool
+    banned_turn_classes: int  # the classes `feasible_pair` refuses, as the searches' class bits
+    avoided_turn_classes: int  # the classes it penalises, which the searches try without first
 
     def node_terms(self, G: GraphData) -> FloatArray | None:  # noqa: N803 (the plan's G)
         """Per-node term, or None for none."""
@@ -115,6 +122,12 @@ class Objective(Protocol):
         """The quantity a ratio target compares with the baseline's."""
         ...
 
+    def constraint_delta(
+        self, route: Route, i: int, j: int, nodes: IntArray, edges: IntArray
+    ) -> float:
+        """The part of `delta` the objective's constraints contribute (0 without any)."""
+        ...
+
     def evaluate(self, nodes: IntArray, edges: IntArray) -> tuple[float, Metrics]:
         """The score and metrics of a route's arrays."""
         ...
@@ -134,6 +147,8 @@ class BaseObjective:
     key = "base"
     has_pair = False
     has_global = False
+    banned_turn_classes = 0
+    avoided_turn_classes = 0
 
     def __init__(self, data: GraphData, *, baseline: Metrics, r_max: float) -> None:
         self.data = data
@@ -209,6 +224,12 @@ class BaseObjective:
     def primary(metrics: Metrics) -> float:
         """The length."""
         return metrics.length_m
+
+    def constraint_delta(
+        self, route: Route, i: int, j: int, nodes: IntArray, edges: IntArray
+    ) -> float:
+        """None: a mode alone has no constraints."""
+        return 0.0
 
     def evaluate(self, nodes: IntArray, edges: IntArray) -> tuple[float, Metrics]:
         """The score and metrics of a route's arrays."""

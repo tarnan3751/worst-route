@@ -10,8 +10,10 @@ start's node. A stop moved off another stop's node says so in its note.
 
 `resnap(...)` is the fallback when a leg cannot be built (`seed_route.resolve_stops` drives it):
 the stop is snapped again with the nodes already tried excluded, and its note says why it
-moved. `StopUnreachable` names the leg (k, k + 1) no route covers without repeating a road;
-its `stop_index` is the leg's later stop, the stop the API's error names.
+moved ("without repeating one", or "under the strict no-left constraint"). `StopUnreachable`
+names the leg (k, k + 1) no route covers without repeating a road; its `stop_index` is the leg's
+later stop, the stop the API's error names. `InfeasibleTurnConstraint`, a `StopUnreachable`,
+says a strict turn constraint is why (`constraint`: its key).
 """
 
 from collections.abc import Sequence
@@ -35,6 +37,15 @@ class StopUnreachable(Exception):  # noqa: N818 (the name the design uses)
         )
         self.leg = leg
         self.stop_index = end
+
+
+class InfeasibleTurnConstraint(StopUnreachable):
+    """A leg no route covers without repeating a road under a strict turn constraint;
+    `constraint` is its key, `"no_left"` or `"no_right"`."""
+
+    def __init__(self, leg: tuple[int, int], detail: str, constraint: str) -> None:
+        super().__init__(leg, detail)
+        self.constraint = constraint
 
 
 def role_of(k: int, count: int) -> Role:
@@ -83,8 +94,11 @@ def resnap(
     role: Role,
     active_mask: NDArray[np.bool_],
     exclude: NDArray[np.bool_],
+    reason: str = "without repeating one",
 ) -> Snap:
-    """The stop's nearest node outside `exclude`, noted as moved because nearer ones failed."""
+    """The stop's nearest node outside `exclude`, noted as moved because nearer ones could not
+    be reached (`reason`: without repeating one, or under a strict turn constraint)."""
     snap = spatial.snap(stop[0], stop[1], role, active_mask, exclude=exclude)
-    why = "nearer nodes cannot be reached without repeating one"
-    return replace(snap, note=f"moved {snap.moved_m:.0f} m: {why}")
+    return replace(
+        snap, note=f"moved {snap.moved_m:.0f} m: nearer nodes cannot be reached {reason}"
+    )

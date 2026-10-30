@@ -6,7 +6,8 @@ import numpy as np
 import pytest
 
 from worst_route.engine.route import Metrics
-from worst_route.engine.validator import NAMES, ValidationFailed, validate_route
+from worst_route.engine.validator import NAMES, ValidationFailed, ValidationReport, validate_route
+from worst_route.graph.backend import TURN_LEFT, TURN_RIGHT, TURN_U
 from worst_route.graph.data import GraphData
 from worst_route.graph.testing import edge_id, make_graph
 
@@ -305,3 +306,35 @@ def test_validation_failed_carries_the_report() -> None:
     assert error.report is report and "metrics" in str(error)
     with pytest.raises(ValidationFailed):
         raise error
+
+
+def test_a_strict_turn_constraint_is_proven_from_the_bearings() -> None:
+    # 0 → 1 → 4 → 5: east, a left turn north at 1, a right turn east at 4
+    route = drawn(GRID, [0, 1, 4, 5])
+    no_left, no_right = TURN_LEFT | TURN_U, TURN_RIGHT | TURN_U
+
+    def report(classes: int) -> ValidationReport:
+        return validate_route(
+            GRID,
+            route,
+            stop_nodes=[0, 5],
+            node_mask=ALL_NODES,
+            banned_edges=NO_BANS,
+            banned_turn_classes=classes,
+        )
+
+    assert report(0).ok  # no constraint, or a soft one: nothing to prove about turns
+    strict_left = report(no_left)
+    assert [c.name for c in strict_left.checks if not c.ok] == ["constraints"]
+    assert strict_left.check("constraints").index == 1
+    assert strict_left.check("constraints").detail == (
+        "a left turn at node 1, which the request's strict constraint refuses"
+    )
+    strict_right = report(no_right).check("constraints")
+    assert (strict_right.ok, strict_right.index) == (False, 2)
+    assert strict_right.detail.startswith("a right turn at node 4")
+    straight = drawn(GRID, [0, 1, 2])
+    assert validate_route(
+        GRID, straight, stop_nodes=[0, 2], node_mask=ALL_NODES, banned_edges=NO_BANS,
+        banned_turn_classes=no_left | no_right,
+    ).ok  # fmt: skip

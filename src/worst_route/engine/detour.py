@@ -28,15 +28,19 @@ weight 1/3); `strategy` forces one (tests, the round-trip seed).
   edges, up to `LOCAL_EXHAUSTIVE_MAX_PATHS`, inside a ball around the midpoint of radius
   `LOCAL_EXHAUSTIVE_BALL_FACTOR × dist(a, b)` capped at `LOCAL_EXHAUSTIVE_BALL_MAX_M`, from
   `entry_edge` to `exit_edge`, after a Dijkstra probe that skips the enumeration when b cannot
-  be reached at all (turns ignored: a legal path exists only if a turn-blind one does).
+  be reached at all (turns ignored, the banned classes too: a legal path exists only if a
+  turn-blind one does).
   `find_detour` ranks them by `objective.delta` (stable, so ties keep the search's order), or,
-  for a run shrinking toward a target (`shrink`, its goal), keeps those that lose (`delta` < 0,
-  the only ones it can take) and ranks them by how close each would bring the route to the
-  target's band (`Goal.shrink_rank`); it returns the first the splice accepts.
+  for a run shrinking toward a target (`shrink`, its goal), keeps those it can take (a loss of
+  the objective's own that adds no penalised turn) and ranks them by how close each would bring
+  the route to the target's band (`Goal.shrink_rank`); it returns the first the splice accepts.
 
 Every search goes through `search.py`, so on a build with transition rows each turn of a
 detour, its two boundary junctions included (`entry_edge` = edges[i − 1] into its first edge,
-its last edge into `exit_edge` = edges[j]), is one the tables allow. What the searches cannot
+its last edge into `exit_edge` = edges[j]), is one the tables allow, and none is of a class the
+objective's constraints refuse (`objective.banned_turn_classes`); a class they penalise
+(`objective.avoided_turn_classes`) is avoided where a search can (`search.py`). Every strategy
+passes both on as `banned_turn_classes` and `avoided_turn_classes`. What the searches cannot
 avoid makes a candidate fail the splice check: two twins inside one local-exhaustive path (the
 next one ranked is tried). A refused candidate is a failed attempt, nothing worse. The
 randomness is `rng`'s alone.
@@ -109,6 +113,10 @@ def find_detour(
     a, b = int(route.nodes[i]), int(route.nodes[j])
     chosen = strategy or pick_strategy(_distance(data, a, b), rng)
     weights = objective.search_weights(data)
+    turns = {
+        "banned_turn_classes": objective.banned_turn_classes,
+        "avoided_turn_classes": objective.avoided_turn_classes,
+    }
     candidates: list[Path] = []
     if chosen == "waypoint":
         found = waypoint_path(
@@ -127,6 +135,7 @@ def find_detour(
             pool=objective.waypoint_pool(data, route),
             entry_edge=entry_edge,
             exit_edge=exit_edge,
+            **turns,
         )
         candidates = [] if found is None else [found]
     elif chosen == "random_weight":
@@ -145,6 +154,7 @@ def find_detour(
             rng=rng,
             entry_edge=entry_edge,
             exit_edge=exit_edge,
+            **turns,
         )
         candidates = [] if found is None else [found]
     else:
@@ -160,12 +170,15 @@ def find_detour(
             weights=weights,
             entry_edge=entry_edge,
             exit_edge=exit_edge,
+            **turns,
         )
         gains = [objective.delta(route, i, j, *p) for p in paths]
         if shrink is None:
             order = np.argsort(-np.array(gains, dtype=np.float64), kind="stable").tolist()
-        else:  # only the paths a shrinking run can take (a loss), the closest to the band first
-            losing = [k for k, gain in enumerate(gains) if gain < 0]
+        else:  # only the paths a shrinking run can take, the closest to the band first: a loss
+            # of the objective's own that adds no penalised turn (`Goal.accepts`)
+            held = [objective.constraint_delta(route, i, j, *p) for p in paths]
+            losing = [k for k, (g, h) in enumerate(zip(gains, held, strict=True)) if h >= 0 > g - h]
             after = [shrink.candidate(route, i, j, paths[k][1], gains[k]) for k in losing]
             rank = np.array([shrink.shrink_rank(v) for v in after], dtype=np.float64)
             order = [losing[k] for k in np.argsort(rank, kind="stable").tolist()]
@@ -202,6 +215,8 @@ def waypoint_path(
     min_dist_m: float = 0.0,
     entry_edge: int = -1,
     exit_edge: int = -1,
+    banned_turn_classes: int = 0,
+    avoided_turn_classes: int = 0,
 ) -> Path | None:
     """a → w → b through a waypoint w drawn near the midpoint of a and b, or None."""
     middle = (_xy(data, a) + _xy(data, b)) / 2
@@ -235,6 +250,8 @@ def waypoint_path(
         banned_edges=banned,
         max_cost=max_cost,
         avoid_twins=True,
+        banned_turn_classes=banned_turn_classes,
+        avoided_turn_classes=avoided_turn_classes,
     )
     if first is None:
         return None
@@ -257,6 +274,8 @@ def waypoint_path(
         banned_edges=second_banned,
         max_cost=max_cost,
         avoid_twins=True,
+        banned_turn_classes=banned_turn_classes,
+        avoided_turn_classes=avoided_turn_classes,
     )
     if second is None:
         return None
@@ -279,6 +298,8 @@ def random_weight_path(
     rng: np.random.Generator,
     entry_edge: int = -1,
     exit_edge: int = -1,
+    banned_turn_classes: int = 0,
+    avoided_turn_classes: int = 0,
 ) -> Path | None:
     """a → b with the weights near the window scaled at random, or None."""
     middle = (_xy(data, a) + _xy(data, b)) / 2
@@ -298,6 +319,8 @@ def random_weight_path(
         banned_edges=banned,
         max_cost=max_cost,
         avoid_twins=True,
+        banned_turn_classes=banned_turn_classes,
+        avoided_turn_classes=avoided_turn_classes,
     )
 
 
@@ -314,6 +337,8 @@ def local_exhaustive_paths(
     weights: FloatArray,
     entry_edge: int = -1,
     exit_edge: int = -1,
+    banned_turn_classes: int = 0,
+    avoided_turn_classes: int = 0,
 ) -> list[Path]:
     """The simple paths a → b in a small ball around their midpoint."""
     middle = (_xy(data, a) + _xy(data, b)) / 2
@@ -335,6 +360,8 @@ def local_exhaustive_paths(
         banned_edges=banned,
         max_depth=LOCAL_EXHAUSTIVE_MAX_DEPTH,
         max_paths=LOCAL_EXHAUSTIVE_MAX_PATHS,
+        banned_turn_classes=banned_turn_classes,
+        avoided_turn_classes=avoided_turn_classes,
     )
 
 

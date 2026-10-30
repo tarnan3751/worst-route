@@ -298,11 +298,14 @@ def worsen(
                 refused=refused,
                 shrink=goal if shrinking else None,
             )
-            gain = 0.0 if detour is None else objective.delta(route, i, j, *detour)
-            after = 0.0 if detour is None else goal.candidate(route, i, j, detour[1], gain)
+            gain = held = after = 0.0
+            if detour is not None:
+                gain = objective.delta(route, i, j, *detour)
+                held = objective.constraint_delta(route, i, j, *detour)
+                after = goal.candidate(route, i, j, detour[1], gain)
             if (
                 detour is None
-                or not goal.accepts(value, gain, after)
+                or not goal.accepts(value, gain, after, held)
                 or not objective.feasible_window(data, route, i, j, *detour)
             ):
                 if (

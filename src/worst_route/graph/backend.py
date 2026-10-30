@@ -26,32 +26,35 @@ predecessor.
 `dijkstra_edges` is the transition-aware search: its states are edges, so it sees the build's
 transition table (`trans_node`, `trans_in`, `trans_out`: a node without rows allows every turn;
 a node with rows allows (e, f) iff the row (node, e, f) exists). The turn from e into f is
-allowed iff it is allowed at head(e). `entry_edge` (−1: none) is the edge the path continues,
-which must end at `src`; `exit_edge` (−1: none) the edge it must hand over to, which must start
-at `dst`; neither is driven, banned or costed. The start states are the out-edges f of `src`
-whose turn from `entry_edge` is allowed (every out-edge without one). From a state e, the
-search relaxes each f of `out_edges(head(e))`, in that order, iff the turn (e, f) is allowed, f
-is not banned, head(f) may be entered, and head(f) is neither `src` nor head(e) (no state
-returns to the start, no self-loop). A state e with head(e) == `dst` is terminal iff the turn
-(e, `exit_edge`) is allowed (always without an exit edge); a state into `dst` that is not
-terminal is a dead end, never expanded (any way on would pass `dst` twice). The cost of a
+allowed iff it is allowed at head(e) and its class (`TURN_CLASS`, below) is not among
+`banned_turn_classes`, a set of class bits (default 0: every class; straight is never banned)
+that the turn constraints pass (`engine/constraints.py`). `entry_edge` (−1: none) is the edge
+the path continues, which must end at `src`; `exit_edge` (−1: none) the edge it must hand over
+to, which must start at `dst`; neither is driven, banned or costed. The start states are the
+out-edges f of `src` whose turn from `entry_edge` is allowed (every out-edge without one). From
+a state e, the search relaxes each f of `out_edges(head(e))`, in that order, iff the turn (e, f)
+is allowed, f is not banned, head(f) may be entered, and head(f) is neither `src` nor head(e)
+(no state returns to the start, no self-loop). A state e with head(e) == `dst` is terminal iff
+the turn (e, `exit_edge`) is allowed (always without an exit edge); a state into `dst` that is
+not terminal is a dead end, never expanded (any way on would pass `dst` twice). The cost of a
 state is the sum of the weights along it; the search never keeps a state costing more than
 `max_cost` (inclusive), and a negative `max_cost` finds nothing. Ties: the heap orders entries
-by (cost, edge id), out-edges are relaxed in ascending edge id, and only a strictly smaller
-cost replaces a state's predecessor. The answer is the path of the first terminal state
-popped, or None; **when that path enters a node twice, the answer is None**: node-simplicity is
-not expressible in an edge-state search, and such a path is illegal anyway. From `src` to
-itself the answer is the one-node path unless both turn edges are given and the turn
-(`entry_edge`, `exit_edge`) is not allowed at `src` (then None). On a build with no
-transition rows, and with either turn edge, it finds a path whenever `dijkstra` does, at the
-same cost (Dijkstra's tree of edge states never repeats a node when every turn is allowed);
-the path itself is `dijkstra`'s whenever the two tie rules pick the same one. `ValueError` for
-a turn edge outside [−1, m) or not meeting its end.
+by (cost, edge id), out-edges are relaxed in ascending edge id, and only a strictly smaller cost
+replaces a state's predecessor. The answer is the path of the first terminal state popped, or
+None; **when that path enters a node twice, the answer is None**: node-simplicity is not
+expressible in an edge-state search, and such a path is illegal anyway. From `src` to itself the
+answer is the one-node path unless both turn edges are given and the turn (`entry_edge`,
+`exit_edge`) is not allowed at `src` (then None). On a build with no transition rows, and with
+either turn edge, it finds a path whenever `dijkstra` does, at the same cost (Dijkstra's tree of
+edge states never repeats a node when every turn is allowed); the path itself is `dijkstra`'s
+whenever the two tie rules pick the same one. `ValueError` for a turn edge outside [−1, m) or
+not meeting its end, and for `banned_turn_classes` outside [0, 7].
 
 `simple_paths_dfs` lists the simple paths from `src` to `dst` of at most `max_depth` edges, in
 ascending edge-id order (lexicographic in their edge ids), and stops after `max_paths`. Every
-turn along a path is allowed by the transition table, the turn from `entry_edge` into its first
-edge and from its last edge into `exit_edge` included (both optional, as for `dijkstra_edges`).
+turn along a path is allowed (by the transition table and `banned_turn_classes`, as for
+`dijkstra_edges`), the turn from `entry_edge` into its first edge and from its last edge into
+`exit_edge` included (both optional).
 
 `largest_scc_mask` is the node mask of the largest strongly connected component of the graph
 restricted to `edge_mask` (default: every edge); ties go to the component scipy labels first.
@@ -61,10 +64,11 @@ to itself it is that one node and no edge.
 
 What follows the protocol is what every backend shares, so their errors, their scalars and
 the SCC mask are the same whichever backend runs: `check_ends`; `check_turn_edges`;
-`WeightCheck`, one per backend, which remembers the last weights array it passed; `as_cost`,
-which makes `max_cost` a Python float, so it compares in float64 on every backend; `as_limits`,
-which makes `max_depth` and `max_paths` ints in the int64 range; `enterable` (the combined "may
-enter" mask, checking `node_mask` and `forbid_nodes`); `banned_mask`; `largest_scc_mask`.
+`as_turn_classes`; `WeightCheck`, one per backend, which remembers the last weights array it
+passed; `as_cost`, which makes `max_cost` a Python float, so it compares in float64 on every
+backend; `as_limits`, which makes `max_depth` and `max_paths` ints in the int64 range;
+`enterable` (the combined "may enter" mask, checking `node_mask` and `forbid_nodes`);
+`banned_mask`; `largest_scc_mask`.
 
 `TURN_CLASS` is the class of a turn by its change of bearing, the rule `engine/turns.py`
 describes: from edge e into edge f, `TURN_CLASS[(edge_bearing_out[f] − edge_bearing_in[e]) mod
@@ -137,6 +141,7 @@ class GraphBackend(Protocol):
         forbid_nodes: NDArray[np.bool_] | None = None,
         banned_edges: NDArray[np.bool_] | None = None,
         max_cost: float = math.inf,
+        banned_turn_classes: int = 0,
     ) -> Path | None:
         """A cheapest path src → dst whose every turn is allowed, within the masks, or None."""
         ...
@@ -153,6 +158,7 @@ class GraphBackend(Protocol):
         banned_edges: NDArray[np.bool_] | None = None,
         max_depth: int,
         max_paths: int,
+        banned_turn_classes: int = 0,
     ) -> list[Path]:
         """The first `max_paths` simple paths src → dst of at most `max_depth` edges."""
         ...
@@ -175,6 +181,15 @@ def check_turn_edges(data: GraphData, src: int, dst: int, entry_edge: int, exit_
         raise ValueError(f"entry_edge: need -1 or an edge in [0, {m}) ending at src")
     if not -1 <= exit_edge < m or (exit_edge >= 0 and data.edge_u[exit_edge] != dst):
         raise ValueError(f"exit_edge: need -1 or an edge in [0, {m}) starting at dst")
+
+
+def as_turn_classes(banned_turn_classes: int) -> int:
+    """`banned_turn_classes` as an int (`operator.index`); `ValueError` unless it is a set of
+    the bits `TURN_LEFT`, `TURN_RIGHT` and `TURN_U`."""
+    banned = operator.index(banned_turn_classes)
+    if not 0 <= banned <= TURN_LEFT | TURN_RIGHT | TURN_U:
+        raise ValueError("banned_turn_classes: need a set of turn class bits, in [0, 7]")
+    return banned
 
 
 class WeightCheck:

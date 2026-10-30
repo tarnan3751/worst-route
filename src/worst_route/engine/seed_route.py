@@ -12,7 +12,9 @@ then exists whenever the seed does).
 loop starts from. Its legs are built in order on length, each forbidding the nodes of the
 other legs built so far and every other stop's node, and banning their edges' twins; each
 continues the leg before it (`entry_edge`) and hands over to the leg after it when that one is
-built (`exit_edge`), so every turn, at the vias too, is one the tables allow. A leg found
+built (`exit_edge`), so every turn, at the vias too, is one the tables allow, and, under a
+strict turn constraint (`constraints.Constraints`), none of a class it refuses (a soft one
+leaves the seed alone). A leg found
 driving an edge and its twin is searched again without the later of the two
 (`search.shortest_path`, `avoid_twins`), and a round trip's leg whose other legs drive a single
 edge avoids that edge's road (`edge_unit`), so the trip is not one road out and back. When a
@@ -21,7 +23,9 @@ unconstrained path names the nodes other legs hold that it needs; those legs are
 `SEED_PENALTY_FACTOR` × the weight on every edge touching those nodes (keeping their old path
 when no other exists), and the leg is tried again. A leg that still fails, a leg that would not
 move (two stops on one node), or an assembled route `check_route` refuses names the leg:
-`StopUnreachable`.
+`StopUnreachable`; under a strict turn constraint, `InfeasibleTurnConstraint`, which says so
+("under the strict no-left constraint"), when the legs can be built without it (one more build,
+on failure only), else the plain `StopUnreachable`, the constraint not being the reason.
 
 `resolve_stops(data, spatial, backend, request, masks)` settles where the stops go before the
 seed is built, deterministically for a request and a build, so `worst-route validate` can
@@ -41,7 +45,7 @@ there is no fallback.
 """
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 
@@ -57,6 +61,7 @@ from worst_route.config import (
     SEED_PENALTY_ROUNDS,
     SNAP_FALLBACK_CANDIDATES,
 )
+from worst_route.engine.constraints import NO_CONSTRAINTS, Constraints
 from worst_route.engine.detour import waypoint_path
 from worst_route.engine.objectives.base import route_delay_s
 from worst_route.engine.request import RequestMasks, RouteRequest
@@ -150,7 +155,7 @@ def resolve_stops(
     snaps = snap_stops(spatial, data, stops, masks.active)
     if len(snaps) == 2 and snaps[0].node == snaps[1].node:
         return snaps  # a round trip without legs: nothing to fall back from
-    builder = _Builder(backend, data, masks.active, masks.banned)
+    builder = _Builder(backend, data, masks.active, masks.banned, NO_CONSTRAINTS)
     try:
         builder.seed(snaps)
         return snaps
@@ -193,15 +198,20 @@ def seed_route(
     rng: np.random.Generator,
     *,
     r_max: float,
+    constraints: Constraints = NO_CONSTRAINTS,
 ) -> SeedRoute:
     """The shortest route through the resolved stops with node-disjoint legs, or a loop."""
     snaps = list(snaps)
     if len(snaps) == 2 and snaps[0].node == snaps[1].node:
-        return _loop(backend, spatial, data, snaps, node_mask, banned_edges, rng, r_max)
+        return _loop(
+            backend, spatial, data, snaps, node_mask, banned_edges, rng, r_max, constraints
+        )
     try:
-        return _Builder(backend, data, node_mask, banned_edges).seed(snaps)
+        return _Builder(backend, data, node_mask, banned_edges, constraints).seed(snaps)
     except _LegError as failed:
-        raise StopUnreachable((failed.leg, failed.leg + 1)) from failed
+        plain = _Builder(backend, data, node_mask, banned_edges, NO_CONSTRAINTS)
+        leg = (failed.leg, failed.leg + 1)
+        raise _unreachable(constraints, leg, "", lambda: plain.seed(snaps)) from failed
 
 
 def _loop(
@@ -213,6 +223,7 @@ def _loop(
     banned_edges: BoolArray,
     rng: np.random.Generator,
     r_max: float,
+    constraints: Constraints,
 ) -> SeedRoute:
     """A round trip's seed: a loop from the start through a waypoint and back."""
     start = snaps[0].node
@@ -232,6 +243,7 @@ def _loop(
             max_cost=SEARCH_BUDGET_FACTOR * radius,
             rng=rng,
             min_dist_m=ROUND_TRIP_MIN_M,
+            banned_turn_classes=constraints.banned_turn_classes,
         )
         if found is None:
             continue
@@ -242,21 +254,48 @@ def _loop(
         except IllegalSplice:
             continue
         return SeedRoute(nodes, edges, stop_idx, tuple(snaps))
-    raise StopUnreachable(
-        (0, 1), f"after {ROUND_TRIP_SEED_TRIES} tries at a loop through a waypoint"
-    )
+    tries = f"after {ROUND_TRIP_SEED_TRIES} tries at a loop through a waypoint"
+
+    def plain() -> SeedRoute:
+        args = (backend, spatial, data, snaps, node_mask, banned_edges, rng, r_max)
+        return _loop(*args, NO_CONSTRAINTS)
+
+    raise _unreachable(constraints, (0, 1), tries, plain)
+
+
+def _unreachable(
+    constraints: Constraints,
+    leg: tuple[int, int],
+    detail: str,
+    plain: Callable[[], SeedRoute],
+) -> StopUnreachable:
+    """The error for a leg the seed cannot build under `constraints`: under a strict one,
+    `InfeasibleTurnConstraint` only when the same build without it, `plain`, succeeds (one more
+    build, on failure only), else `StopUnreachable`, as without a constraint."""
+    if constraints.strict:
+        try:
+            plain()
+        except (_LegError, StopUnreachable):
+            return StopUnreachable(leg, detail)
+    return constraints.unreachable(leg, detail)
 
 
 class _Builder:
     """Builds the seed's legs for one set of stop nodes."""
 
     def __init__(
-        self, backend: GraphBackend, data: GraphData, node_mask: BoolArray, banned: BoolArray
+        self,
+        backend: GraphBackend,
+        data: GraphData,
+        node_mask: BoolArray,
+        banned: BoolArray,
+        constraints: Constraints,
     ) -> None:
         self.backend = backend
         self.data = data
         self.node_mask = node_mask
         self.banned = banned
+        self.classes = constraints.banned_turn_classes
         self.weights = data.edge_length_m.astype(np.float64)
 
     def seed(self, snaps: Sequence[Snap]) -> SeedRoute:
@@ -314,6 +353,7 @@ class _Builder:
             forbid_nodes=forbid,
             banned_edges=banned,
             avoid_twins=True,
+            banned_turn_classes=self.classes,
         )
 
     def _penalty_resolve(self, stops: list[int], legs: list[Path | None], leg: int) -> Path | None:
@@ -329,6 +369,7 @@ class _Builder:
             exit_edge=exit_,
             node_mask=self.node_mask,
             banned_edges=self.banned,
+            banned_turn_classes=self.classes,
         )
         if wanted is None:
             return None

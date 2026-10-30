@@ -11,8 +11,9 @@ scipy call. Nothing is copied at construction; the transition table is precomput
 the two arrays the turn kernels read (`trans_indptr`, `trans_key`, `kernels.py`).
 
 `dijkstra_edges` is always the edge-state kernel. `simple_paths_dfs` is the turn kernel on a
-build with transition rows or when a turn edge is given; otherwise every turn is allowed and
-the plain kernel answers, byte for byte the same.
+build with transition rows, when a turn edge is given or when turn classes are banned;
+otherwise every turn is allowed and the plain kernel answers, byte for byte the same. The turn
+kernels read the build's bearings and `TURN_CLASS` as they are, zero-copy.
 """
 
 import math
@@ -22,10 +23,12 @@ from numpy.typing import NDArray
 
 from worst_route.graph import kernels
 from worst_route.graph.backend import (
+    TURN_CLASS,
     Path,
     WeightCheck,
     as_cost,
     as_limits,
+    as_turn_classes,
     banned_mask,
     check_ends,
     check_turn_edges,
@@ -98,18 +101,24 @@ class CsrBackend:
         forbid_nodes: NDArray[np.bool_] | None = None,
         banned_edges: NDArray[np.bool_] | None = None,
         max_cost: float = math.inf,
+        banned_turn_classes: int = 0,
     ) -> Path | None:
         """A cheapest path src → dst whose every turn is allowed, within the masks, or None."""
         self._check_weights(weights)
         check_ends(self.data, src, dst)
         check_turn_edges(self.data, src, dst, entry_edge, exit_edge)
+        classes = as_turn_classes(banned_turn_classes)
         enter = enterable(self.data, node_mask, forbid_nodes)
         banned = banned_mask(self.data, banned_edges)
         max_cost = as_cost(max_cost)
         if max_cost < 0 or not (enter[src] and enter[dst]):
             return None
         if src == dst:
-            if entry_edge >= 0 and exit_edge >= 0 and not self._turn_ok(entry_edge, exit_edge):
+            if (
+                entry_edge >= 0
+                and exit_edge >= 0
+                and not self._turn_ok(entry_edge, exit_edge, classes)
+            ):
                 return None
             return np.array([src], dtype=np.int32), np.array([], dtype=np.int32)
         g = self.data
@@ -123,6 +132,10 @@ class CsrBackend:
             banned.view(np.uint8),
             self._trans_indptr,
             self._trans_key,
+            g.edge_bearing_in,
+            g.edge_bearing_out,
+            TURN_CLASS,
+            classes,
             src,
             dst,
             entry_edge,
@@ -143,21 +156,27 @@ class CsrBackend:
         banned_edges: NDArray[np.bool_] | None = None,
         max_depth: int,
         max_paths: int,
+        banned_turn_classes: int = 0,
     ) -> list[Path]:
         """The first `max_paths` simple paths src → dst of at most `max_depth` edges."""
         check_ends(self.data, src, dst)
         check_turn_edges(self.data, src, dst, entry_edge, exit_edge)
+        classes = as_turn_classes(banned_turn_classes)
         enter = enterable(self.data, node_mask, forbid_nodes)
         banned = banned_mask(self.data, banned_edges)
         max_depth, max_paths = as_limits(max_depth, max_paths)
         if max_paths <= 0 or not (enter[src] and enter[dst]):
             return []
         if src == dst:
-            if entry_edge >= 0 and exit_edge >= 0 and not self._turn_ok(entry_edge, exit_edge):
+            if (
+                entry_edge >= 0
+                and exit_edge >= 0
+                and not self._turn_ok(entry_edge, exit_edge, classes)
+            ):
                 return []
             return [(np.array([src], dtype=np.int32), np.array([], dtype=np.int32))]
         g = self.data
-        if len(g.trans_node) or entry_edge >= 0 or exit_edge >= 0:
+        if len(g.trans_node) or entry_edge >= 0 or exit_edge >= 0 or classes:
             offsets, nodes, edges = kernels.simple_paths_dfs_turns(
                 g.out_indptr,
                 g.out_edges,
@@ -166,6 +185,10 @@ class CsrBackend:
                 banned.view(np.uint8),
                 self._trans_indptr,
                 self._trans_key,
+                g.edge_bearing_in,
+                g.edge_bearing_out,
+                TURN_CLASS,
+                classes,
                 src,
                 dst,
                 entry_edge,
@@ -195,8 +218,12 @@ class CsrBackend:
         """The nodes of the largest strongly connected component over `edge_mask`."""
         return largest_scc_mask(self.data, edge_mask)
 
-    def _turn_ok(self, e_in: int, e_out: int) -> bool:
-        """Whether the turn e_in → e_out is allowed at head(e_in)."""
+    def _turn_ok(self, e_in: int, e_out: int, classes: int) -> bool:
+        """Whether the turn e_in → e_out is allowed at head(e_in), and of a class not in
+        `classes`."""
+        g = self.data
         return kernels.turn_allowed(
-            self._trans_indptr, self._trans_key, self.data.edge_v, e_in, e_out
+            self._trans_indptr, self._trans_key, g.edge_v, e_in, e_out
+        ) and kernels.turn_class_allowed(
+            g.edge_bearing_in, g.edge_bearing_out, TURN_CLASS, classes, e_in, e_out
         )

@@ -216,6 +216,15 @@ TARGET_MAX_DURATION_S = 7 * 24 * 3600.0
 # turn up to ±TURN_UTURN_DEG, and a U-turn beyond.
 TURN_STRAIGHT_DEG = 30
 TURN_UTURN_DEG = 160
+# A soft turn constraint (`engine/constraints.py`) scores each turn it is about at minus a
+# penalty in its objective's score units: TURN_PENALTY_M metres when the score is a length (one
+# banned turn costs a kilometre; 10⁶ makes it lexicographic, which on Portland gives 1.1×
+# routes), TURN_PENALTY_S seconds under the slowest time (about a kilometre at 40 km/h; on
+# Portland, Powell's to Reed soft no-left under the slowest time, seed 1: 28.48x the experienced
+# time with 1.09 left turns a km at 90 s, 11.66x with 0.85 at 180 s, 4.67x with 0.54 at 300 s,
+# so none keeps both under 0.7 a km and well above 10x, and it stays 90 s).
+TURN_PENALTY_M = 1000.0
+TURN_PENALTY_S = 90.0
 
 # Cleanup (`docs/PLAN.md` §2.4; `docs/reference/pipeline.md`, cleanup).
 # Stage A (`pipeline/consolidate.py`): the radius OSMnx buffers each node by; two nodes merge

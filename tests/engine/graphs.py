@@ -95,3 +95,18 @@ def at(x: float, y: float) -> tuple[float, float]:
     """(lat, lon) of a point given in metres from GRID_ORIGIN."""
     lon, lat = TO_LONLAT.transform(X0 + x, Y0 + y)
     return float(lat), float(lon)
+
+
+def two_rings(radius_m: float = 300.0, apart_m: float = 2000.0) -> GraphData:
+    """Two one-way rings of 12 nodes, `apart_m` between their centres and no road between them:
+    nodes 0-11 round the first (node 0 at (radius_m, 0)), 12-23 round the second (node 12 at
+    (apart_m + radius_m, 0)). No route joins them, whatever the turns."""
+    xy: list[tuple[float, float]] = []
+    edges: list[Edge] = []
+    for cx in (0.0, apart_m):
+        first = len(xy)
+        for k in range(12):
+            angle = 2 * np.pi * k / 12
+            xy.append((X0 + cx + radius_m * np.cos(angle), Y0 + radius_m * np.sin(angle)))
+        edges += [Edge(first + k, first + (k + 1) % 12, None) for k in range(12)]
+    return make_graph(xy, edges)

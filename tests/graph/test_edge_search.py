@@ -4,8 +4,10 @@ Against the semantics in graph/backend.py: the node-state `dijkstra` on graphs w
 transition rows (same cost, a path whenever it finds one), a heap-free implementation of the
 edge-state tie rule on graphs with random transition tables (the exact path), a networkx search
 over the edge states (the cost), and a brute force over networkx's simple paths for the DFS.
-The tests of the semantics run on each backend (`backend_type`); the parity tests then ask
-`CsrBackend` for the reference's exact bytes, ties and Nones included.
+The same again with random bearings and a random set of banned turn classes, classed here by
+the rule written out (`Case.turn_class`). The tests of the semantics run on each backend
+(`backend_type`); the parity tests then ask `CsrBackend` for the reference's exact bytes, ties
+and Nones included.
 """
 
 import dataclasses
@@ -19,7 +21,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from worst_route.graph.backend import Path
+from worst_route.graph.backend import TURN_LEFT, TURN_RIGHT, TURN_U, Path
 from worst_route.graph.csr_backend import CsrBackend
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
@@ -47,6 +49,7 @@ class Case:
     node_mask: np.ndarray | None
     forbid: np.ndarray | None
     banned: np.ndarray | None
+    banned_turns: int = 0
 
     def enterable(self) -> np.ndarray:
         enter = np.ones(self.g.n, dtype=bool) if self.node_mask is None else self.node_mask
@@ -57,10 +60,22 @@ class Case:
 
     def turn_ok(self, e: int, f: int) -> bool:
         g = self.g
+        if self.turn_class(e, f) & self.banned_turns:
+            return False
         rows = g.trans_node == g.edge_v[e]
         if not rows.any():
             return True
         return bool(((g.trans_in == e) & (g.trans_out == f) & rows).any())
+
+    def turn_class(self, e: int, f: int) -> int:
+        """Straight 0, left 1, right 2, U-turn 4, by the bearing change wrapped to (−180, 180]."""
+        delta = (int(self.g.edge_bearing_out[f]) - int(self.g.edge_bearing_in[e])) % 360
+        delta = delta - 360 if delta > 180 else delta
+        if abs(delta) <= 30:
+            return 0
+        if 30 < delta <= 160:
+            return 2
+        return 1 if -160 <= delta < -30 else 4
 
     def out_edges(self, v: int) -> list[int]:
         g = self.g
@@ -75,6 +90,9 @@ class Case:
 
     def turns(self) -> dict[str, int]:
         return {"entry_edge": self.entry, "exit_edge": self.exit}
+
+    def turns_and_classes(self) -> dict[str, int]:
+        return {**self.turns(), "banned_turn_classes": self.banned_turns}
 
     def state_moves(self) -> Iterator[tuple[int, int]]:
         """Every move between edge states the semantics allow: (from, to), from −1 at src."""
@@ -118,9 +136,11 @@ def cases(
     max_nodes: int = 8,
     max_edges: int = 28,
     weight: st.SearchStrategy[float] = TIED_WEIGHTS,
+    classes: bool = False,
 ) -> Case:
     """A random multigraph (self-loops, parallel edges), weights, masks, turn edges and, when
-    `rows`, a random transition table: some nodes list a random subset of their turns."""
+    `rows`, a random transition table: some nodes list a random subset of their turns; with
+    `classes`, random bearings (the class bands' edges often) and banned turn classes."""
     n = draw(st.integers(2, max_nodes))
     node = st.integers(0, n - 1)
     pairs = draw(st.lists(st.tuples(node, node), min_size=n, max_size=max_edges))
@@ -142,6 +162,17 @@ def cases(
         g = dataclasses.replace(
             g, trans_node=columns[:, 0], trans_in=columns[:, 1], trans_out=columns[:, 2]
         )
+    banned_turns = 0
+    if classes:
+        bearing = st.integers(0, 359) | st.sampled_from([0, 30, 160, 180, 200, 330])
+        bearings = [
+            np.array(draw(st.lists(bearing, min_size=g.m, max_size=g.m)), dtype=np.int16)
+            for _ in range(2)
+        ]
+        g = dataclasses.replace(
+            g, edge_bearing_in=bearings[0].reshape(g.m), edge_bearing_out=bearings[1].reshape(g.m)
+        )
+        banned_turns = draw(st.integers(0, 7))
     weights = np.array(draw(st.lists(weight, min_size=g.m, max_size=g.m)), dtype=np.float64)
     src, dst = draw(node), draw(node)
     ins = g.in_edges[g.in_indptr[src] : g.in_indptr[src + 1]].tolist()
@@ -156,6 +187,7 @@ def cases(
         node_mask=draw(optional_mask(n, default=True)),
         forbid=draw(optional_mask(n, default=False)),
         banned=draw(optional_mask(g.m, default=False)),
+        banned_turns=banned_turns,
     )
 
 
@@ -317,26 +349,7 @@ def test_simple_paths_check_every_turn(
         **case.masks(),
     )
     found = [tuple(p[1].tolist()) for p in every]
-    enter, banned, g = case.enterable(), case.is_banned(), case.g
-    if not (enter[case.src] and enter[case.dst]):
-        expected: list[tuple[int, ...]] = []
-    elif case.src == case.dst:
-        conflict = case.entry >= 0 and case.exit >= 0 and not case.turn_ok(case.entry, case.exit)
-        expected = [] if conflict else [()]
-    else:
-        graph = nx.MultiDiGraph()
-        graph.add_nodes_from(int(v) for v in np.flatnonzero(enter))
-        for e in range(g.m):
-            u, v = int(g.edge_u[e]), int(g.edge_v[e])
-            if enter[u] and enter[v] and not banned[e]:
-                graph.add_edge(u, v, key=e)
-        expected = []
-        for p in nx.all_simple_edge_paths(graph, case.src, case.dst, cutoff=max_depth):
-            edges = [e for _, _, e in p]
-            turns = [case.entry, *edges, case.exit]
-            pairs = zip(turns[:-1], turns[1:], strict=True)
-            if all(e < 0 or f < 0 or case.turn_ok(e, f) for e, f in pairs):
-                expected.append(tuple(edges))
+    expected = legal_simple_paths(case, max_depth)
     assert sorted(found) == sorted(expected) and found == sorted(found)
     for path in every:
         assert_legal(case, path)
@@ -349,6 +362,75 @@ def test_simple_paths_check_every_turn(
         **case.masks(),
     )
     assert [tuple(p[1].tolist()) for p in first] == found[:max_paths]
+
+
+def legal_simple_paths(case: Case, max_depth: int) -> list[tuple[int, ...]]:
+    """Every simple path's edges, by brute force over networkx's, whose every turn is allowed."""
+    enter, banned, g = case.enterable(), case.is_banned(), case.g
+    if not (enter[case.src] and enter[case.dst]):
+        return []
+    if case.src == case.dst:
+        conflict = case.entry >= 0 and case.exit >= 0 and not case.turn_ok(case.entry, case.exit)
+        return [] if conflict else [()]
+    graph = nx.MultiDiGraph()
+    graph.add_nodes_from(int(v) for v in np.flatnonzero(enter))
+    for e in range(g.m):
+        u, v = int(g.edge_u[e]), int(g.edge_v[e])
+        if enter[u] and enter[v] and not banned[e]:
+            graph.add_edge(u, v, key=e)
+    expected = []
+    for p in nx.all_simple_edge_paths(graph, case.src, case.dst, cutoff=max_depth):
+        edges = [e for _, _, e in p]
+        turns = [case.entry, *edges, case.exit]
+        pairs = zip(turns[:-1], turns[1:], strict=True)
+        if all(e < 0 or f < 0 or case.turn_ok(e, f) for e, f in pairs):
+            expected.append(tuple(edges))
+    return expected
+
+
+# Banned turn classes: the same semantics, every turn also of a class not banned.
+
+
+@EXAMPLES
+@given(cases(rows=True, classes=True), st.sampled_from([0.0, 1.0, 2.0, 3.0, math.inf]))
+def test_banned_turn_classes_follow_the_tie_rule(backend_type, case: Case, max_cost: float) -> None:
+    path = backend_type(case.g).dijkstra_edges(
+        case.src, case.dst, case.weights, max_cost=max_cost, **case.turns_and_classes(),
+        **case.masks(),
+    )  # fmt: skip
+    expected = tie_rule_reference(case, max_cost)
+    assert (None if path is None else path[1].tolist()) == expected
+    if path is not None:
+        assert_legal(case, path)
+
+
+@EXAMPLES
+@given(cases(rows=True, classes=True, weight=st.integers(1, 9).map(float)))
+def test_banned_turn_classes_give_the_cheapest_legal_walk(backend_type, case: Case) -> None:
+    path = backend_type(case.g).dijkstra_edges(
+        case.src, case.dst, case.weights, **case.turns_and_classes(), **case.masks()
+    )
+    if case.src == case.dst:
+        return
+    best = state_graph_cost(case)
+    if best is None:
+        assert path is None
+    elif path is not None:  # None only when the cheapest walk repeats a node
+        assert_legal(case, path)
+        assert float(case.weights[path[1]].sum()) == best
+
+
+@EXAMPLES
+@given(cases(rows=True, classes=True, max_nodes=6, max_edges=20), st.integers(0, 6))
+def test_simple_paths_skip_banned_turn_classes(backend_type, case: Case, max_depth: int) -> None:
+    every = backend_type(case.g).simple_paths_dfs(
+        case.src, case.dst, max_depth=max_depth, max_paths=10**6, **case.turns_and_classes(),
+        **case.masks(),
+    )  # fmt: skip
+    found = [tuple(p[1].tolist()) for p in every]
+    assert found == sorted(legal_simple_paths(case, max_depth))
+    for path in every:
+        assert_legal(case, path)
 
 
 # Crafted cases. A plus-shaped junction J (node 0) with 100 m arms to N (1), E (2), S (3), W (4),
@@ -549,6 +631,51 @@ def test_the_backends_agree_on_edge_states(
             assert_same([theirs, ours])
 
 
+@settings(max_examples=300, deadline=None)
+@given(
+    st.booleans().flatmap(
+        lambda rows: cases(
+            rows=rows,
+            max_nodes=10,
+            max_edges=40,
+            weight=st.sampled_from([0.0, 0.5, 1.0, 2.0, math.inf]),
+            classes=True,
+        )
+    ),
+    st.sampled_from([-1.0, 0.0, 1.0, 1.5, 2.0, 3.0, math.inf]),
+    st.integers(-1, 7),
+    st.sampled_from([-1, 0, 1, 2, 5, 10**6]),
+)
+def test_the_backends_agree_with_banned_turn_classes(
+    case: Case, max_cost: float, max_depth: int, max_paths: int
+) -> None:
+    backends = [make(case.g) for make in BACKENDS.values()]
+    turns = case.turns_and_classes()
+    found = [
+        b.dijkstra_edges(
+            case.src, case.dst, case.weights, max_cost=max_cost, **turns, **case.masks()
+        )
+        for b in backends
+    ]
+    if case.banned_turns == 0:  # no class banned: the call without the argument
+        found.append(
+            backends[0].dijkstra_edges(
+                case.src, case.dst, case.weights, max_cost=max_cost, **case.turns(), **case.masks()
+            )
+        )
+    assert_same(found)
+    reference, *others = (
+        b.simple_paths_dfs(
+            case.src, case.dst, max_depth=max_depth, max_paths=max_paths, **turns, **case.masks()
+        )
+        for b in backends
+    )
+    for paths in others:
+        assert len(paths) == len(reference)
+        for ours, theirs in zip(paths, reference, strict=True):
+            assert_same([theirs, ours])
+
+
 def town_with_tables(seed: int) -> GraphData:
     """A 30 × 30 grid with one-way rows and columns, and a transition table at a third of its
     junctions, each allowing a random 60% of its turns."""
@@ -630,3 +757,69 @@ def test_the_backends_agree_on_every_turning_path_of_a_grid() -> None:
         assert len(ours) == len(reference) >= min(max_paths, 100)
         for a, b in zip(reference, ours, strict=True):
             assert_same([a, b])
+
+
+def test_the_backends_agree_on_a_town_with_tables_and_banned_turn_classes() -> None:
+    # the town's real bearings (0, 90, 180, 270: straight, right, left and U-turns), a set of
+    # banned classes drawn per search, from turn edges and without
+    g = town_with_tables(2)
+    rng = np.random.default_rng(3)
+    weights = rng.integers(1, 4, size=g.m).astype(np.float64)
+    backends = [make(g) for make in BACKENDS.values()]
+    found = 0
+    for _ in range(300):
+        src, dst = (int(v) for v in rng.integers(g.n, size=2))
+        ins = g.in_edges[g.in_indptr[src] : g.in_indptr[src + 1]].tolist()
+        outs = g.out_edges[g.out_indptr[dst] : g.out_indptr[dst + 1]].tolist()
+        turns = {
+            "entry_edge": int(rng.choice([-1, *ins])),
+            "exit_edge": int(rng.choice([-1, *outs])),
+            "banned_turn_classes": int(rng.integers(8)),
+        }
+        forbid = rng.random(g.n) < 0.05
+        forbid[[src, dst]] = False
+        masks = {"forbid_nodes": forbid, "banned_edges": rng.random(g.m) < 0.05}
+        paths = [b.dijkstra_edges(src, dst, weights, **turns, **masks) for b in backends]
+        assert_same(paths)
+        found += paths[0] is not None
+        if paths[0] is not None and found % 10 == 1:  # every tenth found path: the DFS too
+            near = [
+                b.simple_paths_dfs(src, dst, max_depth=8, max_paths=50, **turns, **masks)
+                for b in backends
+            ]
+            assert len(near[0]) == len(near[1])
+            for a, b in zip(*near, strict=True):
+                assert_same([a, b])
+    assert 50 < found < 300  # both kinds of answer were compared
+
+
+def test_a_banned_turn_class_is_driven_round(backend_type) -> None:
+    g = plus(False)  # J allows every turn
+    b = backend_type(g)
+    from_s = edge_id(g, 3, 0)
+    # S → J → W turns left at J, S → J → E right; banned, each goes along the ring instead
+    assert nodes_of(b.dijkstra_edges(3, 4, lengths(g))) == [3, 0, 4]
+    assert nodes_of(b.dijkstra_edges(3, 4, lengths(g), banned_turn_classes=TURN_LEFT)) == [3, 4]
+    assert nodes_of(b.dijkstra_edges(3, 2, lengths(g), banned_turn_classes=TURN_RIGHT)) == [3, 2]
+    # arriving at J from S, never turning left: round three rights, J → E → S → W
+    no_left = {"entry_edge": from_s, "banned_turn_classes": TURN_LEFT | TURN_U}
+    assert nodes_of(b.dijkstra_edges(0, 4, lengths(g), entry_edge=from_s)) == [0, 4]
+    assert nodes_of(b.dijkstra_edges(0, 4, lengths(g), **no_left)) == [0, 2, 3, 4]
+    # J → S after S → J is a U-turn: allowed, unless U-turns are banned
+    assert nodes_of(b.dijkstra_edges(0, 3, lengths(g), entry_edge=from_s)) == [0, 3]
+    assert nodes_of(b.dijkstra_edges(0, 3, lengths(g), **no_left)) == [0, 2, 3]
+    paths = b.simple_paths_dfs(0, 4, max_depth=4, max_paths=99, **no_left)
+    assert sorted(p[0].tolist() for p in paths) == [[0, 1, 2, 3, 4], [0, 2, 3, 4]]  # rights only
+    to_w = edge_id(g, 0, 4)
+    assert b.dijkstra_edges(0, 0, lengths(g), entry_edge=from_s, exit_edge=to_w) is not None
+    assert b.dijkstra_edges(0, 0, lengths(g), exit_edge=to_w, **no_left) is None
+
+
+def test_bad_banned_turn_classes_are_rejected(backend_type) -> None:
+    g = plus()
+    b = backend_type(g)
+    for bad in (-1, 8):
+        with pytest.raises(ValueError, match="banned_turn_classes"):
+            b.dijkstra_edges(0, 2, lengths(g), banned_turn_classes=bad)
+        with pytest.raises(ValueError, match="banned_turn_classes"):
+            b.simple_paths_dfs(0, 2, max_depth=3, max_paths=1, banned_turn_classes=bad)

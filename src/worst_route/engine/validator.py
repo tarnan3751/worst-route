@@ -1,6 +1,7 @@
 """The validator: proves a finished route legal from the raw data (`docs/PLAN.md` §8.1).
 
-`validate_route(data, route, stop_nodes=, node_mask=, banned_edges=)` runs every check below
+`validate_route(data, route, stop_nodes=, node_mask=, banned_edges=, banned_turn_classes=0)`
+runs every check below
 on a route's `nodes`, `edges`, `stop_idx` and reported `metrics`, and returns a
 `ValidationReport`: one `Check` per rule, each with `ok`, the first offending index (a position
 in `nodes` or `edges`, an edge for `osm_ids`, a stop for `stops`) and a detail. `report.ok` is
@@ -20,7 +21,10 @@ recomputed from the request by the caller, not taken from the engine's state.
 5. `transitions`: every (edges[k-1], edges[k]) turn allowed at a node with transition rows.
 6. `stops`: `nodes[stop_idx[s]] == stop_nodes[s]`, strictly increasing positions from the
    first node to the last.
-7. `constraints`: every node in the active mask, no edge in `banned_edges`.
+7. `constraints`: every node in the active mask, no edge in `banned_edges`, and, under a strict
+   turn constraint (`banned_turn_classes`, its class bits), no turn of a class it refuses: each
+   turn classed again here from the edges' bearings (`TURN_STRAIGHT_DEG`, `TURN_UTURN_DEG`),
+   not with the engine's table.
 8. `metrics`: the reported length and time are finite and equal the ones recomputed from the
    edges within a relative 1e-6.
 
@@ -37,6 +41,8 @@ from typing import Any, Protocol
 import numpy as np
 from numpy.typing import NDArray
 
+from worst_route.config import TURN_STRAIGHT_DEG, TURN_UTURN_DEG
+from worst_route.graph.backend import TURN_LEFT, TURN_RIGHT, TURN_U
 from worst_route.graph.data import GraphData
 
 METRICS_TOLERANCE = 1e-6  # relative, docs/PLAN.md §8.1
@@ -141,6 +147,7 @@ def validate_route(
     stop_nodes: Sequence[int],
     node_mask: NDArray[np.bool_],
     banned_edges: NDArray[np.bool_],
+    banned_turn_classes: int = 0,
 ) -> ValidationReport:
     """Run every check on `route`; see the module docstring."""
     nodes = np.asarray(route.nodes, dtype=np.int64)
@@ -160,7 +167,7 @@ def validate_route(
             _osm_ids(data, edges, round_trip),
             _transitions(data, nodes, edges),
             _stops(nodes, route.stop_idx, stop_nodes),
-            _constraints(nodes, edges, node_mask, banned_edges),
+            _constraints(data, nodes, edges, node_mask, banned_edges, banned_turn_classes),
             _metrics(data, edges, route.metrics),
         )
     )
@@ -321,10 +328,12 @@ def _stops(nodes: NDArray[np.int64], stop_idx: Sequence[int], stop_nodes: Sequen
 
 
 def _constraints(
+    data: GraphData,
     nodes: NDArray[np.int64],
     edges: NDArray[np.int64],
     node_mask: NDArray[np.bool_],
     banned_edges: NDArray[np.bool_],
+    banned_turn_classes: int,
 ) -> Check:
     bad = np.flatnonzero(~node_mask[nodes])
     if len(bad):
@@ -334,7 +343,25 @@ def _constraints(
         return _fail(
             "constraints", bad[0], f"edge {edges[bad[0]]} is excluded by the request's tier"
         )
+    turned = _turns(data, edges[:-1], edges[1:])
+    bad = np.flatnonzero(turned & banned_turn_classes)
+    if len(bad):
+        turn = {TURN_LEFT: "left turn", TURN_RIGHT: "right turn", TURN_U: "U-turn"}[turned[bad[0]]]
+        node = nodes[bad[0] + 1]
+        detail = f"a {turn} at node {node}, which the request's strict constraint refuses"
+        return _fail("constraints", bad[0] + 1, detail)
     return Check("constraints", True)
+
+
+def _turns(data: GraphData, e_in: NDArray[np.int64], e_out: NDArray[np.int64]) -> NDArray[np.int64]:
+    """Each turn's class bit (left, right, U-turn; 0 straight), from the bearings."""
+    delta = (data.edge_bearing_out[e_out].astype(np.int64) - data.edge_bearing_in[e_in]) % 360
+    delta = np.where(delta > 180, delta - 360, delta)  # (−180, 180], clockwise
+    turned = np.zeros(len(delta), dtype=np.int64)
+    turned[(delta > TURN_STRAIGHT_DEG) & (delta <= TURN_UTURN_DEG)] = TURN_RIGHT
+    turned[(delta < -TURN_STRAIGHT_DEG) & (delta >= -TURN_UTURN_DEG)] = TURN_LEFT
+    turned[np.abs(delta) > TURN_UTURN_DEG] = TURN_U
+    return turned
 
 
 def _metrics(data: GraphData, edges: NDArray[np.int64], reported: Measured) -> Check:

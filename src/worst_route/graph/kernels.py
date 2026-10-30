@@ -12,7 +12,9 @@ orders entries by (cost, edge id). It and the turn DFS (`simple_paths_dfs_turns`
 transition table as `CsrBackend` precomputes it once per build: `trans_indptr`, each node's run
 of rows (rows sorted by node), and `trans_key`, each row's `in_edge * m + out_edge`, ascending
 within a node's run; `turn_allowed` answers a turn by a binary search in the run of the turn's
-node (a node without rows allows every turn).
+node (a node without rows allows every turn). They also take the bearings, `TURN_CLASS` and a
+set of banned turn classes (`backend.py`): `turn_class_allowed` refuses a turn of a banned
+class, and with no class banned it answers at once.
 
 Masks arrive as uint8: zero-copy views of the bool masks (`mask.view(np.uint8)`). Each kernel
 is compiled once, eagerly, for one signature whose arrays are read-only of any layout, so
@@ -49,11 +51,14 @@ def _readonly(dtype: Any) -> Any:
     return types.Array(dtype, 1, "A", readonly=True)
 
 
-_I8, _I4, _F8, _U1 = (_readonly(t) for t in (types.int64, types.int32, types.float64, types.uint8))
+_I8, _I4, _I2, _F8, _U1 = (
+    _readonly(t) for t in (types.int64, types.int32, types.int16, types.float64, types.uint8)
+)
 _PATH = types.Tuple((types.boolean, types.int32[::1], types.int32[::1]))  # type: ignore[no-untyped-call]
 _PATHS = types.Tuple((types.int64[::1], types.int32[::1], types.int32[::1]))  # type: ignore[no-untyped-call]
 _HEAP = types.Tuple((types.float64[::1], types.int64[::1], types.int64))  # type: ignore[no-untyped-call]
 
+I16 = NDArray[np.int16]
 I32 = NDArray[np.int32]
 I64 = NDArray[np.int64]
 F64 = NDArray[np.float64]
@@ -265,6 +270,18 @@ def turn_allowed(trans_indptr: I64, trans_key: I64, edge_v: I32, e: int, f: int)
     return bool(lo < end and trans_key[lo] == key)
 
 
+@_kernel(types.boolean(_I2, _I2, _U1, types.int64, types.int64, types.int64))
+def turn_class_allowed(
+    bearing_in: I16, bearing_out: I16, turn_class: U8, banned_turns: int, e: int, f: int
+) -> bool:
+    """Whether the turn from edge e into edge f is of a class not in `banned_turns`: its class is
+    `turn_class` at the change from e's arriving bearing to f's leaving one, modulo 360."""
+    if banned_turns == 0:
+        return True
+    delta = (np.int64(bearing_out[f]) - np.int64(bearing_in[e]) + 360) % 360
+    return bool((np.int64(turn_class[delta]) & banned_turns) == 0)
+
+
 @_kernel(_HEAP(types.float64[::1], types.int64[::1], types.int64, types.float64, types.int64))
 def _heap_push(
     heap_cost: F64, heap_edge: I64, size: int, cost: float, edge: int
@@ -303,6 +320,10 @@ def _heap_push(
         _U1,
         _I8,
         _I8,
+        _I2,
+        _I2,
+        _U1,
+        types.int64,
         types.int64,
         types.int64,
         types.int64,
@@ -320,6 +341,10 @@ def dijkstra_edges_masked(
     banned: U8,
     trans_indptr: I64,
     trans_key: I64,
+    bearing_in: I16,
+    bearing_out: I16,
+    turn_class: U8,
+    banned_turns: int,
     src: int,
     dst: int,
     entry_edge: int,
@@ -344,7 +369,10 @@ def dijkstra_edges_masked(
         w = edge_v[f]
         if w == src or banned[f] or not enter[w]:
             continue
-        if entry_edge >= 0 and not turn_allowed(trans_indptr, trans_key, edge_v, entry_edge, f):
+        if entry_edge >= 0 and not (
+            turn_allowed(trans_indptr, trans_key, edge_v, entry_edge, f)
+            and turn_class_allowed(bearing_in, bearing_out, turn_class, banned_turns, entry_edge, f)
+        ):
             continue
         c = weights[f]
         if c <= max_cost:
@@ -387,7 +415,12 @@ def dijkstra_edges_masked(
         state[e] = 2
         v = edge_v[e]
         if v == dst:
-            if exit_edge >= 0 and not turn_allowed(trans_indptr, trans_key, edge_v, e, exit_edge):
+            if exit_edge >= 0 and not (
+                turn_allowed(trans_indptr, trans_key, edge_v, e, exit_edge)
+                and turn_class_allowed(
+                    bearing_in, bearing_out, turn_class, banned_turns, e, exit_edge
+                )
+            ):
                 continue  # a dead end: any way on would pass dst twice
             length = 1
             x = e
@@ -415,6 +448,8 @@ def dijkstra_edges_masked(
                 continue
             if not turn_allowed(trans_indptr, trans_key, edge_v, e, f):
                 continue
+            if not turn_class_allowed(bearing_in, bearing_out, turn_class, banned_turns, e, f):
+                continue
             c = cost + weights[f]
             if c <= max_cost and c < (dist[f] if state[f] == 1 else np.inf):
                 state[f] = 1
@@ -433,6 +468,10 @@ def dijkstra_edges_masked(
         _U1,
         _I8,
         _I8,
+        _I2,
+        _I2,
+        _U1,
+        types.int64,
         types.int64,
         types.int64,
         types.int64,
@@ -449,6 +488,10 @@ def simple_paths_dfs_turns(
     banned: U8,
     trans_indptr: I64,
     trans_key: I64,
+    bearing_in: I16,
+    bearing_out: I16,
+    turn_class: U8,
+    banned_turns: int,
     src: int,
     dst: int,
     entry_edge: int,
@@ -456,9 +499,10 @@ def simple_paths_dfs_turns(
     max_depth: int,
     max_paths: int,
 ) -> tuple[I64, I32, I32]:
-    """`simple_paths_dfs` whose every turn is allowed: from `entry_edge` into the first edge,
-    between edges, and from the last edge into `exit_edge` (each turn edge −1 for none).
-    The same enumeration, limits and packing otherwise."""
+    """`simple_paths_dfs` whose every turn is allowed (by the table and the banned classes):
+    from `entry_edge` into the first edge, between edges, and from the last edge into
+    `exit_edge` (each turn edge −1 for none). The same enumeration, limits and packing
+    otherwise."""
     n = out_indptr.shape[0] - 1
     levels = max(min(max_depth, n), 0) + 1
     current = np.empty(levels, dtype=np.int64)
@@ -491,10 +535,18 @@ def simple_paths_dfs_turns(
         if on_path[w] or banned[e] or not enter[w] or depth >= max_depth:
             continue
         last = path_edges[depth - 1] if depth > 0 else entry_edge
-        if last >= 0 and not turn_allowed(trans_indptr, trans_key, edge_v, last, e):
+        if last >= 0 and not (
+            turn_allowed(trans_indptr, trans_key, edge_v, last, e)
+            and turn_class_allowed(bearing_in, bearing_out, turn_class, banned_turns, last, e)
+        ):
             continue
         if w == dst:
-            if exit_edge >= 0 and not turn_allowed(trans_indptr, trans_key, edge_v, e, exit_edge):
+            if exit_edge >= 0 and not (
+                turn_allowed(trans_indptr, trans_key, edge_v, e, exit_edge)
+                and turn_class_allowed(
+                    bearing_in, bearing_out, turn_class, banned_turns, e, exit_edge
+                )
+            ):
                 continue
             if count + 2 > offsets.shape[0]:
                 bigger_offsets = np.zeros(2 * offsets.shape[0], dtype=np.int64)

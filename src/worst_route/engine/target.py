@@ -21,11 +21,14 @@ so the API's follower can apply them to the score and metrics of each splice it 
 - `candidate(route, i, j, edges, gain)`: the value after replacing nodes[i..j] by a detour,
   from the window alone (`math.fsum` of the edges' lengths and times and of the delays at the
   nodes it adds and removes).
-- `accepts(value, gain, candidate)`: for `max`, a gain (`gain > 0`). Growing, a gain that moves
-  the value up without passing the band's top; shrinking, a loss (`gain < 0`) that moves it down
-  without passing the band's bottom. Both conditions hold at once for a ratio of the score's
-  own quantity (the distance objective's length); otherwise (a duration under distance) they
-  keep the value monotone when the score and the value disagree.
+- `accepts(value, gain, candidate, held)`: for `max`, a gain (`gain > 0`). Growing, a gain that
+  moves the value up without passing the band's top; shrinking, a loss of the objective's own
+  (`gain − held < 0`, `held` being the constraints' part of the gain, `constraint_delta`) that
+  moves the value down without passing the band's bottom and adds no penalised turn (`held ≥
+  0`), so a soft constraint's turns never pile up while a route shrinks. Both value conditions
+  hold at once for a ratio of the score's own quantity (the distance objective's length);
+  otherwise (a duration under distance) they keep the value monotone when the score and the
+  value disagree.
 - `overshoots(value, gain, candidate)`: growing, a gain that would pass the band's top; the loop
   keeps the smallest one and takes it only when a whole cycle found nothing it accepts.
 - `shrink_rank(candidate)`: shrinking, how close a detour would bring the route to the band (0
@@ -132,15 +135,16 @@ class Goal:
         )
         return self.value(route.score + gain, after)
 
-    def accepts(self, value: float, gain: float, candidate: float) -> bool:
-        """Whether the loop takes a detour of this gain and resulting value."""
+    def accepts(self, value: float, gain: float, candidate: float, held: float = 0.0) -> bool:
+        """Whether the loop takes a detour of this gain (`held` of it the constraints') and
+        resulting value."""
         if self.maximise:
             return gain > 0
         phase = self.phase(value)
         if phase == "grow":
             return gain > 0 and value < candidate <= self.high
         if phase == "shrink":
-            return gain < 0 and self.low <= candidate < value
+            return held >= 0 and gain - held < 0 and self.low <= candidate < value
         return False
 
     def overshoots(self, value: float, gain: float, candidate: float) -> bool:

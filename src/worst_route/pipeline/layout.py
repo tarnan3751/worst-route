@@ -83,6 +83,7 @@ STAGE_CHAIN: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("cleanup", "cleanup.pkl", ("build.pkl",)),
     ("enrich", "enrich.pkl", ("cleanup.pkl",)),
     ("tiers", "tiers.json", ("enrich.pkl",)),
+    ("save", "save.json", ("enrich.pkl", "tiers.json")),
 )
 
 

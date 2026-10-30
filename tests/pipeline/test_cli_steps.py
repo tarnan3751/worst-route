@@ -15,8 +15,10 @@ import pyarrow.parquet as pq
 import pytest
 from typer.testing import CliRunner
 
+from tests.pipeline.invariants import check_build
 from worst_route.cli import app
 from worst_route.config import REGIONS
+from worst_route.graph.store import read_build
 from worst_route.pipeline import download, layout
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "osm"
@@ -432,3 +434,188 @@ def test_tiers_need_enrich(data_dir: Path) -> None:
     cleaned_build(str(FIXTURES / "culdesac.osm"))
     code, output = pipeline("tiers", "--region", "portland")
     assert code == 1 and "enrich.pkl" in output and "pipeline enrich --region" in output
+
+
+def saved_build(source: str, *, allow_fragmented: bool = False) -> Path:
+    """Run every step up to save on a fixture; the build's directory (build id b1)."""
+    stages = cleaned_build(source)
+    assert pipeline("enrich", "--region", "portland")[0] == 0
+    fragmented = ["--allow-fragmented"] if allow_fragmented else []
+    assert pipeline("tiers", "--region", "portland", *fragmented)[0] == 0
+    code, output = pipeline("save", "--region", "portland")
+    assert code == 0, output
+    return stages.parent
+
+
+def test_save_after_tiers(data_dir: Path) -> None:
+    directory = saved_build(str(FIXTURES / "grid.osm"), allow_fragmented=True)
+    meta = json.loads((directory / "meta.json").read_text())
+    assert sorted(p.name for p in directory.iterdir()) == [
+        "arrays",
+        "meta.json",
+        "stages",
+        "strings.json",
+    ]
+    assert meta["region"] == "portland" and meta["build_id"] == "b1"
+    assert meta["counts"] == {
+        "nodes": 36,
+        "edges": 110,
+        "twin_pairs": 0,
+        "transitions": 0,
+        "superjunctions": 0,
+    }
+    assert meta["sources"] == [
+        {
+            "file": "grid.osm",
+            "md5": layout.file_md5(FIXTURES / "grid.osm"),
+            "source_timestamp": None,
+        }
+    ]
+    params = meta["params"]
+    assert params["bbox"] == list(REGIONS["portland"].bbox or ())
+    assert params["cleanup"]["allow_fragmented"] is False
+    assert params["cleanup"]["config"]["STAGE_A_MAX_LENGTH_M"] == 60.0
+    assert params["enrich"]["config"]["NODE_DELAY_S"] == {"stop": 10.0, "traffic_signals": 30.0}
+    assert params["tiers"]["config"]["TIER_MIN_RETAINED"] == 0.95
+    assert "pipeline_version" not in params["enrich"]
+    saved = json.loads((directory / "stages" / "save.json").read_text())
+    assert saved["graph_version"] == meta["graph_version"]
+    check_build(read_build(directory))
+
+
+def test_save_output(data_dir: Path) -> None:
+    cleaned_build(str(FIXTURES / "diamond.osm"))
+    assert pipeline("enrich", "--region", "portland")[0] == 0
+    assert pipeline("tiers", "--region", "portland", "--allow-fragmented")[0] == 0
+    code, output = pipeline("save", "--region", "portland")
+    assert code == 0, output
+    directory = data_dir / "graphs" / "portland" / "b1"
+    version = json.loads((directory / "meta.json").read_text())["graph_version"]
+    lines = output.splitlines()
+    assert lines[0].startswith(f"save b1: wrote {directory} (")
+    assert lines[1:] == [
+        f"graph_version {version}",
+        "nodes 7, edges 12; 2 twin pairs; 16 transitions at 1 super-junctions",
+    ]
+
+
+def test_save_skips_refuses_and_forces(data_dir: Path) -> None:
+    directory = saved_build(str(FIXTURES / "divided.osm"))
+    meta = directory / "meta.json"
+    written = json.loads(meta.read_text())
+    code, output = pipeline("save", "--region", "portland")
+    assert (
+        code == 0 and output == f"skipped: build b1 is written at {directory} (--force to redo)\n"
+    )
+    # Other inputs under the same build id (here a tiers stage with another timing): the
+    # written build stays, unless --force.
+    tiers_json = directory / "stages" / "tiers.json"
+    stage = json.loads(tiers_json.read_text())
+    tiers_json.write_text(json.dumps({**stage, "seconds": stage["seconds"] + 1}))
+    result = runner.invoke(app, ["pipeline", "save", "--region", "portland"])
+    assert result.exit_code == 1 and result.stdout == ""
+    assert result.stderr == (
+        f"save failed: build b1 is already written at {directory} from other inputs; a build "
+        "is never overwritten (--force to replace it)\n"
+    )
+    assert json.loads(meta.read_text()) == written
+    code, output = pipeline("save", "--region", "portland", "--force")
+    assert code == 0 and output.startswith("save b1: wrote ")
+    rewritten = json.loads(meta.read_text())
+    assert rewritten["graph_version"] == written["graph_version"]  # same graph, same version
+
+
+def test_save_refuses_stale_tiers(data_dir: Path) -> None:
+    saved_build(str(FIXTURES / "divided.osm"))
+    # Another extract under the same build id: build, cleanup and enrich run again, tiers not.
+    assert (
+        pipeline("filter", "--region", "portland", "--source", str(FIXTURES / "grid.osm"))[0] == 0
+    )
+    for step in ("build", "cleanup", "enrich"):
+        assert pipeline(step, "--region", "portland", "--build-id", "b1")[0] == 0
+    for args in ([], ["--force"]):
+        result = runner.invoke(app, ["pipeline", "save", "--region", "portland", *args])
+        assert result.exit_code == 1 and result.stdout == ""
+        assert result.stderr == (
+            "stage tiers is stale: rerun `worst-route pipeline tiers --region portland`\n"
+        )
+
+
+def test_save_records_the_parameters_it_copies(data_dir: Path) -> None:
+    directory = saved_build(str(FIXTURES / "divided.osm"))
+    written = json.loads((directory / "meta.json").read_text())
+    # Cleanup again with another parameter: its stage is the same bytes, so enrich and tiers
+    # skip, but the build's params would change.
+    code, output = pipeline("cleanup", "--region", "portland", "--allow-fragmented")
+    assert code == 0 and output.startswith("cleanup b1: wrote ")
+    assert pipeline("enrich", "--region", "portland")[1].startswith("skipped: ")
+    assert pipeline("tiers", "--region", "portland")[1].startswith("skipped: ")
+    result = runner.invoke(app, ["pipeline", "save", "--region", "portland"])
+    assert result.exit_code == 1 and "already written" in result.stderr
+    assert pipeline("save", "--region", "portland", "--force")[0] == 0
+    rewritten = json.loads((directory / "meta.json").read_text())
+    assert rewritten["params"]["cleanup"]["allow_fragmented"] is True
+    assert rewritten["graph_version"] != written["graph_version"]  # params enter the version
+
+
+def test_save_refuses_sources_of_another_extract(data_dir: Path) -> None:
+    saved_build(str(FIXTURES / "divided.osm"))
+    # The region is filtered again from another file; the build still holds the first one.
+    assert (
+        pipeline("filter", "--region", "portland", "--source", str(FIXTURES / "grid.osm"))[0] == 0
+    )
+    result = runner.invoke(app, ["pipeline", "save", "--region", "portland", "--force"])
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "save failed: the filtered extract changed since this build was built; rebuild\n"
+    )
+
+
+def test_save_needs_the_sidecars_it_reads(data_dir: Path) -> None:
+    directory = saved_build(str(FIXTURES / "divided.osm"))
+    sidecar = directory / "stages" / "cleanup.pkl.inputs.json"
+    sidecar.unlink()
+    result = runner.invoke(app, ["pipeline", "save", "--region", "portland", "--force"])
+    assert result.exit_code == 1
+    assert result.stderr == (
+        f"missing input {sidecar}: run `worst-route pipeline cleanup --region portland` first\n"
+    )
+
+
+def test_save_needs_its_inputs(data_dir: Path) -> None:
+    cleaned_build(str(FIXTURES / "culdesac.osm"))
+    code, output = pipeline("save", "--region", "portland")
+    assert code == 1 and "enrich.pkl" in output and "pipeline enrich --region" in output
+    assert pipeline("enrich", "--region", "portland")[0] == 0
+    code, output = pipeline("save", "--region", "portland")
+    assert code == 1 and "tiers.json" in output and "pipeline tiers --region" in output
+
+
+def test_plan_on_a_build_the_pipeline_saved(data_dir: Path, tmp_path: Path) -> None:
+    saved_build(str(FIXTURES / "grid.osm"), allow_fragmented=True)
+    route = tmp_path / "route.json"
+    result = runner.invoke(
+        app,
+        [
+            "plan",
+            "--region",
+            "portland",
+            "--from",
+            "45.5000,-122.6000",  # the grid's south-west corner
+            "--to",
+            "45.5045,-122.5936",  # its north-east corner
+            "--seed",
+            "1",
+            "--budget",
+            "5",
+            "--out",
+            str(route),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "validator: ok (" in result.stdout
+    ratio = float(result.stdout.split("ratio: ")[1].split("x")[0])
+    assert ratio > 1.0
+    result = runner.invoke(app, ["validate", str(route)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip().endswith("valid")

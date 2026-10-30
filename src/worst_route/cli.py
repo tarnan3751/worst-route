@@ -4,14 +4,15 @@
 named region (`docs/PLAN.md` §2): download, filter, build, cleanup, enrich, tiers, save, qa.
 Every step takes `--region` (a key of `config.REGIONS`), `--build-id` and `--force`; `filter`
 and `build` also take `--source`, a file read instead of the step's usual input (fixtures,
-tests); `cleanup` and `tiers` also take `--allow-fragmented`. `download`, `filter`, `build`,
-`cleanup`, `enrich` and `tiers` are real (`docs/reference/pipeline.md`): each prints what it
-wrote and its counts, or that its output is up to date and was skipped; a failed download, a
-cleanup or tiers step whose graph is too fragmented, or a step whose earlier stages are stale
-(`layout.stale_stages`) prints one line and exits 1. The steps from `cleanup` on read the build
-named by `--build-id`, else the region's latest. Each imports its step module when it runs, so
-`version` and the other commands do not load the geo stack. The other steps are a skeleton for
-now: each exits with code 2 and says it is not implemented yet.
+tests); `cleanup` and `tiers` also take `--allow-fragmented`. Every step but `qa` is real
+(`docs/reference/pipeline.md`): each prints what it wrote and its counts, or that its output is
+up to date and was skipped; a failed download, a cleanup or tiers step whose graph is too
+fragmented, a step whose earlier stages are stale (`layout.stale_stages`), or a save that cannot
+write its build prints one line and exits 1. The steps from `cleanup` on read the build named by
+`--build-id`, else the region's latest. `save` writes the build beside the stages and never
+overwrites one without `--force`. Each imports its step module when it runs, so `version` and
+the other commands do not load the geo stack. `qa` is a skeleton for now: it exits with code 2
+and says it is not implemented yet.
 
 `plan` plans a route on a saved build (`docs/reference/engine.md`, **The CLI**): it prints the
 snapped stops, the baseline, the worst route, the ratio, the search and the validator's report,
@@ -418,8 +419,66 @@ def tiers(
 
 @pipeline_app.command()
 def save(region: RegionOption, build_id: BuildIdOption = None, force: ForceOption = False) -> None:
-    """Write the build in the on-disk format."""
-    _not_implemented("save")
+    """Write the build in the on-disk format, beside its stages."""
+    import json
+    import pickle
+
+    from worst_route.pipeline import save as step
+
+    build_id, directory = _build_of(region, build_id)
+    spec = REGIONS[region]
+    source = layout.stage_file(directory, "enrich.pkl")
+    tiers_json = layout.stage_file(directory, "tiers.json")
+    reads = [  # (file, the step that writes it)
+        (source, "enrich"),
+        (tiers_json, "tiers"),
+        (layout.sidecar(layout.stage_file(directory, "build.pkl")), "build"),
+        *((layout.sidecar(layout.stage_file(directory, out)), s) for s, out in step.STEP_OUTPUTS),
+        (layout.roads_pbf(region), "filter"),
+        (layout.sidecar(layout.roads_pbf(region)), "filter"),
+    ]
+    for path, writer in reads:
+        _require(path, f"run `worst-route pipeline {writer} --region {region}` first")
+    _require_fresh(region, directory, "save")
+    try:
+        sources = step.build_sources(spec, directory)
+    except step.SourcesChangedError as error:
+        _fail(f"save failed: {error}")
+    params = step.build_params(spec, directory)
+    output = layout.stage_file(directory, "save.json")
+    record: dict[str, Any] = {
+        "step": "save",
+        "inputs": _inputs(source) + _inputs(tiers_json),
+        "params": {"meta": params, "pipeline_version": PIPELINE_VERSION},
+    }
+    if not force and (directory / "meta.json").exists():
+        if layout.sidecar_matches(output, record):
+            typer.echo(f"skipped: build {build_id} is written at {directory} (--force to redo)")
+            return
+        _fail(
+            f"save failed: build {build_id} is already written at {directory} from other "
+            "inputs; a build is never overwritten (--force to replace it)"
+        )
+    step.remove_build(directory)
+    layout.sidecar(output).unlink(missing_ok=True)
+    output.unlink(missing_ok=True)
+    with source.open("rb") as f:
+        graph = pickle.load(f)
+    tiers = json.loads(tiers_json.read_text())["tiers"]
+    meta = step.build_meta(spec, build_id, params, sources)
+    try:
+        data = step.graph_data(graph, [t["node_ids"] for t in tiers], meta)
+    except step.EmptyTransitionsError as error:
+        _fail(f"save failed: {error}")
+    report = step.save_build(data, directory)
+    layout.write_sidecar(output, record)
+    c = report.counts
+    typer.echo(f"save {build_id}: wrote {directory} ({report.megabytes:.1f} MB)")
+    typer.echo(f"graph_version {report.graph_version}")
+    typer.echo(
+        f"nodes {c['nodes']}, edges {c['edges']}; {c['twin_pairs']} twin pairs; "
+        f"{c['transitions']} transitions at {c['superjunctions']} super-junctions"
+    )
 
 
 @pipeline_app.command()

@@ -20,7 +20,11 @@
   "leash_km": "auto",
   "budget_s": 120.0,
   "max_iterations": 400,
-  "seed": 7
+  "seed": 7,
+  "target": {
+   "kind": "max",
+   "value": null
+  }
  },
  "nodes": [
   0,

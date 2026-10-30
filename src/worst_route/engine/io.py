@@ -7,7 +7,8 @@
      stops:    [{lat, lon, node, moved_m, note}]  (where each stop was snapped),
      nodes, edges, stop_idx,
      metrics:  {length_m, time_s, baseline_length_m, baseline_time_s, ratio (null for a round
-                trip, whose baseline is 0 m), and the objective's own numbers},
+                trip, whose baseline is 0 m), the objective's own numbers, and for a ratio or
+                duration target, target: {kind, value, achieved, within_tolerance}},
      run:      {attempts, accepted, stopped_because, elapsed_s, backend}}
 
 `read_route(path)` reads one back as a `SavedRoute`, which the validator reads like a `Route`:
@@ -61,6 +62,7 @@ def route_document(data: GraphData, result: PlanResult) -> dict[str, Any]:
     """The `route.json` of a planned route."""
     route, baseline, run = result.route, result.baseline, result.run
     ratio = route.metrics.length_m / baseline.length_m if baseline.length_m > 0 else None
+    target = result.goal.describe(result.goal.value(route.score, route.metrics))
     return {
         "graph_version": data.meta["graph_version"],
         "region": data.meta["region"],
@@ -82,6 +84,7 @@ def route_document(data: GraphData, result: PlanResult) -> dict[str, Any]:
             "baseline_time_s": baseline.time_s,
             "ratio": ratio,
             **route.metrics.counters,
+            **({"target": target} if target is not None else {}),
         },
         "run": {
             "attempts": run.attempts,

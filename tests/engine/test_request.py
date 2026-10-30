@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from worst_route.config import HighwayClass
 from worst_route.engine.request import RouteRequest, auto_leash_m, auto_tier, request_masks
+from worst_route.engine.target import Target
 from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import SpatialIndex
 from worst_route.graph.testing import Edge, make_graph
@@ -20,6 +21,7 @@ def test_defaults() -> None:
     assert request.objective == "distance"
     assert (request.tier, request.leash_km) == ("auto", "auto")
     assert (request.budget_s, request.max_iterations) == (20.0, 5000)
+    assert request.target == Target(kind="max")
 
 
 @pytest.mark.parametrize(
@@ -41,6 +43,8 @@ def test_defaults() -> None:
         {"budget_s": float("nan")},
         {"stops": [(float("nan"), 0.0), (0.0, 0.0)]},
         {"max_iterations": -1},
+        {"target": {"kind": "ratio", "value": 1}},
+        {"target": {"kind": "duration", "value": -60}},
         {"colour": "red"},
     ],
 )
@@ -56,8 +60,23 @@ def test_the_bounds_themselves_are_allowed() -> None:
     assert "Infinity" not in json.dumps(request.model_dump(mode="json"))
 
 
+def test_a_round_trip_has_no_ratio_target() -> None:
+    loop = [PORTLAND[0], PORTLAND[0]]
+    with pytest.raises(ValidationError, match="a round trip has no ratio target"):
+        RouteRequest(stops=loop, seed=1, target=Target(kind="ratio", value=5))
+    assert RouteRequest(stops=loop, seed=1, target=Target(kind="duration", value=600)).target
+    assert RouteRequest(stops=PORTLAND, seed=1, target=Target(kind="ratio", value=5)).target
+
+
 def test_round_trips_through_json() -> None:
-    request = RouteRequest(stops=PORTLAND, tier="T3", leash_km=4.5, budget_s=3, seed=7)
+    request = RouteRequest(
+        stops=PORTLAND,
+        tier="T3",
+        leash_km=4.5,
+        budget_s=3,
+        seed=7,
+        target=Target(kind="duration", value=32400),
+    )
     again = RouteRequest.model_validate(json.loads(json.dumps(request.model_dump(mode="json"))))
     assert again == request
     auto = RouteRequest(stops=PORTLAND, seed=0)

@@ -200,6 +200,10 @@ RADIUS_HALVE_EVERY = 20
 RADIUS_MIN_M = 300.0
 CONVERGED_FAILS = 400
 CONVERGED_EMPTY_CYCLES = 3
+# Targets (`engine/target.py`): a ratio or duration target is reached within ±TARGET_TOLERANCE
+# of its value; a duration target is at most TARGET_MAX_DURATION_S.
+TARGET_TOLERANCE = 0.02
+TARGET_MAX_DURATION_S = 7 * 24 * 3600.0
 
 # Cleanup (`docs/PLAN.md` §2.4; `docs/reference/pipeline.md`, cleanup).
 # Stage A (`pipeline/consolidate.py`): the radius OSMnx buffers each node by; two nodes merge

@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from worst_route.config import TARGET_TOLERANCE
 from worst_route.engine import ENGINE_VERSION
 from worst_route.engine.io import (
     feature_collection,
@@ -14,6 +15,7 @@ from worst_route.engine.io import (
 )
 from worst_route.engine.plan import PlanResult, plan_route
 from worst_route.engine.request import RouteRequest, request_masks
+from worst_route.engine.target import Target
 from worst_route.engine.validator import validate_route
 from worst_route.graph.spatial import SpatialIndex
 
@@ -62,6 +64,26 @@ def test_route_json_round_trips(tmp_path: Path) -> None:
         banned_edges=masks.banned,
     )
     assert report.ok
+
+
+def test_the_target_is_in_the_request_and_for_a_target_run_in_the_metrics() -> None:
+    plain = route_document(GRID, planned([0, 63]))
+    assert plain["request"]["target"] == {"kind": "max", "value": None}
+    assert "target" not in plain["metrics"]
+
+    request = RouteRequest(
+        stops=[at_node(GRID, v) for v in (0, 63)],
+        seed=2,
+        max_iterations=150,
+        budget_s=120,
+        target=Target(kind="ratio", value=3),
+    )
+    doc = route_document(GRID, plan_route(GRID, request))
+    assert doc["request"]["target"] == {"kind": "ratio", "value": 3.0}
+    target = doc["metrics"]["target"]
+    assert target["kind"] == "ratio" and target["value"] == 3.0
+    assert target["achieved"] == doc["metrics"]["ratio"]
+    assert target["within_tolerance"] == (abs(target["achieved"] / 3 - 1) <= TARGET_TOLERANCE)
 
 
 def test_a_round_trip_has_no_ratio_and_no_baseline_line() -> None:

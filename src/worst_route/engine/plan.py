@@ -4,8 +4,9 @@
 `numpy.random.Generator(PCG64(request.seed))` for every random draw that follows, settles the
 stops (`resolve_stops`: snapping and its fallback, which may move stops), builds the seed route
 and the baseline on them, makes the request's objective with the baseline length and the radius
-bound r_max = min(leash, the active area's extent), and runs the worsen loop within the
-request's budget, handing each accepted splice and the baseline to `on_progress`. It searches
+bound r_max = min(leash, the active area's extent) and its goal (`target.Goal`, the request's
+target against that baseline), and runs the worsen loop within the request's budget, handing
+each accepted splice and the baseline to `on_progress`. It searches
 with the backend it is given, else `make_backend`'s default (`config.DEFAULT_BACKEND`); every
 backend gives the same route, and the result records which one searched. The best
 route is then validated against the request's masks and the resolved stops; a route that fails
@@ -37,6 +38,7 @@ from worst_route.engine.request import RequestMasks, RouteRequest, request_masks
 from worst_route.engine.route import IllegalSplice, Route
 from worst_route.engine.seed_route import Baseline, baseline_route, resolve_stops, seed_route
 from worst_route.engine.snap import StopUnreachable
+from worst_route.engine.target import Goal
 from worst_route.engine.validator import (
     RouteLike,
     ValidationFailed,
@@ -62,6 +64,7 @@ class PlanResult:
     run: WorsenResult
     report: ValidationReport
     backend: str  # the name of the backend that searched
+    goal: Goal
 
 
 def plan_route(
@@ -100,6 +103,7 @@ def plan_route(
     objective = make_objective(
         request.objective, data, baseline_length_m=baseline.length_m, r_max=r_max
     )
+    goal = Goal(request.target, data, baseline_length_m=baseline.length_m)
     score, metrics = objective.evaluate(nodes, edges)
     try:
         route = Route.new(
@@ -146,7 +150,9 @@ def plan_route(
     )
     if not report.ok:
         raise ValidationFailed(report)
-    return PlanResult(request, masks, tuple(snaps), baseline, run.best, run, report, backend.name)
+    return PlanResult(
+        request, masks, tuple(snaps), baseline, run.best, run, report, backend.name, goal
+    )
 
 
 class BaseRouteMismatch(ValueError):  # noqa: N818 (the API error it becomes)

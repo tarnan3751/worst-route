@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="hand">
+  <!-- Clipping to the bbox (-122.605, 45.495, -122.595, 45.505), recorded in
+       tests/pipeline/test_filter.py. Way 500 lies inside, 501 outside, 502 straddles the east
+       edge (kept whole, nodes 6 and 7 included), 503 crosses the box with no node inside
+       (dropped: the rule looks at node locations). POIs: toll booth 10 inside (kept),
+       traffic signals 11 outside (dropped), level crossing at node 6 outside the box but on
+       the kept straddling way (kept). -->
+  <node id="1" version="1" lat="45.4980000" lon="-122.6020000"/>
+  <node id="2" version="1" lat="45.4980000" lon="-122.5980000"/>
+  <node id="3" version="1" lat="45.4800000" lon="-122.6200000"/>
+  <node id="4" version="1" lat="45.4800000" lon="-122.6150000"/>
+  <node id="5" version="1" lat="45.5020000" lon="-122.6000000"/>
+  <node id="6" version="1" lat="45.5020000" lon="-122.5900000">
+    <tag k="railway" v="level_crossing"/>
+  </node>
+  <node id="7" version="1" lat="45.5020000" lon="-122.5850000"/>
+  <node id="8" version="1" lat="45.5000000" lon="-122.6100000"/>
+  <node id="9" version="1" lat="45.5000000" lon="-122.5900000"/>
+  <node id="10" version="1" lat="45.5000000" lon="-122.6000000">
+    <tag k="barrier" v="toll_booth"/>
+  </node>
+  <node id="11" version="1" lat="45.4900000" lon="-122.6200000">
+    <tag k="highway" v="traffic_signals"/>
+  </node>
+  <way id="500" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Inside St"/>
+  </way>
+  <way id="501" version="1">
+    <nd ref="3"/>
+    <nd ref="4"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Outside St"/>
+  </way>
+  <way id="502" version="1">
+    <nd ref="5"/>
+    <nd ref="6"/>
+    <nd ref="7"/>
+    <tag k="highway" v="tertiary"/>
+    <tag k="name" v="Straddle Rd"/>
+  </way>
+  <way id="503" version="1">
+    <nd ref="8"/>
+    <nd ref="9"/>
+    <tag k="highway" v="secondary"/>
+    <tag k="name" v="Crossing Hwy"/>
+  </way>
+</osm>

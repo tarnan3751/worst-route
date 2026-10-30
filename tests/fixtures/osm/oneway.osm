@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="hand">
+  <!-- One-way rules, one small piece each (docs/reference/pipeline.md, build).
+       Expected after build: 15 junctions, 10 segments, 15 directed edges:
+       motorway_implied 2, roundabout 2, two_way 4, oneway_reverse 1, oneway_no 4, reversible 2. -->
+  <!-- I-5: a motorway with no oneway tag (forward only), then its link (forward only) -->
+  <node id="1" version="1" lat="45.5200000" lon="-122.6300000"/>
+  <node id="2" version="1" lat="45.5200000" lon="-122.6280000"/>
+  <node id="3" version="1" lat="45.5200000" lon="-122.6260000"/>
+  <node id="4" version="1" lat="45.5205000" lon="-122.6240000"/>
+  <!-- a roundabout ring, counter-clockwise: 10 south, 11 east, 12 north, 13 west -->
+  <node id="10" version="1" lat="45.5297000" lon="-122.6200000"/>
+  <node id="11" version="1" lat="45.5300000" lon="-122.6196000"/>
+  <node id="12" version="1" lat="45.5303000" lon="-122.6200000"/>
+  <node id="13" version="1" lat="45.5300000" lon="-122.6204000"/>
+  <!-- its approaches, from the south into 10 and from 12 to the north -->
+  <node id="14" version="1" lat="45.5290000" lon="-122.6200000"/>
+  <node id="15" version="1" lat="45.5310000" lon="-122.6200000"/>
+  <!-- oneway=-1: drawn west to east, driven east to west -->
+  <node id="20" version="1" lat="45.5400000" lon="-122.6300000"/>
+  <node id="21" version="1" lat="45.5400000" lon="-122.6290000"/>
+  <node id="22" version="1" lat="45.5400000" lon="-122.6280000"/>
+  <!-- oneway=no -->
+  <node id="30" version="1" lat="45.5450000" lon="-122.6300000"/>
+  <node id="31" version="1" lat="45.5450000" lon="-122.6290000"/>
+  <!-- oneway=reversible -->
+  <node id="40" version="1" lat="45.5500000" lon="-122.6300000"/>
+  <node id="41" version="1" lat="45.5500000" lon="-122.6290000"/>
+  <!-- a motorway tagged oneway=no: the implied rule needs the tag absent -->
+  <node id="50" version="1" lat="45.5550000" lon="-122.6300000"/>
+  <node id="51" version="1" lat="45.5550000" lon="-122.6290000"/>
+  <way id="300" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <tag k="highway" v="motorway"/>
+    <tag k="ref" v="I 5"/>
+    <tag k="maxspeed" v="55 mph"/>
+    <tag k="lanes" v="3"/>
+  </way>
+  <way id="301" version="1">
+    <nd ref="3"/>
+    <nd ref="4"/>
+    <tag k="highway" v="motorway_link"/>
+  </way>
+  <way id="302" version="1">
+    <nd ref="10"/>
+    <nd ref="11"/>
+    <nd ref="12"/>
+    <nd ref="13"/>
+    <nd ref="10"/>
+    <tag k="highway" v="tertiary"/>
+    <tag k="junction" v="roundabout"/>
+  </way>
+  <way id="303" version="1">
+    <nd ref="14"/>
+    <nd ref="10"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="South Approach"/>
+  </way>
+  <way id="304" version="1">
+    <nd ref="12"/>
+    <nd ref="15"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="North Approach"/>
+  </way>
+  <way id="305" version="1">
+    <nd ref="20"/>
+    <nd ref="21"/>
+    <nd ref="22"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Reverse St"/>
+    <tag k="oneway" v="-1"/>
+  </way>
+  <way id="306" version="1">
+    <nd ref="30"/>
+    <nd ref="31"/>
+    <tag k="highway" v="residential"/>
+    <tag k="oneway" v="no"/>
+  </way>
+  <way id="307" version="1">
+    <nd ref="40"/>
+    <nd ref="41"/>
+    <tag k="highway" v="primary"/>
+    <tag k="oneway" v="reversible"/>
+  </way>
+  <way id="308" version="1">
+    <nd ref="50"/>
+    <nd ref="51"/>
+    <tag k="highway" v="motorway"/>
+    <tag k="oneway" v="no"/>
+  </way>
+</osm>

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="hand">
+  <!-- Junction detection. Clinton St (400) runs 1-2-3-4-5; Clinton Ct (401) branches north
+       from 3 and dead-ends at the cul-de-sac node 7; Division St (402) continues 5-21-22, and
+       its middle node 21 is a junction only because Short St (403) ends there.
+       Expected after build: junctions 1, 3, 5, 7, 21, 22, 23; shape points 2, 4, 6;
+       6 segments, 12 directed edges, all two-way. -->
+  <node id="1" version="1" lat="45.5600000" lon="-122.6450000"/>
+  <node id="2" version="1" lat="45.5600000" lon="-122.6440000"/>
+  <node id="3" version="1" lat="45.5600000" lon="-122.6430000"/>
+  <node id="4" version="1" lat="45.5600000" lon="-122.6420000"/>
+  <node id="5" version="1" lat="45.5600000" lon="-122.6410000"/>
+  <node id="6" version="1" lat="45.5605000" lon="-122.6430000"/>
+  <!-- the cul-de-sac end -->
+  <node id="7" version="1" lat="45.5610000" lon="-122.6430000">
+    <tag k="highway" v="turning_circle"/>
+  </node>
+  <node id="21" version="1" lat="45.5600000" lon="-122.6400000"/>
+  <node id="22" version="1" lat="45.5600000" lon="-122.6390000"/>
+  <node id="23" version="1" lat="45.5595000" lon="-122.6400000"/>
+  <way id="400" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <nd ref="4"/>
+    <nd ref="5"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Clinton St"/>
+  </way>
+  <way id="401" version="1">
+    <nd ref="3"/>
+    <nd ref="6"/>
+    <nd ref="7"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Clinton Ct"/>
+  </way>
+  <way id="402" version="1">
+    <nd ref="5"/>
+    <nd ref="21"/>
+    <nd ref="22"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Division St"/>
+  </way>
+  <way id="403" version="1">
+    <nd ref="23"/>
+    <nd ref="21"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Short St"/>
+  </way>
+</osm>

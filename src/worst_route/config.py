@@ -50,3 +50,28 @@ REGIONS: dict[str, Region] = {
 def settings() -> Settings:
     """The process-wide settings, read from the environment once."""
     return Settings()
+
+
+# Road classes the pipeline keeps (`docs/PLAN.md` §2.2; `pipeline/exclusions.py` applies them).
+# A `highway=service` way is kept only when `service=alley`, as class "alley". A way is dropped
+# when its access for cars, by OSM's hierarchy (`motorcar` if present, else `motor_vehicle`, else
+# `access`), is in `BLOCKING_ACCESS`.
+KEPT_HIGHWAY: frozenset[str] = frozenset(
+    {
+        "motorway",
+        "motorway_link",
+        "trunk",
+        "trunk_link",
+        "primary",
+        "primary_link",
+        "secondary",
+        "secondary_link",
+        "tertiary",
+        "tertiary_link",
+        "unclassified",
+        "residential",
+        "living_street",
+    }
+)
+ALLEY_SERVICE = "alley"
+BLOCKING_ACCESS = frozenset({"private", "no"})

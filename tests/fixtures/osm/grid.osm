@@ -1,0 +1,247 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="hand">
+  <!-- A 6x6 street grid at ~100 m spacing in Portland's UTM zone (EPSG:32610).
+       Grid node ids are 1000 + 10*row + col, row 0 south, col 0 west.
+       Rows (ways 2000-2005, west to east): Ash St, Baker Rd (primary, ref OR 10),
+       Cedar St, Dogwood Ave (oneway=yes), Elm St, Fir St.
+       Columns (ways 2100-2105, south to north): Garfield Ave, Hazel Ave,
+       Ivy St (secondary, ref US 26), Juniper St, Kerby Ave (oneway=-1), Lombard St.
+       36 junctions, 60 segments, 110 directed edges after build.
+       POIs: toll booth 1102, level crossing 1103, traffic signals 1022, stop 1033,
+       Waffle House node 1106, Fred Meyer building way 3001. -->
+  <node id="1000" version="1" lat="45.5000000" lon="-122.6000000"/>
+  <node id="1001" version="1" lat="45.5000000" lon="-122.5987200"/>
+  <node id="1002" version="1" lat="45.5000000" lon="-122.5974400"/>
+  <node id="1003" version="1" lat="45.5000000" lon="-122.5961600"/>
+  <node id="1004" version="1" lat="45.5000000" lon="-122.5948800"/>
+  <node id="1005" version="1" lat="45.5000000" lon="-122.5936000"/>
+  <node id="1010" version="1" lat="45.5009000" lon="-122.6000000"/>
+  <node id="1011" version="1" lat="45.5009000" lon="-122.5987200"/>
+  <node id="1012" version="1" lat="45.5009000" lon="-122.5974400"/>
+  <node id="1013" version="1" lat="45.5009000" lon="-122.5961600"/>
+  <node id="1014" version="1" lat="45.5009000" lon="-122.5948800"/>
+  <node id="1015" version="1" lat="45.5009000" lon="-122.5936000"/>
+  <node id="1020" version="1" lat="45.5018000" lon="-122.6000000"/>
+  <node id="1021" version="1" lat="45.5018000" lon="-122.5987200"/>
+  <!-- signals at Cedar St / Ivy St -->
+  <node id="1022" version="1" lat="45.5018000" lon="-122.5974400">
+    <tag k="highway" v="traffic_signals"/>
+  </node>
+  <node id="1023" version="1" lat="45.5018000" lon="-122.5961600"/>
+  <node id="1024" version="1" lat="45.5018000" lon="-122.5948800"/>
+  <node id="1025" version="1" lat="45.5018000" lon="-122.5936000"/>
+  <node id="1030" version="1" lat="45.5027000" lon="-122.6000000"/>
+  <node id="1031" version="1" lat="45.5027000" lon="-122.5987200"/>
+  <node id="1032" version="1" lat="45.5027000" lon="-122.5974400"/>
+  <!-- stop sign at Dogwood Ave / Juniper St -->
+  <node id="1033" version="1" lat="45.5027000" lon="-122.5961600">
+    <tag k="highway" v="stop"/>
+  </node>
+  <node id="1034" version="1" lat="45.5027000" lon="-122.5948800"/>
+  <node id="1035" version="1" lat="45.5027000" lon="-122.5936000"/>
+  <node id="1040" version="1" lat="45.5036000" lon="-122.6000000"/>
+  <node id="1041" version="1" lat="45.5036000" lon="-122.5987200"/>
+  <node id="1042" version="1" lat="45.5036000" lon="-122.5974400"/>
+  <node id="1043" version="1" lat="45.5036000" lon="-122.5961600"/>
+  <node id="1044" version="1" lat="45.5036000" lon="-122.5948800"/>
+  <node id="1045" version="1" lat="45.5036000" lon="-122.5936000"/>
+  <node id="1050" version="1" lat="45.5045000" lon="-122.6000000"/>
+  <node id="1051" version="1" lat="45.5045000" lon="-122.5987200"/>
+  <node id="1052" version="1" lat="45.5045000" lon="-122.5974400"/>
+  <node id="1053" version="1" lat="45.5045000" lon="-122.5961600"/>
+  <node id="1054" version="1" lat="45.5045000" lon="-122.5948800"/>
+  <node id="1055" version="1" lat="45.5045000" lon="-122.5936000"/>
+  <!-- shape point on Ash St, ~11 m north of the line -->
+  <node id="1100" version="1" lat="45.5001000" lon="-122.5993600"/>
+  <!-- shape point on Garfield Ave, ~8 m west of the line -->
+  <node id="1101" version="1" lat="45.5004500" lon="-122.6001000"/>
+  <!-- toll booth on Baker Rd -->
+  <node id="1102" version="1" lat="45.5009000" lon="-122.5968000">
+    <tag k="barrier" v="toll_booth"/>
+  </node>
+  <!-- level crossing on Fir St -->
+  <node id="1103" version="1" lat="45.5045000" lon="-122.5980800">
+    <tag k="railway" v="level_crossing"/>
+  </node>
+  <!-- railway node south of Fir St -->
+  <node id="1104" version="1" lat="45.5041000" lon="-122.5980800"/>
+  <!-- railway node north of Fir St -->
+  <node id="1105" version="1" lat="45.5049000" lon="-122.5980800"/>
+  <!-- Waffle House, ~22 m north of Ash St, on no way -->
+  <node id="1106" version="1" lat="45.5002000" lon="-122.5955200">
+    <tag k="amenity" v="restaurant"/>
+    <tag k="brand" v="Waffle House"/>
+    <tag k="brand:wikidata" v="Q1701206"/>
+    <tag k="name" v="Waffle House"/>
+  </node>
+  <!-- building corner -->
+  <node id="1110" version="1" lat="45.5038700" lon="-122.5957760"/>
+  <!-- building corner -->
+  <node id="1111" version="1" lat="45.5038700" lon="-122.5952640"/>
+  <!-- building corner -->
+  <node id="1112" version="1" lat="45.5042300" lon="-122.5952640"/>
+  <!-- building corner -->
+  <node id="1113" version="1" lat="45.5042300" lon="-122.5957760"/>
+  <!-- Ash St, west to east -->
+  <way id="2000" version="1">
+    <nd ref="1000"/>
+    <nd ref="1100"/>
+    <nd ref="1001"/>
+    <nd ref="1002"/>
+    <nd ref="1003"/>
+    <nd ref="1004"/>
+    <nd ref="1005"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Ash St"/>
+  </way>
+  <!-- Baker Rd, west to east -->
+  <way id="2001" version="1">
+    <nd ref="1010"/>
+    <nd ref="1011"/>
+    <nd ref="1012"/>
+    <nd ref="1102"/>
+    <nd ref="1013"/>
+    <nd ref="1014"/>
+    <nd ref="1015"/>
+    <tag k="highway" v="primary"/>
+    <tag k="ref" v="OR 10"/>
+    <tag k="maxspeed" v="35 mph"/>
+    <tag k="lanes" v="2"/>
+    <tag k="name" v="Baker Rd"/>
+  </way>
+  <!-- Cedar St, west to east -->
+  <way id="2002" version="1">
+    <nd ref="1020"/>
+    <nd ref="1021"/>
+    <nd ref="1022"/>
+    <nd ref="1023"/>
+    <nd ref="1024"/>
+    <nd ref="1025"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Cedar St"/>
+  </way>
+  <!-- Dogwood Ave, west to east -->
+  <way id="2003" version="1">
+    <nd ref="1030"/>
+    <nd ref="1031"/>
+    <nd ref="1032"/>
+    <nd ref="1033"/>
+    <nd ref="1034"/>
+    <nd ref="1035"/>
+    <tag k="highway" v="tertiary"/>
+    <tag k="oneway" v="yes"/>
+    <tag k="name" v="Dogwood Ave"/>
+  </way>
+  <!-- Elm St, west to east -->
+  <way id="2004" version="1">
+    <nd ref="1040"/>
+    <nd ref="1041"/>
+    <nd ref="1042"/>
+    <nd ref="1043"/>
+    <nd ref="1044"/>
+    <nd ref="1045"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Elm St"/>
+  </way>
+  <!-- Fir St, west to east -->
+  <way id="2005" version="1">
+    <nd ref="1050"/>
+    <nd ref="1051"/>
+    <nd ref="1103"/>
+    <nd ref="1052"/>
+    <nd ref="1053"/>
+    <nd ref="1054"/>
+    <nd ref="1055"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Fir St"/>
+  </way>
+  <!-- Garfield Ave, south to north -->
+  <way id="2100" version="1">
+    <nd ref="1000"/>
+    <nd ref="1101"/>
+    <nd ref="1010"/>
+    <nd ref="1020"/>
+    <nd ref="1030"/>
+    <nd ref="1040"/>
+    <nd ref="1050"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Garfield Ave"/>
+  </way>
+  <!-- Hazel Ave, south to north -->
+  <way id="2101" version="1">
+    <nd ref="1001"/>
+    <nd ref="1011"/>
+    <nd ref="1021"/>
+    <nd ref="1031"/>
+    <nd ref="1041"/>
+    <nd ref="1051"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Hazel Ave"/>
+  </way>
+  <!-- Ivy St, south to north -->
+  <way id="2102" version="1">
+    <nd ref="1002"/>
+    <nd ref="1012"/>
+    <nd ref="1022"/>
+    <nd ref="1032"/>
+    <nd ref="1042"/>
+    <nd ref="1052"/>
+    <tag k="highway" v="secondary"/>
+    <tag k="ref" v="US 26"/>
+    <tag k="name" v="Ivy St"/>
+  </way>
+  <!-- Juniper St, south to north -->
+  <way id="2103" version="1">
+    <nd ref="1003"/>
+    <nd ref="1013"/>
+    <nd ref="1023"/>
+    <nd ref="1033"/>
+    <nd ref="1043"/>
+    <nd ref="1053"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Juniper St"/>
+  </way>
+  <!-- Kerby Ave, south to north -->
+  <way id="2104" version="1">
+    <nd ref="1004"/>
+    <nd ref="1014"/>
+    <nd ref="1024"/>
+    <nd ref="1034"/>
+    <nd ref="1044"/>
+    <nd ref="1054"/>
+    <tag k="highway" v="residential"/>
+    <tag k="oneway" v="-1"/>
+    <tag k="name" v="Kerby Ave"/>
+  </way>
+  <!-- Lombard St, south to north -->
+  <way id="2105" version="1">
+    <nd ref="1005"/>
+    <nd ref="1015"/>
+    <nd ref="1025"/>
+    <nd ref="1035"/>
+    <nd ref="1045"/>
+    <nd ref="1055"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Lombard St"/>
+  </way>
+  <!-- railway through the level crossing -->
+  <way id="3000" version="1">
+    <nd ref="1104"/>
+    <nd ref="1103"/>
+    <nd ref="1105"/>
+    <tag k="railway" v="rail"/>
+  </way>
+  <!-- Fred Meyer building, a closed square -->
+  <way id="3001" version="1">
+    <nd ref="1110"/>
+    <nd ref="1111"/>
+    <nd ref="1112"/>
+    <nd ref="1113"/>
+    <nd ref="1110"/>
+    <tag k="building" v="retail"/>
+    <tag k="shop" v="supermarket"/>
+    <tag k="brand" v="Fred Meyer"/>
+    <tag k="brand:wikidata" v="Q5495932"/>
+    <tag k="name" v="Fred Meyer"/>
+  </way>
+</osm>

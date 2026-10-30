@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="hand">
+  <!-- Exclusion rules. Main St (way 200, residential, kept) runs west to east through
+       nodes 1-16, ~47 m apart; each test way leaves Main St node i northwards to node
+       100 + i (~55 m). Dropped: ways 201-211. Kept: 200 and 221-224.
+       Expected after build: junctions 1, 13, 14, 15, 16 and 113-116 (dropped branches do
+       not make junctions), 8 segments, 16 directed edges. -->
+  <node id="1" version="1" lat="45.5100000" lon="-122.6000000"/>
+  <node id="2" version="1" lat="45.5100000" lon="-122.5994000"/>
+  <node id="3" version="1" lat="45.5100000" lon="-122.5988000"/>
+  <node id="4" version="1" lat="45.5100000" lon="-122.5982000"/>
+  <node id="5" version="1" lat="45.5100000" lon="-122.5976000"/>
+  <node id="6" version="1" lat="45.5100000" lon="-122.5970000"/>
+  <node id="7" version="1" lat="45.5100000" lon="-122.5964000"/>
+  <node id="8" version="1" lat="45.5100000" lon="-122.5958000"/>
+  <node id="9" version="1" lat="45.5100000" lon="-122.5952000"/>
+  <node id="10" version="1" lat="45.5100000" lon="-122.5946000"/>
+  <node id="11" version="1" lat="45.5100000" lon="-122.5940000"/>
+  <node id="12" version="1" lat="45.5100000" lon="-122.5934000"/>
+  <node id="13" version="1" lat="45.5100000" lon="-122.5928000"/>
+  <node id="14" version="1" lat="45.5100000" lon="-122.5922000"/>
+  <node id="15" version="1" lat="45.5100000" lon="-122.5916000"/>
+  <node id="16" version="1" lat="45.5100000" lon="-122.5910000"/>
+  <node id="102" version="1" lat="45.5105000" lon="-122.5994000"/>
+  <node id="103" version="1" lat="45.5105000" lon="-122.5988000"/>
+  <node id="104" version="1" lat="45.5105000" lon="-122.5982000"/>
+  <node id="105" version="1" lat="45.5105000" lon="-122.5976000"/>
+  <node id="106" version="1" lat="45.5105000" lon="-122.5970000"/>
+  <node id="107" version="1" lat="45.5105000" lon="-122.5964000"/>
+  <node id="108" version="1" lat="45.5105000" lon="-122.5958000"/>
+  <node id="109" version="1" lat="45.5105000" lon="-122.5952000"/>
+  <node id="110" version="1" lat="45.5105000" lon="-122.5946000"/>
+  <node id="111" version="1" lat="45.5105000" lon="-122.5940000"/>
+  <node id="112" version="1" lat="45.5105000" lon="-122.5934000"/>
+  <node id="113" version="1" lat="45.5105000" lon="-122.5928000"/>
+  <node id="114" version="1" lat="45.5105000" lon="-122.5922000"/>
+  <node id="115" version="1" lat="45.5105000" lon="-122.5916000"/>
+  <node id="116" version="1" lat="45.5105000" lon="-122.5910000"/>
+  <!-- third corner of the area=yes loop -->
+  <node id="150" version="1" lat="45.5105000" lon="-122.5942000"/>
+  <way id="200" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <nd ref="4"/>
+    <nd ref="5"/>
+    <nd ref="6"/>
+    <nd ref="7"/>
+    <nd ref="8"/>
+    <nd ref="9"/>
+    <nd ref="10"/>
+    <nd ref="11"/>
+    <nd ref="12"/>
+    <nd ref="13"/>
+    <nd ref="14"/>
+    <nd ref="15"/>
+    <nd ref="16"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Main St"/>
+  </way>
+  <!-- dropped: service=driveway -->
+  <way id="201" version="1">
+    <nd ref="2"/>
+    <nd ref="102"/>
+    <tag k="highway" v="service"/>
+    <tag k="service" v="driveway"/>
+  </way>
+  <!-- dropped: service=parking_aisle -->
+  <way id="202" version="1">
+    <nd ref="3"/>
+    <nd ref="103"/>
+    <tag k="highway" v="service"/>
+    <tag k="service" v="parking_aisle"/>
+  </way>
+  <!-- dropped: footway -->
+  <way id="203" version="1">
+    <nd ref="4"/>
+    <nd ref="104"/>
+    <tag k="highway" v="footway"/>
+  </way>
+  <!-- dropped: path -->
+  <way id="204" version="1">
+    <nd ref="5"/>
+    <nd ref="105"/>
+    <tag k="highway" v="path"/>
+  </way>
+  <!-- dropped: track -->
+  <way id="205" version="1">
+    <nd ref="6"/>
+    <nd ref="106"/>
+    <tag k="highway" v="track"/>
+  </way>
+  <!-- dropped: construction -->
+  <way id="206" version="1">
+    <nd ref="7"/>
+    <nd ref="107"/>
+    <tag k="highway" v="construction"/>
+    <tag k="construction" v="residential"/>
+  </way>
+  <!-- dropped: proposed -->
+  <way id="207" version="1">
+    <nd ref="8"/>
+    <nd ref="108"/>
+    <tag k="highway" v="proposed"/>
+    <tag k="proposed" v="residential"/>
+  </way>
+  <!-- dropped: cycleway -->
+  <way id="208" version="1">
+    <nd ref="9"/>
+    <nd ref="109"/>
+    <tag k="highway" v="cycleway"/>
+  </way>
+  <!-- dropped: area=yes (a closed way) -->
+  <way id="209" version="1">
+    <nd ref="10"/>
+    <nd ref="110"/>
+    <nd ref="150"/>
+    <nd ref="10"/>
+    <tag k="highway" v="residential"/>
+    <tag k="area" v="yes"/>
+  </way>
+  <!-- dropped: access=private -->
+  <way id="210" version="1">
+    <nd ref="11"/>
+    <nd ref="111"/>
+    <tag k="highway" v="residential"/>
+    <tag k="access" v="private"/>
+  </way>
+  <!-- dropped: motor_vehicle=no -->
+  <way id="211" version="1">
+    <nd ref="12"/>
+    <nd ref="112"/>
+    <tag k="highway" v="residential"/>
+    <tag k="motor_vehicle" v="no"/>
+  </way>
+  <!-- kept: service=alley -->
+  <way id="221" version="1">
+    <nd ref="13"/>
+    <nd ref="113"/>
+    <tag k="highway" v="service"/>
+    <tag k="service" v="alley"/>
+    <tag k="name" v="Alder Alley"/>
+  </way>
+  <!-- kept: access=private + motor_vehicle=yes -->
+  <way id="222" version="1">
+    <nd ref="14"/>
+    <nd ref="114"/>
+    <tag k="highway" v="residential"/>
+    <tag k="access" v="private"/>
+    <tag k="motor_vehicle" v="yes"/>
+  </way>
+  <!-- kept: living_street -->
+  <way id="223" version="1">
+    <nd ref="15"/>
+    <nd ref="115"/>
+    <tag k="highway" v="living_street"/>
+  </way>
+  <!-- kept: unclassified -->
+  <way id="224" version="1">
+    <nd ref="16"/>
+    <nd ref="116"/>
+    <tag k="highway" v="unclassified"/>
+  </way>
+</osm>

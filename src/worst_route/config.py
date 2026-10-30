@@ -173,3 +173,14 @@ RADIUS_GROWTH = 1.5
 RADIUS_HALVE_EVERY = 20
 RADIUS_MIN_M = 300.0
 CONVERGED_FAILS = 400
+
+# Cleanup (`docs/PLAN.md` §2.4; `docs/reference/pipeline.md`, cleanup).
+# Stage A (`pipeline/consolidate.py`): the radius OSMnx buffers each node by; two nodes merge
+# when their buffers overlap and an edge of at most STAGE_A_MAX_LENGTH_M joins them. The first
+# rule that matches a node's incident edges wins: a roundabout edge (stage B owns roundabouts),
+# then an arterial class (medians of divided arterials are 20-30 m wide), else the default.
+STAGE_A_TOLERANCE_ROUNDABOUT_M = 1.0
+STAGE_A_TOLERANCE_ARTERIAL_M = 15.0
+STAGE_A_TOLERANCE_M = 8.0
+STAGE_A_ARTERIAL_CLASSES = frozenset({"trunk", "primary", "secondary"})
+STAGE_A_MAX_LENGTH_M = 60.0

@@ -19,20 +19,24 @@ from .graphs import X0, Y0, at_node, lattice
 
 
 def plan_seed(
-    g: GraphData, stops: Sequence[tuple[float, float]], banned: np.ndarray | None = None
+    g: GraphData,
+    stops: Sequence[tuple[float, float]],
+    banned: np.ndarray | None = None,
+    seed: int = 0,
 ) -> SeedRoute:
     """resolve_stops then seed_route, every node active and only the given bans."""
     spatial, backend = SpatialIndex(g), PythonBackend(g)
-    request = RouteRequest(stops=list(stops), seed=0)
+    request = RouteRequest(stops=list(stops), seed=seed)
     bans = banned if banned is not None else np.zeros(g.m, dtype=bool)
     masks = replace(request_masks(spatial, g, request), active=np.ones(g.n, bool), banned=bans)
     snaps = resolve_stops(g, spatial, backend, request, masks)
     assert resolve_stops(g, spatial, backend, request, masks) == snaps  # deterministic
-    seed = seed_route(backend, g, snaps, masks.active, masks.banned)
-    check_route(g, seed.nodes, seed.edges, seed.stop_idx, bans)
-    assert list(seed.snaps) == snaps
-    assert seed.nodes[list(seed.stop_idx)].tolist() == [s.node for s in snaps]
-    return seed
+    rng = np.random.Generator(np.random.PCG64(seed))
+    found = seed_route(backend, spatial, g, snaps, masks.active, masks.banned, rng, r_max=10_000.0)
+    check_route(g, found.nodes, found.edges, found.stop_idx, bans)
+    assert list(found.snaps) == snaps
+    assert found.nodes[list(found.stop_idx)].tolist() == [s.node for s in snaps]
+    return found
 
 
 def two_way(xy: list[tuple[float, float]], streets: list[tuple[int, int, float]]) -> GraphData:
@@ -217,7 +221,10 @@ def test_a_leg_between_two_stops_on_one_node_is_a_failed_leg() -> None:
     snaps = [SpatialIndex(g).snap(*at_node(g, v), "via") for v in (0, 4, 4)]
     nowhere = np.zeros(g.m, dtype=bool)
     with pytest.raises(StopUnreachable) as caught:
-        seed_route(PythonBackend(g), g, snaps, np.ones(g.n, bool), nowhere)
+        seed_route(
+            PythonBackend(g), SpatialIndex(g), g, snaps, np.ones(g.n, bool), nowhere,
+            np.random.Generator(np.random.PCG64(0)), r_max=1e4,
+        )  # fmt: skip
     assert caught.value.leg == (1, 2)
 
 
@@ -244,11 +251,33 @@ def test_a_leg_that_turns_where_a_table_forbids_falls_back() -> None:
     assert seed.snaps[1].note == "moved 100 m: nearer nodes cannot be reached without repeating one"
 
 
-def test_a_round_trip_without_vias_waits_for_the_detours() -> None:
-    g = lattice(3, 3)
+@pytest.mark.parametrize("seed", range(5))
+def test_a_round_trip_without_vias_is_a_loop_through_a_far_waypoint(seed: int) -> None:
+    g = lattice(15, 15)
+    centre = 7 * 15 + 7
+    loop = plan_seed(g, [at_node(g, centre), at_node(g, centre)], seed=seed)
+    assert loop.nodes[0] == loop.nodes[-1] == centre and loop.stop_idx == (0, len(loop.nodes) - 1)
+    far = np.hypot(g.node_x[loop.nodes] - g.node_x[centre], g.node_y[loop.nodes] - g.node_y[centre])
+    assert far.max() >= 500.0
+    assert len(np.unique(loop.nodes[:-1])) == len(loop.nodes) - 1
+
+
+def test_the_same_seed_gives_the_same_loop() -> None:
+    g = lattice(15, 15)
+    stops = [at_node(g, 112), at_node(g, 112)]
+    assert plan_seed(g, stops, seed=3).nodes.tolist() == plan_seed(g, stops, seed=3).nodes.tolist()
+
+
+def test_a_round_trip_with_no_loop_is_unreachable() -> None:
+    xy = [(X0 + 300.0 * k, Y0) for k in range(8)]
+    g = two_way(xy, [(k, k + 1, 300.0) for k in range(7)])  # a dead straight road
     with pytest.raises(StopUnreachable) as caught:
-        plan_seed(g, [at_node(g, 4), at_node(g, 4)])
+        plan_seed(g, [at_node(g, 3), at_node(g, 3)])
     assert caught.value.leg == (0, 1) and caught.value.stop_index == 1
+    assert str(caught.value) == (
+        "no route from stop 0 to stop 1 without repeating a road, "
+        "after 20 tries at a loop through a waypoint"
+    )
 
 
 def test_a_round_trip_through_a_via() -> None:

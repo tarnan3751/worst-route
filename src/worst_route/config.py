@@ -140,3 +140,25 @@ BUBBLE_KM = 3.0
 SNAP_FALLBACK_CANDIDATES = 10
 SEED_PENALTY_ROUNDS = 4
 SEED_PENALTY_FACTOR = 8.0
+
+# Detours (`docs/PLAN.md` §3.5). A strategy is drawn with STRATEGY_WEIGHTS (waypoint, random
+# weight, local exhaustive); local exhaustive only when the window's ends lie less than
+# LOCAL_EXHAUSTIVE_MAX_M apart, in a ball of LOCAL_EXHAUSTIVE_BALL_FACTOR × that distance capped
+# at LOCAL_EXHAUSTIVE_BALL_MAX_M (the reference backend's DFS grows exponentially with the
+# ball). A waypoint is drawn within WAYPOINT_BALL_FACTOR × the radius; searches are bounded by
+# SEARCH_BUDGET_FACTOR × the radius. A first radius is RADIUS_INITIAL_FRACTION of the baseline,
+# at least RADIUS_INITIAL_MIN_M. A round trip with no stop between its ends starts as a loop
+# through a waypoint at least ROUND_TRIP_MIN_M away, drawn up to ROUND_TRIP_SEED_TRIES times.
+STRATEGY_WEIGHTS = (0.6, 0.3, 0.1)
+RANDOM_WEIGHT_RANGE = (0.2, 5.0)
+LOCAL_EXHAUSTIVE_MAX_M = 800.0
+LOCAL_EXHAUSTIVE_BALL_FACTOR = 3.0
+LOCAL_EXHAUSTIVE_BALL_MAX_M = 400.0
+LOCAL_EXHAUSTIVE_MAX_DEPTH = 25
+LOCAL_EXHAUSTIVE_MAX_PATHS = 5000
+WAYPOINT_BALL_FACTOR = 4.0
+SEARCH_BUDGET_FACTOR = 4.0
+RADIUS_INITIAL_FRACTION = 0.25
+RADIUS_INITIAL_MIN_M = 1000.0
+ROUND_TRIP_MIN_M = 500.0
+ROUND_TRIP_SEED_TRIES = 20

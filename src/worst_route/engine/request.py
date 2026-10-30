@@ -1,10 +1,11 @@
 """A route request and the masks it implies (`docs/reference/engine.md`, **Requests**).
 
 `RouteRequest` is what a caller asks for: the stops as (lat, lon) in order (the first the start,
-the last the end; the same point first and last makes a round trip), the objective's key, the
-tier (`"auto"` or `"T0"`..`"T4"`), the leash in km (`"auto"` or a number, at most 150), the
-budget in seconds (at most 120) and iterations, and the seed. Every number is finite, so it
-round-trips through JSON (`model_dump(mode="json")`) without `Infinity`.
+the last the end; the same point first and last makes a round trip), the objective's key (one
+of `objectives.OBJECTIVES`), the tier (`"auto"` or `"T0"`..`"T4"`), the leash in km (`"auto"` or
+a number, at most 150), the budget in seconds (at most 120) and iterations, and the seed. Every
+number is finite, so it round-trips through JSON (`model_dump(mode="json")`) without
+`Infinity`.
 
 `request_masks(spatial, data, request)` turns it into `RequestMasks`, from the request alone,
 so the validator can recompute them from a saved route. The stops are projected and the trip
@@ -41,6 +42,7 @@ from worst_route.config import (
     LEASH_MIN_KM,
     TIER_AUTO_KM,
 )
+from worst_route.engine.objectives import OBJECTIVES
 from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import SpatialIndex, active_mask
 
@@ -59,6 +61,13 @@ class RouteRequest(BaseModel):
     budget_s: float = Field(default=DEFAULT_BUDGET_S, gt=0, le=BUDGET_MAX_S)
     max_iterations: int = Field(default=DEFAULT_MAX_ITERATIONS, ge=0)
     seed: int = Field(ge=0)
+
+    @field_validator("objective")
+    @classmethod
+    def _known(cls, objective: str) -> str:
+        if objective not in OBJECTIVES:
+            raise ValueError(f"unknown objective {objective!r}; known: {', '.join(OBJECTIVES)}")
+        return objective
 
     @field_validator("stops")
     @classmethod

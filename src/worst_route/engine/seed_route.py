@@ -23,8 +23,12 @@ then, with it back on its node, the later stop the same way (a via or the end); 
 moves. Then `StopUnreachable` names the leg. So a via trapped where the route can enter but not
 leave walks out, and the stops after it stay. It costs a few seed builds.
 
-A request whose start and end are one node with no stop between them is a round trip without
-legs: it raises `StopUnreachable` until the detour strategies can seed it.
+A round trip with no stop between its ends (start and end on one node) has no legs: its seed is
+a loop through a waypoint, the waypoint strategy from the start back to itself on length, with
+a radius of `RADIUS_INITIAL_MIN_M` (at most r_max) and the waypoint at least `ROUND_TRIP_MIN_M`
+from the start, drawn up to `ROUND_TRIP_SEED_TRIES` times from `rng`; when none closes into a
+legal loop, `StopUnreachable` for the leg (0, 1). A stop cannot be moved to make a loop, so
+there is no fallback.
 """
 
 import math
@@ -35,7 +39,16 @@ from itertools import pairwise
 import numpy as np
 from numpy.typing import NDArray
 
-from worst_route.config import SEED_PENALTY_FACTOR, SEED_PENALTY_ROUNDS, SNAP_FALLBACK_CANDIDATES
+from worst_route.config import (
+    RADIUS_INITIAL_MIN_M,
+    ROUND_TRIP_MIN_M,
+    ROUND_TRIP_SEED_TRIES,
+    SEARCH_BUDGET_FACTOR,
+    SEED_PENALTY_FACTOR,
+    SEED_PENALTY_ROUNDS,
+    SNAP_FALLBACK_CANDIDATES,
+)
+from worst_route.engine.detour import waypoint_path
 from worst_route.engine.request import RequestMasks, RouteRequest
 from worst_route.engine.route import IllegalSplice, IntArray, check_route, twins_of
 from worst_route.engine.snap import (
@@ -152,19 +165,66 @@ def resolve_stops(
 
 def seed_route(
     backend: GraphBackend,
+    spatial: SpatialIndex,
     data: GraphData,
     snaps: Sequence[Snap],
     node_mask: BoolArray,
     banned_edges: BoolArray,
+    rng: np.random.Generator,
+    *,
+    r_max: float,
 ) -> SeedRoute:
-    """The shortest route through the resolved stops with node-disjoint legs."""
+    """The shortest route through the resolved stops with node-disjoint legs, or a loop."""
     snaps = list(snaps)
     if len(snaps) == 2 and snaps[0].node == snaps[1].node:
-        raise StopUnreachable((0, 1), "a round trip without stops between needs the detours")
+        return _loop(backend, spatial, data, snaps, node_mask, banned_edges, rng, r_max)
     try:
         return _Builder(backend, data, node_mask, banned_edges).seed(snaps)
     except _LegError as failed:
         raise StopUnreachable((failed.leg, failed.leg + 1)) from failed
+
+
+def _loop(
+    backend: GraphBackend,
+    spatial: SpatialIndex,
+    data: GraphData,
+    snaps: list[Snap],
+    node_mask: BoolArray,
+    banned_edges: BoolArray,
+    rng: np.random.Generator,
+    r_max: float,
+) -> SeedRoute:
+    """A round trip's seed: a loop from the start through a waypoint and back."""
+    start = snaps[0].node
+    radius = min(RADIUS_INITIAL_MIN_M, r_max)
+    for _ in range(ROUND_TRIP_SEED_TRIES):
+        found = waypoint_path(
+            backend,
+            spatial,
+            data,
+            start,
+            start,
+            forbid=np.zeros(data.n, dtype=np.bool_),
+            banned=banned_edges,
+            node_mask=node_mask,
+            radius=radius,
+            weights=data.edge_length_m.astype(np.float64),
+            max_cost=SEARCH_BUDGET_FACTOR * radius,
+            rng=rng,
+            min_dist_m=ROUND_TRIP_MIN_M,
+        )
+        if found is None:
+            continue
+        nodes, edges = found
+        stop_idx = (0, len(nodes) - 1)
+        try:
+            check_route(data, nodes, edges, stop_idx, banned_edges)
+        except IllegalSplice:
+            continue
+        return SeedRoute(nodes, edges, stop_idx, tuple(snaps))
+    raise StopUnreachable(
+        (0, 1), f"after {ROUND_TRIP_SEED_TRIES} tries at a loop through a waypoint"
+    )
 
 
 class _Builder:

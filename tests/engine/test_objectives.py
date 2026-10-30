@@ -42,6 +42,13 @@ class Busy(BaseObjective):
         return float(len(nodes)) ** 1.5
 
 
+class BusyFromTheStart(Busy):
+    """Busy, with a term for the route's first edge too."""
+
+    def first_edge_term(self, G: GraphData, e: int, closing: int) -> float:  # noqa: N803
+        return float(e % 5) + 0.25 + (closing % 3 if closing >= 0 else 0.0)
+
+
 def distance(data: GraphData = GRID, baseline: float = 500.0, r_max: float = 10_000.0) -> Distance:
     return Distance(data, baseline=Metrics(baseline, 0.0), r_max=r_max)
 
@@ -119,15 +126,29 @@ def test_a_round_trip_counts_its_start_once() -> None:
     assert busy.score(route) == pytest.approx(expected)
 
 
+def test_the_first_edge_term_counts_once() -> None:
+    route = route_on(GRID, [0, 1, 7])
+    busy, from_the_start = (
+        cls(GRID, baseline=Metrics(0.0, 0.0), r_max=1e4) for cls in (Busy, BusyFromTheStart)
+    )
+    first = int(route.edges[0])
+    assert from_the_start.score(route) == pytest.approx(busy.score(route) + first % 5 + 0.25)
+    loop = route_on(GRID, [0, 1, 7, 6, 0])  # a round trip: its last edge closes on its start
+    first, last = int(loop.edges[0]), int(loop.edges[-1])
+    expected = busy.score(loop) + first % 5 + 0.25 + last % 3
+    assert from_the_start.score(loop) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("busy_type", [Busy, BusyFromTheStart])
 @pytest.mark.parametrize("seed", range(6))
-def test_delta_equals_a_full_rescore_on_random_splices(seed: int) -> None:
+def test_delta_equals_a_full_rescore_on_random_splices(seed: int, busy_type: type[Busy]) -> None:
     rng = np.random.Generator(np.random.PCG64(seed))
     backend, spatial = PythonBackend(GRID), SpatialIndex(GRID)
     snake = [0, 1, 2, 3, 4, 5, 11, 10, 9, 8, 7, 6, 12, 13, 14, 15, 16, 17]
     if seed % 2:
         snake = [0, 1, 2, 3, 9, 8, 7, 6, 0]  # a round trip
     route = route_on(GRID, snake)
-    busy = Busy(GRID, baseline=Metrics(500.0, 45.0), r_max=1e4)
+    busy = busy_type(GRID, baseline=Metrics(500.0, 45.0), r_max=1e4)
     route = Route.new(
         GRID,
         route.nodes,

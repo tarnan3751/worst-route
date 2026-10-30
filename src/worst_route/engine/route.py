@@ -50,13 +50,13 @@ BoolArray = NDArray[np.bool_]
 
 @dataclass(frozen=True)
 class Metrics:
-    """What a route measures: length, driving time, the objective's own counters, and the
-    delays at its nodes (signals and stop signs; a reader that needs only the first two may
-    leave them at 0)."""
+    """What a route measures: length, driving time, the objective's own counters (JSON values:
+    the collect mode's are its item and the route's count of every item), and the delays at its
+    nodes (signals and stop signs; a reader that needs only the first two may leave them at 0)."""
 
     length_m: float
     time_s: float
-    counters: Mapping[str, float] = field(default_factory=dict)
+    counters: Mapping[str, Any] = field(default_factory=dict)
     delay_s: float = field(default=0.0, kw_only=True)
 
 

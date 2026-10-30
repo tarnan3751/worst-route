@@ -312,6 +312,20 @@ def test_the_waypoint_honours_its_pool_and_distance() -> None:
         **kwargs,
     )
     assert path is not None and 36 in path[0].tolist()
+    # a pool none of whose nodes lies in the ball: the waypoint is drawn from the ball's nodes
+    stranded = waypoint_path(
+        BACKEND,
+        SPATIAL,
+        GRID,
+        0,
+        7,
+        radius=100.0,
+        max_cost=1e9,
+        rng=rng(1),
+        pool=np.array([GRID.n - 1], dtype=np.int32),
+        **kwargs,
+    )
+    assert stranded is not None and GRID.n - 1 not in stranded[0].tolist()
     for seed in range(5):
         loop = waypoint_path(
             BACKEND,

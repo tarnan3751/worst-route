@@ -238,6 +238,12 @@ def test_validate_catches_a_tampered_route(data_dir: Path, tmp_path: Path) -> No
     result = runner.invoke(app, ["validate", str(out)])
     assert result.exit_code == 1
     assert "metrics: FAILED: length_m reported" in result.stdout
+    doc["metrics"]["length_m"] -= 10
+    doc["metrics"]["items"]["bridge"] = 999  # every route.json counts the items
+    out.write_text(json.dumps(doc))
+    result = runner.invoke(app, ["validate", str(out)])
+    assert result.exit_code == 1
+    assert "metrics: FAILED: items reported {" in result.stdout and "'bridge': 999" in result.stdout
 
     doc["graph_version"] = "0" * 64
     out.write_text(json.dumps(doc))

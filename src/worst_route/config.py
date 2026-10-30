@@ -231,6 +231,13 @@ TURN_UTURN_DEG = 160
 # so none keeps both under 0.7 a km and well above 10x, and it stays 90 s).
 TURN_PENALTY_M = 1000.0
 TURN_PENALTY_S = 90.0
+# Collecting (`engine/objectives/collect.py`): the score is items × COLLECT_ITEM_WEIGHT + the
+# length in metres, items first and length second as long as a splice changes the length by
+# less than the weight (1,000 km). The first radius is COLLECT_RADIUS_FRACTION of the baseline,
+# at least COLLECT_RADIUS_MIN_M: items are sparse, so detours start wider than distance's.
+COLLECT_ITEM_WEIGHT = 1e6
+COLLECT_RADIUS_FRACTION = 0.5
+COLLECT_RADIUS_MIN_M = 2000.0
 
 # Cleanup (`docs/PLAN.md` §2.4; `docs/reference/pipeline.md`, cleanup).
 # Stage A (`pipeline/consolidate.py`): the radius OSMnx buffers each node by; two nodes merge

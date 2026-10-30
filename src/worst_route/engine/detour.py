@@ -10,8 +10,9 @@ when a and b lie less than `LOCAL_EXHAUSTIVE_MAX_M` apart (otherwise waypoint 2/
 weight 1/3); `strategy` forces one (tests, the round-trip seed).
 
 - `waypoint_path`: a waypoint w drawn from the nodes the search may enter within
-  `WAYPOINT_BALL_FACTOR × radius` of the midpoint of a and b (the objective's pool when it has
-  one; never a or b; at least `min_dist_m` from the midpoint), uniformly with
+  `WAYPOINT_BALL_FACTOR × radius` of the midpoint of a and b (those of the objective's pool when
+  it has one and the ball holds some, else any; never a or b; at least `min_dist_m` from the
+  midpoint), uniformly with
   `WAYPOINT_UNIFORM_PROBABILITY`, else with probability ∝ exp(−distance / radius); then a → w
   (not through b), continuing `entry_edge`, and w → b (not through a → w, nor any twin of its
   edges, nor, when a = b, back along one of its roads),
@@ -222,8 +223,10 @@ def waypoint_path(
     middle = (_xy(data, a) + _xy(data, b)) / 2
     candidates = spatial.nodes_within(middle, WAYPOINT_BALL_FACTOR * radius, node_mask)
     keep = ~forbid[candidates] & (candidates != a) & (candidates != b)
-    if pool is not None:
-        keep &= np.isin(candidates, pool)
+    if pool is not None:  # the pool steers while the ball holds some of it
+        pooled = keep & np.isin(candidates, pool)
+        if pooled.any():
+            keep = pooled
     candidates = candidates[keep]
     distance = np.hypot(data.node_x[candidates] - middle[0], data.node_y[candidates] - middle[1])
     far = distance >= min_dist_m

@@ -15,6 +15,7 @@ The worsen loop cannot tell it from the objective alone.
 
 import math
 from collections.abc import Sequence
+from typing import Any
 
 from worst_route.engine.objectives.base import BoolArray, FloatArray, Objective
 from worst_route.engine.route import IntArray, Metrics, Route
@@ -47,6 +48,10 @@ class Composite:
     def pair_term(self, G: GraphData, e_in: int, e_out: int) -> float:  # noqa: N803
         """Every part's, summed."""
         return math.fsum(part.pair_term(G, e_in, e_out) for part in self._all)
+
+    def first_edge_term(self, G: GraphData, e: int, closing: int) -> float:  # noqa: N803
+        """Every part's, summed."""
+        return math.fsum(part.first_edge_term(G, e, closing) for part in self._all)
 
     def feasible_pair(self, G: GraphData, e_in: int, e_out: int) -> bool:  # noqa: N803
         """Whether the objective and every constraint allow the turn."""
@@ -97,7 +102,7 @@ class Composite:
         """The objective's."""
         return self.objective.target_value(G, route)
 
-    def describe(self, G: GraphData, route: Route) -> dict[str, float]:  # noqa: N803
+    def describe(self, G: GraphData, route: Route) -> dict[str, Any]:  # noqa: N803
         """The objective's."""
         return self.objective.describe(G, route)
 

@@ -46,8 +46,10 @@ def test_route_json_round_trips(tmp_path: Path) -> None:
     assert saved.nodes.tobytes() == result.route.nodes.tobytes()
     assert saved.edges.tobytes() == result.route.edges.tobytes()
     assert saved.stop_idx == result.route.stop_idx
-    assert saved.metrics == result.route.metrics
     metrics = doc["metrics"]
+    reported = (saved.metrics.length_m, saved.metrics.time_s)
+    assert reported == (result.route.metrics.length_m, result.route.metrics.time_s)
+    assert saved.metrics.counters == {"items": metrics["items"]}  # for the validator's recount
     assert metrics["ratio"] == pytest.approx(metrics["length_m"] / metrics["baseline_length_m"])
     assert metrics["delay_s"] == 0.0  # the lattice has no signals
     assert metrics["turns"] == count_turns(GRID, result.route.edges)

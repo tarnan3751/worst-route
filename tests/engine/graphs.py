@@ -1,6 +1,6 @@
 """Graphs and route helpers shared by the engine tests."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 import numpy as np
@@ -26,6 +26,7 @@ def lattice(
     transitions: Sequence[EdgePair] = (),
     rounded_lonlat: bool = False,
     primary_every: int = 0,
+    roads: Mapping[tuple[int, int], Mapping[str, int]] | None = None,
 ) -> GraphData:
     """`grid_graph`'s two-way lattice (node r * cols + c), with twins and transitions.
 
@@ -33,15 +34,21 @@ def lattice(
     its graph_version do not depend on PROJ's last bits on this platform. With
     `primary_every` = k, the rows and columns 0, k, 2k, ... are primary roads at 72 km/h (the
     rest residential at 40 km/h), with a 30 s signal where two of them cross and a 10 s stop
-    sign at their other nodes.
+    sign at their other nodes. `roads` gives `Edge` fields (`flags`, `toll_booths`,
+    `level_crossings`) to both directions of the road a–b, keyed by (a, b) with a < b.
     """
     xy = [(X0 + c * spacing_m, Y0 + r * spacing_m) for r in range(rows) for c in range(cols)]
+    fields = roads or {}
 
     def street(a: int, b: int, primary: bool) -> list[Edge]:
         highway, speed = (
             (HighwayClass.PRIMARY, 72.0) if primary else (HighwayClass.RESIDENTIAL, 40.0)
         )
-        return [Edge(a, b, spacing_m, highway, speed), Edge(b, a, spacing_m, highway, speed)]
+        extra = fields.get((a, b), {})
+        return [
+            Edge(a, b, spacing_m, highway, speed, **extra),
+            Edge(b, a, spacing_m, highway, speed, **extra),
+        ]
 
     def on_primary(k: int) -> bool:
         return primary_every > 0 and k % primary_every == 0

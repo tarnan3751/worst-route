@@ -26,15 +26,17 @@ recomputed from the request by the caller, not taken from the engine's state.
    turn classed again here from the edges' bearings (`TURN_STRAIGHT_DEG`, `TURN_UTURN_DEG`),
    not with the engine's table.
 8. `metrics`: the reported length and time are finite and equal the ones recomputed from the
-   edges within a relative 1e-6.
+   edges within a relative 1e-6, and reported `items` (the metrics' counters carry them for a
+   collecting route and for a route read from a file) equal the route's recount.
 
-It is deliberately written without `engine/route.py`, so a bug in the engine's bookkeeping
-cannot hide here too. A route whose ids are out of range fails `chain`, and the checks that
-would index with them fail as skipped. `ValidationFailed` carries a failing report.
+It deliberately uses nothing of `engine/route.py`'s bookkeeping, so a bug there cannot hide
+here too; it recounts the items with `objectives.collect.count_items`, which reads the route's
+arrays and the build's alone. A route whose ids are out of range fails `chain`, and the checks
+that would index with them fail as skipped. `ValidationFailed` carries a failing report.
 """
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -42,6 +44,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from worst_route.config import TURN_STRAIGHT_DEG, TURN_UTURN_DEG
+from worst_route.engine.objectives.collect import count_items
 from worst_route.graph.backend import TURN_LEFT, TURN_RIGHT, TURN_U
 from worst_route.graph.data import GraphData
 
@@ -56,6 +59,9 @@ class Measured(Protocol):
 
     @property
     def time_s(self) -> float: ...
+
+    @property
+    def counters(self) -> Mapping[str, Any]: ...
 
 
 class RouteLike(Protocol):
@@ -168,7 +174,7 @@ def validate_route(
             _transitions(data, nodes, edges),
             _stops(nodes, route.stop_idx, stop_nodes),
             _constraints(data, nodes, edges, node_mask, banned_edges, banned_turn_classes),
-            _metrics(data, edges, route.metrics),
+            _metrics(data, route, edges),
         )
     )
 
@@ -364,7 +370,8 @@ def _turns(data: GraphData, e_in: NDArray[np.int64], e_out: NDArray[np.int64]) -
     return turned
 
 
-def _metrics(data: GraphData, edges: NDArray[np.int64], reported: Measured) -> Check:
+def _metrics(data: GraphData, route: RouteLike, edges: NDArray[np.int64]) -> Check:
+    reported = route.metrics
     for name, values, value in (
         ("length_m", data.edge_length_m, reported.length_m),
         ("time_s", data.edge_time_s, reported.time_s),
@@ -373,4 +380,9 @@ def _metrics(data: GraphData, edges: NDArray[np.int64], reported: Measured) -> C
         close = abs(value - actual) <= METRICS_TOLERANCE * max(1.0, abs(actual))
         if not (math.isfinite(value) and close):  # NaN compares false, so it fails here
             return Check("metrics", False, None, f"{name} reported {value}, recomputed {actual}")
+    items = reported.counters.get("items")
+    if items is not None:
+        recounted = count_items(data, route.nodes, route.edges)
+        if items != recounted:
+            return Check("metrics", False, None, f"items reported {items}, recounted {recounted}")
     return Check("metrics", True)

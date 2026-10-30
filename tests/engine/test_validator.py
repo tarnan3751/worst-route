@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 import pytest
 
+from worst_route.engine.objectives.collect import count_items
 from worst_route.engine.route import Metrics
 from worst_route.engine.validator import NAMES, ValidationFailed, ValidationReport, validate_route
 from worst_route.graph.backend import TURN_LEFT, TURN_RIGHT, TURN_U
@@ -213,6 +214,21 @@ def test_wrong_metrics() -> None:
     assert report.lines()[-1] == "metrics: FAILED: length_m reported 301.0, recomputed 300.0"
     route.metrics = Metrics(300.0 * (1 + 1e-7), route.metrics.time_s)  # within the tolerance
     assert failed(check(route)) == []
+
+
+def test_reported_items_are_recounted() -> None:
+    route = drawn(GRID, [0, 1, 2, 5])
+    length, time = route.metrics.length_m, route.metrics.time_s
+    items = count_items(GRID, route.nodes, route.edges)
+    route.metrics = Metrics(length, time, {"items": items})
+    assert failed(check(route)) == []
+    route.metrics = Metrics(length, time, {"items": {**items, "bridge": 999}})
+    assert failed(check(route)) == ["metrics"]
+    report = validate_route(
+        GRID, route, stop_nodes=[0, 5], node_mask=ALL_NODES, banned_edges=NO_BANS
+    )
+    assert report.lines()[-1].startswith("metrics: FAILED: items reported {")
+    assert "'bridge': 999" in report.lines()[-1] and "recounted" in report.lines()[-1]
 
 
 @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])

@@ -8,12 +8,14 @@
      nodes, edges, stop_idx,
      metrics:  {length_m, time_s, delay_s (at signals and stop signs), baseline_length_m,
                 baseline_time_s, baseline_delay_s, ratio (null for a round trip, whose
-                baseline is 0 m), turns:
-                {left, right, straight, u_turn}, the objective's own numbers, and for a ratio
-                or duration target, target: {kind, value, achieved, within_tolerance}},
+                baseline is 0 m), turns: {left, right, straight, u_turn}, items: {toll_booth,
+                level_crossing, roundabout, bridge} (`count_items`, whatever the mode), the
+                objective's own numbers, and for a ratio or duration target, target: {kind,
+                value, achieved, within_tolerance}},
      run:      {attempts, accepted, stopped_because, elapsed_s, backend}}
 
-`read_route(path)` reads one back as a `SavedRoute`, which the validator reads like a `Route`:
+`read_route(path)` reads one back as a `SavedRoute`, which the validator reads like a `Route`
+(its metrics' counters hold the file's `items`, which the validator recounts):
 `worst-route validate` re-checks it against the build it names. A run that stopped on time is
 replayed exactly with `max_iterations` set to its `run.attempts` and a budget in seconds at
 least as large as the first run's.
@@ -35,6 +37,7 @@ from typing import Any
 import numpy as np
 
 from worst_route.engine import ENGINE_VERSION
+from worst_route.engine.objectives.collect import count_items
 from worst_route.engine.plan import PlanResult
 from worst_route.engine.request import RouteRequest
 from worst_route.engine.route import IntArray, Metrics
@@ -89,6 +92,7 @@ def route_document(data: GraphData, result: PlanResult) -> dict[str, Any]:
             "baseline_delay_s": baseline.delay_s,
             "ratio": ratio,
             "turns": count_turns(data, route.edges),
+            "items": count_items(data, route.nodes, route.edges),
             **route.metrics.counters,
             **({"target": target} if target is not None else {}),
         },
@@ -126,7 +130,11 @@ def read_route(path: Path) -> SavedRoute:
         nodes=np.array(doc["nodes"], dtype=np.int32),
         edges=np.array(doc["edges"], dtype=np.int32),
         stop_idx=tuple(int(k) for k in doc["stop_idx"]),
-        metrics=Metrics(float(doc["metrics"]["length_m"]), float(doc["metrics"]["time_s"])),
+        metrics=Metrics(
+            float(doc["metrics"]["length_m"]),
+            float(doc["metrics"]["time_s"]),
+            {"items": doc["metrics"]["items"]} if "items" in doc["metrics"] else {},
+        ),
         document=doc,
     )
 

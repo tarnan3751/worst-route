@@ -108,6 +108,7 @@ from worst_route.config import (
 )
 from worst_route.engine import ENGINE_VERSION
 from worst_route.engine.objectives import OBJECTIVES
+from worst_route.engine.objectives.collect import count_items
 from worst_route.engine.request import RequestMasks, RouteRequest, request_masks
 from worst_route.engine.route import IntArray, Metrics
 from worst_route.engine.seed_route import resolve_stops
@@ -735,6 +736,7 @@ class JobManager:
                 "baseline_delay_s": job.baseline_delay_s,
                 "ratio": ratio,
                 "turns": count_turns(job.loaded.data, route.edges),
+                "items": count_items(job.loaded.data, route.nodes, route.edges),
                 **route.metrics.counters,
                 **({"target": target} if target is not None else {}),
             },

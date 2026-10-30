@@ -2,13 +2,16 @@
 
 A mode is an `Objective`. Its score is a sum of terms:
 
-    score = Σ node_terms[v] + Σ edge_terms[e] + Σ pair_term(e_k, e_k+1) + global_term
+    score = Σ node_terms[v] + Σ edge_terms[e] + Σ pair_term(e_k, e_k+1)
+            + first_edge_term(e_0, closing) + global_term
 
 node terms over the route's nodes (a round trip's start once), edge terms over its edges, pair
-terms over each two consecutive edges (only when `has_pair`), the global term over the whole
-route (only when `has_global`). Feasibility hooks (`feasible_pair`, `feasible_window`) and
-per-window bans (`banned_edges`) constrain it, and `banned_turn_classes` names the turn classes
-its `feasible_pair` refuses, so the searches never propose them (`graph/backend.py`);
+terms over each two consecutive edges and the first-edge term over its first edge (its pair
+term after an edge that is not there; `closing` is a round trip's last edge, which comes back
+to its start, else -1; both only when `has_pair`), the global term over the whole route (only
+when `has_global`). Feasibility hooks (`feasible_pair`, `feasible_window`) and per-window bans
+(`banned_edges`) constrain it, and `banned_turn_classes` names the turn classes its
+`feasible_pair` refuses, so the searches never propose them (`graph/backend.py`);
 `avoided_turn_classes` names those its pair terms penalise, which the searches try without
 first (`engine/search.py`); search guidance (`search_weights`,
 `waypoint_pool`, `initial_radius`, `search_budget`) steers the detours; `target_value` is the
@@ -28,15 +31,16 @@ implements, once for every
 mode, `evaluate(nodes, edges)` (the score and the `Metrics`: length, time and, by
 `route_delay_s`, the delays at the route's nodes, whatever the mode), `score(route)` and
 `delta(route, i, j, nodes, edges)`: the terms a splice removes and adds (node and edge terms
-over the removed interior and the detour, pair terms at both boundaries and inside, the global
-term re-evaluated), summed with `math.fsum`, so it equals `score(after) - score(before)` to
-rounding and a change of nothing is exactly zero. Its `initial_radius` is
-RADIUS_INITIAL_FRACTION of the baseline length, at least RADIUS_INITIAL_MIN_M, at most r_max.
+over the removed interior and the detour, pair terms at both boundaries and inside, the
+first-edge term when the window starts the route or ends a round trip, the global term
+re-evaluated), summed with `math.fsum`, so it equals `score(after) - score(before)` to rounding
+and a change of nothing is exactly zero. Its `initial_radius` is RADIUS_INITIAL_FRACTION of the
+baseline length, at least RADIUS_INITIAL_MIN_M, at most r_max.
 """
 
 import math
 from itertools import pairwise
-from typing import Protocol
+from typing import Any, Protocol
 
 import numpy as np
 from numpy.typing import NDArray
@@ -68,6 +72,11 @@ class Objective(Protocol):
 
     def pair_term(self, G: GraphData, e_in: int, e_out: int) -> float:  # noqa: N803
         """The term of turning from e_in to e_out (read only when `has_pair`)."""
+        ...
+
+    def first_edge_term(self, G: GraphData, e: int, closing: int) -> float:  # noqa: N803
+        """The term of starting the route on e, after no edge; `closing` is the last edge of a
+        round trip (which ends where it starts), else -1 (read only when `has_pair`)."""
         ...
 
     def feasible_pair(self, G: GraphData, e_in: int, e_out: int) -> bool:  # noqa: N803
@@ -114,8 +123,8 @@ class Objective(Protocol):
         """The quantity a target mode compares."""
         ...
 
-    def describe(self, G: GraphData, route: Route) -> dict[str, float]:  # noqa: N803
-        """Mode-specific numbers for the presentation."""
+    def describe(self, G: GraphData, route: Route) -> dict[str, Any]:  # noqa: N803
+        """Mode-specific values for the presentation."""
         ...
 
     def primary(self, metrics: Metrics) -> float:
@@ -171,6 +180,10 @@ class BaseObjective:
         """No pair terms."""
         return 0.0
 
+    def first_edge_term(self, G: GraphData, e: int, closing: int) -> float:  # noqa: N803
+        """No first-edge term."""
+        return 0.0
+
     def feasible_pair(self, G: GraphData, e_in: int, e_out: int) -> bool:  # noqa: N803
         """Every turn."""
         return True
@@ -216,7 +229,7 @@ class BaseObjective:
         """The score."""
         return route.score
 
-    def describe(self, G: GraphData, route: Route) -> dict[str, float]:  # noqa: N803
+    def describe(self, G: GraphData, route: Route) -> dict[str, Any]:  # noqa: N803
         """Nothing beyond the metrics."""
         return {}
 
@@ -240,6 +253,9 @@ class BaseObjective:
             terms += self._edge[edges].tolist()
         if self.has_pair:
             terms += [self.pair_term(self.data, a, b) for a, b in pairwise(edges.tolist())]
+            if len(edges):
+                closing = int(edges[-1]) if nodes[0] == nodes[-1] else -1
+                terms.append(self.first_edge_term(self.data, int(edges[0]), closing))
         if self.has_global:
             terms.append(self.global_term(self.data, nodes, edges))
         return math.fsum(terms), self.metrics(nodes, edges)
@@ -272,6 +288,13 @@ class BaseObjective:
             old = np.concatenate((before, removed, after)).tolist()
             terms += [self.pair_term(self.data, a, b) for a, b in pairwise(new)]
             terms += [-self.pair_term(self.data, a, b) for a, b in pairwise(old)]
+            end, round_trip = len(route.edges), bool(route.nodes[0] == route.nodes[-1])
+            if i == 0 or (round_trip and j == end):  # the first edge, or a round trip's last
+                first = int(edges[0] if i == 0 else route.edges[0])
+                last = int(edges[-1] if j == end else route.edges[-1]) if round_trip else -1
+                was = int(route.edges[-1]) if round_trip else -1
+                terms.append(self.first_edge_term(self.data, first, last))
+                terms.append(-self.first_edge_term(self.data, int(route.edges[0]), was))
         if self.has_global:
             terms.append(self.global_term(self.data, *splice_arrays(route, i, j, nodes, edges)))
             terms.append(-self.global_term(self.data, route.nodes, route.edges))

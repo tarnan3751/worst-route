@@ -184,3 +184,18 @@ STAGE_A_TOLERANCE_ARTERIAL_M = 15.0
 STAGE_A_TOLERANCE_M = 8.0
 STAGE_A_ARTERIAL_CLASSES = frozenset({"trunk", "primary", "secondary"})
 STAGE_A_MAX_LENGTH_M = 60.0
+# Stage B (`pipeline/consolidate.py`): ramps (`*_link`) and roundabouts become super-junctions.
+# Ramp components whose attachment roads share two identities and lie within STAGE_B_JOIN_M of
+# each other are one interchange; a cluster whose links are all minor (STAGE_B_MINOR_LINKS)
+# takes in the at-grade node its slip lanes bypass, a neighbour of two of its attachment nodes
+# through two different roads within STAGE_B_SLIP_CENTER_M. A cluster then takes in the nodes
+# of a pocket: a path of at most STAGE_B_POCKET_M along one road leaving the cluster and coming
+# back to it (a bridge between ramp terminals). A cluster wider than STAGE_B_MAX_DIAMETER_M
+# (bbox diagonal) is split by single linkage of its attachment nodes at STAGE_B_SPLIT_EPS_M.
+# Roundabouts never split.
+STAGE_B_JOIN_M = 500.0
+STAGE_B_MINOR_LINKS = frozenset({"primary_link", "secondary_link", "tertiary_link"})
+STAGE_B_SLIP_CENTER_M = 150.0
+STAGE_B_POCKET_M = 600.0
+STAGE_B_MAX_DIAMETER_M = 1500.0
+STAGE_B_SPLIT_EPS_M = 300.0

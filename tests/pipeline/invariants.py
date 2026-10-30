@@ -5,9 +5,14 @@ rests on. Each check works on the graph after any cleanup step; a node without `
 simplified graph's nodes) stands for its own OSM id.
 """
 
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
+from typing import Any
 
 import networkx as nx
+
+from worst_route.pipeline.build import ROUNDABOUT_JUNCTIONS
+
+SUPER_KINDS = {"interchange", "roundabout"}
 
 
 def members(graph: nx.MultiDiGraph, node: int) -> tuple[int, ...]:
@@ -57,3 +62,49 @@ def check_edges(graph: nx.MultiDiGraph) -> None:
         nodes = data["osm_nodes"]
         assert nodes[0] in members(graph, u) and nodes[-1] in members(graph, v)
         assert len(set(nodes)) == len(nodes), f"edge {u}->{v} repeats an OSM id"
+
+
+def check_superjunctions(graph: nx.MultiDiGraph) -> None:
+    """(5) Transitions name boundary edges of their node; (6) they are its internal reachability.
+
+    The expected table is rebuilt from the record alone: the internal edges between parts, and
+    each boundary edge's OSM end, which lies in one part.
+    """
+    tables: dict[int, dict[str, Any]] = graph.graph.get("superjunctions", {})
+    supers = {n for n, kind in graph.nodes(data="kind") if kind in SUPER_KINDS}
+    assert set(tables) == supers
+    for node, record in tables.items():
+        assert record["kind"] == graph.nodes[node]["kind"]
+        assert record["members"] == graph.nodes[node]["members"]
+        part_of = {osm_id: part[0] for part in record["parts"] for osm_id in part}
+        inside = {m for edge in record["internal"] for m in edge["osm_nodes"][1:-1]}
+        assert set(record["members"]) == set(part_of) | inside
+        ring_edges = [e for e in record["internal"] if e.get("junction") in ROUNDABOUT_JUNCTIONS]
+        rings = nx.Graph((e["u"], e["v"]) for e in ring_edges)
+        assert record["roundabouts"] == nx.number_connected_components(rings)
+        after: dict[int, list[int]] = defaultdict(list)
+        for edge in record["internal"]:
+            assert part_of[edge["osm_nodes"][0]] == edge["u"]
+            assert part_of[edge["osm_nodes"][-1]] == edge["v"]
+            after[edge["u"]].append(edge["v"])
+        ins = [(u, v, k) for u, v, k in graph.in_edges(node, keys=True)]
+        outs = [(u, v, k) for u, v, k in graph.out_edges(node, keys=True)]
+        expected = []
+        for into in ins:
+            head = part_of[graph.edges[into]["osm_nodes"][-1]]
+            reach, queue = {head}, deque([head])
+            while queue:
+                for nxt in after[queue.popleft()]:
+                    if nxt not in reach:
+                        reach.add(nxt)
+                        queue.append(nxt)
+            for out in outs:
+                if part_of[graph.edges[out]["osm_nodes"][0]] in reach:
+                    expected.append((into, out))
+        assert list(record["transitions"]) == sorted(expected)
+
+
+def check_all(raw: nx.MultiDiGraph, graph: nx.MultiDiGraph, *, complete: bool = True) -> None:
+    check_partition(raw, graph, complete=complete)
+    check_edges(graph)
+    check_superjunctions(graph)

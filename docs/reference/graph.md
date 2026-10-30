@@ -130,7 +130,7 @@ on x/y and lengths), but a golden test should record the version of the build it
 
 ## Backends
 
-`GraphBackend` (`backend.py`) is what the engine programs against; M1's surface is three calls
+`GraphBackend` (`backend.py`) is what the engine programs against; M1's surface is four calls
 and a `name` (`"python"`, `"csr"`), which a planned route records. Every backend must give
 identical results on identical inputs; `PythonBackend` is the reference, `CsrBackend` the
 production one (**The CSR backend**), and networkx the oracle the tests check both against.
@@ -157,9 +157,13 @@ included, raises `TypeError`) and clamps them to the int64 range (a huge limit i
   a cheapest path, or None when `dst` cannot be reached at a cost of at most `max_cost`. The
   search never visits a node whose tentative cost exceeds `max_cost`, `src` at cost 0 included,
   so a negative `max_cost` returns None even when `src == dst`.
-- `simple_paths_dfs(src, dst, *, node_mask, forbid_nodes, banned_edges, max_depth, max_paths) -> list[Path]`:
-  the simple paths of at most `max_depth` edges, in ascending edge-id order (lexicographic in
-  their edge ids), stopping after `max_paths`.
+- `dijkstra_edges(src, dst, weights, *, entry_edge=-1, exit_edge=-1, node_mask, forbid_nodes, banned_edges, max_cost=inf) -> Path | None`:
+  the transition-aware search, below.
+- `simple_paths_dfs(src, dst, *, entry_edge=-1, exit_edge=-1, node_mask, forbid_nodes, banned_edges, max_depth, max_paths) -> list[Path]`:
+  the simple paths of at most `max_depth` edges whose every turn the transition table allows
+  (from `entry_edge` into the first edge and from the last edge into `exit_edge` included, when
+  given), in ascending edge-id order (lexicographic in their edge ids), stopping after
+  `max_paths`.
 - `largest_scc_mask(edge_mask=None) -> bool[n]`: the nodes of the largest strongly connected
   component of the graph restricted to `edge_mask` (scipy's `connected_components`,
   `connection="strong"`); on a tie, the component scipy labels first.
@@ -173,9 +177,39 @@ equal costs pop the lower node id first; a node's out-edges are relaxed in `out_
 equal-cost routes, the one that reaches the shared node first keeps it; of equal parallel
 edges, the lower id.
 
+**The transition-aware search** (`dijkstra_edges`; `docs/PLAN.md` §3.5) searches edge states,
+so it sees the transition table: a turn from e into f is allowed iff head(e) has no rows or
+lists (e, f). `entry_edge` is the edge the path continues (it must end at `src`), `exit_edge`
+the edge it hands over to (it must start at `dst`); both are optional (−1), and neither is
+driven, banned or costed. A bad one is a `ValueError`.
+
+- **Start**: the out-edges of `src` the turn from `entry_edge` allows (all of them without one).
+- **Moves**: from e, each f of `out_edges(head(e))` in ascending id, iff the turn (e, f) is
+  allowed, f is not banned, head(f) may be entered and is neither `src` nor head(e). No state
+  returns to the start, and none is a self-loop.
+- **End**: a state into `dst` whose turn into `exit_edge` is allowed (any, without one). A state
+  into `dst` that cannot hand over is a dead end, never expanded: going on would pass `dst`
+  twice.
+- **Ties**: the heap orders entries by (cost, edge id); only a strictly smaller cost replaces a
+  state's predecessor; `max_cost` is inclusive and bounds every state kept.
+- **The answer** is the path of the first end state popped, or None. **A path that enters a
+  node twice is None**: node-simplicity cannot be said in an edge-state search, and such a path
+  is illegal anyway (a turn table can make the cheapest legal way a loop round a block).
+- From `src` to itself: the one-node path, unless both turn edges are given and their turn is
+  not allowed at `src` (None).
+
+On a build with no transition rows it finds a path whenever `dijkstra` does, at the same cost
+(Dijkstra's tree of edge states never repeats a node when every turn is allowed), and the same
+path whenever the two tie rules pick the same one (always when the cheapest path is unique).
+The engine calls it only on builds that have rows (`docs/reference/engine.md`, **Searches**),
+so on every other build the backends' node-state results stay what they were.
+
 **`PythonBackend(data)`** turns the adjacency into Python lists once (tens of MB at Portland
-scale), combines the node masks into one array per search with a NumPy operation, and reads
-masks and weights only for the edges a search touches, so a small bounded search does not pay
+scale), and the transition table into a list of which nodes have rows and a set of allowed
+`in_edge * m + out_edge` keys (a row's node is its in-edge's head; the set is only asked for
+membership, the answer a binary search on the sorted rows gives); it combines the node masks
+into one array per search with a NumPy operation, and reads masks and weights only for the
+edges a search touches, so a small bounded search does not pay
 for the whole graph. Measured on the dev machine: a search across a 200 × 200 `grid_graph`
 (40,000 nodes, 159,200 edges, every node settled) takes 20–50 ms of CPU by the machine's load,
 0.13–0.3 µs per relaxed edge; a search ten blocks from the centre of the same grid takes under
@@ -189,6 +223,15 @@ nothing. Each call runs the shared checks in the reference's order, answers the 
 the reference does (a negative `max_cost`, an end that may not be entered, `max_paths <= 0`,
 `src == dst` for the DFS), then hands the kernel the arrays, the weights, and the masks as
 zero-copy uint8 views (`mask.view(np.uint8)`). `largest_scc_mask` is the shared scipy call.
+
+**The transition-aware search has no kernel yet.** `dijkstra_edges` raises
+`NotImplementedError` ("the csr backend cannot search turn tables yet; use --backend python"),
+and so does `simple_paths_dfs` on a build with transition rows; on a build without rows every
+turn is allowed, so the DFS's turn edges (checked as the reference checks them) change nothing
+and the plain kernel answers, byte for byte. The engine calls the transition-aware search only
+on builds with rows (`docs/reference/engine.md`, **Searches**), so on those builds, Portland's
+among them, plan with `--backend python` until the edge-state kernel lands; on builds without
+rows both backends plan the same routes.
 
 - `dijkstra_masked(out_indptr, out_edges, edge_u, edge_v, weights, enter_u8, banned_u8, src,
   dst, max_cost) -> (found, nodes, edges)`: the tie rule exactly, with a binary heap of
@@ -204,7 +247,7 @@ zero-copy uint8 views (`mask.view(np.uint8)`). `largest_scc_mask` is the shared 
 **The parity contract.** For arguments of the declared types (int node ids and limits, a real
 `max_cost`, float64 weights, bool masks), `CsrBackend` returns `PythonBackend`'s results byte
 for byte: the same paths in the same int32 arrays, the same ties, the same Nones, the same
-paths in the same order, the same errors. The semantics in `backend.py` are the specification; a case where the
+paths in the same order, the same errors (the transition-aware search aside, above). The semantics in `backend.py` are the specification; a case where the
 two legitimately differ is a bug in one of them, never a choice. Floats are added one at a time
 in the same order as the reference (no `fastmath`, no `parallel`), so equal inputs give equal
 costs. The tests (**Tests**) hold this, and so do the golden route and the engine's same-seed
@@ -320,11 +363,12 @@ hand; nothing outside tests uses it.
 
 `tests/graph/`: `test_data.py` (every malformation `validate` rejects), `test_testing.py` (the
 builders), `test_store.py` (round trips, the version and its pin, refusals), `test_backends.py`,
-and `test_spatial.py` (snapping roles, masks, `exclude` and notes; leash and bubble masks).
+`test_edge_search.py` and `test_spatial.py` (snapping roles, masks, `exclude` and notes; leash
+and bubble masks).
 
 `test_backends.py` runs the reference's tests on both backends through the `backend_type`
 fixture:
-- hypothesis parity with networkx for all three calls, 200 examples each;
+- hypothesis parity with networkx for the node-state calls and the SCC mask, 200 examples each;
 - the exact path against a heap-free implementation of the tie rule, on graphs where equal
   costs are common, also 200 examples;
 - the tie rule, masks, `max_cost`, bad arguments, and depth and count limits on crafted graphs.
@@ -337,4 +381,13 @@ Then its parity tests compare the two backends byte for byte:
 - a float32 `max_cost` against a 0.1000000015 edge, limits of 2**63, 2.5 and `inf` (the same
   results or the same `TypeError`), and the weights scanned once per array.
 
-It also tests `make_backend`'s choices. Run them with `uv run pytest tests/graph`.
+It also tests `make_backend`'s choices.
+
+`test_edge_search.py` tests `dijkstra_edges` and the DFS's turns on the reference: on random
+graphs with random transition tables, the exact path against a heap-free implementation of the
+edge-state tie rule and the cost against networkx over the edge states; without rows, the cost
+of `dijkstra` and its path when the cheapest is unique; the DFS against networkx's simple paths
+filtered by turns; crafted entry and exit edges, a loop that would repeat a node, no return to
+the start, the dead end at `dst`, bad arguments. It also checks that `CsrBackend` raises
+`NotImplementedError` for the transition-aware search on a build with rows, and answers the DFS
+with turn edges like the reference on a build without. Run them with `uv run pytest tests/graph`.

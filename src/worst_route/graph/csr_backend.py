@@ -8,6 +8,11 @@ reference does; then
 hands the CSR arrays (`out_indptr`, `out_edges`, `edge_u`, `edge_v`), the weights and the masks,
 as zero-copy uint8 views, to a kernel in `kernels.py`. `largest_scc_mask` is the reference's
 scipy call. Nothing is copied or precomputed at construction.
+
+The transition-aware search has no kernel yet: `dijkstra_edges` raises `NotImplementedError`
+(the engine calls it only on a build with transition rows, `engine/search.py`), and so does
+`simple_paths_dfs` on a build with rows; on a build without rows every turn is allowed, so the
+DFS's turn edges change nothing and the plain kernel answers.
 """
 
 import math
@@ -23,10 +28,13 @@ from worst_route.graph.backend import (
     as_limits,
     banned_mask,
     check_ends,
+    check_turn_edges,
     enterable,
     largest_scc_mask,
 )
 from worst_route.graph.data import GraphData
+
+NO_TURN_KERNEL = "the csr backend cannot search turn tables yet; use --backend python"
 
 
 class CsrBackend:
@@ -72,11 +80,29 @@ class CsrBackend:
         )
         return (nodes, edges) if found else None
 
+    def dijkstra_edges(
+        self,
+        src: int,
+        dst: int,
+        weights: NDArray[np.float64],
+        *,
+        entry_edge: int = -1,
+        exit_edge: int = -1,
+        node_mask: NDArray[np.bool_] | None = None,
+        forbid_nodes: NDArray[np.bool_] | None = None,
+        banned_edges: NDArray[np.bool_] | None = None,
+        max_cost: float = math.inf,
+    ) -> Path | None:
+        """Not yet: the edge-state kernel is a follow-up."""
+        raise NotImplementedError(NO_TURN_KERNEL)
+
     def simple_paths_dfs(
         self,
         src: int,
         dst: int,
         *,
+        entry_edge: int = -1,
+        exit_edge: int = -1,
         node_mask: NDArray[np.bool_] | None = None,
         forbid_nodes: NDArray[np.bool_] | None = None,
         banned_edges: NDArray[np.bool_] | None = None,
@@ -85,6 +111,9 @@ class CsrBackend:
     ) -> list[Path]:
         """The first `max_paths` simple paths src → dst of at most `max_depth` edges."""
         check_ends(self.data, src, dst)
+        check_turn_edges(self.data, src, dst, entry_edge, exit_edge)
+        if len(self.data.trans_node):
+            raise NotImplementedError(NO_TURN_KERNEL)
         enter = enterable(self.data, node_mask, forbid_nodes)
         banned = banned_mask(self.data, banned_edges)
         max_depth, max_paths = as_limits(max_depth, max_paths)

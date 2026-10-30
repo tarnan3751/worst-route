@@ -50,3 +50,26 @@ def test_file_md5(tmp_path: Path) -> None:
     path = tmp_path / "f"
     path.write_bytes(b"worst route")
     assert layout.file_md5(path) == "a5f42835d84598517db5a5a0371f1ed0"
+
+
+def test_stale_stages(tmp_path: Path) -> None:
+    stages = tmp_path / "stages"
+    stages.mkdir()
+
+    def made(output: str, inputs: list[str]) -> None:
+        (stages / output).write_bytes(output.encode())
+        record = {"inputs": [{"file": i, "md5": layout.file_md5(stages / i)} for i in inputs]}
+        layout.write_sidecar(stages / output, record)
+
+    (stages / "build.pkl").write_bytes(b"raw")
+    assert layout.stale_stages(tmp_path, "enrich") == []  # nothing made yet: nothing stale
+    made("cleanup.pkl", ["build.pkl"])
+    made("enrich.pkl", ["cleanup.pkl"])
+    assert layout.stale_stages(tmp_path, "qa") == []
+    (stages / "build.pkl").write_bytes(b"raw again")  # build ran again after cleanup
+    assert layout.stale_stages(tmp_path, "enrich") == ["cleanup"]
+    assert layout.stale_stages(tmp_path, "cleanup") == []  # only the stages before the step
+    (stages / "cleanup.pkl").write_bytes(b"cleaned again")
+    assert layout.stale_stages(tmp_path, "qa") == ["cleanup", "enrich"]
+    (stages / "cleanup.pkl").unlink()  # a recorded input gone
+    assert layout.stale_stages(tmp_path, "qa") == ["cleanup", "enrich"]

@@ -304,3 +304,77 @@ def test_cleanup_needs_a_build(data_dir: Path) -> None:
     assert "missing input" in output and "pipeline build --region portland" in output
     code, output = pipeline("cleanup", "--region", "portland", "--build-id", "nope")
     assert code == 1 and "nope" in output and "build.pkl" in output
+
+
+def cleaned_build(source: str, build_id: str = "b1") -> Path:
+    """Filter, build and clean a fixture under the test's data directory; the stages."""
+    assert pipeline("filter", "--region", "portland", "--source", source)[0] == 0
+    assert pipeline("build", "--region", "portland", "--build-id", build_id)[0] == 0
+    assert pipeline("cleanup", "--region", "portland", "--build-id", build_id)[0] == 0
+    return layout.build_dir("portland", build_id) / "stages"
+
+
+def test_enrich_after_cleanup(data_dir: Path) -> None:
+    stages = cleaned_build(str(FIXTURES / "grid.osm"))
+    code, output = pipeline("enrich", "--region", "portland")  # the latest build: b1
+    assert code == 0, output
+    pkl = stages / "enrich.pkl"
+    assert output.splitlines() == [
+        f"enrich b1: wrote {pkl} ({pkl.stat().st_size / 1e6:.1f} MB)",
+        "speeds: 10 edges from maxspeed, 100 at their class default",
+        "identities: 12 on 110 edges; units: 60 (50 two-way pairs)",
+        "flags: bridge 0, tunnel 0, toll 0, roundabout 0, link 0",
+        "toll_booth: 1 found, 1 on edges, 0 at junctions, 0 off the graph; on 2 edges",
+        "level_crossing: 1 found, 1 on edges, 0 at junctions, 0 off the graph; on 2 edges",
+        "stop: 1 found, 1 at junctions (a delay), 0 shape points (none), 0 off the graph",
+        "traffic_signals: 1 found, 1 at junctions (a delay), 0 shape points (none), "
+        "0 off the graph",
+        "nodes: 2 with a delay, 36 of 36 pass-through",
+    ]
+    assert json.loads((stages / "enrich.json").read_text())["units"] == 60
+    sidecar = json.loads((stages / "enrich.pkl.inputs.json").read_text())
+    assert [i["file"] for i in sidecar["inputs"]] == ["cleanup.pkl", "portland.pois.parquet"]
+    assert sidecar["params"]["config"]["BEARING_SAMPLE_M"] == 20.0
+
+
+def test_enrich_skips_unless_forced_or_changed(data_dir: Path) -> None:
+    stages = cleaned_build(str(FIXTURES / "divided.osm"))
+    assert pipeline("enrich", "--region", "portland")[0] == 0
+    written = (stages / "enrich.pkl").stat().st_mtime_ns
+    code, output = pipeline("enrich", "--region", "portland", "--build-id", "b1")
+    assert code == 0 and output.startswith("skipped: enrich of build b1 is up to date")
+    assert (stages / "enrich.pkl").stat().st_mtime_ns == written
+    code, output = pipeline("enrich", "--region", "portland", "--force")
+    assert code == 0 and output.startswith("enrich b1: wrote ")
+    # Other POIs are another input: enrich runs again.
+    grid = str(FIXTURES / "grid.osm")
+    assert pipeline("filter", "--region", "portland", "--source", grid)[0] == 0
+    code, output = pipeline("enrich", "--region", "portland")
+    assert code == 0 and output.startswith("enrich b1: wrote ")
+
+
+def test_enrich_refuses_a_stale_cleanup(data_dir: Path) -> None:
+    stages = cleaned_build(str(FIXTURES / "divided.osm"))
+    # The build is made again, from another file under the same id; cleanup is not rerun.
+    source = str(FIXTURES / "culdesac.osm")
+    assert pipeline("build", "--region", "portland", "--source", source, "--build-id", "b1")[0] == 0
+    result = runner.invoke(app, ["pipeline", "enrich", "--region", "portland"])
+    assert result.exit_code == 1 and result.stdout == ""
+    assert result.stderr == (
+        "stage cleanup is stale: rerun `worst-route pipeline cleanup --region portland`\n"
+    )
+    assert not (stages / "enrich.pkl").exists()
+    assert pipeline("cleanup", "--region", "portland")[0] == 0
+    assert pipeline("enrich", "--region", "portland")[0] == 0
+
+
+def test_enrich_needs_its_inputs(data_dir: Path) -> None:
+    code, output = pipeline("enrich", "--region", "portland")
+    assert code == 1 and "pipeline build --region portland" in output
+    source = str(FIXTURES / "culdesac.osm")
+    assert pipeline("build", "--region", "portland", "--source", source, "--build-id", "b1")[0] == 0
+    code, output = pipeline("enrich", "--region", "portland")
+    assert code == 1 and "cleanup.pkl" in output and "pipeline cleanup --region" in output
+    assert pipeline("cleanup", "--region", "portland")[0] == 0
+    code, output = pipeline("enrich", "--region", "portland")
+    assert code == 1 and "pois.parquet" in output and "pipeline filter --region" in output

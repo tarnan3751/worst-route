@@ -4,13 +4,14 @@
 named region (`docs/PLAN.md` §2): download, filter, build, cleanup, enrich, tiers, save, qa.
 Every step takes `--region` (a key of `config.REGIONS`), `--build-id` and `--force`; `filter`
 and `build` also take `--source`, a file read instead of the step's usual input (fixtures,
-tests); `cleanup` also takes `--allow-fragmented`. `download`, `filter`, `build` and `cleanup`
-are real (`docs/reference/pipeline.md`): each prints what it wrote and its counts, or that its
-output is up to date and was skipped; a failed download, or a cleanup whose graph is too
-fragmented, prints one line and exits 1. `cleanup` reads the build named by `--build-id`, else
-the region's latest. Each imports its step module when it runs, so `version` and the other
-commands do not load the geo stack. The other steps are a skeleton for now: each exits with
-code 2 and says it is not implemented yet.
+tests); `cleanup` also takes `--allow-fragmented`. `download`, `filter`, `build`, `cleanup` and
+`enrich` are real (`docs/reference/pipeline.md`): each prints what it wrote and its counts, or
+that its output is up to date and was skipped; a failed download, a cleanup whose graph is too
+fragmented, or a step whose earlier stages are stale (`layout.stale_stages`) prints one line and
+exits 1. `cleanup` and `enrich` read the build named by `--build-id`, else the region's latest.
+Each imports its step module when it runs, so `version` and the other commands do not load the
+geo stack. The other steps are a skeleton for now: each exits with code 2 and says it is not
+implemented yet.
 
 `plan` plans a route on a saved build (`docs/reference/engine.md`, **The CLI**): it prints the
 snapped stops, the baseline, the worst route, the ratio, the search and the validator's report,
@@ -75,6 +76,26 @@ def _not_implemented(step: str) -> NoReturn:
 def _require(path: Path, hint: str) -> None:
     if not path.exists():
         typer.echo(f"missing input {path}: {hint}", err=True)
+        raise typer.Exit(code=1)
+
+
+def _build_of(region: str, build_id: str | None) -> tuple[str, Path]:
+    """The build `--build-id` names, else the region's latest, and its directory."""
+    if build_id is None:
+        latest = layout.latest_file(region)
+        _require(latest, f"run `worst-route pipeline build --region {region}` first")
+        build_id = latest.read_text().strip()
+    return build_id, layout.build_dir(region, build_id)
+
+
+def _require_fresh(region: str, directory: Path, step: str) -> None:
+    """Exit 1, naming the step to rerun, when a stage before `step` is stale."""
+    stale = layout.stale_stages(directory, step)
+    if stale:
+        typer.echo(
+            f"stage {stale[0]} is stale: rerun `worst-route pipeline {stale[0]} --region {region}`",
+            err=True,
+        )
         raise typer.Exit(code=1)
 
 
@@ -280,8 +301,62 @@ def cleanup(
 def enrich(
     region: RegionOption, build_id: BuildIdOption = None, force: ForceOption = False
 ) -> None:
-    """Speeds, identities, collectibles, brands, states and places."""
-    _not_implemented("enrich")
+    """Speeds, identities, road units, flags, bearings, collectibles, delays, pass-through."""
+    import pickle
+
+    import pyarrow.parquet as pq
+
+    from worst_route.pipeline import enrich as step
+
+    build_id, directory = _build_of(region, build_id)
+    source = layout.stage_file(directory, "cleanup.pkl")
+    _require(source, f"run `worst-route pipeline cleanup --region {region}` first")
+    _require_fresh(region, directory, "enrich")
+    pois = layout.pois_parquet(region)
+    _require(pois, f"run `worst-route pipeline filter --region {region}` first")
+    output = layout.stage_file(directory, "enrich.pkl")
+    record: dict[str, Any] = {
+        "step": "enrich",
+        "inputs": _inputs(source) + _inputs(pois),
+        "params": {"config": step.parameters(), "pipeline_version": PIPELINE_VERSION},
+    }
+    if not force and layout.sidecar_matches(output, record):
+        typer.echo(
+            f"skipped: enrich of build {build_id} is up to date at {output} (--force to redo)"
+        )
+        return
+    layout.sidecar(output).unlink(missing_ok=True)
+    output.unlink(missing_ok=True)
+    layout.stage_file(directory, "enrich.json").unlink(missing_ok=True)
+    with source.open("rb") as f:
+        graph = pickle.load(f)
+    report = step.run_enrich(graph, pq.read_table(pois))
+    step.save_stage(graph, report, directory)
+    layout.write_sidecar(output, record)
+    typer.echo(f"enrich {build_id}: wrote {output} ({_size(output)})")
+    parsed = sum(report.speed_parsed.values())
+    typer.echo(
+        f"speeds: {parsed} edges from maxspeed, {report.edges - parsed} at their class default"
+    )
+    typer.echo(
+        f"identities: {report.identities} on {report.edges_with_identity} edges; "
+        f"units: {report.units} ({report.two_way_pairs} two-way pairs)"
+    )
+    typer.echo("flags: " + ", ".join(f"{flag} {n}" for flag, n in report.flags.items()))
+    for kind, c in report.collectibles.items():
+        typer.echo(
+            f"{kind}: {c['found']} found, {c['on_edges']} on edges, {c['at_junctions']} at "
+            f"junctions, {c['off_graph']} off the graph; on {c['edges']} edges"
+        )
+    for kind, d in report.delays.items():
+        typer.echo(
+            f"{kind}: {d['found']} found, {d['at_junctions']} at junctions (a delay), "
+            f"{d['shape_points']} shape points (none), {d['off_graph']} off the graph"
+        )
+    typer.echo(
+        f"nodes: {report.delay_nodes} with a delay, {report.pass_through} of {report.nodes} "
+        "pass-through"
+    )
 
 
 @pipeline_app.command()

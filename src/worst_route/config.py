@@ -216,3 +216,26 @@ TWIN_BEARING_TOL = 30.0
 # Connectivity (`pipeline/connectivity.py`): cleanup fails when the largest strongly connected
 # component keeps fewer than this fraction of the nodes, unless --allow-fragmented.
 SCC_MIN_RETAINED = 0.99
+
+# Enrich (`docs/PLAN.md` §2.5; `docs/reference/pipeline.md`, enrich). An edge's speed is its
+# `maxspeed` tag when it parses, else its class's default here, in mph; a node's delay is the
+# largest NODE_DELAY_S of the stop signs and signals merged into it; an edge's bearings are taken
+# over the first and the last BEARING_SAMPLE_M of its geometry.
+SPEED_DEFAULT_MPH: dict[HighwayClass, float] = {
+    HighwayClass.MOTORWAY: 65.0,
+    HighwayClass.MOTORWAY_LINK: 35.0,
+    HighwayClass.TRUNK: 55.0,
+    HighwayClass.TRUNK_LINK: 35.0,
+    HighwayClass.PRIMARY: 45.0,
+    HighwayClass.PRIMARY_LINK: 35.0,
+    HighwayClass.SECONDARY: 35.0,
+    HighwayClass.SECONDARY_LINK: 35.0,
+    HighwayClass.TERTIARY: 30.0,
+    HighwayClass.TERTIARY_LINK: 35.0,
+    HighwayClass.UNCLASSIFIED: 25.0,
+    HighwayClass.RESIDENTIAL: 25.0,
+    HighwayClass.LIVING_STREET: 15.0,
+    HighwayClass.ALLEY: 10.0,
+}
+NODE_DELAY_S = {"stop": 10.0, "traffic_signals": 30.0}
+BEARING_SAMPLE_M = 20.0

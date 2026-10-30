@@ -10,7 +10,9 @@ the settings cache sees its own tree.
 A build id is the first 12 hex digits of a sha256 over the filtered roads' md5, the region's
 name, bbox and projected CRS, and `PIPELINE_VERSION`. A step that wrote `<output>` records its
 inputs' md5s and its parameters in the sidecar `<output>.inputs.json`; the step is skipped while
-its output exists and the sidecar matches what it would record now.
+its output exists and the sidecar matches what it would record now. `stale_stages` walks a
+build's stages in order (`STAGE_CHAIN`) and names those whose recorded inputs no longer match
+the files there, so a step never reads a stage made from inputs that have since changed.
 """
 
 import hashlib
@@ -73,6 +75,37 @@ def build_id_for(roads_md5: str, region: Region) -> str:
 def sidecar(output: Path) -> Path:
     """The file recording what `output` was made from."""
     return output.with_name(f"{output.name}.inputs.json")
+
+
+# A build's stages in order: each step, the stage file it writes, and the stage files its
+# sidecar records as its inputs.
+STAGE_CHAIN: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("cleanup", "cleanup.pkl", ("build.pkl",)),
+    ("enrich", "enrich.pkl", ("cleanup.pkl",)),
+)
+
+
+def stale_stages(build: Path, up_to: str) -> list[str]:
+    """The stages before step `up_to`, in order, that were made from inputs since changed.
+
+    A stage is stale when its sidecar exists and an input it records is gone or has another md5
+    now; a stage not yet made is not stale (a step's own missing input is reported apart). A step
+    outside the chain checks every stage.
+    """
+    stale = []
+    for step, output, inputs in STAGE_CHAIN:
+        if step == up_to:
+            break
+        side = sidecar(stage_file(build, output))
+        if not side.exists():
+            continue
+        recorded = {i["file"]: i["md5"] for i in json.loads(side.read_text())["inputs"]}
+        for name in inputs:
+            path = stage_file(build, name)
+            if not path.exists() or recorded.get(name) != file_md5(path):
+                stale.append(step)
+                break
+    return stale
 
 
 def sidecar_matches(output: Path, record: dict[str, Any]) -> bool:

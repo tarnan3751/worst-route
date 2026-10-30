@@ -1,6 +1,7 @@
 import pytest
 
 from worst_route.pipeline.names import (
+    identity_of,
     name_without_directions,
     normalize_name,
     normalize_ref,
@@ -100,3 +101,30 @@ def test_road_signature() -> None:
 )
 def test_name_without_directions(name: str, expected: str) -> None:
     assert name_without_directions(name) == expected
+
+
+@pytest.mark.parametrize(
+    ("tags", "expected"),
+    [
+        ({"ref": "I 84;US 30", "name": "Banfield Expressway"}, "I 84"),
+        ({"ref": "US 30;I-84"}, "I 84"),  # by class, not by position
+        ({"ref": "US 26;OR 8"}, "US 26"),
+        ({"ref": "OR 8;US 26"}, "US 26"),
+        ({"ref": "OR 99W;OR 18"}, "OR 18"),  # alphabetical within a class
+        ({"ref": "I-5;I-205"}, "I 205"),
+        ({"ref": "SR 14;WA 500"}, "SR 14"),  # SR ranks with the states
+        ({"ref": "CR 119;OR 99W"}, "OR 99W"),  # a county route is not a state route
+        ({"ref": "CR 119"}, "CR 119"),
+        ({"ref": "1220"}, "1220"),
+        ({"ref": "Interstate 5"}, "I 5"),
+        ({"ref": "US 26 Business"}, "US 26 BUSINESS"),  # never its mainline's identity
+        ({"ref": "US 26 Business;OR 8"}, "US 26 BUSINESS"),
+        ({"ref": "US 30 Bypass"}, "US 30 BYPASS"),
+        ({"ref": " ; ", "name": "SE Main St"}, "southeast main street"),
+        ({"name": "SE Hawthorne Blvd"}, "southeast hawthorne boulevard"),
+        ({"name": " "}, None),
+        ({}, None),
+    ],
+)
+def test_identity_of(tags: dict[str, str], expected: str | None) -> None:
+    assert identity_of(tags) == expected

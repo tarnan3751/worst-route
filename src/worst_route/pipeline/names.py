@@ -9,9 +9,11 @@ a space put between a letter prefix and its number (`I5` → `I 5`), and a trail
 business route never equals its mainline. `normalize_name` casefolds, drops periods, expands
 directionals (`NE` → `northeast`) and, except as the first word ("St Johns"), the USPS street
 suffixes (`St` → `street`); `name_without_directions` also leaves the directional words out.
-`road_signature` is a road's identity for the cleanup steps: its
-normalised ref set when it has a ref, else its normalised name, else None. Enrich's identities
-reuse these tables later.
+`road_signature` is a road's identity for the cleanup steps: its normalised ref set when it has a
+ref, else its normalised name, else None. `identity_of` is the one identity enrich stores per
+edge (hard mode, directions): the highest-class ref, ranked Interstate, US, state (a state's
+postal code or `SR`), then any other, alphabetically within a class, each ref keeping its suffix
+(`US 26 BUSINESS` is not `US 26`); else the normalised name.
 """
 
 import re
@@ -37,6 +39,14 @@ _REF_SUFFIXES = {
     "ALT": "ALT",
     "ALTERNATE": "ALT",
 }
+
+# Ref prefixes ranked as state routes by `identity_of`: the states' and DC's postal codes, and
+# SR (`State Route`). Others, such as CR (county roads), rank below.
+_STATE_CODES = (
+    "AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH "
+    "NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY SR"
+)
+_STATE_PREFIXES = frozenset(_STATE_CODES.split())
 
 _DIRECTIONALS = {
     "n": "north",
@@ -109,3 +119,28 @@ def road_signature(tags: Mapping[str, Any]) -> RoadSignature | None:
     if name is not None and (normalized := normalize_name(name)):
         return normalized
     return None
+
+
+def identity_of(tags: Mapping[str, Any]) -> str | None:
+    """The road's identity: its highest-class ref, suffix kept, else its normalised name."""
+    ref = tags.get("ref")
+    if ref is not None:
+        refs = [joined for part in ref.split(";") if (joined := " ".join(normalize_ref(part)))]
+        if refs:
+            return min(refs, key=lambda r: (_ref_rank(r), r))
+    name = tags.get("name")
+    if name is not None and (normalized := normalize_name(name)):
+        return normalized
+    return None
+
+
+def _ref_rank(ref: str) -> int:
+    """0 Interstate, 1 US, 2 state, 3 any other ref."""
+    words = ref.split(" ")
+    if len(words) < 2 or not words[1][:1].isdigit():
+        return 3
+    if words[0] == "I":
+        return 0
+    if words[0] == "US":
+        return 1
+    return 2 if words[0] in _STATE_PREFIXES else 3

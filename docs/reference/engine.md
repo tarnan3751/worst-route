@@ -33,7 +33,8 @@ weights, radii) are in `config.py`.
 `Route` (frozen; arrays read-only) holds `nodes` and `edges` (`edges[k]` runs `nodes[k]` →
 `nodes[k + 1]`), `stop_idx` (the stops' positions: strictly increasing, the first 0, the last
 `len(nodes) - 1`), `used_nodes` (bool[n]), `banned_edges` (bool[m]: the route's edges and
-their twins), `score` and `metrics` (`Metrics(length_m, time_s, counters)`), `seed` and the
+their twins), `ban_count` (int32[m]: how many of the route's edges ban each edge, as itself or
+as a twin), `score` and `metrics` (`Metrics(length_m, time_s, counters)`), `seed` and the
 build's `graph_version`. A round trip has `nodes[0] == nodes[-1]`; nothing else repeats.
 
 **`Route.splice(data, i, j, nodes, edges, *, score, metrics, extra_banned=None)` is the only
@@ -54,7 +55,9 @@ the position at fault in the resulting route:
 | `TransitionForbidden` | at any junction of the window, its two boundaries included, a node with transition rows does not list (in_edge, out_edge); nodes without rows allow every turn |
 
 Releasing a run is exact: an edge the removed edges banned (themselves and their twins) stays
-banned iff it is a kept edge or a twin of one (twins are symmetric). `extra_banned` is what
+banned iff it is a kept edge or a twin of one (twins are symmetric), that is iff its
+`ban_count` less the removed edges' bans is positive. So a release, and the splice check's
+test of the bans a detour meets, cost the window, not the route. `extra_banned` is what
 the caller bans for this window: the request's banned edges and the objective's
 `banned_edges(G, route, i, j)`. They are not part of `route.banned_edges`, because an
 objective's bans can depend on the window (hard mode). `release(data, i, j)` gives the
@@ -542,7 +545,7 @@ bytes).
 
 | Test file | What it covers |
 |---|---|
-| `test_route.py` | every refusal, round trips, and the release against a brute force on random twins |
+| `test_route.py` | every refusal, round trips, and the release and the ban counts against a brute force on random twins |
 | `test_validator.py` | each violation caught by the right check, including a cluster entered twice through its members, a shared shape point and non-finite metrics |
 | `test_request.py` | the request model and its bounds, tier and leash auto, the masks and the tier's edge bans |
 | `test_snap.py` | roles, cul-de-sacs, stops kept apart, round trips only for identical points, an end near the start moved on, re-snapping |

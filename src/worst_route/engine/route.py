@@ -3,7 +3,8 @@
 A `Route` is one legal route on one build: `nodes` (each node once, except that a round trip's
 start is also its end), `edges` (`edges[k]` goes `nodes[k]` → `nodes[k + 1]`), `stop_idx` (the
 stops' positions in `nodes`: strictly increasing, the first 0 and the last `len(nodes) - 1`),
-`used_nodes` (bool[n]) and `banned_edges` (bool[m]: the route's edges and their twins), the
+`used_nodes` (bool[n]) and `banned_edges` (bool[m]: the route's edges and their twins),
+`ban_count` (int32[m]: how many of the route's edges ban each edge, as itself or as a twin), the
 score and metrics its objective gave it, the seed, and the build's `graph_version`. Its arrays
 are read-only. A request's and an objective's bans are not the route's: the caller passes them
 per window as `extra_banned`.
@@ -26,7 +27,9 @@ fault in the resulting route:
   the node has transition rows and none allows (in_edge, out_edge).
 
 Releasing a run is exact: an edge the removed edges banned stays banned iff it is a kept edge
-or the twin of one (twins are symmetric). `release(data, i, j)` gives the search masks for a
+or the twin of one (twins are symmetric), that is iff its ban count less the removed edges'
+bans is positive, which costs the window, not the route. `release(data, i, j)` gives the search
+masks for a
 detour of `nodes[i..j]`: the used nodes without the run (its two ends cleared, so a search may
 start and end there) and the bans that remain. The score and metrics come from the caller;
 the route does not know its objective.
@@ -151,6 +154,7 @@ class Route:
     stop_idx: tuple[int, ...]
     used_nodes: BoolArray
     banned_edges: BoolArray
+    ban_count: IntArray
     score: float
     metrics: Metrics
     seed: int
@@ -185,10 +189,8 @@ class Route:
         forbid = self.used_nodes.copy()
         forbid[self.nodes[i : j + 1]] = False
         banned = self.banned_edges.copy()
-        removed = self.edges[i:j]
-        released = np.union1d(removed, twins_of(data, removed)[1]).astype(np.int32)
-        banned[released] = False
-        banned[released[self._kept_bans(data, released, i, j)]] = True
+        released, left = self._released(data, i, j)
+        banned[released] = left > 0
         return forbid, banned
 
     def check_splice(
@@ -225,7 +227,9 @@ class Route:
 
         held = self.banned_edges[edges]
         if held.any():
-            held[held] = self._kept_bans(data, edges[held], i, j)
+            released, left = self._released(data, i, j)
+            at = np.minimum(np.searchsorted(released, edges), len(released) - 1)
+            held &= (released[at] != edges) | (left[at] > 0)
         _check_edges(data, edges, held, extra_banned, i)
         if len(self.edges) - (j - i) + len(edges) == 2 and self.is_round_trip:
             route_nodes, route_edges = splice_arrays(self, i, j, nodes, edges)
@@ -276,10 +280,10 @@ class Route:
     ) -> "Route":
         used = np.zeros(data.n, dtype=np.bool_)
         used[nodes] = True
-        banned = np.zeros(data.m, dtype=np.bool_)
-        banned[edges] = True
-        banned[twins_of(data, edges)[1]] = True
-        for a in (nodes, edges, used, banned):
+        bans = np.concatenate((edges, twins_of(data, edges)[1]))
+        count = np.bincount(bans, minlength=data.m).astype(np.int32)
+        banned = count > 0
+        for a in (nodes, edges, used, banned, count):
             a.flags.writeable = False
         return cls(
             nodes=nodes,
@@ -287,6 +291,7 @@ class Route:
             stop_idx=stop_idx,
             used_nodes=used,
             banned_edges=banned,
+            ban_count=count,
             score=float(score),
             metrics=metrics,
             seed=seed,
@@ -299,13 +304,14 @@ class Route:
         if not 0 <= i < j <= len(self.edges):
             raise ValueError(f"window ({i}, {j}): need 0 <= i < j <= {len(self.edges)}")
 
-    def _kept_bans(self, data: GraphData, candidates: IntArray, i: int, j: int) -> BoolArray:
-        """Which candidate edges stay banned by the edges kept outside `edges[i:j]`."""
-        kept = np.concatenate((self.edges[:i], self.edges[j:]))
-        held: BoolArray = np.isin(candidates, kept)
-        owner, twins = twins_of(data, candidates)
-        held[owner[np.isin(twins, kept)]] = True
-        return held
+    def _released(self, data: GraphData, i: int, j: int) -> tuple[IntArray, IntArray]:
+        """The edges the removed run `edges[i:j]` bans (sorted, each once) and how many of the
+        kept edges still ban each of them."""
+        removed = self.edges[i:j]
+        bans = np.concatenate((removed, twins_of(data, removed)[1]))
+        released, dropped = np.unique(bans, return_counts=True)
+        left: IntArray = self.ban_count[released] - dropped.astype(np.int32)
+        return released.astype(np.int32), left
 
 
 def splice_arrays(

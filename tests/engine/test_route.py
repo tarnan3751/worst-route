@@ -264,6 +264,11 @@ def test_release_matches_a_brute_force_on_random_twins(seed: int) -> None:
     named = [((int(u[a]), int(v[a])), (int(u[b]), int(v[b]))) for a, b in pairs]
     g = lattice(4, 4, twins=named)
     route = route_on(g, SNAKE)
+    count = np.zeros(g.m, dtype=np.int32)  # each route edge bans itself and its twins once
+    for e in route.edges.tolist():
+        count[[e, *g.twin_edges[g.twin_indptr[e] : g.twin_indptr[e + 1]].tolist()]] += 1
+    assert np.array_equal(route.ban_count, count)
+    assert np.array_equal(route.banned_edges, count > 0)
     for _ in range(10):
         i = int(rng.integers(len(route.edges)))
         j = int(rng.integers(i + 1, len(route.edges) + 1))

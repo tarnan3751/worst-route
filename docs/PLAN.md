@@ -292,6 +292,7 @@ class Route:
     stop_idx: list[int]         # positions of the stops in `nodes`; stop_idx[0] == 0, stop_idx[-1] == len(nodes)-1
     used_nodes: BitMask         # numpy bool array sized n_nodes (fast membership for kernels)
     banned_edges: BitMask       # edges used ∪ twins(used); the request's and the objective's bans are per window (§3.4)
+    ban_count: ndarray          # as built: per edge, how many route edges ban it (itself or a twin), so a release costs the window
     score: float
     metrics: Metrics            # length_m, time_s, per-objective counters; recomputed lazily
     seed: int

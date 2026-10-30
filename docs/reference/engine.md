@@ -125,6 +125,13 @@ The transition-aware search answers None when the cheapest legal path passes a n
 table can make the cheapest legal way a loop round a block); such a path is illegal for a route
 anyway, so the caller's fallback applies as for no path at all.
 
+**Twins.** A path a route is made of (a seed leg, the waypoint strategy's two searches, the
+random-weight search) is searched with `avoid_twins`: when it drives an edge and one of its
+twins (both carriageways of one road, as in a U-turn across a median), the later edge of the
+pair that closes first along the path is banned and the search made again, up to
+`TWIN_RESEARCH_ROUNDS` (8) times; then there is no path. The bans depend only on the paths
+found, so this is deterministic. The baseline is not: a GPS may drive both carriageways.
+
 ## Seed and baseline
 
 **The baseline** (`baseline_route`) is what a sane GPS would drive: the shortest path on length
@@ -145,14 +152,16 @@ saved route with it; the cost is a few seed builds.
    built so far and every other stop's node, and bans their edges' twins. Each continues the
    leg before it (`entry_edge`, its last edge) and hands over to the leg after it when that one
    is built (`exit_edge`, its first edge, which matters when the penalty re-solve rebuilds an
-   earlier leg), so the turn at every via is one the tables allow.
+   earlier leg), so the turn at every via is one the tables allow. A leg driving an edge and
+   its twin is searched again without the later one (**Searches**), and a round trip's leg
+   whose other legs drive a single edge avoids that edge's road unit, so a trip to a neighbour
+   and back is not one road out and back.
 2. **Penalty re-solve.** When a leg fails, up to 4 rounds (`docs/PLAN.md` §3.3): the leg's
    unconstrained path (turning legally, from the same entry edge) names the nodes other legs hold; those legs are rebuilt with 8× the
    weight on every edge touching those nodes, keeping their old path when they have no other;
    then the leg is tried again.
 3. **Failed legs.** A leg that still fails, a leg that would not move (two stops on one node),
-   or a seed `check_route` refuses names the leg. `check_route` refuses, for example, a leg that
-   drives an edge and its twin, which the search cannot see.
+   or a seed `check_route` refuses names the leg.
 4. **Fallback** (`resolve_stops`; `docs/PLAN.md` §3.2): the leg's earlier stop, if it is a
    via, is re-snapped to its next-nearest candidate (never another stop's node), up to 10
    times, and the whole seed is rebuilt each time.
@@ -230,11 +239,14 @@ round-trip seed).
   w → b, avoiding the first leg's nodes and its edges' twins. Each search is on
   `search_weights` and bounded by `search_budget(radius)`. The first search continues
   `entry_edge`; the second continues the first's last edge (the turn at the waypoint) and hands
-  over to `exit_edge`.
+  over to `exit_edge`. Both are searched again without a twin they drive; when a = b (a loop)
+  the second also avoids the roads (`edge_unit`) of the first, so a loop is never one road out
+  and back.
 - **Random weight.** a → b on a copy of `search_weights` in which every edge leaving a node
   within 4 × radius of the midpoint is multiplied by U(0.2, 5), drawn from `rng` in ascending
   edge id; the edges farther out keep their weight, so the draws do not grow with the graph.
-  Bounded by the same budget in scaled cost, from `entry_edge` to `exit_edge`.
+  Bounded by the same budget in scaled cost, from `entry_edge` to `exit_edge`, and searched
+  again without a twin it drives.
 - **Local exhaustive.** The simple paths a → b of at most 25 edges, up to 5000 of them. They
   are searched in a ball around the midpoint of radius 3 × dist(a, b), capped at 400 m, from
   `entry_edge` to `exit_edge`. A Dijkstra probe skips the enumeration when b is unreachable;
@@ -255,11 +267,9 @@ the ball. Measured on a 100 m grid with depth 25 and 5000 paths:
 
 The cap is `LOCAL_EXHAUSTIVE_BALL_MAX_M`, for the M2 kernels to revisit.
 
-**What the searches cannot see.** A refused candidate is a failed attempt. The searches cannot
-see:
-
-- two twins inside one detour;
-- a two-edge round trip on one road.
+**What the searches cannot avoid.** A refused candidate is a failed attempt. The local
+exhaustive paths are not searched again for twins: a path driving an edge and its twin is
+refused, and the next one ranked is tried.
 
 On a one- or two-edge window, the randomly weighted direct edge usually wins, so random weight
 seldom finds a new path there; the waypoint is the workhorse.
@@ -495,9 +505,9 @@ before or after it.
   of a detour whose cheapest legal path passes a node twice is no path: the search does not
   look for the cheapest node-simple legal path, which a turn table can make longer than the
   cheapest walk. The seed then falls back as for an unreachable leg.
-- **Twins within a leg.** A seed leg is a plain shortest path; when it drives an edge and its
-  twin (both carriageways of one road, as in a U-turn on E Burnside St, or a cleanup false twin
-  on an OR 224 hairpin), the leg is refused and not rebuilt around it: 2 of the 20 pairs.
+- **Twins within a leg.** A leg driving an edge and its twin is searched again without the
+  later one, up to 8 times; a leg that needs more rounds, or whose only way drives a twin
+  pair, falls back as an unreachable one.
 - **Speed.** `CsrBackend`'s searches are 8–13× the reference's on large searches, but a run on
   a city-sized grid or on Portland is now bound by the loop's own NumPy work (**The loop**,
   Measured; **On Portland with `CsrBackend`**), so a whole run gains only 10–20%.
@@ -530,7 +540,8 @@ bytes).
 | `test_validator.py` | each violation caught by the right check, including a cluster entered twice through its members, a shared shape point and non-finite metrics |
 | `test_request.py` | the request model and its bounds, tier and leash auto, the masks and the tier's edge bans |
 | `test_snap.py` | roles, cul-de-sacs, stops kept apart, round trips only for identical points, an end near the start moved on, re-snapping |
-| `test_seed_route.py` | `resolve_stops` deterministic, node-disjoint legs, legs avoiding later stops, the penalty re-solve on a corridor, the baseline, the re-snap walk out of a one-entrance ring, the start never moving, a point-to-point trip never collapsing onto the start, a leg between two stops on one node, unreachable legs named by both ends, a leg going round a junction that allows only straight on, the turn at a via, the baseline's legal legs and its turn-blind fallback, round-trip loops |
+| `test_search.py` | the turn edges counting only on a build with rows, a path driving both carriageways searched again, and the rounds' limit |
+| `test_seed_route.py` | `resolve_stops` deterministic, node-disjoint legs, legs avoiding later stops, the penalty re-solve on a corridor, the baseline, the re-snap walk out of a one-entrance ring, the start never moving, a point-to-point trip never collapsing onto the start, a leg between two stops on one node, unreachable legs named by both ends, a leg going round a junction that allows only straight on, the turn at a via, the baseline's legal legs and its turn-blind fallback, a leg driving both carriageways going round, a round trip to a neighbour not one road out and back, round-trip loops (never back along the way out) |
 | `test_objectives.py` | `Distance`, the radius, and `delta` against a full re-score for every kind of term |
 | `test_detour.py` | each strategy's legal detours and None when none exists, the strategy weights, random weight drawing only near the window, the local-exhaustive ranking and the refused-candidate skip, no turn refused on a lattice of straight-only junctions (and many when the searches are made turn-blind) |
 | `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, and so do those with turn tables (no turn refused), a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable`; the same-seed test on both backends, and both backends planning the same route, splice for splice, on the grid and on one-way towns |

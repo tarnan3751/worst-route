@@ -12,13 +12,16 @@ then exists whenever the seed does).
 loop starts from. Its legs are built in order on length, each forbidding the nodes of the
 other legs built so far and every other stop's node, and banning their edges' twins; each
 continues the leg before it (`entry_edge`) and hands over to the leg after it when that one is
-built (`exit_edge`), so every turn, at the vias too, is one the tables allow. When a
+built (`exit_edge`), so every turn, at the vias too, is one the tables allow. A leg found
+driving an edge and its twin is searched again without the later of the two
+(`search.shortest_path`, `avoid_twins`), and a round trip's leg whose other legs drive a single
+edge avoids that edge's road (`edge_unit`), so the trip is not one road out and back. When a
 leg cannot be built, the penalty re-solve runs up to `SEED_PENALTY_ROUNDS` rounds: the leg's
 unconstrained path names the nodes other legs hold that it needs; those legs are rebuilt with
 `SEED_PENALTY_FACTOR` × the weight on every edge touching those nodes (keeping their old path
 when no other exists), and the leg is tried again. A leg that still fails, a leg that would not
-move (two stops on one node), or an assembled route `check_route` refuses (two twins inside
-one leg) names the leg: `StopUnreachable`.
+move (two stops on one node), or an assembled route `check_route` refuses names the leg:
+`StopUnreachable`.
 
 `resolve_stops(data, spatial, backend, request, masks)` settles where the stops go before the
 seed is built, deterministically for a request and a build, so `worst-route validate` can
@@ -286,6 +289,9 @@ class _Builder:
             forbid[nodes] = True
             banned[edges] = True
             banned[twins_of(self.data, edges)[1]] = True
+        driven = [e for _, edges in others for e in edges.tolist()]
+        if stops[0] == stops[-1] and len(driven) == 1:  # not one road out and back
+            banned[self.data.edge_unit == self.data.edge_unit[driven[0]]] = True
         s, t = stops[leg], stops[leg + 1]
         forbid[[s, t]] = False
         entry, exit_ = _turn_edges(legs, leg)
@@ -299,6 +305,7 @@ class _Builder:
             node_mask=self.node_mask,
             forbid_nodes=forbid,
             banned_edges=banned,
+            avoid_twins=True,
         )
 
     def _penalty_resolve(self, stops: list[int], legs: list[Path | None], leg: int) -> Path | None:

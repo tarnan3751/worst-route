@@ -13,13 +13,14 @@ weight 1/3); `strategy` forces one (tests, the round-trip seed).
   `WAYPOINT_BALL_FACTOR × radius` of the midpoint of a and b (the objective's pool when it has
   one; never a or b; at least `min_dist_m` from the midpoint), with probability ∝
   exp(−distance / radius); then a → w (not through b), continuing `entry_edge`, and w → b
-  (not through a → w, nor any twin of its edges), continuing a → w's last edge and handing
-  over to `exit_edge`, each bounded by `max_cost`.
+  (not through a → w, nor any twin of its edges, nor, when a = b, back along one of its roads),
+  continuing a → w's last edge and handing over to `exit_edge`, each bounded by `max_cost` and
+  searched again without a twin it drives (`search.shortest_path`, `avoid_twins`).
 - `random_weight_path`: a → b on a copy of the search weights in which every edge leaving a
   node within `WAYPOINT_BALL_FACTOR × radius` of the midpoint is multiplied by a factor drawn
   from `RANDOM_WEIGHT_RANGE` (in ascending edge id; the edges farther out keep their weight,
   so the draws do not grow with the graph), bounded by the same budget in scaled cost, from
-  `entry_edge` to `exit_edge`.
+  `entry_edge` to `exit_edge`, and searched again without a twin it drives.
 - `local_exhaustive_paths`: the simple paths a → b of at most `LOCAL_EXHAUSTIVE_MAX_DEPTH`
   edges, up to `LOCAL_EXHAUSTIVE_MAX_PATHS`, inside a ball around the midpoint of radius
   `LOCAL_EXHAUSTIVE_BALL_FACTOR × dist(a, b)` capped at `LOCAL_EXHAUSTIVE_BALL_MAX_M`, from
@@ -31,9 +32,9 @@ weight 1/3); `strategy` forces one (tests, the round-trip seed).
 Every search goes through `search.py`, so on a build with transition rows each turn of a
 detour, its two boundary junctions included (`entry_edge` = edges[i − 1] into its first edge,
 its last edge into `exit_edge` = edges[j]), is one the tables allow. What the searches cannot
-see makes a candidate fail the splice check: two twins inside one detour, a two-edge round
-trip on one road. A refused candidate is a failed attempt, nothing worse. The randomness is
-`rng`'s alone.
+avoid makes a candidate fail the splice check: two twins inside one local-exhaustive path (the
+next one ranked is tried). A refused candidate is a failed attempt, nothing worse. The
+randomness is `rng`'s alone.
 """
 
 from collections import Counter
@@ -218,6 +219,7 @@ def waypoint_path(
         forbid_nodes=first_forbid,
         banned_edges=banned,
         max_cost=max_cost,
+        avoid_twins=True,
     )
     if first is None:
         return None
@@ -226,6 +228,8 @@ def waypoint_path(
     second_forbid[[w, b]] = False
     second_banned = banned.copy()
     second_banned[twins_of(data, first[1])[1]] = True
+    if a == b:  # a loop: not back along a road of the way out, a two-edge round trip
+        second_banned[np.isin(data.edge_unit, data.edge_unit[first[1]])] = True
     second = shortest_path(
         backend,
         w,
@@ -237,6 +241,7 @@ def waypoint_path(
         forbid_nodes=second_forbid,
         banned_edges=second_banned,
         max_cost=max_cost,
+        avoid_twins=True,
     )
     if second is None:
         return None
@@ -278,6 +283,7 @@ def random_weight_path(
         forbid_nodes=forbid,
         banned_edges=banned,
         max_cost=max_cost,
+        avoid_twins=True,
     )
 
 

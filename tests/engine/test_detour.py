@@ -199,7 +199,7 @@ def test_a_turn_blind_search_would_be_refused(monkeypatch: pytest.MonkeyPatch) -
     def blind_path(
         backend: GraphBackend, src: int, dst: int, weights: np.ndarray, **kw: Any
     ) -> Path | None:
-        kw.pop("entry_edge", None), kw.pop("exit_edge", None)
+        kw.pop("entry_edge", None), kw.pop("exit_edge", None), kw.pop("avoid_twins", None)
         return backend.dijkstra(src, dst, weights, **kw)
 
     def blind_paths(backend: GraphBackend, src: int, dst: int, **kw: Any) -> list[Path]:

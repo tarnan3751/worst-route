@@ -148,6 +148,9 @@ BUBBLE_KM = 3.0
 SNAP_FALLBACK_CANDIDATES = 10
 SEED_PENALTY_ROUNDS = 4
 SEED_PENALTY_FACTOR = 8.0
+# A seed leg or a detour's search whose path drives an edge and one of its twins bans the later
+# of the two and searches again, up to TWIN_RESEARCH_ROUNDS times (`engine/search.py`).
+TWIN_RESEARCH_ROUNDS = 8
 
 # Detours (`docs/PLAN.md` §3.5). A strategy is drawn with STRATEGY_WEIGHTS (waypoint, random
 # weight, local exhaustive); local exhaustive only when the window's ends lie less than

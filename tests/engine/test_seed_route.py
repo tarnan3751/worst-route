@@ -282,6 +282,40 @@ def test_a_baseline_leg_turns_legally_and_falls_back_to_the_blind_path() -> None
     assert blind.nodes.tolist() == [0, 1, 2]
 
 
+def test_a_leg_driving_both_carriageways_goes_round() -> None:
+    # the shortest S → T drives a carriageway and its twin: the leg is searched again without
+    # the later one, and the end stays (before, the leg failed and the end moved)
+    from .test_search import divided
+
+    g = divided()
+    seed = plan_seed(g, [at_node(g, 0), at_node(g, 3)])
+    assert seed.nodes.tolist() == [0, 4, 5, 6, 3]
+    assert all(s.note is None for s in seed.snaps)
+
+
+def one_road(g: GraphData, a: int, b: int) -> GraphData:
+    """g with a → b and b → a made the two directions of one road."""
+    unit = g.edge_unit.copy()
+    unit[edge_id(g, b, a)] = unit[edge_id(g, a, b)]
+    return replace(g, edge_unit=unit)
+
+
+def test_a_round_trip_through_a_neighbour_is_not_one_road_out_and_back() -> None:
+    g = one_road(lattice(3, 3), 0, 1)
+    seed = plan_seed(g, [at_node(g, 0), at_node(g, 1), at_node(g, 0)])
+    assert seed.nodes.tolist() == [0, 1, 4, 3, 0]
+    assert all(s.note is None for s in seed.snaps)
+
+
+def test_a_loop_does_not_come_back_along_its_way_out() -> None:
+    # A (0) ↔ W (1) is one 600 m road and W → X → A the way round; the only waypoint 500 m out
+    # is W, and the loop must not drive A → W → A
+    xy = [(X0, Y0), (X0 + 600, Y0), (X0 + 300, Y0 + 300)]
+    g = one_road(make_graph(xy, [(0, 1, 600.0), (1, 0, 600.0), (1, 2, 424.0), (2, 0, 424.0)]), 0, 1)
+    loop = plan_seed(g, [at_node(g, 0), at_node(g, 0)])
+    assert loop.nodes.tolist() == [0, 1, 2, 0]
+
+
 @pytest.mark.parametrize("seed", range(5))
 def test_a_round_trip_without_vias_is_a_loop_through_a_far_waypoint(seed: int) -> None:
     g = lattice(15, 15)

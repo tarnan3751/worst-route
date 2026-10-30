@@ -5,9 +5,10 @@ edge list into a valid, read-only `GraphData`, filling every array the pipeline 
 plain default: lengths as given (Euclidean when omitted), bearings from the coordinates, one
 OSM member per node (id = node index + 1), one way per edge (id = input position + 1), class
 residential (tier 4), speed 40 km/h, the unit id = the edge id, pass-through from the topology,
-tier masks from the edge tiers (no SCC). Edge ids are the positions after a stable sort by
-(u, v), as in a real build; twins and transitions name edges by their (u, v) node pairs, and
-`edge_id(data, u, v)` finds an edge the same way.
+tier masks from the edge tiers (no SCC), and meta["graph_version"] as `write_build` would
+compute it. Edge ids are the positions after a stable sort by (u, v), as in a real build;
+twins and transitions name edges by their (u, v) node pairs, and `edge_id(data, u, v)` finds
+an edge the same way.
 
 `grid_graph(rows, cols, spacing_m, ...)` builds a lattice at `GRID_ORIGIN` (UTM 10N, near
 downtown Portland): node r * cols + c sits at (x0 + c * spacing, y0 + r * spacing), row 0 the
@@ -28,6 +29,7 @@ from pyproj import Transformer
 
 from worst_route.config import TIERS, HighwayClass
 from worst_route.graph.data import ARRAY_SPECS, N_TIERS, EdgeFlag, GraphData, Strings
+from worst_route.graph.store import graph_version
 
 GRID_ORIGIN = (525_000.0, 5_040_000.0)
 
@@ -209,6 +211,7 @@ def make_graph(
     for name in ARRAY_SPECS:
         getattr(data, name).flags.writeable = False
     data.validate()
+    data.meta["graph_version"] = graph_version(data)
     return data
 
 

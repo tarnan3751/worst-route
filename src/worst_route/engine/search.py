@@ -5,8 +5,7 @@ with transition rows, `shortest_path` is the transition-aware `GraphBackend.dijk
 `simple_paths` the DFS with its turn checks, so a path turns only where the tables allow, at
 the junctions inside it and, given `entry_edge` and `exit_edge`, at its two ends. On a build
 without rows no turn can be forbidden, so they are the node-state `dijkstra` and the plain DFS,
-whose paths every backend reproduces byte for byte; the turn edges are then ignored. A backend
-that cannot search a table yet raises `NotImplementedError` on a build with rows.
+whose paths every backend reproduces byte for byte; the turn edges are then ignored.
 
 `shortest_path(..., avoid_twins=True)` is for the paths a route is made of (seed legs, detours):
 a path that drives an edge and one of its twins (both carriageways of one road) would be refused

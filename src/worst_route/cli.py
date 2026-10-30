@@ -22,18 +22,16 @@ reached, or a missing build, is one line and exit 1, and a route that fails the 
 never printed. `validate` re-checks a saved `route.json` against the build it names, with its
 stops re-derived from its request (`resolve_stops`), and exits 1 when a check fails; a file made
 by another engine version is one line and exit 1 (its stops could be re-derived differently).
-Both take `--backend auto|csr|python` (`config.DEFAULT_BACKEND`) and print the one used,
-which, where both can search, changes only the speed. `auto` is python on a build with
-transition tables, which the CSR kernels cannot search yet, and the `backend:` line says so;
-`csr` asked for there is one line, `cannot plan: the csr backend cannot search turn tables yet;
-use --backend python`, and exit 1, as is `csr` when numba does not import.
+Both take `--backend auto|csr|python` (`config.DEFAULT_BACKEND`, `auto`: csr when numba
+imports) and print the one used, which changes only the speed; `csr` when numba does not import
+is one line and exit 1.
 
 `serve` runs the API (`docs/reference/api.md`) with uvicorn, in one process (jobs live in its
 memory; each runs in a worker process of its own, `--workers` at once): it loads the region's
-build first, so a missing one is one line and exit 1, as is `csr` on a build with transition
-tables, and keeps its routes in `--store` (default `<WORST_ROUTE_DATA>/routes.sqlite`).
-`--port 0` binds a free port, which uvicorn logs, and the job manager's lines (a job
-cancelled, a worker failed) go to the same log.
+build first, so a missing one is one line and exit 1, and keeps its routes in `--store`
+(default `<WORST_ROUTE_DATA>/routes.sqlite`). It takes `--backend` and prints the one used as
+`plan` does. `--port 0` binds a free port, which uvicorn logs, and the job manager's lines (a
+job cancelled, a worker failed) go to the same log.
 """
 
 import json
@@ -553,8 +551,7 @@ def _check_backend(value: str) -> str:
 BackendOption = Annotated[
     str,
     typer.Option(
-        help="Graph backend: csr, python, or auto (csr when numba imports and the build has "
-        "no turn tables).",
+        help="Graph backend: csr, python, or auto (csr when numba imports).",
         callback=_check_backend,
     ),
 ]
@@ -580,12 +577,6 @@ def _make_backend(data: "GraphData", name: str) -> "GraphBackend":
         return make_backend(data, cast(BackendName, name))
     except ImportError as error:  # only csr needs numba; auto falls back to python
         _fail(f"the csr backend needs numba, which did not import: {error}")
-
-
-def _auto_note(data: "GraphData", name: str) -> str:
-    from worst_route.graph.backends import auto_note
-
-    return auto_note(data, cast(BackendName, name))
 
 
 def _load_build(region: str, build_id: str | None) -> "GraphData":
@@ -671,7 +662,7 @@ def plan(
 
     try:
         result = plan_route(data, request, backend=engine, on_progress=progress)
-    except (SnapError, StopUnreachable, NotImplementedError) as error:
+    except (SnapError, StopUnreachable) as error:
         _fail(f"cannot plan: {error}")
     except ValidationFailed as error:
         lines = [line for line in error.report.lines() if "FAILED" in line]
@@ -704,7 +695,7 @@ def plan(
         f"search: {run.attempts} attempts, {run.accepted} accepted, {run.elapsed_s:.1f} s, "
         f"stopped: {run.stopped_because}"
     )
-    typer.echo(f"backend: {result.backend}{_auto_note(data, backend)}")
+    typer.echo(f"backend: {result.backend}")
     names = ", ".join(c.name for c in result.report.checks)
     typer.echo(f"validator: ok ({names})")
     if out is not None:
@@ -757,8 +748,6 @@ def validate(
         stops = resolve_stops(data, spatial, engine, saved.request, masks)
     except (SnapError, StopUnreachable) as error:
         _fail(f"{route_file}: its request cannot be planned on this build: {error}")
-    except NotImplementedError as error:
-        _fail(f"cannot validate: {error}")
     report = validate_route(
         data,
         saved,
@@ -767,7 +756,7 @@ def validate(
         banned_edges=masks.banned,
     )
     typer.echo(f"{route_file}: {len(saved.nodes)} nodes on {saved.region}/{saved.build_id}")
-    typer.echo(f"backend: {engine.name}{_auto_note(data, backend)}")
+    typer.echo(f"backend: {engine.name}")
     for line in report.lines():
         typer.echo(line)
     if not report.ok:
@@ -810,12 +799,10 @@ def serve(
         application = create_app(config)
     except BuildNotFound as error:
         _fail(str(error))
-    except NotImplementedError as error:
-        _fail(f"cannot serve: {error}")
     except ImportError as error:  # only csr needs numba; auto falls back to python
         _fail(f"the csr backend needs numba, which did not import: {error}")
     loaded = application.state.api.builds[region]
-    typer.echo(f"backend: {loaded.backend.name}{_auto_note(loaded.data, backend)}")
+    typer.echo(f"backend: {loaded.backend.name}")
     log_config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
     log_config["loggers"]["worst_route"] = {"handlers": ["default"], "level": "INFO"}
     uvicorn.run(application, host=host, port=port, log_config=log_config)

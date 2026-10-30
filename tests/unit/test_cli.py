@@ -87,10 +87,9 @@ def test_serve_runs_the_app_for_its_options(
     assert runner.invoke(app, [*args[:3], "--workers", "0"]).exit_code == 2
 
 
-def test_serve_takes_csr_by_name_on_a_build_with_turn_tables(
+def test_serve_takes_csr_on_a_build_with_turn_tables(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # auto still takes the reference there and says so; csr asked for by name serves it
     import uvicorn
 
     g = lattice(3, 3, transitions=[((0, 1), (1, 2))])
@@ -102,12 +101,7 @@ def test_serve_takes_csr_by_name_on_a_build_with_turn_tables(
     monkeypatch.setenv("WORST_ROUTE_DATA", str(tmp_path))
     settings.cache_clear()
     served = runner.invoke(app, ["serve", "--region", "portland", "--store", str(tmp_path / "r")])
-    assert served.exit_code == 0, served.output
-    assert served.stdout == "backend: python (csr cannot search turn tables yet)\n"
-    assert ran["app"].state.api.builds["portland"].backend.name == "python"
-    args = ["serve", "--region", "portland", "--backend", "csr", "--store", str(tmp_path / "r")]
-    by_name = runner.invoke(app, args)
     settings.cache_clear()
-    assert by_name.exit_code == 0, by_name.output
-    assert by_name.stdout == "backend: csr\n"
+    assert served.exit_code == 0, served.output
+    assert served.stdout == "backend: csr\n"
     assert ran["app"].state.api.builds["portland"].backend.name == "csr"

@@ -143,11 +143,11 @@ def test_the_csr_backend_without_numba_is_one_line(data_dir: Path, tmp_path: Pat
         assert lines[0].startswith("the csr backend needs numba, which did not import: ")
 
 
-def test_on_a_build_with_turn_tables_auto_is_python_and_csr_plans_the_same_route(
+def test_on_a_build_with_turn_tables_both_backends_plan_the_same_route(
     data_dir: Path, tmp_path: Path
 ) -> None:
-    # auto still takes the reference there and says so; csr asked for by name plans the same
-    # route.json (but the backend and the time), which validates on both
+    # auto is csr there too; both plan the same route.json (but the backend and the time),
+    # which validates on both
     straight = [
         ((44, 45), (45, 46)),
         ((46, 45), (45, 44)),
@@ -158,7 +158,7 @@ def test_on_a_build_with_turn_tables_auto_is_python_and_csr_plans_the_same_route
     trip = ["--from", latlon(g, 0), "--to", latlon(g, 99), "--seed", "4"]
     code, stdout, stderr = plan(*trip, "--max-iterations", "20")
     assert code == 0, stderr
-    assert "backend: python (csr cannot search turn tables yet)" in stdout.splitlines()
+    assert "backend: csr" in stdout.splitlines()
     docs = {}
     for name in ("python", "csr"):
         out = tmp_path / f"{name}.json"

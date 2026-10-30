@@ -90,11 +90,10 @@ The graph package is built (`docs/reference/graph.md`): a build's arrays and the
 memory-mapped on-disk format with its `graph_version`, the `GraphBackend` protocol and its
 pure-Python reference backend, snapping with the leash and bubble masks, and the builders tests
 use for small graphs. The CSR + Numba production backend (M2 step 1) is built too: Numba kernels
-for the masked Dijkstra and the simple-path search, byte-identical to the reference and 8–13×
-faster on large searches; whole runs on a build without transition tables gain 1.5–1.9×. The
-engine and `worst-route plan` / `validate` use it by default (`--backend auto|csr|python`),
-except on a build with transition tables, which it cannot search yet: there, Portland's among
-them, the default (`auto`) takes the reference.
+for the masked Dijkstra and the simple-path search, node-state and transition-aware,
+byte-identical to the reference and 8–13× faster on large searches; whole runs gain about 1.2×
+on Portland and 1.5–1.9× on a build without transition tables. The engine and
+`worst-route plan` / `validate` use it by default on every build (`--backend auto|csr|python`).
 The engine is built (`docs/reference/engine.md`): the route model whose splice is its only
 mutation and refuses any repeat, the request with its tier, leash and bubble masks (a tier also
 bans lower-class roads away from the stops), snapping with the re-snap fallback, the baseline
@@ -122,7 +121,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 | Milestone | Status | Summary |
 |---|---|---|
 | M1 — Portland, distance mode, CLI | Built | bootstrap, every pipeline step (download to qa; Portland's build passes QA), the graph package and the engine (snapping, seed route, transition-aware searches, splice loop, distance objective, validator, `worst-route plan` / `validate`). The acceptance run (`docs/PLAN.md` §7 M1 step 9; `uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` on build e4b3b4ad90db, `graph_version` 45f650e868fa, the reference backend: 20 random Portland pairs 3–15 km apart): all 20 plan and the validator passes all 20; the median ratio is 21.5× (3.3–45.2×); seeds 1 and 2 share 10–16% of their edges (Jaccard on 5 pairs, all < 0.3); the cul-de-sac via moves 86 m to the nearest through street with its note. Powell's → Reed gives 58–62×, PDX → Beaverton 7.3× (`docs/reference/engine.md`, **On Portland**) |
-| M2 — API + map, live growth | In progress | CSR + Numba backend built (the default; byte-identical to the reference); the API built (jobs in worker processes, SSE progress, the route store, make it worse, `worst-route serve`); remaining: the CSR edge-state kernel (until then `auto` takes the reference on a build with transition tables, Portland's among them); MapLibre frontend; targets by ratio and duration |
+| M2 — API + map, live growth | In progress | CSR + Numba backend built, its transition-aware kernels included (the default on every build; byte-identical to the reference: on Portland the acceptance's 20 routes and Powell's → Reed reproduce exactly, at 7,200–8,200 attempts/s); the API built (jobs in worker processes, SSE progress, the route store, make it worse, `worst-route serve`); remaining: MapLibre frontend; targets by ratio and duration |
 | M3 — Modes and constraints | Planned | turn-aware kernel, never/only-left; slowest time; collectibles; brands; hard mode; the search honouring stage B transitions (built at M1); alphabet search |
 | M4 — Presentation | Planned | directions, stats, toasts, comparisons, share image, geocoding proxy, share links |
 | M5 — Scaling up | Planned | Oregon; array-based simplify/consolidate; US at T1; the national decision gate; public-hosting prep |
@@ -132,11 +131,6 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 
 The risks the plan anticipates are `docs/PLAN.md` §8.3. Found on the Portland build:
 
-- **Only the reference backend searches transition tables.** The engine's searches see them
-  (Portland has 11,378 rows at 657 super-junctions, 180 of which forbid some turns), through the
-  reference backend's Python edge-state search; `CsrBackend` has no kernel for it yet, so
-  `auto` takes the reference on Portland (the `backend:` line says why), and `plan --backend
-  csr` there says so in one line.
 - **The transition-aware search answers no path** when the cheapest legal way passes a node
   twice; it does not look for the cheapest node-simple legal way, so a leg can fall back (a
   re-snapped stop) where a longer legal one exists. No seed leg of the acceptance pairs did;
@@ -235,9 +229,9 @@ brief):
   both carriageways. The loop runs in cycles and stops after 3 empty ones; windows start with
   probability 0.3 at the route edges with the most unused nodes near, runs are 1 + geometric
   (mean 3, at most 12), searches are bounded by 8 × radius, and half the waypoints are drawn
-  uniformly in the ball, each kept for raising the acceptance median. `auto` takes the
-  reference on a build with transition tables until the CSR edge-state kernel lands; `validate`
-  refuses a route made by another engine version.
+  uniformly in the ball, each kept for raising the acceptance median. `auto` took the
+  reference on a build with transition tables until the CSR edge-state kernels landed (M2);
+  `validate` refuses a route made by another engine version.
 - **Alphabet mode is a constructive search**, not a splice objective.
 - **SSE for progress, not WebSockets.**
 - **The API as built for M2** (2026-10-30, at the API plan): the job request mirrors the

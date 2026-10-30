@@ -36,10 +36,7 @@ in that process's memory, and each runs in a worker process of its own, `--worke
 uvicorn's log line names. The job manager's own lines (a job cancelled for want of a subscriber,
 a worker's traceback) go to the same log. `--backend` is the engine's
 (`docs/reference/graph.md`, **Choosing a backend**), and `serve` prints the one it took as
-`plan` does: `auto` (the default) is python on a build with transition tables, such as
-Portland's (`backend: python (csr cannot search turn tables yet)`), and `csr` asked for on
-such a build is refused before it listens (`cannot serve: the csr backend cannot search turn
-tables yet; use --backend python`, exit 1), since every job would fail.
+`plan` does (`backend: csr`): `auto`, the default, is csr when numba imports.
 
 `create_app(ApiSettings(data_dir, region, build_id="latest", backend, store_path, jobs))` builds
 the same application in-process; the tests drive it over `httpx` (**Tests**).
@@ -225,7 +222,8 @@ has no reader left, it closes its end and exits (`os._exit`), so a crashed API n
 workers searching. Spawn re-imports the parent's main script, so under `worst-route serve` a
 worker loads `worst_route.cli` (typer, pydantic-settings, `pipeline.layout`) besides the engine
 and the graph package (shapely, scipy); never FastAPI, uvicorn or sse-starlette, and no numba on
-the python backend. Its own imports take about 0.4 s.
+the python backend. Its own imports take about 0.4 s; on the csr backend, the default, loading
+numba and the cached kernels adds about 0.3 s.
 
 **The follower**, an asyncio task per running job, reads that pipe in a thread (`poll` for at
 most `API_READ_GRACE_S`, 0.1 s, then `recv`) and keeps the job's own copy of the route: the
@@ -309,7 +307,8 @@ run. `get` returns a `StoredRoute`, which the validator reads like a `Route`.
 ## Measured
 
 On Portland (build e4b3b4ad90db, engine version 2), `serve` with the default backend (`auto`,
-which took python: the build has transition tables) on the dev machine, with curl:
+which then took python: the CSR kernels did not search transition tables yet) on the dev
+machine, with curl:
 
 - **Powell's → Reed, seed 1, 30 s budget.**
   - `snapped` 0.08 s after the request; `baseline` and the seed's snapshot 0.34 s;
@@ -354,7 +353,7 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 | `test_routes_api.py` | every endpoint over `httpx.AsyncClient` in-process, every refusal code, cancel over HTTP, a closed stream cancelling its job, a stream that subscribes only once it runs, make it worse and its mismatches (a base outside its request's masks included), a continuation that changes nothing reporting the stored route |
 
 `tests/engine/test_plan.py` covers `plan_route`'s hooks, `tests/graph/test_loader.py` the loader,
-and `tests/unit/test_cli.py` `serve`'s errors, options and its refusal of `csr` on a build with
+and `tests/unit/test_cli.py` `serve`'s errors, options and its taking `csr` on a build with
 transition tables. httpx's ASGI transport hands a response over once the app has finished it, so
 an SSE stream is read whole after its end; reconnecting mid-run is tested on the manager, and
 over a real socket by hand (**Measured**).

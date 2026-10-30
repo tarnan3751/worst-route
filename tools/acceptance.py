@@ -6,12 +6,10 @@
 
 It needs a build under `WORST_ROUTE_DATA`, so it is not part of the gate. M1's acceptance is
 `--region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` (the other options at their
-defaults). `--backend` is `make_backend`'s: by default `auto`, the Numba kernels on a build
-without transition tables and the reference on one with them, such as Portland's (M1's numbers
-were measured on the reference); the report records which one ran. A run bounded by time goes
-further on a faster backend, so the routes can differ by backend. `--backend csr` asked for on
-a build with tables, which the kernels cannot search yet, is caught before anything is planned:
-one line, `cannot plan: ...`, and exit 1.
+defaults). `--backend` is `make_backend`'s: by default `auto`, the Numba kernels when numba
+imports (M1's numbers were measured on the reference); the report records which one ran. A run
+bounded by time goes further on a faster backend, so the routes can differ by backend where a
+run stops on time rather than converging.
 
 **Drawing the pairs.** One `Generator(PCG64(--pair-seed))` draws every point, in order. A point
 is a latitude, then a longitude, each uniform within the region's bbox (the nodes' extent for a
@@ -145,12 +143,6 @@ def main(args: argparse.Namespace) -> int:
     data = read_build(layout.build_dir(args.region, build_id))
     spatial = SpatialIndex(data)
     backend = make_backend(data, args.backend)
-    if len(data.trans_node):  # every search will be the transition-aware one: can it run?
-        try:
-            backend.dijkstra_edges(0, 0, data.edge_length_m.astype(np.float64))
-        except NotImplementedError as refusal:
-            print(f"cannot plan: {refusal}", file=sys.stderr)
-            return 1
     bbox = region.bbox or (
         float(data.node_lon.min()),
         float(data.node_lat.min()),

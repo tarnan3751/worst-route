@@ -121,8 +121,7 @@ tables allow, at the junctions inside it and, given the edge it continues (`entr
 the edge it hands over to (`exit_edge`), at its two ends. On a build without rows no turn can
 be forbidden, so they are the node-state `dijkstra` and the plain DFS, and the turn edges are
 ignored: every backend gives the same paths there, byte for byte, and the routes on such builds
-(the test lattices, the golden route) are what they were before the tables were searched. A
-backend that cannot search a table yet raises `NotImplementedError` on a build with rows.
+(the test lattices, the golden route) are what they were before the tables were searched.
 
 The transition-aware search answers None when the cheapest legal path passes a node twice (a
 table can make the cheapest legal way a loop round a block); such a path is illegal for a route
@@ -471,14 +470,10 @@ worst-route validate route.json [--region R] [--build-id ID] [--backend auto|csr
 ```
 
 `--backend` picks the graph backend (`docs/reference/graph.md`, **Choosing a backend**). The
-default is `auto`, which is `csr` when numba imports and the build has no transition tables,
-which `csr` cannot search yet (**Searches**); on a build with tables, Portland's among them,
-`auto` is `python` and the `backend:` line says why (`backend: python (csr cannot search turn
-tables yet)`). Where both can search, the choice changes the speed and nothing else. An unknown
-name is exit 2. Asking for `csr` when numba does not import prints one line on stderr ("the csr
-backend needs numba, which did not import: …") and exits 1; asking for it on a build with
-tables, `plan` prints `cannot plan: the csr backend cannot search turn tables yet; use --backend
-python`, `validate` the same after `cannot validate:`, one line and exit 1.
+default is `auto`, which is `csr` when numba imports. The two give the same routes, so the
+choice changes the speed and nothing else. An unknown name is exit 2. Asking for `csr` when
+numba does not import prints one line on stderr ("the csr backend needs numba, which did not
+import: …") and exits 1.
 
 **`plan`** reads `<WORST_ROUTE_DATA>/graphs/<region>/<build_id>/`, by default the build named in
 `graphs/<region>/latest`. A missing `latest` or `meta.json` is one line on stderr ("... run
@@ -534,25 +529,27 @@ waypoints drawn uniformly 18.0×, three empty cycles to stop 20.2×. Runs before
 2–23% of the road their request allows; the ratio was the search running out of moves, not the
 leash.
 
-**On Portland with `CsrBackend`** (the same build, engine version 1, before the searches saw the
-transition tables; `CsrBackend` cannot search them yet, so Portland now plans on the reference).
-The machine was busy with other work (load average about 20 during the acceptance runs), so a
-rate compares only with the run made just before or after it.
-- **Powell's → Reed, seed 1, `--budget 30 --max-iterations 1000000`.** The reference's 49.74×
-  with the same route bytes, converging after 18,708 attempts in 11.0 s (1,700 attempts/s); the
-  reference took 12.0 s (1,560/s).
-- **The same trip at the default 5,000 attempts.** 32.63× on both backends, 4.4 s against 5.3 s.
-- **The acceptance run with `--backend csr`.** It gives every result above (14 of 20 planned,
-  the validator passing all 14, a median of 6.4× from 2.4× to 31.1×, the same 6 failures),
-  every run converging. Run back to back with the reference, the two agree pair for pair, except
-  where the busy machine let the reference's 30 s run out before it converged: pair 05, and the
-  seed-2 re-plans of pairs 05 and 06. Those are the prefix property at work: `CsrBackend` with `max_iterations` set to the reference's
-  17,517 attempts gives pair 05's 432.0 km route exactly.
-- **A profile of the CSR Powell's → Reed run.** `Route.release` takes 44% of the time and
-  `bubble_mask` 18%. The searches take about 7%, now that the weight check scans each weights
-  array once (`docs/reference/graph.md`, **Backends**); before that, the searches took 9%.
-  After that change, on a busier machine (load average about 12), the same 18,708 attempts took
-  19.8–24.0 s on `CsrBackend` against 25.2–28.0 s on the reference.
+**On Portland with `CsrBackend`** (the same build and engine version 2, 2026-10-30, once its
+transition-aware kernels landed; load average 3–5, about 11 during part of the CSR acceptance
+run, so a rate compares only with the run made just before or after it):
+- **Powell's → Reed, seed 1, `--budget 120 --max-iterations 1000000`.** Both backends write the
+  same route.json but the backend and the time: 62.43× (481.59 km, 4,913 nodes), converged
+  after 82,841 attempts and 800 accepted splices, in 11.7 s on the reference (7,090 attempts/s)
+  and 10.1 s on `CsrBackend` (8,230/s).
+- **The acceptance run on both backends**, back to back (`--backend python`, then the default):
+  the same 20 routes pair for pair (lengths, attempts and accepted splices; every run converged;
+  no turn refused), so the summary above (median 21.5×, quartiles 9.0× and 27.0×, 3.3–45.2×);
+  a median of 7,180 attempts/s on `CsrBackend` against 6,830 on the reference, 157 s of runs
+  against 169 s. Four of the five seed-2 re-plans match; pair 01's ran out of its 30 s on
+  `CsrBackend` while the machine was busiest and stopped at 36.54×, after about 133,300 attempts:
+  the prefix of the 37.05× route both backends reach when it converges (142,254 attempts, with
+  the same bytes).
+- **Where the time goes** (Powell's → Reed, each search call timed). The searches take 33% of
+  the reference's run and 24% of `CsrBackend`'s. `dijkstra_edges` is called 77,573 times, 64 µs
+  a call on the reference and 37 µs on `CsrBackend`, about 40% of which is the weight check
+  scanning each new random-weight array (`docs/reference/graph.md`, **The CSR backend**); the
+  turn DFS 8,110 times, 71 µs against 20 µs. Most searches are small, so a kernel 8–10× faster on
+  large searches makes a whole run about 1.2× faster; the rest of a run is the loop's own work.
 
 ## Limitations
 
@@ -563,10 +560,9 @@ rate compares only with the run made just before or after it.
 - **Twins within a leg.** A leg driving an edge and its twin is searched again without the
   later one, up to 8 times; a leg that needs more rounds, or whose only way drives a twin
   pair, falls back as an unreachable one.
-- **Speed.** `CsrBackend` has no transition-aware kernel yet, so a build with transition tables,
-  Portland's among them, plans on the reference, which `auto` takes there. On a build without
-  tables its searches are 8–13× the reference's, and a whole run 1.5–1.9× (**The loop**,
-  Measured).
+- **Speed.** `CsrBackend`'s searches are 8–13× the reference's on large searches, but most of a
+  run's searches are small: a whole run is about 1.2× faster on Portland (**On Portland with
+  `CsrBackend`**) and 1.5–1.9× on a build without tables (**The loop**, Measured).
 - **Time budgets.** A run that stops on time is reproducible only through its recorded attempt
   count.
 - **The strategy mix.** Random weight found a path other than the removed run in 3 of 64
@@ -600,10 +596,11 @@ bytes).
 | `test_seed_route.py` | `resolve_stops` deterministic, node-disjoint legs, legs avoiding later stops, the penalty re-solve on a corridor, the baseline, the re-snap walk out of a one-entrance ring, the start never moving, a point-to-point trip never collapsing onto the start, a leg between two stops on one node, unreachable legs named by both ends, a leg going round a junction that allows only straight on, the turn at a via, the baseline's legal legs and its turn-blind fallback, a leg driving both carriageways going round, a round trip to a neighbour not one road out and back, round-trip loops (never back along the way out) |
 | `test_objectives.py` | `Distance`, the radius, and `delta` against a full re-score for every kind of term |
 | `test_detour.py` | each strategy's legal detours and None when none exists, the strategy weights, random weight drawing only near the window, the local-exhaustive ranking and the refused-candidate skip, no turn refused on a lattice of straight-only junctions (and many when the searches are made turn-blind) |
-| `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, a splice after two empty cycles and the run stopping only after three, the segment bias's rate and its anchors (the edges with the most unused nodes near), the unused-node grid's cap, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, and so do those with turn tables (no turn refused), a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable`; the same-seed test on both backends, and both backends planning the same route, splice for splice, on the grid and on one-way towns |
+| `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, a splice after two empty cycles and the run stopping only after three, the segment bias's rate and its anchors (the edges with the most unused nodes near), the unused-node grid's cap, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, and so do those with turn tables (no turn refused), a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable`; the same-seed test on both backends, and both backends planning the same route, splice for splice, on the grid and on one-way towns with and without turn tables |
 | `test_io.py` | the route files |
 | `test_plan.py` | `plan_route`'s hooks: `on_start` once before the loop with the route it starts from (every splice replays from it to the result), the same route without the hooks, a continuation from `base` that never scores less, is fixed by its seed on both backends, and refuses a base for other stops, one leaving the request's area (before the loop) and, in `check_base`, a node outside the mask or an edge the request bans |
-| `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32, `--backend` on both commands (the same route.json on both backends but the backend and the time), `auto` taking `python` on a build with turn tables and saying so, `csr` there one line on both commands, a file from another engine version refused |
+| `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32, `--backend` on both commands (the same route.json on both backends but the backend and the time), and the same on a build with turn tables, where `auto` is `csr` too, a file from another engine version refused |
+| `test_portland_data.py` | (`data`: Portland's latest build through `WORST_ROUTE_DATA`, skipped without one) Powell's → Reed, seed 1, 4,000 attempts: the same bytes on both backends, splice for splice, no turn refused |
 
 **The acceptance run**, `tools/acceptance.py`, plans random stop pairs on a saved build, so it
 needs `WORST_ROUTE_DATA` and is not part of the gate:
@@ -614,13 +611,10 @@ uv run python tools/acceptance.py --region portland [--build-id ID] [--pairs 20]
     [--pair-seed 2026] [--near-m 250] [--out tools/out/acceptance.json]
 ```
 
-Its `--backend` is `make_backend`'s, `auto` by default: the reference on a build with
-transition tables such as Portland's (M1's numbers were measured on it), `csr` on one without;
-the report records which backend ran. A run bounded by time goes further on a faster backend,
-so `csr` can give different routes where the reference runs out of time. On a build with
-transition tables it first checks that the backend can run the transition-aware search; `csr`
-asked for there cannot yet, and the tool prints `cannot plan: the csr backend cannot search
-turn tables yet; use --backend python`, one line on stderr, and exits 1.
+Its `--backend` is `make_backend`'s, `auto` by default, which is `csr` when numba imports (M1's
+numbers were measured on the reference); the report records which backend ran. A run bounded by
+time goes further on a faster backend, so the backends give different routes only where a run
+stops on time rather than converging.
 
 The pairs are uniform points in the region's bbox with a node within `--near-m`, the end at a
 straight-line distance within the bounds, drawn from `PCG64(--pair-seed)`; each is planned with

@@ -16,7 +16,7 @@ from hypothesis import strategies as st
 
 from worst_route.config import DEFAULT_BACKEND
 from worst_route.graph.backend import GraphBackend, Path
-from worst_route.graph.backends import auto_note, make_backend
+from worst_route.graph.backends import make_backend
 from worst_route.graph.csr_backend import CsrBackend
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
@@ -307,18 +307,16 @@ def test_make_backend_makes_the_one_asked_for(monkeypatch: pytest.MonkeyPatch) -
         make_backend(GRID, "csr")
 
 
-def test_auto_takes_the_reference_on_a_build_with_turn_tables() -> None:
-    # the CSR kernels cannot search transition tables yet; asked for by name, CSR is still made
+def test_auto_is_csr_on_a_build_with_turn_tables_too() -> None:
+    # the CSR kernels search transition tables, so auto takes them on every build
     g = grid_graph(3, 3, 100.0)
     tables = make_graph(
         [(100.0 * (v % 3), 100.0 * (v // 3)) for v in range(9)],
         [(int(u), int(v), 100.0) for u, v in zip(g.edge_u, g.edge_v, strict=True)],
         transitions=[((3, 4), (4, 5)), ((5, 4), (4, 3)), ((1, 4), (4, 7)), ((7, 4), (4, 1))],
     )
-    assert make_backend(g).name == "csr" and auto_note(g, "auto") == ""
-    assert make_backend(tables).name == "python"
-    assert auto_note(tables, "auto") == " (csr cannot search turn tables yet)"
-    assert make_backend(tables, "csr").name == "csr" and auto_note(tables, "csr") == ""
+    assert make_backend(g).name == "csr"
+    assert make_backend(tables).name == "csr"
 
 
 def test_ties_go_to_the_first_node_settled_then_the_lowest_edge(backend_type) -> None:

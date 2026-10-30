@@ -15,7 +15,7 @@ Code: `src/worst_route/graph/`. The design it implements is `docs/PLAN.md` §2.6
 | `backend.py` | the `GraphBackend` protocol, the `Path` type, and what every backend shares: `check_ends`, `WeightCheck`, `as_cost`, `as_limits`, `enterable`, `banned_mask`, `largest_scc_mask` |
 | `python_backend.py` | `PythonBackend`, the reference implementation |
 | `csr_backend.py` | `CsrBackend`, the production implementation, over `kernels.py` |
-| `kernels.py` | the Numba kernels `dijkstra_masked` and `simple_paths_dfs` |
+| `kernels.py` | the Numba kernels `dijkstra_masked`, `simple_paths_dfs`, `dijkstra_edges_masked`, `simple_paths_dfs_turns` and their turn check `turn_allowed` |
 | `backends.py` | `make_backend` |
 | `loader.py` | `load_build`, `Loaded`, `BuildNotFound` |
 | `spatial.py` | `SpatialIndex` (`project`, `snap`, `leash_mask`, `bubble_mask`), `Snap`, `SnapError`, `active_mask` |
@@ -220,21 +220,19 @@ for the whole graph. Measured on the dev machine: a search across a 200 × 200 `
 ## The CSR backend
 
 **`CsrBackend(data)`** (`csr_backend.py`) runs the Numba kernels of `kernels.py` over the
-build's CSR arrays (`out_indptr`, `out_edges`, `edge_u`, `edge_v`); it copies and precomputes
-nothing. Each call runs the shared checks in the reference's order, answers the trivial cases as
-the reference does (a negative `max_cost`, an end that may not be entered, `max_paths <= 0`,
-`src == dst` for the DFS), then hands the kernel the arrays, the weights, and the masks as
-zero-copy uint8 views (`mask.view(np.uint8)`). `largest_scc_mask` is the shared scipy call.
-
-**The transition-aware search has no kernel yet.** `dijkstra_edges` raises
-`NotImplementedError` ("the csr backend cannot search turn tables yet; use --backend python"),
-and so does `simple_paths_dfs` on a build with transition rows; on a build without rows every
-turn is allowed, so the DFS's turn edges (checked as the reference checks them) change nothing
-and the plain kernel answers, byte for byte. The engine calls the transition-aware search only
-on builds with rows (`docs/reference/engine.md`, **Searches**), so on those builds, Portland's
-among them, `make_backend("auto")` takes the reference until the edge-state kernel lands, and
-`csr` asked for by name fails at the first search; on builds without rows both backends plan
-the same routes.
+build's CSR arrays (`out_indptr`, `out_edges`, `edge_u`, `edge_v`); it copies nothing, and
+precomputes the transition table once into the two arrays the turn kernels read:
+`trans_indptr` (int64[n+1], from `searchsorted` on the sorted `trans_node`: node v's rows are
+`trans_indptr[v]:trans_indptr[v + 1]`) and `trans_key` (int64[k], each row's
+`in_edge * m + out_edge`, ascending within a node's rows), both read-only, 0.6 MB on Portland.
+Each call runs the shared checks in the reference's order, answers the trivial cases as the
+reference does (a negative `max_cost`, an end that may not be entered, `max_paths <= 0`,
+`src == dst`, where both turn edges given must make an allowed turn), then hands the kernel the
+arrays, the weights, and the masks as zero-copy uint8 views (`mask.view(np.uint8)`).
+`dijkstra_edges` is always the edge-state kernel; `simple_paths_dfs` is the turn kernel on a
+build with transition rows or when a turn edge is given, and the plain kernel otherwise, where
+every turn is allowed and the two give the same paths. `largest_scc_mask` is the shared scipy
+call.
 
 - `dijkstra_masked(out_indptr, out_edges, edge_u, edge_v, weights, enter_u8, banned_u8, src,
   dst, max_cost) -> (found, nodes, edges)`: the tie rule exactly, with a binary heap of
@@ -246,12 +244,36 @@ the same routes.
   min(max_depth, n). The paths come back packed: path p is `edges[offsets[p]:offsets[p + 1]]`
   and `nodes[offsets[p] + p : offsets[p + 1] + p + 1]`, in buffers that double when full.
   `CsrBackend` unpacks them into the list of `Path`s.
+- `dijkstra_edges_masked(out_indptr, out_edges, edge_u, edge_v, weights, enter_u8, banned_u8,
+  trans_indptr, trans_key, src, dst, entry_edge, exit_edge, max_cost) -> (found, nodes, edges)`:
+  the transition-aware search exactly (**The transition-aware search**), with a binary heap of
+  (cost, edge id) entries in two arrays. With non-negative weights each state is pushed at most
+  once (its cost is its predecessor's plus its own weight, and states pop in non-decreasing cost,
+  so its first push is its last): at most m entries, and at most 164,473 pushes in a search on
+  Portland (m = 168,167). The heap still starts at 64 entries and doubles when full
+  (`_heap_push`), so a small search allocates little and memory stays safe if a weights array
+  changed in place after its cached check (**Backends**) holds a negative weight, which breaks
+  the bound. Each edge state has one uint8 (not reached, reached, settled); its cost and
+  predecessor are left uninitialised until it is reached, so a search does not fill O(m) floats:
+  on Portland that fill would cost 18 µs a call, the state array costs 1.4 µs. A start state is
+  kept at its own weight within `max_cost`, an infinite one included, as the reference keeps it;
+  a relaxed state only on a strictly smaller cost. The first end state popped is the answer,
+  unless its path enters a node twice (found by sorting a copy of the path's nodes): then nothing
+  is found.
+- `simple_paths_dfs_turns(out_indptr, out_edges, edge_v, enter_u8, banned_u8, trans_indptr,
+  trans_key, src, dst, entry_edge, exit_edge, max_depth, max_paths) -> (offsets, nodes, edges)`:
+  `simple_paths_dfs` with every turn checked, from `entry_edge` (when given) or the path's last
+  edge into each edge it tries, and from an edge into `dst` into `exit_edge` (when given).
+- `turn_allowed(trans_indptr, trans_key, edge_v, e, f) -> bool`: the turn from e into f at
+  head(e): allowed when the node has no rows, else a binary search for `e * m + f` among its rows
+  (at most 304, at a Portland super-junction). Both turn kernels call it, and so does
+  `CsrBackend` for `src == dst`.
 
 **The parity contract.** For arguments of the declared types (int node ids and limits, a real
 `max_cost`, float64 weights, bool masks), `CsrBackend` returns `PythonBackend`'s results byte
 for byte: the same paths in the same int32 arrays, the same ties, the same Nones, the same
-paths in the same order, the same errors (the transition-aware search aside, above). The semantics in `backend.py` are the specification; a case where the
-two legitimately differ is a bug in one of them, never a choice. Floats are added one at a time
+paths in the same order, the same errors. The semantics in `backend.py` are the specification;
+a case where the two legitimately differ is a bug in one of them, never a choice. Floats are added one at a time
 in the same order as the reference (no `fastmath`, no `parallel`), so equal inputs give equal
 costs. The tests (**Tests**) hold this, and so do the golden route and the engine's same-seed
 tests, which run on both backends.
@@ -260,8 +282,9 @@ tests, which run on both backends.
 signature whose arrays are read-only and of any layout. Memory-mapped builds, read-only cached
 weights and fresh writeable masks therefore share one specialization. `cache=True` keeps it in
 `src/worst_route/graph/__pycache__/` (gitignored). The first import after a change to
-`kernels.py`, or in a fresh clone or CI run, compiles both kernels: about 1.2 s on the dev
-machine. Every later process loads them from the cache in about 0.15 s.
+`kernels.py`, or in a fresh clone or CI run, compiles its six functions (the four kernels,
+`turn_allowed` and the heap's push): about 3 s on the dev machine (1.4 s for the two
+node-state kernels alone). Every later process loads them from the cache in about 0.3 s.
 `NUMBA_DISABLE_JIT=1` runs the kernels as plain Python for debugging: slow on a real build, but
 the whole test suite passes that way. `NUMBA_BOUNDSCHECK=1` turns an out-of-range index into an
 `IndexError`, but only with a `NUMBA_CACHE_DIR` of its own: the cache index does not key on
@@ -274,7 +297,12 @@ flags, heap; the DFS's on-path flags and stack), O(n) per call, as the mask comb
 already is: the kernel's allocations and dispatch take 5–8 µs. With the weights array already
 checked, a one-edge search costs 10 µs on the reference and 14 µs on `CsrBackend` on Portland
 (5.5 and 10 µs on `grid_graph(200, 200, 100)`). Before the weight check was cached, its O(m) scan
-took 30–32 µs of every call on both backends.
+took 30–32 µs of every call on both backends. The edge-state kernel's O(m) work is one uint8
+array (above), and a transition-aware search to a neighbour costs 6 µs on the reference and
+7 µs on `CsrBackend`. The engine's searches are mostly small: in Powell's → Reed on Portland
+(`docs/reference/engine.md`, **On Portland with `CsrBackend`**) a `dijkstra_edges` call averages
+64 µs on the reference and 37 µs on `CsrBackend`, about 40% of which is the weight check scanning
+each new random-weight array, which both backends pay.
 
 **Dependency.** `numba>=0.68`, locked at 0.68.1 with llvmlite 0.50.0. Both have CPython 3.12
 wheels for macOS arm64, manylinux x86_64 and aarch64, and Windows, but none for macOS x86_64:
@@ -292,16 +320,20 @@ numpy < 2.6, so a numpy upgrade past 2.5 waits for numba.
 | **On Portland** (build e4b3b4ad90db: 65,810 nodes, 168,167 edges) | | | |
 | `dijkstra` south-west to north-east corner (every node settled) | 34 ms (0.20 µs per edge) | 4.1 ms (0.025 µs per edge) | 8.3× |
 | `dijkstra` to a neighbour (fixed cost; the weights already checked) | 10 µs | 14 µs | — |
+| **Transition-aware, on Portland** (the same build: 11,378 rows at 657 nodes; load average 4–5) | | | |
+| `dijkstra_edges` south-west to north-east corner | 129 ms | 17 ms | 7.6× |
+| `dijkstra_edges` 800 m across downtown, `max_cost` 1.5 km | 0.36 ms | 0.035 ms | 10.3× |
+| `dijkstra_edges` to a neighbour (fixed cost; the weights already checked) | 6 µs | 7 µs | — |
+| `simple_paths_dfs` with an entry edge, a 4-edge window through a 228-row super-junction in a 400 m ball, depth 25, 5000 paths | 70 ms | 7.3 ms | 9.5× |
+| the same, a 4-edge window downtown (no rows in its ball; 745 paths) | 6.4 ms | 0.61 ms | 10.4× |
 
 ## Choosing a backend
 
 `make_backend(data, name=DEFAULT_BACKEND)` (`backends.py`) makes the backend `name` asks for:
 `"csr"`, `"python"`, or `"auto"`, which is `CsrBackend` when numba imports and `PythonBackend`
-otherwise (`csr_backend` is imported only when asked for), and `PythonBackend` on a build with
-transition rows, which `CsrBackend` cannot search yet (**The CSR backend**); `auto_note(data,
-name)` gives the reason, " (csr cannot search turn tables yet)", which the CLI appends to its
-`backend:` line. `config.DEFAULT_BACKEND` is `"auto"`; `config.BackendName` lists the names.
-Where both backends can search, the choice changes only the speed. `plan_route` uses
+otherwise (`csr_backend` is imported only when asked for). `config.DEFAULT_BACKEND` is
+`"auto"`; `config.BackendName` lists the names. The backends give the same results, so the
+choice changes only the speed. `plan_route` uses
 `make_backend`'s default when it is given no backend, and `worst-route plan` and `validate`
 take `--backend` (`docs/reference/engine.md`).
 
@@ -412,14 +444,22 @@ Then its parity tests compare the two backends byte for byte:
 - a float32 `max_cost` against a 0.1000000015 edge, limits of 2**63, 2.5 and `inf` (the same
   results or the same `TypeError`), and the weights scanned once per array.
 
-It also tests `make_backend`'s choices, `auto` taking the reference on a build with turn
-tables among them.
+It also tests `make_backend`'s choices, `auto` taking CSR on a build with turn tables among
+them.
 
-`test_edge_search.py` tests `dijkstra_edges` and the DFS's turns on the reference: on random
-graphs with random transition tables, the exact path against a heap-free implementation of the
-edge-state tie rule and the cost against networkx over the edge states; without rows, the cost
-of `dijkstra` and its path when the cheapest is unique; the DFS against networkx's simple paths
-filtered by turns; crafted entry and exit edges, a loop that would repeat a node, no return to
-the start, the dead end at `dst`, bad arguments. It also checks that `CsrBackend` raises
-`NotImplementedError` for the transition-aware search on a build with rows, and answers the DFS
-with turn edges like the reference on a build without. Run them with `uv run pytest tests/graph`.
+`test_edge_search.py` tests `dijkstra_edges` and the DFS's turns on both backends, through
+the same fixture: on random graphs with random transition tables, the exact path against a
+heap-free implementation of the edge-state tie rule and the cost against networkx over the edge
+states; without rows, the cost of `dijkstra` and its path when the cheapest is unique; the DFS
+against networkx's simple paths filtered by turns; crafted entry and exit edges, a loop that
+would repeat a node, no return to the start, the dead end at `dst`, bad arguments. Then its
+parity tests compare the two backends byte for byte:
+- 300 hypothesis graphs with and without transition tables, turn edges, weights in
+  {0, 0.5, 1, 2, inf}, masks, budgets (`src == dst` included), and depth and count limits, both
+  searches compared;
+- 300 transition-aware searches on a 30 × 30 grid with one-way streets, tables at a third of
+  its junctions and tied weights, with turn edges, masks and budgets (heaps that grow);
+- the simple paths across a 5 × 5 grid whose nodes 6, 12 and 18 allow only straight on, corner
+  to corner, between two of those nodes through turn edges, and under a mask and limits.
+
+Run them with `uv run pytest tests/graph`.

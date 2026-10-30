@@ -215,11 +215,14 @@ def test_the_same_seed_gives_the_same_route(backend: GraphBackend) -> None:
 
 @pytest.mark.parametrize("seed", range(4))
 def test_both_backends_plan_the_same_route(seed: int) -> None:
-    # every search the loop makes returns the same bytes, so the whole run does: on the grid
-    # and on a one-way town with twins
-    g = random_town(seed)
-    scc = np.flatnonzero(PythonBackend(g).largest_scc_mask())
-    for data, stops in [(GRID, CORNERS), (g, [at_node(g, int(scc[0])), at_node(g, int(scc[-1]))])]:
+    # every search the loop makes returns the same bytes, so the whole run does: on the grid,
+    # on a one-way town with twins, and on one with turn tables too (every search edge-state)
+    towns = [random_town(seed), random_town(seed, turns=True)]
+    cases = [(GRID, CORNERS)]
+    for g in towns:
+        scc = np.flatnonzero(PythonBackend(g).largest_scc_mask())
+        cases.append((g, [at_node(g, int(scc[0])), at_node(g, int(scc[-1]))]))
+    for data, stops in cases:
         one, two = (
             plan(seed, data=data, stops=stops, backend=b(data)) for b in (PythonBackend, CsrBackend)
         )
@@ -355,7 +358,7 @@ def test_random_towns_with_turn_tables_always_give_valid_routes() -> None:
         scc = np.flatnonzero(PythonBackend(g).largest_scc_mask())
         stops = [at_node(g, int(scc[0])), at_node(g, int(scc[-1]))]
         try:
-            # raises if the route is invalid; the CSR kernels cannot search turn tables yet
+            # raises if the route is invalid
             result = plan(seed, 200, data=g, stops=stops, backend=PythonBackend(g))
         except StopUnreachable:
             continue

@@ -15,13 +15,17 @@ never overwrites one without `--force`; `qa` prints its thresholds, also when it
 do not load the geo stack.
 
 `plan` plans a route on a saved build (`docs/reference/engine.md`, **The CLI**): it prints the
-snapped stops, the baseline, the worst route, the ratio, the search, the backend it searched
-with and the validator's report, with a progress line on stderr on an accepted splice, at most
-one every 2 s, and writes `route.json` and GeoJSON when asked; a stop that cannot be snapped or
-reached, or a missing build, is one line and exit 1, and a route that fails the validator is
-never printed. `validate` re-checks a saved `route.json` against the build it names, with its
-stops re-derived from its request (`resolve_stops`), and exits 1 when a check fails; a file made
-by another engine version is one line and exit 1 (its stops could be re-derived differently).
+snapped stops, the baseline, the worst route, the ratio, the target and what was achieved (for
+`--target ratio:<x>` or `duration:<time>`), the search, the backend it searched with and the
+validator's report, with a progress line on stderr on an accepted splice, at most one every
+2 s, and writes `route.json` and GeoJSON when asked; a stop that cannot be snapped or reached,
+or a missing build, is one line and exit 1, and a route that fails the validator is never
+printed. `--base route.json` continues a saved route ("make it worse", toward the new target):
+its stops, tier, leash and objective come from the file, which must have been planned on the
+build at its graph_version by this engine version. `validate` re-checks a saved `route.json`
+against the build it names, with its stops re-derived from its request (`resolve_stops`), and
+exits 1 when a check fails; a file made by another engine version is one line and exit 1 (its
+stops could be re-derived differently).
 Both take `--backend auto|csr|python` (`config.DEFAULT_BACKEND`, `auto`: csr when numba
 imports) and print the one used, which changes only the speed; `csr` when numba does not import
 is one line and exit 1.
@@ -35,6 +39,7 @@ job cancelled, a worker failed) go to the same log.
 """
 
 import json
+import re
 import secrets
 import time
 from pathlib import Path
@@ -49,6 +54,7 @@ from worst_route.config import (
     DEFAULT_BUDGET_S,
     DEFAULT_MAX_ITERATIONS,
     REGIONS,
+    TARGET_TOLERANCE,
     BackendName,
     settings,
 )
@@ -600,12 +606,61 @@ def _duration(seconds: float) -> str:
     return f"{hours} h {minutes} min" if hours else f"{minutes} min {secs} s"
 
 
+TIME = re.compile(r"(?:(\d+(?:\.\d*)?)h)?(?:(\d+(?:\.\d*)?)m)?(?:(\d+(?:\.\d*)?)s)?")
+
+
+def _seconds(text: str) -> float:
+    """`9h`, `90m`, `2h30m`, `45s` or a number of seconds, in seconds."""
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    match = TIME.fullmatch(text)
+    if not text or match is None:
+        raise ValueError(text)
+    hours, minutes, secs = (float(part) if part else 0.0 for part in match.groups())
+    return hours * 3600 + minutes * 60 + secs
+
+
+def _target(text: str) -> dict[str, Any]:
+    """`--target`'s value as a request's target: max, ratio:<x> or duration:<time>."""
+    kind, colon, value = text.partition(":")
+    try:
+        if kind == "max" and not colon:
+            return {"kind": "max"}
+        if kind == "ratio":
+            return {"kind": "ratio", "value": float(value)}
+        if kind == "duration":
+            return {"kind": "duration", "value": _seconds(value)}
+    except ValueError:
+        pass
+    raise typer.BadParameter(
+        f"--target {text!r}: expected max, ratio:<x> or duration:<time> "
+        "(9h, 90m, 2h30m, 45s or seconds)"
+    )
+
+
+def _target_line(kind: str, wanted: float, achieved: float, within: bool) -> str:
+    """`target: ratio 20x → achieved 19.87x (within ±2 %)`, or the duration's."""
+    if kind == "ratio":
+        what, got = f"ratio {wanted:g}x", f"{achieved:.2f}x"
+    else:
+        what, got = f"duration {_duration(wanted)}", _duration(achieved)
+    band = f"{'within' if within else 'outside'} ±{TARGET_TOLERANCE * 100:g} %"
+    return f"target: {what} → achieved {got} ({band})"
+
+
 @app.command()
 def plan(
+    ctx: typer.Context,
     region: RegionOption,
-    from_: Annotated[str, typer.Option("--from", metavar="LAT,LON", help="The start.")],
-    to: Annotated[str, typer.Option(metavar="LAT,LON", help="The end.")],
-    build_id: Annotated[str | None, typer.Option(help="Build id (default: latest).")] = None,
+    from_: Annotated[
+        str | None, typer.Option("--from", metavar="LAT,LON", help="The start.")
+    ] = None,
+    to: Annotated[str | None, typer.Option(metavar="LAT,LON", help="The end.")] = None,
+    build_id: Annotated[
+        str | None, typer.Option(help="Build id (default: latest, or the --base file's).")
+    ] = None,
     via: Annotated[
         list[str] | None, typer.Option(metavar="LAT,LON", help="A stop between, in order.")
     ] = None,
@@ -619,35 +674,90 @@ def plan(
     out: Annotated[Path | None, typer.Option(help="Write the route.json here.")] = None,
     geojson: Annotated[Path | None, typer.Option(help="Write the GeoJSON here.")] = None,
     backend: BackendOption = DEFAULT_BACKEND,
+    target: Annotated[
+        str, typer.Option(help="max, ratio:<x> (× the baseline) or duration:<time> (9h, 2h30m).")
+    ] = "max",
+    base: Annotated[
+        Path | None,
+        typer.Option(
+            help="Continue this route.json (its stops, tier and leash).",
+            exists=True,
+            dir_okay=False,
+        ),
+    ] = None,
 ) -> None:
     """Plan the worst route between stops, validated."""
     from pydantic import ValidationError
 
-    from worst_route.engine.io import route_document, route_geojson
-    from worst_route.engine.plan import plan_route
+    from worst_route.engine import ENGINE_VERSION
+    from worst_route.engine.io import SavedRoute, read_route, route_document, route_geojson
+    from worst_route.engine.plan import BaseRouteMismatch, plan_route
     from worst_route.engine.request import RouteRequest
+    from worst_route.engine.route import IllegalSplice
     from worst_route.engine.seed_route import Baseline
-    from worst_route.engine.snap import StopUnreachable
+    from worst_route.engine.snap import StopUnreachable, is_round_trip
     from worst_route.engine.validator import ValidationFailed
     from worst_route.engine.worsen import ProgressEvent
     from worst_route.graph.spatial import SnapError
 
-    stops = [_latlon(from_), *(_latlon(v) for v in via or []), _latlon(to)]
-    try:
-        request = RouteRequest(
-            stops=stops,
-            tier=tier,
-            leash_km=leash_km if leash_km == "auto" else float(leash_km),
-            budget_s=budget,
-            max_iterations=max_iterations,
-            seed=seed if seed is not None else secrets.randbelow(2**31),
+    fields: dict[str, Any] = {
+        "budget_s": budget,
+        "max_iterations": max_iterations,
+        "seed": seed if seed is not None else secrets.randbelow(2**31),
+        "target": _target(target),
+    }
+    saved: SavedRoute | None = None
+    if base is None:
+        if from_ is None or to is None:
+            raise typer.BadParameter("--from and --to are needed, unless --base names a route")
+        fields["stops"] = [_latlon(from_), *(_latlon(v) for v in via or []), _latlon(to)]
+        fields["tier"] = tier
+        try:
+            fields["leash_km"] = leash_km if leash_km == "auto" else float(leash_km)
+        except ValueError as error:
+            raise typer.BadParameter(f"--leash-km: {error}") from None
+    else:
+        given = [name for name, value in (("--from", from_), ("--to", to), ("--via", via)) if value]
+        for name in ("tier", "leash_km"):
+            source = ctx.get_parameter_source(name)
+            if source is not None and source.name != "DEFAULT":
+                given.append(f"--{name.replace('_', '-')}")
+        if given:
+            raise typer.BadParameter(
+                f"--base takes the stops, tier and leash from its route: drop {', '.join(given)}"
+            )
+        try:
+            saved = read_route(base)
+        except (KeyError, TypeError, ValueError, OverflowError, ValidationError) as error:
+            _fail(f"cannot read {base}: {type(error).__name__}: {error}")
+        if saved.engine_version != ENGINE_VERSION:
+            _fail(
+                f"{base} was made by engine version {saved.engine_version}; "
+                f"this is version {ENGINE_VERSION}: re-plan"
+            )
+        if saved.region != region:
+            _fail(f"{base} was planned on {saved.region}, not {region}")
+        build_id = build_id or saved.build_id
+        fields.update(
+            stops=saved.request.stops,
+            objective=saved.request.objective,
+            tier=saved.request.tier,
+            leash_km=saved.request.leash_km,
         )
+    if fields["target"]["kind"] == "ratio" and is_round_trip(fields["stops"]):
+        typer.echo("invalid --target: a round trip has no ratio target", err=True)
+        raise typer.Exit(code=2)
+    try:
+        request = RouteRequest(**fields)
     except ValidationError as error:
         problems = [f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in error.errors()]
         raise typer.BadParameter("; ".join(problems)) from None
-    except ValueError as error:
-        raise typer.BadParameter(f"--leash-km: {error}") from None
     data = _load_build(region, build_id)
+    if saved is not None and data.meta["graph_version"] != saved.graph_version:
+        _fail(
+            f"{base} was planned on graph_version {saved.graph_version[:12]}, "
+            f"the build has {data.meta['graph_version'][:12]}"
+        )
     engine = _make_backend(data, backend)
 
     last = time.monotonic()
@@ -661,9 +771,13 @@ def plan(
             typer.echo(f"iteration {event.iteration}: ratio {ratio:.2f}x, {km:.2f} km", err=True)
 
     try:
-        result = plan_route(data, request, backend=engine, on_progress=progress)
-    except (SnapError, StopUnreachable) as error:
+        result = plan_route(data, request, backend=engine, base=saved, on_progress=progress)
+    except (SnapError, StopUnreachable, BaseRouteMismatch) as error:
         _fail(f"cannot plan: {error}")
+    except (IllegalSplice, IndexError) as error:
+        if saved is None:  # not from a file: an engine bug, so the traceback
+            raise
+        _fail(f"cannot plan: {base} is not a legal route: {type(error).__name__}: {error}")
     except ValidationFailed as error:
         lines = [line for line in error.report.lines() if "FAILED" in line]
         _fail("the route failed validation (an engine bug): " + "; ".join(lines))
@@ -685,11 +799,22 @@ def plan(
             f"moved {s.moved_m:.0f} m{note}"
         )
     typer.echo(f"baseline: {baseline.length_m / 1000:.2f} km, {_duration(baseline.time_s)}")
+    if saved is not None:
+        km, was = saved.metrics.length_m / 1000, _duration(saved.metrics.time_s)
+        ratio = f", {saved.metrics.length_m / baseline.length_m:.2f}x" if baseline.length_m else ""
+        typer.echo(f"base: {base}: {km:.2f} km, {was}{ratio}")
     typer.echo(f"worst: {route.metrics.length_m / 1000:.2f} km, {_duration(route.metrics.time_s)}")
     if baseline.length_m > 0:
         typer.echo(f"ratio: {route.metrics.length_m / baseline.length_m:.2f}x")
     else:
         typer.echo("ratio: n/a (a round trip's baseline is 0 m)")
+    reached = result.goal.describe(result.goal.value(route.score, route.metrics))
+    if reached is not None:
+        typer.echo(
+            _target_line(
+                reached["kind"], reached["value"], reached["achieved"], reached["within_tolerance"]
+            )
+        )
     typer.echo(f"route: {len(route.nodes)} nodes, {len(route.edges)} edges")
     typer.echo(
         f"search: {run.attempts} attempts, {run.accepted} accepted, {run.elapsed_s:.1f} s, "

@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
-from worst_route.cli import app
+from worst_route.cli import _seconds, app
 from worst_route.engine import ENGINE_VERSION
 from worst_route.graph.data import GraphData
 from worst_route.graph.store import write_build
@@ -307,6 +307,124 @@ def test_bad_arguments_are_refused(data_dir: Path) -> None:
     ):
         code, stdout, _ = plan(*args)
         assert code == 2 and stdout == ""
+
+
+def test_a_target_is_planned_printed_and_recorded(data_dir: Path, tmp_path: Path) -> None:
+    save(data_dir, GRID, "b1")
+    trip = ["--from", latlon(GRID, 0), "--to", latlon(GRID, 99), "--seed", "3"]
+    out = tmp_path / "route.json"
+    code, stdout, stderr = plan(*trip, "--target", "ratio:3", "--out", str(out))
+    assert code == 0, stdout + stderr
+    lines = stdout.splitlines()
+    assert "target: ratio 3x → achieved 3.00x (within ±2 %)" in lines
+    assert any(line.startswith("search: ") and line.endswith("stopped: target") for line in lines)
+    doc = json.loads(out.read_text())
+    assert doc["request"]["target"] == {"kind": "ratio", "value": 3.0}
+    assert doc["metrics"]["target"] == {
+        "kind": "ratio",
+        "value": 3.0,
+        "achieved": 3.0,
+        "within_tolerance": True,
+    }
+    assert runner.invoke(app, ["validate", str(out)]).exit_code == 0
+
+    code, stdout, _ = plan(*trip, "--target", "duration:8m")
+    assert code == 0
+    assert "target: duration 8 min 0 s → achieved 8 min 6 s (within ±2 %)" in stdout.splitlines()
+    code, stdout, _ = plan(*trip)
+    assert code == 0 and "target:" not in stdout
+
+
+@pytest.mark.parametrize(
+    ("text", "seconds"),
+    [("9h", 32400), ("90m", 5400), ("2h30m", 9000), ("45s", 45), ("1.5h", 5400), ("600", 600)],
+)
+def test_a_duration_is_read_in_hours_minutes_or_seconds(text: str, seconds: float) -> None:
+    assert _seconds(text) == seconds
+
+
+def test_a_bad_target_is_refused(data_dir: Path) -> None:
+    save(data_dir, GRID, "b1")
+    trip = ["--from", latlon(GRID, 0), "--to", latlon(GRID, 99)]
+    for target in ("ratio:x", "ratio:1", "ratio", "duration:9x", "duration:", "duration:8d",
+                   "duration:9h:", "max:3", "speed:3", "duration:200h"):  # fmt: skip
+        code, stdout, stderr = plan(*trip, "--target", target)
+        assert code == 2 and stdout == "", target
+        assert "target" in stderr
+
+
+def test_a_round_trip_has_no_ratio_target(data_dir: Path, tmp_path: Path) -> None:
+    save(data_dir, GRID, "b1")
+    loop = ["--from", latlon(GRID, 45), "--to", latlon(GRID, 45)]
+    code, stdout, stderr = plan(*loop, "--target", "ratio:3")
+    assert (code, stdout, stderr) == (2, "", "invalid --target: a round trip has no ratio target\n")
+    out = tmp_path / "loop.json"
+    assert plan(*loop, "--seed", "1", "--max-iterations", "20", "--out", str(out))[0] == 0
+    code, stdout, stderr = plan("--base", str(out), "--target", "ratio:3")
+    assert code == 2 and "invalid --target: a round trip has no ratio target" in stderr
+    assert plan("--base", str(out), "--target", "duration:30m", "--max-iterations", "20")[0] == 0
+
+
+def test_an_illegal_route_is_a_base_file_s_fault_only_with_base(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    save(data_dir, GRID, "b1")
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise IndexError("an engine bug")
+
+    monkeypatch.setattr("worst_route.engine.plan.plan_route", broken)
+    result = runner.invoke(app, ["plan", "--region", "portland", "--from", latlon(GRID, 0),
+                                 "--to", latlon(GRID, 99)])  # fmt: skip
+    assert isinstance(result.exception, IndexError) and "not a legal route" not in result.stderr
+
+
+def test_base_continues_a_route_toward_a_new_target(data_dir: Path, tmp_path: Path) -> None:
+    save(data_dir, GRID, "b1")
+    first, second = tmp_path / "worst.json", tmp_path / "less.json"
+    trip = ["--from", latlon(GRID, 0), "--to", latlon(GRID, 99)]
+    code, *_ = plan(*trip, "--seed", "1", "--out", str(first))
+    assert code == 0
+    worst = json.loads(first.read_text())
+    assert worst["metrics"]["ratio"] > 5
+
+    code, stdout, stderr = plan(
+        "--base", str(first), "--target", "ratio:4", "--seed", "2", "--out", str(second)
+    )
+    assert code == 0, stdout + stderr
+    lines = stdout.splitlines()
+    assert f"base: {first}: 9.80 km, 14 min 42 s, 5.44x" in lines
+    assert "target: ratio 4x → achieved 4.00x (within ±2 %)" in lines
+    doc = json.loads(second.read_text())
+    assert doc["request"]["stops"] == worst["request"]["stops"] and doc["seed"] == 2
+    assert doc["stop_idx"][-1] == len(doc["nodes"]) - 1
+    assert runner.invoke(app, ["validate", str(second)]).exit_code == 0
+
+
+def test_base_takes_its_stops_and_scale_from_its_file(data_dir: Path, tmp_path: Path) -> None:
+    save(data_dir, GRID, "b1")
+    first = tmp_path / "worst.json"
+    trip = ["--from", latlon(GRID, 0), "--to", latlon(GRID, 99)]
+    assert plan(*trip, "--seed", "1", "--max-iterations", "50", "--out", str(first))[0] == 0
+    for given in (trip, ["--via", latlon(GRID, 45)], ["--tier", "auto"], ["--leash-km", "3"]):
+        code, stdout, stderr = plan("--base", str(first), *given)
+        assert code == 2 and stdout == "" and "--base takes the stops" in stderr
+    code, _, stderr = plan("--to", latlon(GRID, 99))
+    assert code == 2 and "--from and --to are needed" in stderr
+
+    doc = json.loads(first.read_text())
+    for change, message in (
+        ({"engine_version": "1"}, "was made by engine version 1"),
+        ({"region": "oregon"}, "was planned on oregon, not portland"),
+        ({"graph_version": "0" * 64}, "was planned on graph_version 000000000000"),
+        ({"nodes": doc["nodes"][:3] + doc["nodes"][4:]}, "is not a legal route: IndexError"),
+        ({"nodes": doc["nodes"][:3] + [doc["nodes"][1]] + doc["nodes"][4:]}, "BrokenChain"),
+        ({"stop_idx": [0, 3]}, "cannot plan: the base route's stops are not the ones"),
+    ):
+        edited = tmp_path / "edited.json"
+        edited.write_text(json.dumps({**doc, **change}))
+        code, stdout, stderr = plan("--base", str(edited))
+        assert code == 1 and stdout == "" and message in stderr, stderr
 
 
 def test_validate_re_derives_the_stops(data_dir: Path, tmp_path: Path) -> None:

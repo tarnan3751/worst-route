@@ -43,6 +43,25 @@ key)`, for which a directed path through the internal edges leads from the in-ed
 out-edge's start (the same node counts). Route splicing enforces them; every super-node has the
 entry, even when no pair is allowed.
 
+Twins (`carriageways.find_twins`) are found on the stage A graph, so a carriageway stretch that
+stage B makes internal still has its twins; `stage_b` carries the table across (`_carry_twins`).
+An edge that stays maps to itself. An edge internal to a super-node maps to the super-node's
+boundary edges on the same road (equal `road_signature`) along its own carriageway: the in-edges
+from which that road leads to it through the super-node and the out-edges it leads to, those
+heading its way (within 90 degrees); failing those, every boundary edge on that road heading its
+way, then every boundary edge heading its way (`_along`). So going through on one carriageway
+bans the other carriageway's stretch beside it, and never the same carriageway. A pair whose two
+edges are internal to one super-node is not carried (a route passes the super-node once), but a
+passage through it that must drive both (out on one carriageway, a U-turn at the median's end
+inside the junction, back on the other) is banned: its in-edge and out-edge become twins.
+Besides, a transition every internal path of which drives an internal edge with a twin outside
+the super-node (a cross street that jogs along a carriageway inside it) bans that twin on its
+in-edge and its out-edge, whatever road they are on: an over-ban when a route uses either edge
+for another transition, the exact form being a per-transition ban table. When that twin is
+itself a boundary edge of the super-node, which a route can only use in a passage through it,
+only the transition that drives the stretch and then the twin is banned. The table stays
+symmetric.
+
 `relabel` numbers the nodes `0..n-1`: plain and cluster nodes by their smallest member, then the
 super-nodes by theirs, keeping edge keys and remapping the `superjunctions` and `twins` tables.
 `stage_b` ends with it, and cleanup calls it again after dropping the small components.
@@ -107,6 +126,9 @@ class StageBStats:
     pocket_nodes: int = 0  # nodes taken in as pockets
     split: int = 0  # clusters split by the diameter guard
     internal_edges: int = 0
+    twin_pairs: int = 0  # unordered twin pairs carried across
+    twin_transitions: int = 0  # transitions that must drive an internal edge with a twin outside
+    twin_passages: int = 0  # passages banned for driving both edges of a twin pair inside
     nodes: int = 0
     edges: int = 0
 
@@ -288,6 +310,11 @@ def stage_b(graph: nx.MultiDiGraph) -> tuple[nx.MultiDiGraph, StageBStats]:
         kinds[kind] += 1
         stats.internal_edges += len(edges)
     result.graph["superjunctions"] = superjunctions
+    if "twins" in graph.graph:
+        result.graph["twins"], stats.twin_transitions, stats.twin_passages = _carry_twins(
+            graph, internal, ins, outs, new_key, signature
+        )
+        stats.twin_pairs = sum(map(len, result.graph["twins"].values())) // 2
     stats.superjunctions = {kind: kinds[kind] for kind in sorted(SUPER_KINDS)}
     stats.sizes = dict(sorted(sizes.items()))
     relabelled = relabel(result)
@@ -458,6 +485,154 @@ def _pocket(
                 pushed += 1
                 heapq.heappush(heap, (length, pushed, v))
     return taken
+
+
+def _carry_twins(
+    graph: nx.MultiDiGraph,
+    internal: dict[int, list[tuple[EdgeKey, EdgeData]]],
+    ins: dict[int, list[tuple[EdgeKey, int]]],
+    outs: dict[int, list[tuple[EdgeKey, int]]],
+    new_key: dict[EdgeKey, EdgeKey],
+    signature: dict[EdgeKey, Any],
+) -> tuple[dict[EdgeKey, tuple[EdgeKey, ...]], int, int]:
+    """The stage A graph's twins table in stage B's edge keys (the module header has the rule),
+    the number of transitions that ban a twin of an internal edge they must drive, and the number
+    of passages banned for driving both edges of a twin pair inside their super-node."""
+    twins: dict[EdgeKey, tuple[EdgeKey, ...]] = graph.graph["twins"]
+    owner = {edge: i for i, edges in internal.items() for edge, _ in edges}
+    targets: dict[EdgeKey, set[EdgeKey]] = {}
+
+    def carried(edge: EdgeKey) -> set[EdgeKey]:
+        i = owner.get(edge)
+        if i is None:
+            return {new_key[edge]}
+        if edge not in targets:
+            targets[edge] = _along(graph, edge, internal[i], ins[i], outs[i], new_key, signature)
+        return targets[edge]
+
+    pairs: dict[EdgeKey, set[EdgeKey]] = defaultdict(set)
+    for e, others in twins.items():
+        for f in others:
+            if e > f or (owner.get(e) is not None and owner.get(e) == owner.get(f)):
+                continue  # each pair once; two edges inside one super-node are passed once
+            for a in carried(e):
+                for b in carried(f):
+                    if a != b:
+                        pairs[a].add(b)
+                        pairs[b].add(a)
+
+    # A transition every internal path of which drives an internal edge with a twin outside the
+    # super-node bans that twin on its in-edge and its out-edge too, whatever road they are on;
+    # one forced along both edges of a twin pair inside the super-node (out on one carriageway, a
+    # U-turn at the median's end, back on the other) is banned outright.
+    matched: set[tuple[int, EdgeKey, EdgeKey]] = set()
+    passages: set[tuple[int, EdgeKey, EdgeKey]] = set()
+    for i, edges in internal.items():
+        keys = [edge for edge, _ in edges]
+        outside = {
+            edge: {
+                target for f in twins.get(edge, ()) if owner.get(f) != i for target in carried(f)
+            }
+            for edge in keys
+        }
+        inside = [(e, f) for e in keys for f in twins.get(e, ()) if owner.get(f) == i and e < f]
+        if not inside and not any(outside.values()):
+            continue
+        ends = {n for edge in keys for n in edge[:2]}
+        ends |= {n for _, n in ins[i]} | {n for _, n in outs[i]}
+        reach = _reachability(ends, [edge[:2] for edge in keys])
+        without = {
+            x: _reachability(ends, [edge[:2] for edge in keys if edge != x])
+            for x in {x for x in keys if outside[x]} | {x for pair in inside for x in pair}
+        }
+
+        for e, f in inside:
+            for into, head in ins[i]:
+                for out, tail in outs[i]:
+                    if _forced(reach, without, head, tail, (e, f)):
+                        passages.add((i, into, out))
+                        pairs[new_key[into]].add(new_key[out])
+                        pairs[new_key[out]].add(new_key[into])
+        for x, banned in outside.items():
+            if not banned:
+                continue
+            for into, head in ins[i]:
+                for out, tail in outs[i]:
+                    if not _forced(reach, without, head, tail, (x,)):
+                        continue
+                    matched.add((i, into, out))
+                    a, b = new_key[into], new_key[out]
+                    for f in banned:
+                        if a[1] in f[:2]:
+                            # A boundary edge of this super-node is only ever used in a passage
+                            # through it: ban the one transition that drives x and then f.
+                            bans = [(a, f)] if f == b else [(f, b)] if f == a else []
+                        else:
+                            bans = [(a, f), (b, f)]
+                        for one, other in bans:
+                            pairs[one].add(other)
+                            pairs[other].add(one)
+    table = {edge: tuple(sorted(others)) for edge, others in sorted(pairs.items())}
+    return table, len(matched), len(passages)
+
+
+def _forced(
+    reach: dict[int, set[int]],
+    without: dict[EdgeKey, dict[int, set[int]]],
+    head: int,
+    tail: int,
+    drives: tuple[EdgeKey, ...],
+) -> bool:
+    """Whether a passage from `head` to `tail` is allowed and every internal path of it drives
+    each edge of `drives` (`without[x]` is the reachability with `x` taken out)."""
+    return tail in reach[head] and all(tail not in without[x][head] for x in drives)
+
+
+_NO_ROAD = object()  # the signature of a ramp or roundabout edge, equal to no road's
+
+
+def _along(
+    graph: nx.MultiDiGraph,
+    edge: EdgeKey,
+    internal: list[tuple[EdgeKey, EdgeData]],
+    ins: list[tuple[EdgeKey, int]],
+    outs: list[tuple[EdgeKey, int]],
+    new_key: dict[EdgeKey, EdgeKey],
+    signature: dict[EdgeKey, Any],
+) -> set[EdgeKey]:
+    """The boundary edges an internal edge's twins carry to.
+
+    The first of these that is not empty: the in-edges its road reaches it from and the
+    out-edges it reaches, through the super-node; every boundary edge on its road; every
+    boundary edge; each kept only where it heads the internal edge's way (within 90 degrees),
+    so a same-named turnaround inside the super-node cannot carry a twin to the other
+    carriageway. When the heading leaves none at any level, the first level unfiltered.
+    """
+    road = signature[edge]
+    same = [key for key, _ in internal if signature.get(key, _NO_ROAD) == road]
+    ends = {n for key in same for n in key[:2]} | {n for _, n in ins} | {n for _, n in outs}
+    reach = _reachability(ends, [key[:2] for key in same])
+    u, v, _ = edge
+    boundary = [key for key, _ in [*ins, *outs]]
+    on_road = [key for key in boundary if signature.get(key, _NO_ROAD) == road]
+    reached = [a for a, head in ins if a in on_road and u in reach[head]]
+    reached += [b for b, tail in outs if b in on_road and tail in reach[v]]
+    levels = [reached, on_road, boundary]
+    heading = _heading(graph, edge)
+    for level in levels:
+        ahead = [key for key in level if np.dot(_heading(graph, key), heading) > 0]
+        if ahead:
+            return {new_key[key] for key in ahead}
+    return {new_key[key] for key in next((level for level in levels if level), [])}
+
+
+def _heading(graph: nx.MultiDiGraph, edge: EdgeKey) -> np.ndarray:
+    """The vector from an edge's start to its end, leaving out stage A's stubs."""
+    u, v, _ = edge
+    coords = graph.edges[edge]["geometry"].coords
+    first = coords[0 if graph.nodes[u]["kind"] == "plain" else 1]
+    last = coords[-1 if graph.nodes[v]["kind"] == "plain" else -2]
+    return np.asarray(last, dtype=float) - np.asarray(first, dtype=float)
 
 
 def _diagonal(graph: nx.MultiDiGraph, nodes: Iterable[int]) -> float:

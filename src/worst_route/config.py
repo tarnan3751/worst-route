@@ -199,3 +199,17 @@ STAGE_B_SLIP_CENTER_M = 150.0
 STAGE_B_POCKET_M = 600.0
 STAGE_B_MAX_DIAMETER_M = 1500.0
 STAGE_B_SPLIT_EPS_M = 300.0
+# Carriageway twins (`pipeline/carriageways.py`): one-way edges of TWIN_CLASSES with the same
+# ref set (else name) whose segments run in opposite directions (180° ± TWIN_BEARING_TOL) within
+# the lateral distance of their class. Edges with neither ref nor name pair only in
+# TWIN_GEOMETRY_ONLY_CLASSES.
+TWIN_CLASSES = frozenset({"motorway", "trunk", "primary", "secondary", "tertiary"})
+TWIN_GEOMETRY_ONLY_CLASSES = frozenset({"motorway", "trunk"})
+TWIN_LATERAL_M = {
+    "motorway": 100.0,
+    "trunk": 80.0,
+    "primary": 50.0,
+    "secondary": 35.0,
+    "tertiary": 35.0,
+}
+TWIN_BEARING_TOL = 30.0

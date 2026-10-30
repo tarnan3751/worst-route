@@ -13,6 +13,7 @@ from worst_route.config import (
     STAGE_A_TOLERANCE_ROUNDABOUT_M,
 )
 from worst_route.pipeline.build import build_raw_graph
+from worst_route.pipeline.carriageways import find_twins
 from worst_route.pipeline.consolidate import (
     StageAStats,
     StageBStats,
@@ -588,8 +589,12 @@ def test_stage_b_numbers_the_nodes() -> None:
 
 def test_relabel_keeps_only_what_it_is_told() -> None:
     _, graph = through_b("diamond")
+    find_twins(graph)
     north = node_of(graph, 105)
     kept = relabel(graph, set(graph) - {north})
     assert kept.number_of_nodes() == 6 and list(kept.nodes) == list(range(6))
     (node,) = supers(kept)
     assert len(supers(kept)[node]["transitions"]) == 12  # the 4 pairs leaving north are gone
+    assert len(kept.graph["twins"]) == 2  # northbound departure and its twin dropped out
+    for edge, others in kept.graph["twins"].items():
+        assert kept.has_edge(*edge) and all(kept.has_edge(*e) for e in others)

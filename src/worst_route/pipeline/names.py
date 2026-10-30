@@ -8,7 +8,8 @@ a space put between a letter prefix and its number (`I5` → `I 5`), and a trail
 `Business`/`Bus` or `Alt`/`Alternate` split off into its own token right after the ref, so a
 business route never equals its mainline. `normalize_name` casefolds, drops periods, expands
 directionals (`NE` → `northeast`) and, except as the first word ("St Johns"), the USPS street
-suffixes (`St` → `street`). `road_signature` is a road's identity for the cleanup steps: its
+suffixes (`St` → `street`); `name_without_directions` also leaves the directional words out.
+`road_signature` is a road's identity for the cleanup steps: its
 normalised ref set when it has a ref, else its normalised name, else None. Enrich's identities
 reuse these tables later.
 """
@@ -47,6 +48,7 @@ _DIRECTIONALS = {
     "se": "southeast",
     "sw": "southwest",
 }
+_DIRECTIONS = frozenset(_DIRECTIONALS.values())
 _STREET_SUFFIXES = {
     "st": "street",
     "ave": "avenue",
@@ -89,6 +91,13 @@ def normalize_name(value: str) -> str:
         _DIRECTIONALS.get(word) or (_STREET_SUFFIXES.get(word) if i else None) or word
         for i, word in enumerate(words)
     )
+
+
+def name_without_directions(value: str) -> str:
+    """A normalised name without its directional words: "Pacific Highway East" and "SW Pacific
+    Hwy E" both become "pacific highway"."""
+    words = normalize_name(value).split()
+    return " ".join(word for word in words if word not in _DIRECTIONS)
 
 
 def road_signature(tags: Mapping[str, Any]) -> RoadSignature | None:

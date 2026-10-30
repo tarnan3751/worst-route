@@ -1,6 +1,11 @@
 import pytest
 
-from worst_route.pipeline.names import normalize_name, normalize_ref, road_signature
+from worst_route.pipeline.names import (
+    name_without_directions,
+    normalize_name,
+    normalize_ref,
+    road_signature,
+)
 
 
 @pytest.mark.parametrize(
@@ -80,3 +85,18 @@ def test_road_signature() -> None:
     assert road_signature({"highway": "motorway"}) is None
     # A ref and a name never compare equal, even when they spell the same thing.
     assert road_signature({"ref": "I 5"}) != road_signature({"name": "I 5"})
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("Pacific Highway East", "pacific highway"),
+        ("Southwest Pacific Highway East", "pacific highway"),
+        ("SW Pacific Hwy E", "pacific highway"),
+        ("N Lombard St", "lombard street"),
+        ("East Burnside St", "burnside street"),
+        ("North", ""),
+    ],
+)
+def test_name_without_directions(name: str, expected: str) -> None:
+    assert name_without_directions(name) == expected

@@ -64,6 +64,16 @@ def check_edges(graph: nx.MultiDiGraph) -> None:
         assert len(set(nodes)) == len(nodes), f"edge {u}->{v} repeats an OSM id"
 
 
+def check_twins(graph: nx.MultiDiGraph) -> None:
+    """(4) Twins are symmetric, sorted, between existing edges, never an edge and itself."""
+    twins = graph.graph.get("twins", {})
+    for edge, others in twins.items():
+        assert graph.has_edge(*edge)
+        assert list(others) == sorted(set(others)) and edge not in others
+        for other in others:
+            assert graph.has_edge(*other) and edge in twins[other]
+
+
 def check_superjunctions(graph: nx.MultiDiGraph) -> None:
     """(5) Transitions name boundary edges of their node; (6) they are its internal reachability.
 
@@ -107,4 +117,5 @@ def check_superjunctions(graph: nx.MultiDiGraph) -> None:
 def check_all(raw: nx.MultiDiGraph, graph: nx.MultiDiGraph, *, complete: bool = True) -> None:
     check_partition(raw, graph, complete=complete)
     check_edges(graph)
+    check_twins(graph)
     check_superjunctions(graph)

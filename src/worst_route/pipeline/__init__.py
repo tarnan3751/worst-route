@@ -5,4 +5,4 @@ data layout, build ids and sidecars are `docs/reference/pipeline.md`. `PIPELINE_
 every build id: bump it when a step's output changes for the same input.
 """
 
-PIPELINE_VERSION = "1"
+PIPELINE_VERSION = "2"  # 2: bearings over the road, less cleanup's stubs

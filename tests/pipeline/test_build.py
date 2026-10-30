@@ -8,6 +8,7 @@ from pathlib import Path
 import networkx as nx
 import pytest
 
+from worst_route.pipeline import PIPELINE_VERSION
 from worst_route.pipeline.build import BuildStats, build_raw_graph, direction, save_stage
 from worst_route.pipeline.filter import filter_roads
 
@@ -54,7 +55,7 @@ def edges_of(graph: nx.MultiDiGraph, way_id: int) -> dict[tuple[int, int], dict]
 
 def test_grid_counts() -> None:
     graph, stats = build("grid")
-    assert graph.graph == {"crs": "EPSG:32610", "pipeline_version": "1"}
+    assert graph.graph == {"crs": "EPSG:32610", "pipeline_version": PIPELINE_VERSION}
     assert sorted(graph.nodes) == GRID  # shape points, railway and building nodes are not nodes
     assert stats == BuildStats(
         ways_read=14,  # 12 streets, the railway and the building

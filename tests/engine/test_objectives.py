@@ -1,3 +1,4 @@
+import dataclasses
 import math
 
 import numpy as np
@@ -6,7 +7,7 @@ from pydantic import ValidationError
 
 from worst_route.engine.detour import find_detour
 from worst_route.engine.objectives import OBJECTIVES, make_objective
-from worst_route.engine.objectives.base import BaseObjective, FloatArray, Objective
+from worst_route.engine.objectives.base import BaseObjective, FloatArray, Objective, route_delay_s
 from worst_route.engine.objectives.distance import Distance
 from worst_route.engine.request import RouteRequest
 from worst_route.engine.route import IntArray, Route
@@ -14,7 +15,7 @@ from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
 from worst_route.graph.spatial import SpatialIndex
 
-from .graphs import lattice, route_on
+from .graphs import edges_of, lattice, route_on
 
 GRID = lattice(6, 6)
 
@@ -91,6 +92,19 @@ def test_the_registry_and_the_request_know_distance() -> None:
     assert isinstance(objective, Distance) and objective.key == "distance"
     with pytest.raises(ValidationError, match="unknown objective"):
         RouteRequest(stops=[(45.5, -122.6), (45.6, -122.5)], objective="slowest", seed=0)
+
+
+def test_the_metrics_carry_the_delays_whatever_the_mode() -> None:
+    g = dataclasses.replace(GRID, node_delay_s=np.arange(GRID.n, dtype=np.float32))
+    objective = distance(g)
+    score, metrics = objective.evaluate(*_arrays(g, [0, 1, 2, 8, 14]))
+    assert score == 400.0 and metrics.delay_s == 0 + 1 + 2 + 8 + 14  # start and end included
+    _, metrics = objective.evaluate(*_arrays(g, [0, 1, 7, 6, 0]))
+    assert metrics.delay_s == 0 + 1 + 7 + 6 == route_delay_s(g, np.array([0, 1, 7, 6, 0]))
+
+
+def _arrays(g: GraphData, nodes: list[int]) -> tuple[IntArray, IntArray]:
+    return np.array(nodes, dtype=np.int32), edges_of(g, nodes)
 
 
 def test_a_round_trip_counts_its_start_once() -> None:

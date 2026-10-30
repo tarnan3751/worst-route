@@ -19,7 +19,7 @@ from tests.pipeline.invariants import check_build
 from worst_route.cli import app
 from worst_route.config import REGIONS
 from worst_route.graph.store import read_build
-from worst_route.pipeline import download, layout
+from worst_route.pipeline import PIPELINE_VERSION, download, layout
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "osm"
 runner = CliRunner()
@@ -109,7 +109,10 @@ def test_filter_from_a_source(data_dir: Path) -> None:
         "step": "filter",
         "inputs": [{"file": "grid.osm", "md5": layout.file_md5(FIXTURES / "grid.osm")}],
         "source_timestamp": None,  # the fixture's header has none; Geofabrik's extracts do
-        "params": {"bbox": list(REGIONS["portland"].bbox or ()), "pipeline_version": "1"},
+        "params": {
+            "bbox": list(REGIONS["portland"].bbox or ()),
+            "pipeline_version": PIPELINE_VERSION,
+        },
     }
 
 

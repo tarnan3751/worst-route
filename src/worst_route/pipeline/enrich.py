@@ -13,9 +13,14 @@ the cleaned graph, in place, on every edge:
   order, so a unit's id is the smaller of its two edge ids.
 - `flags`: the `graph.data.EdgeFlag` bits: bridge and tunnel (the tag present and not `no`),
   toll (`toll=yes`), roundabout (`junction` roundabout or circular), link (a `*_link` class).
-- `bearing_out`, leaving u, over the first `config.BEARING_SAMPLE_M` of the geometry, and
-  `bearing_in`, arriving at v, over the last (the whole edge when it is shorter): whole degrees
-  clockwise from the projected CRS's north, 0-359.
+- `bearing_out`, leaving u, over the first `config.BEARING_SAMPLE_M` of the road, and
+  `bearing_in`, arriving at v, over the last (the whole road when it is shorter): whole degrees
+  clockwise from the projected CRS's north, 0-359. The road is the edge's geometry less the
+  stubs cleanup added to reach a merged node's position (`road_geometry`): one coordinate at an
+  end on a stage A cluster or a super-node, two where the super-node took in a stage A cluster
+  at that end (the part holding the end's OSM node has more than one member). Every other
+  coordinate is an OSM node's, so the bearings describe how the road arrives and leaves, not
+  the stub; when nothing but stub would remain, the whole geometry.
 - `toll_booths`, `level_crossings`: the POI nodes of those kinds on the edge. A POI whose OSM id
   lies inside edges counts on every edge that holds it (the two directions of a two-way road, of
   which a route uses one); one that is a node's member (a junction) counts on that node's
@@ -115,6 +120,31 @@ def bearings(geometries: list[shapely.LineString]) -> tuple[NDArray[np.int64], N
     return _bearing(behind, end), _bearing(start, ahead)
 
 
+def road_geometry(graph: nx.MultiDiGraph, key: EdgeKey) -> shapely.LineString:
+    """The edge's geometry less the stubs cleanup added at its merged ends (the whole geometry
+    when nothing but stub would remain)."""
+    u, v, _ = key
+    data = graph.edges[key]
+    coords = list(data["geometry"].coords)
+    start = _stubs(graph, u, data["osm_nodes"][0])
+    road = coords[start : len(coords) - _stubs(graph, v, data["osm_nodes"][-1])]
+    line = shapely.LineString(road) if len(road) >= 2 else None
+    return line if line is not None and line.length > 0 else data["geometry"]
+
+
+def _stubs(graph: nx.MultiDiGraph, node: int, end: int) -> int:
+    """How many stub coordinates cleanup added at an edge's end on `node`, whose OSM node there
+    is `end`: one for a stage A cluster, one for a super-node and one more when the part of it
+    holding `end` was a stage A cluster (a part of more than one member)."""
+    kind = graph.nodes[node]["kind"]
+    if kind == "plain":
+        return 0
+    if kind == "cluster":
+        return 1
+    part = next(p for p in graph.graph["superjunctions"][node]["parts"] if end in p)
+    return 1 + (len(part) > 1)
+
+
 def _bearing(a: NDArray[np.float64], b: NDArray[np.float64]) -> NDArray[np.int64]:
     d = b - a
     degrees = np.degrees(np.arctan2(d[:, 0], d[:, 1]))
@@ -153,7 +183,7 @@ def run_enrich(graph: nx.MultiDiGraph, pois: pa.Table) -> EnrichReport:
 
     report.units, report.two_way_pairs = _units(graph, keys)
     if keys:
-        inward, outward = bearings([graph.edges[key]["geometry"] for key in keys])
+        inward, outward = bearings([road_geometry(graph, key) for key in keys])
         for key, b_in, b_out in zip(keys, inward.tolist(), outward.tolist(), strict=True):
             graph.edges[key]["bearing_in"], graph.edges[key]["bearing_out"] = b_in, b_out
     _place_pois(graph, keys, pois, report)

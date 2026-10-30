@@ -65,6 +65,12 @@ the SCC mask are the same whichever backend runs: `check_ends`; `check_turn_edge
 which makes `max_cost` a Python float, so it compares in float64 on every backend; `as_limits`,
 which makes `max_depth` and `max_paths` ints in the int64 range; `enterable` (the combined "may
 enter" mask, checking `node_mask` and `forbid_nodes`); `banned_mask`; `largest_scc_mask`.
+
+`TURN_CLASS` is the class of a turn by its change of bearing, the rule `engine/turns.py`
+describes: from edge e into edge f, `TURN_CLASS[(edge_bearing_out[f] − edge_bearing_in[e]) mod
+360]` (the bearings are whole degrees). A class's code is also its bit in a search's set of
+banned turn classes: `TURN_LEFT` 1, `TURN_RIGHT` 2, `TURN_U` 4, and `TURN_STRAIGHT` 0, which no
+set can ban.
 """
 
 import math
@@ -77,9 +83,26 @@ from numpy.typing import NDArray
 from scipy.sparse import csr_array
 from scipy.sparse.csgraph import connected_components
 
+from worst_route.config import TURN_STRAIGHT_DEG, TURN_UTURN_DEG
 from worst_route.graph.data import GraphData
 
 Path = tuple[NDArray[np.int32], NDArray[np.int32]]  # (nodes, edges); len(edges) == len(nodes) - 1
+
+TURN_STRAIGHT, TURN_LEFT, TURN_RIGHT, TURN_U = 0, 1, 2, 4
+
+
+def _turn_class_table() -> NDArray[np.uint8]:
+    delta = np.arange(360)
+    delta = np.where(delta > 180, delta - 360, delta)  # wrapped to (−180, 180]
+    table = np.full(360, TURN_U, dtype=np.uint8)
+    table[np.abs(delta) <= TURN_STRAIGHT_DEG] = TURN_STRAIGHT
+    table[(delta > TURN_STRAIGHT_DEG) & (delta <= TURN_UTURN_DEG)] = TURN_RIGHT
+    table[(delta < -TURN_STRAIGHT_DEG) & (delta >= -TURN_UTURN_DEG)] = TURN_LEFT
+    table.flags.writeable = False
+    return table
+
+
+TURN_CLASS = _turn_class_table()
 
 
 class GraphBackend(Protocol):

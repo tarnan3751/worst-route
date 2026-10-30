@@ -211,6 +211,11 @@ CONVERGED_EMPTY_CYCLES = 3
 # of its value; a duration target is at most TARGET_MAX_DURATION_S.
 TARGET_TOLERANCE = 0.02
 TARGET_MAX_DURATION_S = 7 * 24 * 3600.0
+# Turns (`engine/turns.py`): by the change of bearing from one edge into the next, wrapped to
+# (−180, 180] degrees clockwise, a turn is straight within ±TURN_STRAIGHT_DEG, a right or a left
+# turn up to ±TURN_UTURN_DEG, and a U-turn beyond.
+TURN_STRAIGHT_DEG = 30
+TURN_UTURN_DEG = 160
 
 # Cleanup (`docs/PLAN.md` §2.4; `docs/reference/pipeline.md`, cleanup).
 # Stage A (`pipeline/consolidate.py`): the radius OSMnx buffers each node by; two nodes merge

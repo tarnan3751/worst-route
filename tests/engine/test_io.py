@@ -16,6 +16,7 @@ from worst_route.engine.io import (
 from worst_route.engine.plan import PlanResult, plan_route
 from worst_route.engine.request import RouteRequest, request_masks
 from worst_route.engine.target import Target
+from worst_route.engine.turns import count_turns
 from worst_route.engine.validator import validate_route
 from worst_route.graph.spatial import SpatialIndex
 
@@ -48,6 +49,9 @@ def test_route_json_round_trips(tmp_path: Path) -> None:
     assert saved.metrics == result.route.metrics
     metrics = doc["metrics"]
     assert metrics["ratio"] == pytest.approx(metrics["length_m"] / metrics["baseline_length_m"])
+    assert metrics["delay_s"] == 0.0  # the lattice has no signals
+    assert metrics["turns"] == count_turns(GRID, result.route.edges)
+    assert sum(metrics["turns"].values()) == len(result.route.edges) - 1
     assert doc["run"] == {
         "attempts": 150,
         "accepted": result.run.accepted,

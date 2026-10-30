@@ -6,9 +6,10 @@
      request:  the RouteRequest as JSON,
      stops:    [{lat, lon, node, moved_m, note}]  (where each stop was snapped),
      nodes, edges, stop_idx,
-     metrics:  {length_m, time_s, baseline_length_m, baseline_time_s, ratio (null for a round
-                trip, whose baseline is 0 m), the objective's own numbers, and for a ratio or
-                duration target, target: {kind, value, achieved, within_tolerance}},
+     metrics:  {length_m, time_s, delay_s (at signals and stop signs), baseline_length_m,
+                baseline_time_s, ratio (null for a round trip, whose baseline is 0 m), turns:
+                {left, right, straight, u_turn}, the objective's own numbers, and for a ratio
+                or duration target, target: {kind, value, achieved, within_tolerance}},
      run:      {attempts, accepted, stopped_because, elapsed_s, backend}}
 
 `read_route(path)` reads one back as a `SavedRoute`, which the validator reads like a `Route`:
@@ -36,6 +37,7 @@ from worst_route.engine import ENGINE_VERSION
 from worst_route.engine.plan import PlanResult
 from worst_route.engine.request import RouteRequest
 from worst_route.engine.route import IntArray, Metrics
+from worst_route.engine.turns import count_turns
 from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import Snap
 
@@ -80,9 +82,11 @@ def route_document(data: GraphData, result: PlanResult) -> dict[str, Any]:
         "metrics": {
             "length_m": route.metrics.length_m,
             "time_s": route.metrics.time_s,
+            "delay_s": route.metrics.delay_s,
             "baseline_length_m": baseline.length_m,
             "baseline_time_s": baseline.time_s,
             "ratio": ratio,
+            "turns": count_turns(data, route.edges),
             **route.metrics.counters,
             **({"target": target} if target is not None else {}),
         },

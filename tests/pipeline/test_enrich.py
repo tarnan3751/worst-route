@@ -9,6 +9,7 @@ import shapely
 
 from tests.pipeline.chain import FIXTURES, cleaned, node_of, poi_table, pois_of
 from tests.pipeline.osm import write_osm
+from worst_route.graph.backend import TURN_CLASS, TURN_LEFT, TURN_STRAIGHT
 from worst_route.graph.data import EdgeFlag
 from worst_route.pipeline.enrich import (
     KMH_PER_MPH,
@@ -16,6 +17,7 @@ from worst_route.pipeline.enrich import (
     edge_flags,
     parameters,
     parse_maxspeed,
+    road_geometry,
     run_enrich,
     save_stage,
 )
@@ -70,6 +72,37 @@ def test_bearings() -> None:
     inward, outward = bearings(lines)
     assert outward.tolist() == [0, 90, 270, 45, 0, 0, 180, 45]  # leaving u
     assert inward.tolist() == [0, 90, 270, 45, 90, 90, 180, 45]  # arriving at v
+
+
+def test_bearings_at_a_cluster_describe_the_road_not_the_stub(tmp_path: Path) -> None:
+    # the divided crossing (OSM 50-53, a 25 m square) is one stage A cluster, and cleanup extends
+    # each edge at it diagonally to the square's centre. By the roads' own headings, eastbound
+    # Barbur goes straight on through it and turns left onto northbound Main; by the stubs it
+    # would be a right turn and straight on
+    graph = enriched("divided", tmp_path)
+    crossing = node_of(graph, 50)
+    assert graph.nodes[crossing]["kind"] == "cluster"
+
+    def edge(first: int, last: int) -> tuple[int, int, int]:
+        (key,) = (
+            k
+            for k in graph.edges(keys=True)
+            if graph.edges[k]["osm_nodes"][0] == first and graph.edges[k]["osm_nodes"][-1] == last
+        )
+        return key
+
+    east_in, east_on, north = edge(31, 50), edge(51, 32), edge(53, 62)
+    for key in (east_in, east_on, north):
+        road, whole = road_geometry(graph, key), graph.edges[key]["geometry"]
+        assert len(road.coords) == len(whole.coords) - 1  # one stub, at the crossing
+    assert graph.edges[east_in]["bearing_in"] == 90 and graph.edges[east_on]["bearing_out"] == 90
+    assert graph.edges[north]["bearing_out"] == 345  # Main bends a little west of north
+    arriving = graph.edges[east_in]["bearing_in"]
+    assert TURN_CLASS[(graph.edges[east_on]["bearing_out"] - arriving) % 360] == TURN_STRAIGHT
+    assert TURN_CLASS[(graph.edges[north]["bearing_out"] - arriving) % 360] == TURN_LEFT
+    # away from merged nodes the road is the whole geometry
+    plain = edge(95, 70)
+    assert road_geometry(graph, plain).equals(graph.edges[plain]["geometry"])
 
 
 def test_speeds_and_times(tmp_path: Path) -> None:

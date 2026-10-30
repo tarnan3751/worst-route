@@ -441,14 +441,23 @@ constants are in `config.py`.
   super-junction after cleanup, so few edges carry the last two.
 - **Bearings**, whole degrees clockwise from the projected CRS's grid north, 0–359 (in UTM zone
   10 grid north is within 0.2° of true north around Portland, but about 4° off in eastern
-  Oregon): `bearing_out`, leaving u, over the first `BEARING_SAMPLE_M` (20 m) of the geometry;
-  `bearing_in`, arriving at v, over the last 20 m; over the whole edge when it is shorter. This
-  is the format's definition (`docs/reference/graph.md`), which the turn rule of
-  `docs/PLAN.md` §3.6, `wrap(bearing_out(e_out) − bearing_in(e_in))`, needs. At a cluster or
-  super-node the 20 m include the stub cleanup added to reach its centre, which skews them: on
-  Portland, 15% of the edges leaving a stage A cluster (stubs of 7 m median) have a
-  `bearing_out` more than 30° off the road's own, and at interchanges, whose stubs run to the
-  centroid (66 m median), 55%.
+  Oregon): `bearing_out`, leaving u, over the first `BEARING_SAMPLE_M` (20 m) of the road;
+  `bearing_in`, arriving at v, over the last 20 m; over the whole road when it is shorter. The
+  road is the edge's geometry less the stubs cleanup added to reach a merged node's position
+  (**Lengths through junctions**; `enrich.road_geometry`): one coordinate at an end on a stage A
+  cluster or a super-node, two where the super-node took in a stage A cluster at that end (the
+  part of the super-node holding the end's OSM node has more than one member). Every other
+  coordinate is one of the edge's OSM nodes, so the bearings describe the road as it arrives and
+  leaves, not the stub; an edge that is nothing but stub keeps its whole geometry. This is the
+  format's definition (`docs/reference/graph.md`), which the turn rule of `docs/PLAN.md` §3.6,
+  `wrap(bearing_out(e_out) − bearing_in(e_in))`, needs. Before pipeline version 2 the 20 m
+  included the stub (7 m median at a stage A cluster, 66 m to an interchange's centroid), and
+  on Portland 21.5% of the turns between two roads at a stage A cluster classed differently
+  from the road's own, 63% at interchanges, 19% at roundabouts; now 0.2–0.5%, as at plain nodes
+  (0.07%): the build's float32 coordinates' rounding, a degree or two, flipping turns at a
+  class's threshold. `uv run python tools/turn_bearings.py --region portland` reports it for a
+  saved build, counting each edge's stubs from the build alone (its coordinates less its OSM
+  nodes).
 - **Collectibles**, from the POI table's node rows (a way row is not counted): a toll booth or
   level crossing whose OSM id lies inside edges counts on every edge that holds it, both
   directions of a two-way road, of which a legal route uses one; one that is a node's member (at
@@ -591,7 +600,8 @@ and one touching no other road, a diamond whose cross road bridges between its t
 crossover between carriageways, a roundabout bypassed by a slip lane),
 `test_carriageways.py` (with in-memory cases: ramps on one side only, offset gores),
 `test_connectivity.py`, `test_cleanup.py` (the whole step on every fixture, determinism, the
-fragmented failure), `test_enrich.py` (maxspeed parsing, bearings, identities, units, flags,
+fragmented failure), `test_enrich.py` (maxspeed parsing, bearings, at a cluster the road's and not the stub's,
+identities, units, flags,
 collectibles inside edges and at junctions, delays, pass-through, determinism), `test_tiers.py`
 (each fixture's tiers, the tie rule, the fragmented failure), `test_save.py` (every fixture saved,
 read back and checked with `check_build` and `check_saved`, the empty-transitions refusal, a

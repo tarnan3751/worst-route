@@ -111,6 +111,7 @@ from worst_route.engine.request import RequestMasks, RouteRequest, request_masks
 from worst_route.engine.route import IntArray, Metrics
 from worst_route.engine.seed_route import resolve_stops
 from worst_route.engine.target import Goal
+from worst_route.engine.turns import count_turns
 from worst_route.engine.validator import validate_route
 from worst_route.graph.loader import Loaded
 from worst_route.graph.spatial import Snap
@@ -723,9 +724,11 @@ class JobManager:
             "metrics": {
                 "length_m": route.metrics.length_m,
                 "time_s": route.metrics.time_s,
+                "delay_s": route.metrics.delay_s,
                 "baseline_length_m": job.baseline_length_m,
                 "baseline_time_s": job.baseline_time_s,
                 "ratio": ratio,
+                "turns": count_turns(job.loaded.data, route.edges),
                 **route.metrics.counters,
                 **({"target": target} if target is not None else {}),
             },

@@ -16,7 +16,8 @@ A constraint is an objective with hooks and no terms. The worsen loop sees only 
 `global_term` takes the route's node and edge arrays rather than a `Route`, so a candidate can
 be scored before it is spliced. `BaseObjective(data, baseline_length_m=, r_max=)` gives every
 hook a neutral default and caches its term vectors for the build. It implements, once for every
-mode, `evaluate(nodes, edges)` (the score and the `Metrics`), `score(route)` and
+mode, `evaluate(nodes, edges)` (the score and the `Metrics`: length, time and, by
+`route_delay_s`, the delays at the route's nodes, whatever the mode), `score(route)` and
 `delta(route, i, j, nodes, edges)`: the terms a splice removes and adds (node and edge terms
 over the removed interior and the detour, pair terms at both boundaries and inside, the global
 term re-evaluated), summed with `math.fsum`, so it equals `score(after) - score(before)` to
@@ -200,8 +201,7 @@ class BaseObjective:
         """The score and metrics of a route's arrays."""
         terms: list[float] = []
         if self._node is not None:
-            counted = nodes[:-1] if len(nodes) > 1 and nodes[0] == nodes[-1] else nodes
-            terms += self._node[counted].tolist()
+            terms += self._node[counted_nodes(nodes)].tolist()
         if self._edge is not None:
             terms += self._edge[edges].tolist()
         if self.has_pair:
@@ -211,10 +211,11 @@ class BaseObjective:
         return math.fsum(terms), self.metrics(nodes, edges)
 
     def metrics(self, nodes: IntArray, edges: IntArray) -> Metrics:
-        """Length and time, summed exactly."""
+        """Length, time and delays, summed exactly."""
         return Metrics(
             length_m=math.fsum(self._lengths[edges].tolist()),
             time_s=math.fsum(self._times[edges].tolist()),
+            delay_s=route_delay_s(self.data, nodes),
         )
 
     def score(self, route: Route) -> float:
@@ -241,3 +242,14 @@ class BaseObjective:
             terms.append(self.global_term(self.data, *splice_arrays(route, i, j, nodes, edges)))
             terms.append(-self.global_term(self.data, route.nodes, route.edges))
         return math.fsum(terms)
+
+
+def counted_nodes(nodes: IntArray) -> IntArray:
+    """A route's nodes, a round trip's start once."""
+    return nodes[:-1] if len(nodes) > 1 and nodes[0] == nodes[-1] else nodes
+
+
+def route_delay_s(data: GraphData, nodes: IntArray) -> float:
+    """The delays at a route's nodes (`node_delay_s`: signals, stop signs), its start and end
+    included, a round trip's start once."""
+    return math.fsum(data.node_delay_s[counted_nodes(nodes)].astype(np.float64).tolist())

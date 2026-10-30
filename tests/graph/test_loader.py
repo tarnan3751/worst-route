@@ -45,3 +45,10 @@ def test_a_missing_build_names_the_step_to_run(tmp_path: Path) -> None:
     save(tmp_path, "b1")
     with pytest.raises(BuildNotFound, match="no saved build at .*b9"):
         load_build(tmp_path, "portland", "b9")
+
+
+def test_a_build_without_an_array_names_its_remedy(tmp_path: Path) -> None:
+    save(tmp_path, "b1")  # a test build: pipeline version "test", so rebuilt from filter
+    (tmp_path / "graphs" / "portland" / "b1" / "arrays" / "node_roundabouts.npy").unlink()
+    with pytest.raises(BuildNotFound, match="written by pipeline test .*pipeline filter --region"):
+        load_build(tmp_path, "portland", "b1", backend="python")

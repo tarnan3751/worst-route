@@ -5,8 +5,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from worst_route.config import PIPELINE_VERSION
 from worst_route.graph.data import ARRAY_SPECS, GraphData, Strings
-from worst_route.graph.store import graph_version, read_build, write_build
+from worst_route.graph.store import MissingArray, graph_version, read_build, write_build
 from worst_route.graph.testing import Edge, grid_graph, make_graph
 
 
@@ -39,7 +40,7 @@ def assert_same_build(a: GraphData, b: GraphData) -> None:
 def test_graph_version_is_pinned() -> None:
     # Freezes the version definition and the array order (docs/reference/graph.md): this
     # literal changes only under a tier A brief that changes the build format.
-    expected = "08e2799081961a12ac6a4585156b7660552c7e62e13c79d4f1f0d0225a079bb4"
+    expected = "a85968d0fbd95110ec6c88f10c32c140f5efb800299022f8aaf3dc89453ed750"
     assert small_build().meta["graph_version"] == expected
 
 
@@ -252,10 +253,33 @@ def test_write_replaces_a_crashed_temporary(tmp_path: Path) -> None:
 
 
 def test_read_rejects_a_missing_array(tmp_path: Path) -> None:
-    write_build(small_build(), tmp_path / "b")
+    g = small_build()  # this pipeline's build, so the line names the array
+    write_build(replace(g, meta={**g.meta, "pipeline_version": PIPELINE_VERSION}), tmp_path / "b")
     (tmp_path / "b" / "arrays" / "twin_edges.npy").unlink()
     with pytest.raises(FileNotFoundError, match="twin_edges"):
         read_build(tmp_path / "b")
+
+
+@pytest.mark.parametrize("version", [PIPELINE_VERSION, "1"])
+def test_a_build_without_an_array_names_its_remedy(tmp_path: Path, version: str) -> None:
+    # This pipeline's build lacking an array is saved again; another version's is rebuilt from
+    # filter, under a new build id (region "test").
+    g = small_build()
+    write_build(replace(g, meta={**g.meta, "pipeline_version": version}), tmp_path / "b")
+    (tmp_path / "b" / "arrays" / "node_roundabouts.npy").unlink()
+    with pytest.raises(MissingArray) as missing:
+        read_build(tmp_path / "b")
+    if version == PIPELINE_VERSION:
+        assert str(missing.value) == (
+            f"the build at {tmp_path / 'b'} lacks the array node_roundabouts: rebuild it with "
+            "`worst-route pipeline save --force --region test`"
+        )
+    else:
+        assert str(missing.value) == (
+            f"the build at {tmp_path / 'b'} was written by pipeline 1 (now {PIPELINE_VERSION}): "
+            "rebuild the region with `worst-route pipeline filter --region test` and the steps "
+            "after it"
+        )
 
 
 def test_read_rejects_a_wrong_dtype(tmp_path: Path) -> None:

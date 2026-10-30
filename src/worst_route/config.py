@@ -7,7 +7,8 @@ outside services, and the contact (`WORST_ROUTE_CONTACT`) the geocoder adds to i
 `settings.cache_clear()`.
 
 `REGIONS` names the areas the pipeline builds (`docs/PLAN.md` §2): each is a Geofabrik state
-extract, optionally clipped to a bbox, with the projected CRS its metric steps use. Speeds,
+extract, optionally clipped to a bbox, with the projected CRS its metric steps use;
+`PIPELINE_VERSION` is the version every build id and sidecar records. Speeds,
 tier definitions, class allowlists and defaults join this module as their steps are built.
 
 `HighwayClass` numbers the road classes a build keeps (stored per edge as `edge_highway`) and
@@ -55,6 +56,11 @@ REGIONS: dict[str, Region] = {
     ),
     "oregon": Region(name="oregon", state="oregon", crs_epsg=32610),
 }
+
+# The pipeline's version enters every build id and every step's sidecar (`pipeline/layout.py`);
+# bump it when a step's output changes for the same input. `pipeline` re-exports it, and
+# `graph.store` reads it to name the remedy for a build another version wrote.
+PIPELINE_VERSION = "2"  # 2: bearings exclude stubs; save writes node_roundabouts
 
 
 @cache

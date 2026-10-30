@@ -5,8 +5,9 @@
 worker processes share one copy through the OS page cache, and returns it as `Loaded`: the
 `GraphData`, its `SpatialIndex` and the backend `backend` names (`make_backend`). "latest" is the
 id in `graphs/<region>/latest`, read on every call. The two builds used last stay loaded, keyed
-by data directory, region, build id and backend. A build that is not there raises
-`BuildNotFound`, naming the pipeline step to run.
+by data directory, region, build id and backend. A build that is not there, or one saved before
+an array of the format existed (`store.MissingArray`), raises `BuildNotFound`, naming the
+pipeline step to run.
 """
 
 from dataclasses import dataclass
@@ -18,7 +19,7 @@ from worst_route.graph.backend import GraphBackend
 from worst_route.graph.backends import make_backend
 from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import SpatialIndex
-from worst_route.graph.store import read_build
+from worst_route.graph.store import MissingArray, read_build
 
 
 class BuildNotFound(FileNotFoundError):  # noqa: N818 (reads as the condition)
@@ -54,5 +55,8 @@ def _load(data_dir: Path, region: str, build_id: str, backend: BackendName) -> L
         raise BuildNotFound(
             f"no saved build at {path}: run `worst-route pipeline save --region {region}` first"
         )
-    data = read_build(path)
+    try:
+        data = read_build(path)
+    except MissingArray as error:
+        raise BuildNotFound(str(error)) from None
     return Loaded(data, SpatialIndex(data), make_backend(data, backend))

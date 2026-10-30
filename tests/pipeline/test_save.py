@@ -8,7 +8,9 @@ import pytest
 
 from tests.pipeline.chain import FIXTURES, enriched, tier_nodes
 from tests.pipeline.invariants import check_build, check_saved
+from tests.pipeline.osm import write_osm
 from worst_route.config import TIERS
+from worst_route.graph.data import NodeKind
 from worst_route.graph.store import graph_version, read_build
 from worst_route.pipeline.save import (
     EmptyTransitionsError,
@@ -93,6 +95,35 @@ def test_super_junctions_and_their_transitions(tmp_path: Path) -> None:
     assert data.node_kind[node] == 2  # interchange
     assert set(data.trans_node.tolist()) == {node} and len(data.trans_node) == 16  # 4 in x 4 out
     assert data.tier_node_mask[2, node]  # T2 holds the secondary road through it
+
+
+def test_roundabout_rings_are_saved_at_their_super_junctions(tmp_path: Path) -> None:
+    # A ring: one roundabout super-node with one ring. A diamond: an interchange with none. A
+    # slip lane past a ring: one interchange that still holds the ring. Written and read back.
+    nodes = {10: (0, 15), 12: (-15, 0), 14: (0, -15), 16: (15, 0)}
+    nodes |= {20: (0, 150), 21: (0, -150), 22: (150, 0), 23: (-150, 0), 24: (0, 50), 25: (50, 0)}
+    bypassed = write_osm(
+        tmp_path / "bypassed.osm",
+        nodes,
+        [
+            (1, [10, 12, 14, 16, 10], {"highway": "tertiary", "junction": "roundabout"}),
+            (2, [10, 24, 20], {"highway": "residential", "name": "NE 42nd Ave"}),
+            (3, [14, 21], {"highway": "residential", "name": "NE 42nd Ave"}),
+            (4, [16, 25, 22], {"highway": "residential", "name": "NE Going St"}),
+            (5, [12, 23], {"highway": "residential", "name": "NE Going St"}),
+            (6, [24, 25], {"highway": "tertiary_link", "oneway": "yes"}),
+        ],
+    )
+    sources = [FIXTURES / "roundabout.osm", FIXTURES / "diamond.osm", bypassed]
+    expected = [(NodeKind.ROUNDABOUT, 1), (NodeKind.INTERCHANGE, 0), (NodeKind.INTERCHANGE, 1)]
+    for k, (source, (kind, rings)) in enumerate(zip(sources, expected, strict=True)):
+        graph = enriched(source, tmp_path)
+        path = build_dir(tmp_path / str(k))
+        save_build(graph_data(graph, tier_nodes(graph), META), path)
+        loaded = read_build(path)
+        (node,) = graph.graph["superjunctions"]
+        assert (loaded.node_kind[node], loaded.node_roundabouts[node]) == (kind, rings)
+        assert int(loaded.node_roundabouts.sum()) == rings
 
 
 def test_a_super_junction_with_no_allowed_turn_is_refused(tmp_path: Path) -> None:

@@ -279,6 +279,22 @@ def test_a_missing_build_says_to_run_save(data_dir: Path) -> None:
     assert code == 1 and stderr.startswith("no saved build at ") and "pipeline save" in stderr
 
 
+def test_a_build_saved_before_an_array_existed_is_one_line(data_dir: Path, tmp_path: Path) -> None:
+    save(data_dir, replace(GRID, meta={**GRID.meta, "pipeline_version": "1"}), "b1")
+    out = tmp_path / "route.json"
+    trip = ["--from", latlon(GRID, 0), "--to", latlon(GRID, 9), "--max-iterations", "20"]
+    assert plan(*trip, "--out", str(out))[0] == 0
+    path = data_dir / "graphs" / "portland" / "b1"
+    (path / "arrays" / "node_roundabouts.npy").unlink()
+    line = (
+        f"the build at {path} was written by pipeline 1 (now 2): rebuild the region with "
+        "`worst-route pipeline filter --region portland` and the steps after it\n"
+    )
+    assert plan(*trip) == (1, "", line)
+    result = runner.invoke(app, ["validate", str(out)])
+    assert (result.exit_code, result.stderr) == (1, line)
+
+
 def test_a_stop_off_the_map_or_out_of_reach_is_one_line(data_dir: Path) -> None:
     save(data_dir, GRID, "b1")
     code, stdout, stderr = plan("--from", latlon(GRID, 0), "--to", "44.0,-121.0")

@@ -132,6 +132,7 @@ MALFORMED: list[tuple[str, Callable[[GraphData], GraphData], str]] = [
     ),
     ("transition out order", edited("trans_in", setitem(1, 0)), "rows must be strictly"),
     ("transition elsewhere", edited("trans_out", setitem(0, 0)), "do not meet at its node"),
+    ("ring at a plain node", edited("node_roundabouts", setitem(0, 1)), "node_roundabouts"),
 ]
 
 

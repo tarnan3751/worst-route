@@ -63,6 +63,25 @@ def test_serve_without_a_build_is_one_line(tmp_path: Path, monkeypatch: pytest.M
     )
 
 
+def test_serve_on_a_build_saved_before_an_array_existed_is_one_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    g = grid_graph(3, 3, 100)
+    g = replace(g, meta={**g.meta, "region": "portland", "build_id": "b1", "pipeline_version": "1"})
+    path = tmp_path / "graphs" / "portland" / "b1"
+    write_build(g, path)
+    (path / "arrays" / "node_roundabouts.npy").unlink()
+    monkeypatch.setenv("WORST_ROUTE_DATA", str(tmp_path))
+    settings.cache_clear()
+    result = runner.invoke(app, ["serve", "--region", "portland", "--build-id", "b1"])
+    settings.cache_clear()
+    assert result.exit_code == 1
+    assert result.stderr == (
+        f"the build at {path} was written by pipeline 1 (now 2): rebuild the region with "
+        "`worst-route pipeline filter --region portland` and the steps after it\n"
+    )
+
+
 def test_serve_runs_the_app_for_its_options(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

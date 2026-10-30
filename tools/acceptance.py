@@ -56,7 +56,7 @@ from worst_route.graph.backend import GraphBackend
 from worst_route.graph.backends import make_backend
 from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import SnapError, SpatialIndex
-from worst_route.graph.store import read_build
+from worst_route.graph.store import MissingArray, read_build
 from worst_route.pipeline import layout
 
 UNLIMITED = 10**9  # attempts: the budget in seconds bounds a run
@@ -140,7 +140,11 @@ def jaccard(a: np.ndarray, b: np.ndarray) -> float:
 def main(args: argparse.Namespace) -> int:
     region = REGIONS[args.region]
     build_id = args.build_id or layout.latest_file(args.region).read_text().strip()
-    data = read_build(layout.build_dir(args.region, build_id))
+    try:
+        data = read_build(layout.build_dir(args.region, build_id))
+    except MissingArray as error:
+        print(error, file=sys.stderr)
+        return 1
     spatial = SpatialIndex(data)
     backend = make_backend(data, args.backend)
     bbox = region.bbox or (

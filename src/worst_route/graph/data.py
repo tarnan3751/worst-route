@@ -12,7 +12,8 @@ contiguous run of ascending ids.
 the meta keys and counts, and `meta["params"]` JSON-native with string keys, so that its JSON,
 which `graph_version` hashes, is the params); that is what `read_build` runs. The default also
 checks contents: indptr runs, id and enum ranges, each original OSM node id a member of one
-node only, the edge order, both adjacency lists, twins symmetric, transitions sorted.
+node only, the edge order, both adjacency lists, twins symmetric, transitions sorted, and
+roundabout rings counted at super-junctions only.
 """
 
 import json
@@ -100,6 +101,8 @@ ARRAY_SPECS: dict[str, tuple[np.dtype[Any], tuple[str | int, ...]]] = {
     # tiers
     "tier_node_mask": (np.dtype(np.bool_), ("T", "n")),
     "tier_edge_mask": (np.dtype(np.bool_), ("T", "m")),
+    # collectibles
+    "node_roundabouts": (np.dtype(np.uint8), ("n",)),
 }
 
 META_KEYS = (
@@ -179,6 +182,8 @@ class GraphData:
     # tiers
     tier_node_mask: NDArray[np.bool_]
     tier_edge_mask: NDArray[np.bool_]
+    # collectibles: the roundabout rings each super-junction holds, 0 at every other node
+    node_roundabouts: NDArray[np.uint8]
     strings: Strings
     meta: dict[str, Any]
 
@@ -258,6 +263,9 @@ class GraphData:
         _check_range("trans_node", self.trans_node, 0, n)
         _check_range("trans_in", self.trans_in, 0, m)
         _check_range("trans_out", self.trans_out, 0, m)
+        supers = (self.node_kind == NodeKind.INTERCHANGE) | (self.node_kind == NodeKind.ROUNDABOUT)
+        if (self.node_roundabouts[~supers] > 0).any():
+            raise ValueError("node_roundabouts: only a super-junction holds roundabout rings")
         for name in ("edge_length_m", "edge_time_s"):
             values = getattr(self, name)
             if not (np.isfinite(values).all() and (values >= 0).all()):

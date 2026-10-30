@@ -18,6 +18,8 @@ tier_nodes, meta)` turns the enriched graph into `GraphData`:
   sorted.
 - **Tiers**: `tier_node_mask[t]` the nodes `tiers` kept; `tier_edge_mask[t]` the edges of the
   tier's classes with both ends kept.
+- **Collectibles**: `node_roundabouts`, the roundabout rings each super-junction's record counts
+  (an interchange that holds a ring counts it too), 0 at every other node.
 
 It refuses a super-node whose transition table is empty (`EmptyTransitionsError`): for cleanup
 that means no turn through it is allowed, but `GraphData` reads a node without rows as allowing
@@ -184,6 +186,9 @@ def graph_data(
         trans_out=trans[:, 2].copy(),
         tier_node_mask=tier_node_mask,
         tier_edge_mask=tier_edge_mask,
+        node_roundabouts=np.array(
+            [records[v]["roundabouts"] if v in records else 0 for v in range(n)], dtype=np.uint8
+        ),
         strings=strings,
         meta={**meta, "counts": counts, "graph_version": ""},
     )

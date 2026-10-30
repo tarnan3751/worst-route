@@ -22,10 +22,12 @@ time, with its drive and delays), its turns and delays, the target and what was 
 `--target ratio:<x>` or `duration:<time>`), the search, the backend it searched with and the
 validator's report, with a progress line on stderr on an accepted splice, at most one every
 2 s, and writes `route.json` and GeoJSON when asked; a stop that cannot be snapped or reached,
-or a missing build, is one line and exit 1, and a route that fails the validator is never
-printed. `--base route.json` continues a saved route ("make it worse", toward the new target):
-its stops, tier, leash, objective and constraints come from the file, which must have been
-planned on the build at its graph_version by this engine version.
+or a missing build (or one without an array of the format, which names its remedy: the rebuild
+from `filter` when another pipeline version wrote it, which a plain `save` names too;
+`validate`, `serve` and `qa` say the same), is one line and exit 1, and a route that fails the
+validator is never printed. `--base route.json` continues a saved route ("make it worse",
+toward the new target): its stops, tier, leash, objective and constraints come from the file,
+which must have been planned on the build at its graph_version by this engine version.
 `validate` re-checks a saved `route.json` against the build it names, with its stops re-derived
 from its request (`resolve_stops`), and exits 1 when a check fails; a file made by another
 engine version is one line and exit 1 (its stops could be re-derived differently).
@@ -452,6 +454,7 @@ def save(region: RegionOption, build_id: BuildIdOption = None, force: ForceOptio
     import json
     import pickle
 
+    from worst_route.graph.store import outdated
     from worst_route.pipeline import save as step
 
     build_id, directory = _build_of(region, build_id)
@@ -481,6 +484,10 @@ def save(region: RegionOption, build_id: BuildIdOption = None, force: ForceOptio
         "params": {"meta": params, "pipeline_version": PIPELINE_VERSION},
     }
     if not force and (directory / "meta.json").exists():
+        # a build another pipeline version wrote is rebuilt from filter, not saved over
+        line = outdated(directory, json.loads((directory / "meta.json").read_text()))
+        if line is not None:
+            _fail(line)
         if layout.sidecar_matches(output, record):
             typer.echo(f"skipped: build {build_id} is written at {directory} (--force to redo)")
             return
@@ -515,6 +522,7 @@ def qa(region: RegionOption, build_id: BuildIdOption = None, force: ForceOption 
     """Write the build's QA report and layers and check its thresholds."""
     import json
 
+    from worst_route.graph.store import MissingArray
     from worst_route.pipeline import qa as step
 
     build_id, directory = _build_of(region, build_id)
@@ -539,7 +547,10 @@ def qa(region: RegionOption, build_id: BuildIdOption = None, force: ForceOption 
     else:
         layout.sidecar(output).unlink(missing_ok=True)
         output.unlink(missing_ok=True)
-        result = step.run_qa(directory)
+        try:
+            result = step.run_qa(directory)
+        except MissingArray as error:
+            _fail(str(error))
         layout.write_sidecar(output, record)
         thresholds = result.thresholds
         typer.echo(f"qa {build_id}: wrote {output.parent} (qa.json and {len(step.LAYERS)} layers)")
@@ -595,7 +606,7 @@ def _make_backend(data: "GraphData", name: str) -> "GraphBackend":
 
 
 def _load_build(region: str, build_id: str | None) -> "GraphData":
-    from worst_route.graph.store import read_build
+    from worst_route.graph.store import MissingArray, read_build
 
     hint = f"run `worst-route pipeline save --region {region}` first"
     if build_id is None:
@@ -606,7 +617,10 @@ def _load_build(region: str, build_id: str | None) -> "GraphData":
     path = layout.build_dir(region, build_id)
     if not (path / "meta.json").exists():
         _fail(f"no saved build at {path}: {hint}")
-    return read_build(path)
+    try:
+        return read_build(path)
+    except MissingArray as error:
+        _fail(str(error))
 
 
 def _duration(seconds: float) -> str:

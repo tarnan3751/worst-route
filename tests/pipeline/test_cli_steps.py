@@ -692,3 +692,33 @@ def test_qa_needs_a_saved_build(data_dir: Path) -> None:
     (directory / "stages" / "enrich.json").unlink()
     code, output = pipeline("qa", "--region", "portland")
     assert code == 1 and "enrich.json" in output and "pipeline enrich --region" in output
+
+
+def test_qa_of_a_build_without_an_array_names_the_save_to_run(data_dir: Path) -> None:
+    directory = saved_build(str(FIXTURES / "divided.osm"))
+    (directory / "arrays" / "node_roundabouts.npy").unlink()
+    result = runner.invoke(app, ["pipeline", "qa", "--region", "portland"])
+    assert (result.exit_code, result.stdout) == (1, "")
+    assert result.stderr == (
+        f"the build at {directory} lacks the array node_roundabouts: rebuild it with "
+        "`worst-route pipeline save --force --region portland`\n"
+    )
+    assert pipeline("save", "--region", "portland", "--force")[0] == 0  # the line's remedy
+    code, output = pipeline("qa", "--region", "portland")
+    assert code == 0 and output.strip().endswith("qa passed")
+
+
+def test_a_build_another_pipeline_wrote_names_the_rebuild(data_dir: Path) -> None:
+    # A build pipeline 1 wrote, lacking the array it did not know: neither a plain save nor qa
+    # treats it as current, and both name the rebuild from filter, which gives a new build id.
+    directory = saved_build(str(FIXTURES / "divided.osm"))
+    meta = json.loads((directory / "meta.json").read_text())
+    (directory / "meta.json").write_text(json.dumps({**meta, "pipeline_version": "1"}))
+    (directory / "arrays" / "node_roundabouts.npy").unlink()
+    line = (
+        f"the build at {directory} was written by pipeline 1 (now 2): rebuild the region with "
+        "`worst-route pipeline filter --region portland` and the steps after it\n"
+    )
+    for step in ("save", "qa"):
+        result = runner.invoke(app, ["pipeline", step, "--region", "portland"])
+        assert (result.exit_code, result.stdout, result.stderr) == (1, "", line), step

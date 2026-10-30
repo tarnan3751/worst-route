@@ -168,7 +168,8 @@ def check_build(data: GraphData) -> None:
 
 
 def check_saved(graph: nx.MultiDiGraph, data: GraphData) -> None:
-    """The build holds the enriched graph: its nodes, edges, twins and transitions, keys as ids."""
+    """The build holds the enriched graph: its nodes (with each super-junction's roundabout rings),
+    edges, twins and transitions, keys as ids."""
     keys = sorted(graph.edges(keys=True))
     edge_id = {key: e for e, key in enumerate(keys)}
     assert (data.n, data.m) == (graph.number_of_nodes(), len(keys))
@@ -179,6 +180,8 @@ def check_saved(graph: nx.MultiDiGraph, data: GraphData) -> None:
         assert NodeKind(data.node_kind[v]).name.lower() == d["kind"]
         assert data.node_delay_s[v] == np.float32(d["delay_s"])
         assert bool(data.node_pass_through[v]) == d["pass_through"]
+        record = graph.graph["superjunctions"].get(v)
+        assert data.node_roundabouts[v] == (0 if record is None else record["roundabouts"])
 
     def text(table: list[str], i: int) -> str | None:
         return None if i < 0 else table[i]

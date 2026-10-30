@@ -95,12 +95,14 @@ class ApiError(Exception):
         self.body = ErrorBody(code=code, message=message, **fields)
 
 
-def _api(request: Request) -> "Api":
+def api_of(request: Request) -> "Api":
+    """The application's state."""
     api: Api = request.app.state.api
     return api
 
 
-def _region(api: "Api", region: str) -> Loaded:
+def region_of(api: "Api", region: str) -> Loaded:
+    """The build served for `region`, else UNKNOWN_REGION."""
     loaded = api.builds.get(region)
     if loaded is None:
         known = ", ".join(sorted(api.builds))
@@ -108,7 +110,7 @@ def _region(api: "Api", region: str) -> Loaded:
     return loaded
 
 
-def _bbox(loaded: Loaded) -> tuple[float, float, float, float]:
+def bbox_of(loaded: Loaded) -> tuple[float, float, float, float]:
     """The region's bbox: the build's own (`params.bbox`), else its nodes' extent."""
     bbox = loaded.data.meta["params"].get("bbox")
     if bbox is not None:
@@ -119,7 +121,7 @@ def _bbox(loaded: Loaded) -> tuple[float, float, float, float]:
 
 
 def _check_inside(loaded: Loaded, lat: float, lon: float, **fields: Any) -> None:
-    west, south, east, north = _bbox(loaded)
+    west, south, east, north = bbox_of(loaded)
     if not (west <= lon <= east and south <= lat <= north):
         region = loaded.data.meta["region"]
         message = f"({lat}, {lon}) is outside {region} ({west}, {south}, {east}, {north})"
@@ -161,7 +163,7 @@ def _build_of(api: "Api", stored: StoredRoute) -> Loaded:
 @router.get("/health")
 def health(request: Request) -> Health:
     """Liveness and the loaded builds."""
-    api = _api(request)
+    api = api_of(request)
     builds = [
         BuildOut(
             region=region,
@@ -177,7 +179,7 @@ def health(request: Request) -> Health:
 def regions(request: Request) -> list[RegionOut]:
     """Each region's build, bbox, counts and tiers."""
     out = []
-    for region, loaded in _api(request).builds.items():
+    for region, loaded in api_of(request).builds.items():
         data = loaded.data
         tiers = [
             TierOut(
@@ -192,7 +194,7 @@ def regions(request: Request) -> list[RegionOut]:
                 region=region,
                 build_id=data.meta["build_id"],
                 graph_version=data.meta["graph_version"],
-                bbox=_bbox(loaded),
+                bbox=bbox_of(loaded),
                 counts=data.meta["counts"],
                 tiers=tiers,
             )
@@ -203,7 +205,7 @@ def regions(request: Request) -> list[RegionOut]:
 @router.post("/snap")
 def snap(body: SnapIn, request: Request) -> SnapOut:
     """Where a stop at (lat, lon) would go, in its role."""
-    loaded = _region(_api(request), body.region)
+    loaded = region_of(api_of(request), body.region)
     _check_inside(loaded, body.lat, body.lon)
     data, spatial = loaded.data, loaded.spatial
     tier = 4 if body.tier == "auto" else int(body.tier[1])
@@ -219,10 +221,10 @@ def snap(body: SnapIn, request: Request) -> SnapOut:
 @router.post("/jobs", status_code=202)
 async def create_job(body: RouteRequestIn, request: Request) -> JobCreated:
     """Start planning a route; its events are at `events_url`."""
-    api = _api(request)
+    api = api_of(request)
     if body.stops is not None:
         _check_round_trip(body, [(s.lat, s.lon) for s in body.stops])
-    loaded = _region(api, body.region)
+    loaded = region_of(api, body.region)
     if body.objective in PLANNED_OBJECTIVES:
         message = f"the {body.objective} objective is not built yet; distance is"
         raise ApiError(422, "NOT_YET", message, field="objective")
@@ -337,7 +339,7 @@ def _unsnappable(loaded: Loaded, request: RouteRequest) -> int | None:
 @router.get("/jobs/{job_id}/events")
 async def job_events(job_id: str, request: Request) -> EventSourceResponse:
     """The job's events as Server-Sent Events, resumed after `Last-Event-ID`."""
-    api = _api(request)
+    api = api_of(request)
     job = _job(api, job_id)
     last = request.headers.get("last-event-id", "")
 
@@ -357,14 +359,14 @@ async def job_events(job_id: str, request: Request) -> EventSourceResponse:
 async def job_status(job_id: str, request: Request) -> JobStatus:
     """The job's status and its route's current snapshot (on the event loop, which owns the
     jobs)."""
-    api = _api(request)
+    api = api_of(request)
     return api.jobs.status(_job(api, job_id), with_snapshot=True)
 
 
 @router.delete("/jobs/{job_id}")
 async def cancel_job(job_id: str, request: Request) -> JobStatus:
     """Cancel the job; its route so far is stored and reported in `done`."""
-    api = _api(request)
+    api = api_of(request)
     job = _job(api, job_id)
     await api.jobs.cancel(job)
     return api.jobs.status(job, with_snapshot=False)
@@ -373,7 +375,7 @@ async def cancel_job(job_id: str, request: Request) -> JobStatus:
 @router.get("/routes/{route_id}")
 def route(route_id: str, request: Request) -> RouteDocument:
     """A stored route's document (the presentation's fields arrive with M4)."""
-    api = _api(request)
+    api = api_of(request)
     stored = _stored(api, route_id)
     data = _build_of(api, stored).data
     asked = RouteRequestIn.model_validate(stored.input)
@@ -427,7 +429,7 @@ def route(route_id: str, request: Request) -> RouteDocument:
 @router.get("/routes/{route_id}/geojson")
 def route_geojson(route_id: str, request: Request) -> dict[str, Any]:
     """The route, its baseline and its stops as a GeoJSON FeatureCollection."""
-    api = _api(request)
+    api = api_of(request)
     stored = _stored(api, route_id)
     m = stored.metrics_json
     return feature_collection(
@@ -445,7 +447,7 @@ def route_geojson(route_id: str, request: Request) -> dict[str, Any]:
 @router.post("/routes/{route_id}/validate")
 def validate(route_id: str, request: Request) -> ValidationOut:
     """The validator's report on a stored route, its stops re-derived from its request."""
-    api = _api(request)
+    api = api_of(request)
     stored = _stored(api, route_id)
     _check_engine(stored)
     loaded = _build_of(api, stored)

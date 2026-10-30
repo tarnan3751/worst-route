@@ -10,9 +10,9 @@ as zero-copy uint8 views, to a kernel in `kernels.py`. `largest_scc_mask` is the
 scipy call. Nothing is copied at construction; the transition table is precomputed once into
 the two arrays the turn kernels read (`trans_indptr`, `trans_key`, `kernels.py`).
 
-The turn DFS has no kernel yet: `simple_paths_dfs` raises `NotImplementedError` on a build with
-transition rows; on a build without rows every turn is allowed, so the DFS's turn edges change
-nothing and the plain kernel answers.
+`dijkstra_edges` is always the edge-state kernel. `simple_paths_dfs` is the turn kernel on a
+build with transition rows or when a turn edge is given; otherwise every turn is allowed and
+the plain kernel answers, byte for byte the same.
 """
 
 import math
@@ -33,8 +33,6 @@ from worst_route.graph.backend import (
     largest_scc_mask,
 )
 from worst_route.graph.data import GraphData
-
-NO_TURN_KERNEL = "the csr backend cannot search turn tables yet; use --backend python"
 
 
 class CsrBackend:
@@ -149,27 +147,44 @@ class CsrBackend:
         """The first `max_paths` simple paths src → dst of at most `max_depth` edges."""
         check_ends(self.data, src, dst)
         check_turn_edges(self.data, src, dst, entry_edge, exit_edge)
-        if len(self.data.trans_node):
-            raise NotImplementedError(NO_TURN_KERNEL)
         enter = enterable(self.data, node_mask, forbid_nodes)
         banned = banned_mask(self.data, banned_edges)
         max_depth, max_paths = as_limits(max_depth, max_paths)
         if max_paths <= 0 or not (enter[src] and enter[dst]):
             return []
         if src == dst:
+            if entry_edge >= 0 and exit_edge >= 0 and not self._turn_ok(entry_edge, exit_edge):
+                return []
             return [(np.array([src], dtype=np.int32), np.array([], dtype=np.int32))]
         g = self.data
-        offsets, nodes, edges = kernels.simple_paths_dfs(
-            g.out_indptr,
-            g.out_edges,
-            g.edge_v,
-            enter.view(np.uint8),
-            banned.view(np.uint8),
-            src,
-            dst,
-            max_depth,
-            max_paths,
-        )
+        if len(g.trans_node) or entry_edge >= 0 or exit_edge >= 0:
+            offsets, nodes, edges = kernels.simple_paths_dfs_turns(
+                g.out_indptr,
+                g.out_edges,
+                g.edge_v,
+                enter.view(np.uint8),
+                banned.view(np.uint8),
+                self._trans_indptr,
+                self._trans_key,
+                src,
+                dst,
+                entry_edge,
+                exit_edge,
+                max_depth,
+                max_paths,
+            )
+        else:
+            offsets, nodes, edges = kernels.simple_paths_dfs(
+                g.out_indptr,
+                g.out_edges,
+                g.edge_v,
+                enter.view(np.uint8),
+                banned.view(np.uint8),
+                src,
+                dst,
+                max_depth,
+                max_paths,
+            )
         ends = offsets.tolist()
         return [
             (nodes[a + p : b + p + 1], edges[a:b])

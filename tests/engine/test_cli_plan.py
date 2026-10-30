@@ -143,12 +143,11 @@ def test_the_csr_backend_without_numba_is_one_line(data_dir: Path, tmp_path: Pat
         assert lines[0].startswith("the csr backend needs numba, which did not import: ")
 
 
-def test_on_a_build_with_turn_tables_auto_is_python_and_csr_one_line(
+def test_on_a_build_with_turn_tables_auto_is_python_and_csr_plans_the_same_route(
     data_dir: Path, tmp_path: Path
 ) -> None:
-    # the CSR backend's DFS cannot check turns yet: auto takes the reference and says so; csr
-    # asked for by name cannot plan (one line), but validates: re-deriving the stops needs only
-    # the edge-state Dijkstra
+    # auto still takes the reference there and says so; csr asked for by name plans the same
+    # route.json (but the backend and the time), which validates on both
     straight = [
         ((44, 45), (45, 46)),
         ((46, 45), (45, 44)),
@@ -157,20 +156,25 @@ def test_on_a_build_with_turn_tables_auto_is_python_and_csr_one_line(
     ]
     g = save(data_dir, lattice(10, 10, transitions=straight, rounded_lonlat=True), "b1")
     trip = ["--from", latlon(g, 0), "--to", latlon(g, 99), "--seed", "4"]
-    out = tmp_path / "route.json"
-    code, stdout, stderr = plan(*trip, "--max-iterations", "20", "--out", str(out))
+    code, stdout, stderr = plan(*trip, "--max-iterations", "20")
     assert code == 0, stderr
     assert "backend: python (csr cannot search turn tables yet)" in stdout.splitlines()
-    assert json.loads(out.read_text())["run"]["backend"] == "python"
-    result = runner.invoke(app, ["validate", str(out)])
-    assert result.exit_code == 0, result.output
-    assert result.stdout.splitlines()[1] == "backend: python (csr cannot search turn tables yet)"
-    refusal = "the csr backend cannot search turn tables yet; use --backend python"
-    code, stdout, stderr = plan(*trip, "--backend", "csr")
-    assert (code, stdout, stderr.splitlines()) == (1, "", [f"cannot plan: {refusal}"])
-    result = runner.invoke(app, ["validate", str(out), "--backend", "csr"])
-    assert result.exit_code == 0, result.output
-    assert result.stdout.splitlines()[1] == "backend: csr"
+    docs = {}
+    for name in ("python", "csr"):
+        out = tmp_path / f"{name}.json"
+        code, stdout, stderr = plan(
+            *trip, "--max-iterations", "150", "--backend", name, "--out", str(out)
+        )
+        assert code == 0, stdout + stderr
+        assert f"backend: {name}" in stdout.splitlines()
+        docs[name] = json.loads(out.read_text())
+        assert docs[name]["run"]["backend"] == name
+        result = runner.invoke(app, ["validate", str(out), "--backend", name])
+        assert result.exit_code == 0, result.output
+        assert result.stdout.splitlines()[1] == f"backend: {name}"
+    for key in ("nodes", "edges", "stop_idx", "stops", "metrics"):
+        assert docs["python"][key] == docs["csr"][key]
+    assert docs["python"]["run"]["accepted"] == docs["csr"]["run"]["accepted"] > 0
 
 
 def test_validate_refuses_a_route_from_another_engine_version(

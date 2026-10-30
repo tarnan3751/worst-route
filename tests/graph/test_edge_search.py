@@ -304,8 +304,10 @@ def _cheapest_is_unique(case: Case) -> bool:
 
 @EXAMPLES
 @given(cases(rows=True, max_nodes=6, max_edges=20), st.integers(0, 6), st.integers(1, 20))
-def test_simple_paths_check_every_turn(case: Case, max_depth: int, max_paths: int) -> None:
-    backend = PythonBackend(case.g)
+def test_simple_paths_check_every_turn(
+    backend_type, case: Case, max_depth: int, max_paths: int
+) -> None:
+    backend = backend_type(case.g)
     every = backend.simple_paths_dfs(
         case.src,
         case.dst,
@@ -401,9 +403,9 @@ def _ban(g: GraphData, *pairs: tuple[int, int]) -> np.ndarray:
     return banned
 
 
-def test_from_a_node_to_itself() -> None:
+def test_from_a_node_to_itself(backend_type) -> None:
     g = plus()
-    b = PythonBackend(g)
+    b = backend_type(g)
     from_s, to_n, to_e = edge_id(g, 3, 0), edge_id(g, 0, 1), edge_id(g, 0, 2)
     assert nodes_of(b.dijkstra_edges(0, 0, lengths(g))) == [0]
     assert nodes_of(b.dijkstra_edges(0, 0, lengths(g), entry_edge=from_s, exit_edge=to_n)) == [0]
@@ -478,33 +480,15 @@ def test_bad_turn_edges_are_rejected(backend_type) -> None:
         b.dijkstra_edges(0, 2, lengths(g)[:-1])
 
 
-def test_simple_paths_skip_forbidden_turns() -> None:
+def test_simple_paths_skip_forbidden_turns(backend_type) -> None:
     g = plus()
-    b = PythonBackend(g)
+    b = backend_type(g)
     turning = {(3, 0, 2), (3, 0, 4)}
     straight = [tuple(p[0].tolist()) for p in b.simple_paths_dfs(3, 2, max_depth=6, max_paths=99)]
-    free = PythonBackend(plus(False)).simple_paths_dfs(3, 2, max_depth=6, max_paths=99)
+    free = backend_type(plus(False)).simple_paths_dfs(3, 2, max_depth=6, max_paths=99)
     assert {tuple(p[0].tolist()) for p in free} > set(straight)
     assert not any(t in turning for p in straight for t in zip(p, p[1:], p[2:], strict=False))
     assert (3, 2) in straight and (3, 0, 2) not in straight
-
-
-def test_the_csr_backend_has_no_turn_dfs_kernel_yet() -> None:
-    g = plus()
-    b = CsrBackend(g)
-    with pytest.raises(NotImplementedError, match="use --backend python"):
-        b.simple_paths_dfs(3, 2, max_depth=4, max_paths=9)
-    with pytest.raises(ValueError, match="entry_edge"):  # the reference's checks come first
-        b.simple_paths_dfs(0, 2, entry_edge=edge_id(g, 0, 1), max_depth=3, max_paths=1)
-    # without rows the turn edges change nothing: the plain kernel answers as the reference
-    free = plus(False)
-    entry = edge_id(free, 3, 0)
-    for backend in (CsrBackend(free), PythonBackend(free)):
-        paths = backend.simple_paths_dfs(0, 2, entry_edge=entry, max_depth=4, max_paths=99)
-        assert [p[1].tolist() for p in paths] == [
-            p[1].tolist()
-            for p in PythonBackend(free).simple_paths_dfs(0, 2, max_depth=4, max_paths=99)
-        ]
 
 
 def assert_same(paths: list[Path | None]) -> None:
@@ -533,16 +517,36 @@ def assert_same(paths: list[Path | None]) -> None:
         )
     ),
     st.sampled_from([-1.0, 0.0, 1.0, 1.5, 2.0, 3.0, math.inf]),
+    st.integers(-1, 7),
+    st.sampled_from([-1, 0, 1, 2, 5, 10**6]),
 )
-def test_the_backends_agree_on_edge_states(case: Case, max_cost: float) -> None:
+def test_the_backends_agree_on_edge_states(
+    case: Case, max_cost: float, max_depth: int, max_paths: int
+) -> None:
+    backends = [make(case.g) for make in BACKENDS.values()]
     assert_same(
         [
-            make(case.g).dijkstra_edges(
+            b.dijkstra_edges(
                 case.src, case.dst, case.weights, max_cost=max_cost, **case.turns(), **case.masks()
             )
-            for make in BACKENDS.values()
+            for b in backends
         ]
     )
+    reference, *others = (
+        b.simple_paths_dfs(
+            case.src,
+            case.dst,
+            max_depth=max_depth,
+            max_paths=max_paths,
+            **case.turns(),
+            **case.masks(),
+        )
+        for b in backends
+    )
+    for paths in others:
+        assert len(paths) == len(reference)
+        for ours, theirs in zip(paths, reference, strict=True):
+            assert_same([theirs, ours])
 
 
 def town_with_tables(seed: int) -> GraphData:
@@ -590,3 +594,39 @@ def test_the_backends_agree_on_a_town_with_tables() -> None:
         assert_same(paths)
         found += paths[0] is not None
     assert 100 < found < 300  # both kinds of answer were compared
+
+
+def test_the_backends_agree_on_every_turning_path_of_a_grid() -> None:
+    # the simple paths across a 5 × 5 grid whose nodes 6, 12 and 18 allow only straight on,
+    # also between two of them entered and left through turn edges: the kernel's output
+    # buffers grow many times over
+    g = grid_graph(5, 5, 100.0)
+    columns = []
+    for v in (6, 12, 18):
+        ins = g.in_edges[g.in_indptr[v] : g.in_indptr[v + 1]].tolist()
+        outs = g.out_edges[g.out_indptr[v] : g.out_indptr[v + 1]].tolist()
+        columns += [
+            (v, a, b)
+            for a in ins
+            for b in outs
+            if (g.node_x[g.edge_u[a]] == g.node_x[g.edge_v[b]])
+            or (g.node_y[g.edge_u[a]] == g.node_y[g.edge_v[b]])
+        ]
+    table = np.array(sorted(columns), dtype=np.int32)
+    g = dataclasses.replace(g, trans_node=table[:, 0], trans_in=table[:, 1], trans_out=table[:, 2])
+    forbid = np.zeros(g.n, dtype=bool)
+    forbid[13] = True
+    for src, dst, turns, masks, max_depth, max_paths in [
+        (0, 24, {}, {}, 100, 10**6),
+        (6, 18, {"entry_edge": edge_id(g, 5, 6), "exit_edge": edge_id(g, 18, 19)}, {}, 100, 10**6),
+        (12, 4, {"entry_edge": edge_id(g, 11, 12)}, {"forbid_nodes": forbid}, 14, 40),
+    ]:
+        reference, ours = (
+            make(g).simple_paths_dfs(
+                src, dst, max_depth=max_depth, max_paths=max_paths, **turns, **masks
+            )
+            for make in BACKENDS.values()
+        )
+        assert len(ours) == len(reference) >= min(max_paths, 100)
+        for a, b in zip(reference, ours, strict=True):
+            assert_same([a, b])

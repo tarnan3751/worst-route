@@ -1,9 +1,8 @@
 """The FastAPI application (`docs/reference/api.md`).
 
 `create_app(settings)` loads the region's build (memory-mapped, `graph.loader`) when it is
-called, so `worst-route serve` fails before it listens when the build is missing (or when the
-CSR backend is asked for on a build with transition tables, which it cannot search yet:
-`NotImplementedError`); it opens the route store and mounts the endpoints (`routes_api`). Its
+called, so `worst-route serve` fails before it listens when the build is missing; it opens the
+route store and mounts the endpoints (`routes_api`). Its
 lifespan starts and stops the job manager. `ApiSettings` says which build, which backend, where
 the store is, and the job limits.
 
@@ -61,10 +60,6 @@ def create_app(settings: ApiSettings) -> FastAPI:
     loaded = load_build(
         settings.data_dir, settings.region, settings.build_id, backend=settings.backend
     )
-    if loaded.backend.name == "csr" and len(loaded.data.trans_node):
-        from worst_route.graph.csr_backend import NO_TURN_KERNEL
-
-        raise NotImplementedError(NO_TURN_KERNEL)
     store = RouteStore(settings.store_path or settings.data_dir / "routes.sqlite")
     jobs = JobManager(settings.jobs, store, data_dir=settings.data_dir, backend=settings.backend)
 

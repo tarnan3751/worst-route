@@ -3,8 +3,7 @@
 `docs/reference/graph.md`, **Backends**; `docs/PLAN.md` §3.10. M1's surface is four calls.
 `PythonBackend` is the reference implementation; `CsrBackend`, over Numba kernels, is the
 production one and returns the same results on the same inputs of the declared types, byte for
-byte, except that its `simple_paths_dfs` cannot yet check turns: it raises `NotImplementedError`
-on a build with transition rows (the turn DFS kernel is a follow-up).
+byte.
 
 Masks, exactly. A node may be entered iff `node_mask[v]` (default: every node) and not
 `forbid_nodes[v]`; `src` and `dst` obey the same rule, so a caller that forbids the route's

@@ -8,11 +8,11 @@ trivial cases (a negative `max_cost`, an end that may not be entered) before it 
 kernel, as `PythonBackend` does before it searches.
 
 The transition-aware search (`dijkstra_edges_masked`) is the same over edge states: its heap
-orders entries by (cost, edge id). It reads the transition table as `CsrBackend` precomputes
-it once per build: `trans_indptr`, each node's run of rows (rows sorted by node), and
-`trans_key`, each row's `in_edge * m + out_edge`, ascending within a node's run; `turn_allowed`
-answers a turn by a binary search in the run of the turn's node (a node without rows allows
-every turn).
+orders entries by (cost, edge id). It and the turn DFS (`simple_paths_dfs_turns`) read the
+transition table as `CsrBackend` precomputes it once per build: `trans_indptr`, each node's run
+of rows (rows sorted by node), and `trans_key`, each row's `in_edge * m + out_edge`, ascending
+within a node's run; `turn_allowed` answers a turn by a binary search in the run of the turn's
+node (a node without rows allows every turn).
 
 Masks arrive as uint8: zero-copy views of the bool masks (`mask.view(np.uint8)`). Each kernel
 is compiled once, eagerly, for one signature whose arrays are read-only of any layout, so
@@ -422,3 +422,108 @@ def dijkstra_edges_masked(
                 pred[f] = e
                 heap_cost, heap_edge, size = _heap_push(heap_cost, heap_edge, size, c, f)
     return False, np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)
+
+
+@_kernel(
+    _PATHS(
+        _I8,
+        _I4,
+        _I4,
+        _U1,
+        _U1,
+        _I8,
+        _I8,
+        types.int64,
+        types.int64,
+        types.int64,
+        types.int64,
+        types.int64,
+        types.int64,
+    )
+)
+def simple_paths_dfs_turns(
+    out_indptr: I64,
+    out_edges: I32,
+    edge_v: I32,
+    enter: U8,
+    banned: U8,
+    trans_indptr: I64,
+    trans_key: I64,
+    src: int,
+    dst: int,
+    entry_edge: int,
+    exit_edge: int,
+    max_depth: int,
+    max_paths: int,
+) -> tuple[I64, I32, I32]:
+    """`simple_paths_dfs` whose every turn is allowed: from `entry_edge` into the first edge,
+    between edges, and from the last edge into `exit_edge` (each turn edge −1 for none).
+    The same enumeration, limits and packing otherwise."""
+    n = out_indptr.shape[0] - 1
+    levels = max(min(max_depth, n), 0) + 1
+    current = np.empty(levels, dtype=np.int64)
+    path_edges = np.empty(levels, dtype=np.int32)
+    cursor = np.empty(levels, dtype=np.int64)
+    on_path = np.zeros(n, dtype=np.uint8)
+    offsets = np.zeros(64, dtype=np.int64)
+    edges = np.empty(1024, dtype=np.int32)
+    nodes = np.empty(1024, dtype=np.int32)
+    count = 0
+    n_edges = 0
+    n_nodes = 0
+
+    depth = 0
+    current[0] = src
+    cursor[0] = out_indptr[src]
+    on_path[src] = 1
+    while True:
+        v = current[depth]
+        k = cursor[depth]
+        if k == out_indptr[v + 1]:  # every out-edge of v tried: step back
+            if depth == 0:
+                break
+            on_path[v] = 0
+            depth -= 1
+            continue
+        cursor[depth] = k + 1
+        e = out_edges[k]
+        w = edge_v[e]
+        if on_path[w] or banned[e] or not enter[w] or depth >= max_depth:
+            continue
+        last = path_edges[depth - 1] if depth > 0 else entry_edge
+        if last >= 0 and not turn_allowed(trans_indptr, trans_key, edge_v, last, e):
+            continue
+        if w == dst:
+            if exit_edge >= 0 and not turn_allowed(trans_indptr, trans_key, edge_v, e, exit_edge):
+                continue
+            if count + 2 > offsets.shape[0]:
+                bigger_offsets = np.zeros(2 * offsets.shape[0], dtype=np.int64)
+                bigger_offsets[: count + 1] = offsets[: count + 1]
+                offsets = bigger_offsets
+            if n_nodes + depth + 2 > nodes.shape[0]:
+                size = 2 * (nodes.shape[0] + depth + 2)
+                bigger_edges = np.empty(size, dtype=np.int32)
+                bigger_edges[:n_edges] = edges[:n_edges]
+                edges = bigger_edges
+                bigger_nodes = np.empty(size, dtype=np.int32)
+                bigger_nodes[:n_nodes] = nodes[:n_nodes]
+                nodes = bigger_nodes
+            for t in range(depth):
+                edges[n_edges + t] = path_edges[t]
+                nodes[n_nodes + t] = current[t]
+            edges[n_edges + depth] = e
+            nodes[n_nodes + depth] = v
+            nodes[n_nodes + depth + 1] = w
+            n_edges += depth + 1
+            n_nodes += depth + 2
+            count += 1
+            offsets[count] = n_edges
+            if count == max_paths:
+                break
+        elif depth + 1 < max_depth:
+            path_edges[depth] = e
+            depth += 1
+            current[depth] = w
+            cursor[depth] = out_indptr[w]
+            on_path[w] = 1
+    return offsets[: count + 1].copy(), nodes[:n_nodes].copy(), edges[:n_edges].copy()

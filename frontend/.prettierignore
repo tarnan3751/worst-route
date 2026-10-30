@@ -1,2 +1,4 @@
 dist
 package-lock.json
+# Recorded from the server and kept one event per line (docs/reference/frontend.md, **Tests**)
+src/__fixtures__/*.json

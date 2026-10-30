@@ -1,5 +1,5 @@
 # The gate, tools/gates.sh, on every push and pull request: sync, lint, types, tests, the
-# frontend typecheck and build (skipped until frontend/ exists), and the leftover scan.
+# frontend typecheck, build and tests (skipped without frontend/), and the leftover scan.
 name: gate
 
 on:

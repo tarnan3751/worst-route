@@ -657,38 +657,44 @@ Nominatim's public policy (verified 2026-10-30): max **1 request/s per applicati
 
 - **Long, live-updating routes.** A 9-hour route is thousands of edges and tens of thousands of vertices, redrawn ~10×/s while it grows. MapLibre renders that on the GPU; `source.setData()` on a GeoJSON source is cheap. Leaflet draws polylines as SVG/Canvas on the main thread and gets choppy past ~20k vertices with frequent updates.
 - **`line-gradient` with `lineMetrics: true`** colours the route by progress along it, which makes "watch it get worse" legible, and fits the share image's visual identity.
-- **Vector basemap, self-hostable.** OSM's raster tile policy forbids heavy use and demands correct `Referer`/`User-Agent` handling; it is fine for local hobby volume but not for a public joke that might go viral. With MapLibre the basemap is a vector style; locally use any free style, publicly serve **Protomaps PMTiles** (one static file for the US, served from object storage, no tile server) or MapTiler/Stadia. Switching is a style URL in config. A muted basemap style also makes the route pop.
+- **Vector basemap, self-hostable.** OSM's raster tile policy forbids heavy use and demands correct `Referer`/`User-Agent` handling; it is fine for local hobby volume but not for a public joke that might go viral. With MapLibre the basemap is a vector style; locally use any free style, publicly serve **Protomaps PMTiles** (one static file for the US, served from object storage, no tile server) or MapTiler/Stadia. Switching is a style URL in config. A muted basemap style also makes the route pop. As built for M2, the local basemap is OSM's raster tiles, desaturated, at hobby volume, and the switch is `VECTOR_STYLE_URL` in `frontend/src/map/basemap.ts` (`docs/reference/frontend.md`, **Basemap**).
 - **Camera tricks** (fit bounds with padding, slow fly-along for the share "flyover") come free.
 - Leaflet's advantages (smaller API, raster simplicity, plugin ecosystem) do not matter here, and the raster-tile policy would push us to a provider anyway.
 
 ### 5.2 Structure (Vite + TypeScript, no framework)
 
+As built for M2 (`docs/reference/frontend.md`); what is marked M4 arrives with the presentation.
+
 ```
 frontend/
 ├── index.html
-├── vite.config.ts            # dev proxy /api → localhost:8000
+├── vite.config.ts            # dev proxy /api → WORST_ROUTE_API (default 127.0.0.1:8000), prefix stripped
 ├── src/
-│   ├── main.ts               # bootstrap, URL state (?route=, ?seed=), wiring
-│   ├── state.ts              # tiny typed store on EventTarget: stops, settings, job status, route, metrics
-│   ├── api/client.ts         # fetch wrappers + SSE subscription with reconnect and Last-Event-ID
+│   ├── main.ts               # bootstrap, URL state (?route=, ?seed=, ?stops=, ...), wiring
+│   ├── state.ts              # tiny typed store on EventTarget: region, stops, settings, run, route, error
+│   ├── api/types.ts          # the API's shapes, by hand; a test holds them to api.md and a recorded stream
+│   ├── api/client.ts         # fetch wrappers + SSE subscription (EventSource reconnects with Last-Event-ID)
+│   ├── map/basemap.ts        # the basemap and its switch to a vector style
 │   ├── map/map.ts            # MapLibre init, style, attribution, layer order
 │   ├── map/routeLayer.ts     # baseline (grey dashed) + worst route (gradient) sources; applySplice(), setSnapshot()
-│   ├── map/stopsLayer.ts     # draggable markers, numbered, snapped-position ghost + "moved 140 m" tooltip
-│   ├── stops/stopList.ts     # ordered list: add by click, geocode search box (button, not type-ahead), reorder, remove
-│   ├── settings/panel.ts     # inefficiency target, scale (tier auto/override, leash), objective mode, constraints, vehicle, departure
-│   ├── run/controls.ts       # Go / Stop / Reroll (new seed) / Make it worse; progress bar with ratio ticking up
-│   ├── toasts/toasts.ts      # rotating stat toasts during and after the run; jokes interleaved
-│   ├── directions/panel.ts   # scrollable turn list; hovering a step highlights the edge range on the map
-│   ├── share/share.ts        # copy link, open share.png, download GeoJSON
-│   └── format.ts             # units (mi/km toggle), durations, money, dates
-└── public/                   # favicon, fonts
+│   ├── map/stopsLayer.ts     # draggable markers, numbered, snapped-position ghost + note tooltip
+│   ├── stops/stopList.ts     # ordered list: add by click, remove; geocode search box (button, not type-ahead) (M4)
+│   ├── settings/panel.ts     # seed, budget, inefficiency target, scale (tier auto/override, leash), objective mode, units; constraints (M3), vehicle, departure (M4)
+│   ├── run/controls.ts       # Go / Cancel / Reroll (new seed) / Make it worse; the live stat line with the ratio ticking up
+│   ├── share/share.ts        # URL state, ?route= links, copy link; open share.png, download GeoJSON (M4)
+│   ├── banner.ts             # API errors, non-modal
+│   ├── format.ts             # units (mi/km toggle), durations, numbers; money, dates (M4)
+│   ├── util/                 # geo (rounding, bounds), dom
+│   ├── toasts/toasts.ts      # (M4) rotating stat toasts during and after the run; jokes interleaved
+│   └── directions/panel.ts   # (M4) scrollable turn list; hovering a step highlights the edge range on the map
+└── public/                   # (later) favicon, fonts
 ```
 
 Behaviour notes:
 
-- **Live growth:** on each `progress` event apply splices in order; flash the new segment for 400 ms; update the ratio counter. On `snapshot` replace. On `done` fetch `/routes/{id}` for directions, toasts and comparisons.
+- **Live growth:** on each `progress` event apply splices in order; flash the new segment for 400 ms; update the ratio counter. On `snapshot` replace. On `done` fetch `/routes/{id}` and draw its full geometry (and, with M4, its directions, toasts and comparisons).
 - **Stop picker:** first click = start, second = end, further clicks = vias appended before the end; drag to move; the list shows snap notes.
-- **Settings** are serialised to the URL so a link reproduces the request (plus `seed`), and `?route=` loads a stored route directly.
+- **Settings** and the stops are serialised to the URL so a link reproduces the request (plus `seed`), and `?route=` loads a stored route directly.
 - **Reroll** = same request, new seed. **Make it worse** = `base_route_id` = current route, same seed+1 so it is also reproducible.
 - **Share image** is requested from the backend and shown in a modal with copy/download; no client-side rendering.
 - Units default to miles for US users with a km toggle; all numbers from the API are metric.
@@ -769,7 +775,7 @@ Deliverable: `worst-route plan --region portland --from 45.5231,-122.6765 --to 4
 
 1. `CSRBackend` + Numba kernels (node-state Dijkstra, bounded DFS, and the transition-aware edge-state Dijkstra and turn-checking DFS); parity tests against the reference backend on fixtures; benchmark ≥ 10 attempts/s at Portland scale. Built: byte-identical to the reference and the default on every build; on Portland it plans the reference's routes at 7,200–8,200 attempts/s (`docs/reference/engine.md`, **On Portland with `CsrBackend`**).
 2. FastAPI app: `/regions`, `/snap`, `/jobs` + SSE, `/routes/{id}`, `/routes/{id}/geojson`, sqlite route store, worker pool. Built (`docs/reference/api.md`): a process per job, "make it worse" from a stored route, cancel storing the route so far, `worst-route serve`.
-3. Frontend: map, stop picker, run controls, route layer with splice application, ratio counter; settings panel with inefficiency target (max / ratio / duration), tier override, leash; Reroll; Make it worse.
+3. Frontend: map, stop picker, run controls, route layer with splice application, ratio counter; settings panel with inefficiency target (max / ratio / duration), tier override, leash; Reroll; Make it worse. Built (`docs/reference/frontend.md`): the route drawn growing from the stream and reconnecting with `Last-Event-ID`, the ratio and duration targets with what a run achieved, the objectives other than distance shown disabled until they land, settings and stops in the URL, `?route=` links, cancel on `pagehide`, OSM raster tiles locally with the switch to a vector style.
 4. Target modes (ratio and duration) in the engine, including run replacement for trimming. Built (`docs/reference/engine.md`, **Targets**): `plan --target ratio:<x>|duration:<time>`, `plan --base`, and the API's `target`; on Portland, Powell's → Reed reaches 20× and 3 h within ±2 % in under half a second, 9 h in 1.1 s, and a 62.43× route shrinks to 30.58× in 5 s.
 5. Acceptance: a 15-minute Portland drive becomes a 9-hour route within ±2% of target in < 20 s; the map shows it growing; closing the tab cancels the job.
 

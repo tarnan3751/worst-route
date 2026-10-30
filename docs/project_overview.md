@@ -1,8 +1,9 @@
 # Worst Route — project overview
 
-Last updated: 2026-10-30. Snapshot taken after the API landed: the plan is written; the
-project scaffolding, every pipeline step, the graph package, the engine and the API are built;
-Portland has a saved build, and the M1 acceptance run on it passes (§2.2): M1 is built.
+Last updated: 2026-10-30. Snapshot taken after the frontend landed: the plan is written; the
+project scaffolding, every pipeline step, the graph package, the engine, the API and the
+frontend are built; Portland has a saved build, and the M1 acceptance run on it passes (§2.2):
+M1 is built.
 
 This file answers three questions: what the project is meant to become, how far along it is, and
 what has been decided. It is written for a human reader and for an AI agent picking up the
@@ -42,8 +43,8 @@ Claude: Python for the pipeline, engine, API and rendering; TypeScript + MapLibr
   the other modes are later milestones.
 - **API and frontend** (In progress): FastAPI jobs with Server-Sent Events progress, a MapLibre map
   that shows the route getting worse live, settings, reroll, make it worse. `docs/PLAN.md` §4–5.
-  The API is built for the distance mode and its targets (`docs/reference/api.md`); the
-  frontend is next.
+  The API and the frontend are built for the distance mode and its targets
+  (`docs/reference/api.md`, `docs/reference/frontend.md`); M2's acceptance is next.
 - **Modes** (Planned): longest distance, slowest time, never/only turn left, collect toll booths /
   rail crossings / roundabouts / bridges, brand pilgrimage, alphabet route, hard mode (targets
   by ratio or duration are built, for the distance mode).
@@ -114,6 +115,15 @@ finished routes in sqlite, continues a stored route ("make it worse"), and on a 
 limit or a closed stream stores the best route so far once the validator passes it. On
 Portland, Powell's → Reed streams to 62.4× in 11.8 s through it, the engine's own result for
 that seed; a 9 h target from the same 13-minute drive ends within ±2 % in 1.8 s.
+The frontend is built (`docs/reference/frontend.md`, M2 step 3): a Vite + TypeScript app
+without a framework on MapLibre GL JS, in which the user clicks a start, an end and stops along
+the way on the region's map, picks a target (as bad as possible, a ratio or a drive time), runs
+a job and watches the route grow from the stream (each splice applied and flashed, a colour
+gradient from start to end, reconnecting with `Last-Event-ID`), cancels, rerolls, makes the
+route worse, and opens a stored route by its `?route=` link; the settings and stops live in the
+URL, every API error shows in a banner, and leaving the page cancels a running job. On
+Portland, Powell's → Reed grows to 60.0× in 12 s on the map; its tests replay streams recorded
+from the server, node for node.
 The workflow scaffolding exists: `CLAUDE.md`, the four agents,
 `tools/gates.sh`, `tools/land_series.sh`, this overview, `docs/PLAN.md`. The M1 bootstrap is
 built: the uv project (Python 3.12, `src` layout, the M1 dependencies), the gate running ruff,
@@ -127,7 +137,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 | Milestone | Status | Summary |
 |---|---|---|
 | M1 — Portland, distance mode, CLI | Built | bootstrap, every pipeline step (download to qa; Portland's build passes QA), the graph package and the engine (snapping, seed route, transition-aware searches, splice loop, distance objective, validator, `worst-route plan` / `validate`). The acceptance run (`docs/PLAN.md` §7 M1 step 9; `uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` on build e4b3b4ad90db, `graph_version` 45f650e868fa, the reference backend: 20 random Portland pairs 3–15 km apart): all 20 plan and the validator passes all 20; the median ratio is 21.5× (3.3–45.2×); seeds 1 and 2 share 10–16% of their edges (Jaccard on 5 pairs, all < 0.3); the cul-de-sac via moves 86 m to the nearest through street with its note. Powell's → Reed gives 58–62×, PDX → Beaverton 7.3× (`docs/reference/engine.md`, **On Portland**) |
-| M2 — API + map, live growth | In progress | CSR + Numba backend built, its transition-aware kernels included (the default on every build; byte-identical to the reference: on Portland the acceptance's 20 routes and Powell's → Reed reproduce exactly, at 7,200–8,200 attempts/s); the API built (jobs in worker processes, SSE progress, the route store, make it worse, `worst-route serve`); targets by ratio and duration built (engine, CLI `--target`/`--base`, API), a 13-minute Portland drive to 9 h within ±2 % in 1.8 s over the API; remaining: MapLibre frontend, the acceptance |
+| M2 — API + map, live growth | In progress | CSR + Numba backend built, its transition-aware kernels included (the default on every build; byte-identical to the reference: on Portland the acceptance's 20 routes and Powell's → Reed reproduce exactly, at 7,200–8,200 attempts/s); the API built (jobs in worker processes, SSE progress, the route store, make it worse, `worst-route serve`); targets by ratio and duration built (engine, CLI `--target`/`--base`, API), a 13-minute Portland drive to 9 h within ±2 % in 1.8 s over the API; the MapLibre frontend built (stops by click, the route growing live, run controls, settings with the targets, links); remaining: the acceptance |
 | M3 — Modes and constraints | Planned | turn-aware kernel, never/only-left; slowest time; collectibles; brands; hard mode; the search honouring stage B transitions (built at M1); alphabet search |
 | M4 — Presentation | Planned | directions, stats, toasts, comparisons, share image, geocoding proxy, share links |
 | M5 — Scaling up | Planned | Oregon; array-based simplify/consolidate; US at T1; the national decision gate; public-hosting prep |
@@ -160,6 +170,17 @@ The risks the plan anticipates are `docs/PLAN.md` §8.3. Found on the Portland b
 - **A possible stage B over-restriction**: the I-84 / NE Halsey super-junction (node 65437 of
   the 2026-10-30 Portland build) forbids NE 42nd Ave → NE Sandy Blvd, a turn that looks
   drivable; to investigate in the next cleanup fold.
+
+In the frontend (`docs/reference/frontend.md`, **Limitations**):
+
+- **MapLibre GL JS 5 carries an advisory**: GHSA-jrc7-96c5-q579, an XSS bypass in its HTML
+  sanitizer, which `npm audit` lists as critical for every version up to 6.4.0. In 5.x the
+  sanitizer renders only the attribution control's strings, here the app's own, so 5.x is kept
+  for local use (decided 2026-10-30); the upgrade to 6.x comes before public hosting, whose
+  third-party vector style brings attribution of its own (M5).
+- **The dev server's proxy does not end a stream whose upstream drops**: if the API dies
+  mid-run, the page keeps showing the run as going; a stream dropped between the browser and
+  the server reconnects. No watchdog is planned.
 
 ## 3. Decisions
 
@@ -274,6 +295,29 @@ brief):
   pipe rather than a `multiprocessing.Queue`, so a worker that dies mid-message fails its job at
   once, and a worker whose API process has died exits; a stored route keeps the id of its
   content, so a request that produces it again gets the first record.
+- **The frontend as built for M2** (2026-10-30, at its brief and plan): Vite 6, TypeScript 5.9
+  (strict), MapLibre GL JS 5 its one runtime dependency, vitest for the tests of its pure modules
+  (the gate runs them); the dev server proxies `/api` to `WORST_ROUTE_API`; OSM raster tiles
+  locally, at hobby volume with their attribution, and one switch (`basemap.ts`) to a vector
+  style for public hosting; first click the start, second the end, later ones vias before the
+  end, at 6 decimals, removable; editing the stops forgets the route shown; Reroll lets the
+  server pick the seed; Make it worse continues the shown route with its seed + 1 and leaves the
+  stops, tier and leash to it; the objectives other than distance are shown disabled; the
+  settings and stops serialise to the URL (`?seed=&budget=&tier=&leash=&stops=`), `?route=`
+  opens a stored route; seeds are safe
+  integers; the stream's replay is tested against a recording of the server by node, not point
+  for point (snapshots are simplified). At the review (same day): prettier (print width 100)
+  formats `frontend/`, its check run by `typecheck` and so by the gate; maplibre-gl stays 5.x
+  until public hosting despite its advisory (§2.3); a stream the dev proxy leaves hanging stays
+  a documented limitation, without a watchdog; every error ends a run with the controls
+  unlocked (`CLIENT_ERROR` for the app's own, `BAD_RESPONSE` for a success that is not JSON);
+  a `?route=` link leaves the URL alone until it opens and keeps its parameter when it fails;
+  Make it worse keeps the route and its seed when nothing worse is found and tries the next
+  seed after the last one tried; leaving during the POST cancels the job once it is answered.
+  Once the targets landed: the panel's ratio (20× by default) and drive time (9 h, typed as
+  `9h`, `90m`, `2h30m` or minutes) are sent as the request's target and shown with what was
+  achieved, within ±2 %; the URL carries `target=max|ratio:<x>|duration:<seconds>`; the
+  max-mode recording is kept and a smaller ratio-target recording added.
 - **Share image rendered from our own data** (route, faint network, Census outlines), no
   third-party basemap.
 - **Towns from the Census Gazetteer** with an area-equivalent radius; states from Census

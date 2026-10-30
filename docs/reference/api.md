@@ -262,8 +262,8 @@ route.
 - **Orphans**: once a subscriber has connected, a job with none for `API_ORPHAN_S` (15 s) is
   cancelled, or dropped if still queued (`error` `CANCELLED`); the manager looks every
   `API_SWEEP_S` (1 s). A job nobody ever subscribed to runs to its end, so a script can
-  `POST /jobs` and read the route later. The frontend, when built, also sends `DELETE` on
-  `pagehide` (`fetch` with `keepalive`).
+  `POST /jobs` and read the route later. The frontend also sends `DELETE` on `pagehide`
+  (`fetch` with `keepalive`; `docs/reference/frontend.md`).
 - **A dead worker**: one that exits without a result is `WORKER_FAILED`. Its death closes the
   pipe's only write end, so a read ends at once with end-of-file, even partway through a message
   (a 2 MB message cut short after 60 kB fails its job in well under a second, and the manager

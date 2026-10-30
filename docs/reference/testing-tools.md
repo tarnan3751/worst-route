@@ -26,6 +26,10 @@ The `data` and `slow` markers are registered in `pyproject.toml`, which runs pyt
 `--strict-markers` and a 300 s timeout per test. `slow` marks a test that starts real worker
 processes (`tests/api/test_worker_process.py`, a few seconds); the gate still runs it, and
 `-m "not slow"` leaves it out of a quick local run.
+The frontend's tests are vitest files beside its modules (`frontend/src/**/*.test.ts`), with
+streams recorded from the server under `frontend/src/__fixtures__/`; they run in Node with
+`npm test` and in the gate, never reach the network, and read nothing but the recordings and
+`docs/reference/api.md` (`docs/reference/frontend.md`, **Tests**).
 
 The planned shape, from `docs/PLAN.md` §8.2: `tests/fixtures/osm/*.osm` hand-written
 OSM XML (a grid with one-ways, a divided highway with mismatched junctions, a cloverleaf, a
@@ -41,7 +45,8 @@ test that needs a built graph carries `@pytest.mark.data` and runs on demand wit
 One command, run from any tree, that a change must pass before it is reported, reviewed or
 landed. In order: `uv sync --frozen`; `ruff check` and `ruff format --check`; `mypy src`;
 `pytest -q -m "not data"`; under `frontend/` when it exists, `npm ci` if `node_modules` is
-missing, then `npm run typecheck` and `npm run build`; and a scan for `[verify]` instrumentation
+missing, then `npm run typecheck` (tsc and the prettier check), `npm run build` and
+`npm run test`; and a scan for `[verify]` instrumentation
 under `src`, `tests`, `tools` and `frontend/src`. One line per gate, the failing gate's output in
 full, non-zero exit on any failure. It never downloads and never reads `data/`. Before M1's
 bootstrap (no `pyproject.toml`) the Python gates report `skipped` and the gate passes on the
@@ -76,5 +81,8 @@ in place, unpushed. A mismatch or a patch that does not apply resets `main` to t
 
 The coordinator runs the API and the frontend on the main tree and looks through the browser.
 Agents verify in their clones through `worst-route plan` (which prints the validator report),
-`worst-route validate`, the tests, and, once M2 lands, a Playwright script under `tools/` that
-drives a lane's own server and writes screenshots to `tools/out/` (gitignored).
+`worst-route validate`, the tests, and the frontend on their own ports, driven by headless
+Chrome over the DevTools protocol with the tile server blocked and screenshots kept in their
+scratch directory (`docs/reference/frontend.md`, **Seeing it**). A Playwright script under
+`tools/` that drives a lane's own server and writes screenshots to `tools/out/` (gitignored)
+is a later item.

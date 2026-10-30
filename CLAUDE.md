@@ -27,7 +27,9 @@ the validator, and `worst-route plan` / `validate` on a saved build. So is the A
 (`docs/reference/api.md`, M2's second step): `worst-route serve`, jobs in worker processes, the
 route streamed over Server-Sent Events, the route store and "make it worse". So are the
 inefficiency targets (M2's fourth step): a ratio or a duration, reached within ±2 %, from
-`plan --target` and the API. The frontend does not exist yet. The plan (`docs/PLAN.md`,
+`plan --target` and the API. So is the frontend (`docs/reference/frontend.md`, M2's third
+step): a MapLibre map on which stops are clicked, the route drawn growing live from the stream,
+the run controls, the settings (the targets among them) and links. The plan (`docs/PLAN.md`,
 2026-10-30) is written and its open questions answered as far as `docs/project_overview.md` §3
 records. **M1 is built**: in the acceptance run on the
 Portland build (`uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20
@@ -59,13 +61,12 @@ or grep `.venv/lib/python3.12/site-packages/`.
 
 ## Commands
 
-M1's bootstrap has landed: the project, the gate on the real tools and the CLI skeleton exist;
-the rest is the shape `docs/PLAN.md` commits to. A command that does not exist yet is marked
-with the milestone that adds it, *(M1)* or *(M2)*.
+Every command below exists. One a later milestone adds is marked with that milestone, as
+*(M3)*, until it lands.
 
 | What | Command |
 |---|---|
-| The gate (sync, lint, types, tests, frontend build, leftovers) | `tools/gates.sh` |
+| The gate (sync, lint, types, tests, frontend typecheck/build/test, leftovers) | `tools/gates.sh` |
 | Install / refresh the virtualenv | `uv sync` |
 | Run all tests | `uv run pytest` |
 | Run some tests | `uv run pytest -k splice` |
@@ -76,7 +77,7 @@ with the milestone that adds it, *(M1)* or *(M2)*.
 | Plan a route from the CLI, validated (`--target ratio:20` or `duration:9h` aims for a target within ±2 %; `--base route.json` continues a saved route) | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
 | Validate a saved route | `uv run worst-route validate route.json` |
 | API server (the coordinator only; agents use `--port 0` or a port of their own, and `--store` in their own tree) | `uv run worst-route serve --region portland` |
-| Frontend dev server / build / typecheck | `cd frontend && npm run dev` / `npm run build` / `npm run typecheck` *(M2)* |
+| Frontend dev server / build / typecheck (with the prettier check) / tests / format (the dev server proxies `/api` to `WORST_ROUTE_API`, default `http://127.0.0.1:8000`; agents point it at their own server and add `-- --port <free>`) | `cd frontend && npm run dev` / `npm run build` / `npm run typecheck` / `npm test` / `npm run format` |
 | Land a delivered series | `tools/land_series.sh <patch-dir> <base-commit> <tree-hash>` |
 
 **Run the gate after every change.** The gate never downloads anything and never needs `data/`;
@@ -99,7 +100,7 @@ first built and listed here when it exists.
 | Objectives and constraints: the interface, each mode, the alphabet search | `src/worst_route/engine/objectives/`, `alphabet_search.py` | §3.6–3.8 | `docs/reference/engine.md` (**Objectives**) |
 | API: jobs, SSE, routes, geocode proxy, workers | `src/worst_route/api/`, `geocode/` | §4 | `docs/reference/api.md` |
 | Presentation: directions, stats, comparisons, share image, jokes | `src/worst_route/presentation/` | §4.3, M4 | *(when built)* `docs/reference/presentation.md` |
-| Frontend: map, stops, settings, run controls, toasts, directions, share | `frontend/src/` | §5 | *(when built)* `docs/reference/frontend.md` |
+| Frontend: map, stops, settings, run controls, toasts, directions, share | `frontend/src/` | §5 | `docs/reference/frontend.md` |
 | Testing and tools: the gate, lanes, landing, fixtures, benchmarks | `tests/`, `tools/` | §8 | `docs/reference/testing-tools.md` |
 
 ## Architecture rules
@@ -206,10 +207,13 @@ The coordinator runs the API and the frontend on the main tree
 (`uv run worst-route serve --region portland`, `cd frontend && npm run dev`) and looks through
 the browser (the `claude-in-chrome` skill, or the `run` skill); that is the coordinator's
 instance on the default ports. Agents see the app in their own clones through the CLI
-(`worst-route plan` and its validator), the API tests (`httpx` against the app in-process), and,
-once M2 lands, a Playwright script under `tools/` that drives a lane's own server on a free port
-and writes screenshots to `tools/out/` (gitignored). "It parses" is the floor; a route printed
-with its validator report, or a screenshot read, is proof.
+(`worst-route plan` and its validator), the API tests (`httpx` against the app in-process), the
+frontend's tests (`npm test`), and the frontend itself: `serve` and `npm run dev` on free ports of
+their own, driven by headless Chrome over the DevTools protocol with the tile server blocked,
+screenshots to their scratch directory (`docs/reference/frontend.md`, **Seeing it**); a
+Playwright script under `tools/` writing to `tools/out/` (gitignored) is a later item. "It
+parses" is the floor; a route printed with its validator report, or a screenshot read, is
+proof.
 
 ## Agent workflow
 

@@ -5,7 +5,13 @@ import numpy as np
 import pytest
 
 from worst_route.engine import ENGINE_VERSION
-from worst_route.engine.io import read_route, route_document, route_geojson
+from worst_route.engine.io import (
+    feature_collection,
+    line_coordinates,
+    read_route,
+    route_document,
+    route_geojson,
+)
 from worst_route.engine.plan import PlanResult, plan_route
 from worst_route.engine.request import RouteRequest, request_masks
 from worst_route.engine.validator import validate_route
@@ -83,6 +89,24 @@ def test_geojson_draws_the_route_the_baseline_and_the_stops() -> None:
         round(result.snaps[1].lat, 7),
     ]
     json.dumps(collection)  # JSON-native throughout
+
+
+def test_the_collection_from_a_route_s_parts_is_route_geojson_s() -> None:
+    result = planned([0, 27, 63])
+    route, baseline = result.route, result.baseline
+    parts = feature_collection(
+        GRID,
+        edges=route.edges,
+        length_m=route.metrics.length_m,
+        time_s=route.metrics.time_s,
+        baseline_edges=baseline.edges,
+        baseline_length_m=baseline.length_m,
+        baseline_time_s=baseline.time_s,
+        snaps=result.snaps,
+    )
+    assert json.dumps(parts) == json.dumps(route_geojson(GRID, result))
+    line = parts["features"][0]["geometry"]["coordinates"]
+    assert line_coordinates(GRID, route.edges) == line
 
 
 def test_a_file_that_is_not_a_route_is_refused(tmp_path: Path) -> None:

@@ -1,14 +1,23 @@
 """The worsen loop (`docs/PLAN.md` §3.4; `docs/reference/engine.md`, **The loop**).
 
-`worsen(backend, spatial, data, route, objective, budget, rng, node_mask, r_max=, ...)` is a
-generator: each attempt picks a window of the route, asks `find_detour` for a replacement
-inside the masks, and splices it in when the objective's `delta` is strictly positive and its
-`feasible_window` agrees; every accepted splice yields a `ProgressEvent` (the attempt number,
-the elapsed time, the new score and metrics, the `Splice` that made it). The generator returns
-a `WorsenResult`: the best route by `objective.better`, every event, the attempts and accepted
-splices, why it stopped, the time it took, and how many candidates the splice refused for a
-turn a transition table forbids (the searches see the tables, so this should stay near zero).
-`run_worsen` drives it to the end.
+`worsen(backend, spatial, data, route, objective, budget, rng, node_mask, r_max=, goal=, ...)`
+is a generator: each attempt picks a window of the route, asks `find_detour` for a replacement
+inside the masks, and splices it in when the goal accepts it (`target.Goal.accepts`: for `max`,
+the default, the objective's `delta` strictly positive) and the objective's `feasible_window`
+agrees; every accepted splice yields a `ProgressEvent` (the attempt number, the elapsed time,
+the new score and metrics, the `Splice` that made it). The generator returns a `WorsenResult`:
+the best route by `goal.better` (for `max` the highest score, for a target the closest),
+every event, the attempts and accepted splices, why it stopped, the time it took, and how many
+candidates the splice refused for a turn a transition table forbids (the searches see the
+tables, so this should stay near zero). `run_worsen` drives it to the end.
+
+A target run (ratio or duration) has phases, by the route's value (`Goal.phase`): below the
+band it grows, taking detours that gain without passing the band's top; above it, it shrinks,
+taking shorter replacements that do not pass the band's bottom, with the radius held at its
+floor; inside it, the run stops ("target"), before its first attempt too. Growing, the
+smallest candidate that would pass the band's top is kept (from the last accepted splice on);
+when a whole cycle accepts nothing, it is spliced in as one more attempt, and the run goes on
+shrinking.
 
 - The window is one edge (j = i + 1) with probability `SINGLE_EDGE_PROBABILITY`, else a run
   of 1 + a geometric number of edges (`RUN_EDGES_MEAN` on average, at most `SEGMENT_RUN_MAX`),
@@ -22,12 +31,14 @@ turn a transition table forbids (the searches see the tables, so this should sta
   what the splice is told to refuse.
 - The ambition radius starts at `objective.initial_radius`, grows ×1.5 on every accepted splice
   up to `r_max`, and halves after every 20 failures in a row down to `RADIUS_MIN_M` (or r_max
-  when that is smaller). A failure is no detour, a gain of zero or less, or an infeasible window.
+  when that is smaller); shrinking, it stays at that floor. A failure is no detour, one the
+  goal does not accept (for `max`, a gain of zero or less), or an infeasible window.
 - The run goes in cycles. A cycle ends after more than `CONVERGED_FAILS` (400) failures in a
-  row at the smallest radius; the radius goes back to `objective.initial_radius` and a new
-  cycle starts.
-- The run stops when `budget.max_iterations` attempts are made or `budget.seconds` have passed
-  ("budget"), or when `CONVERGED_EMPTY_CYCLES` cycles in a row accept nothing ("converged").
+  row at the smallest radius; the radius goes back to `objective.initial_radius` (the floor,
+  shrinking) and a new cycle starts.
+- The run stops when the goal is reached ("target"), when `budget.max_iterations` attempts are
+  made or `budget.seconds` have passed ("budget"), or when `CONVERGED_EMPTY_CYCLES` cycles in a
+  row accept nothing ("converged").
 
 Every random choice is `rng`'s, in a fixed order, and candidate lists are sorted arrays, so a
 seed gives the same sequence of splices on any machine. The clock decides only when to stop: a
@@ -72,12 +83,13 @@ from worst_route.engine.route import (
     TransitionForbidden,
     splice_arrays,
 )
-from worst_route.graph.backend import GraphBackend
+from worst_route.engine.target import Goal, Target
+from worst_route.graph.backend import GraphBackend, Path
 from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import SpatialIndex
 
 BoolArray = NDArray[np.bool_]
-StopReason = Literal["converged", "budget"]
+StopReason = Literal["converged", "budget", "target"]
 
 
 @dataclass(frozen=True)
@@ -110,6 +122,18 @@ class WorsenResult:
     stopped_because: StopReason
     elapsed_s: float
     refused_transitions: int
+
+
+@dataclass(frozen=True, eq=False)
+class _Overshoot:
+    """A detour for nodes[i..j] that would carry a growing route to `value`, past the band."""
+
+    i: int
+    j: int
+    path: Path
+    gain: float
+    value: float
+    extra: BoolArray | None
 
 
 def pick_segment(
@@ -190,16 +214,23 @@ def worsen(
     *,
     r_max: float,
     banned_edges: BoolArray | None = None,
+    goal: Goal | None = None,
     check_delta: bool = False,
 ) -> Generator[ProgressEvent, None, WorsenResult]:
-    """Make `route` worse, one accepted splice per event; returns the run's result."""
+    """Make `route` worse, one accepted splice per event, toward `goal` (default: max); returns
+    the run's result."""
     start = time.monotonic()
+    goal = goal if goal is not None else Goal(Target(), data, baseline_length_m=0.0)
     r_min = min(RADIUS_MIN_M, r_max)
-    radius = objective.initial_radius(route)
-    best = route
+    value = goal.value(route.score, route.metrics)
+    shrinking = goal.phase(value) == "shrink"
+    radius = r_min if shrinking else objective.initial_radius(route)
+    best, best_value = route, value
     attempts = accepted = fails = 0
     cycle_accepted = False
     empty_cycles = 0
+    # growing toward a target: the smallest detour past the band's top since the last splice
+    overshoot: _Overshoot | None = None
     unused = UnusedNodes(data, node_mask)
     table = unused.table(route)
     anchors_for: tuple[int, float] | None = None
@@ -207,46 +238,70 @@ def worsen(
     events: list[ProgressEvent] = []
     refused: Counter[type[IllegalSplice]] = Counter()
     while True:
-        if attempts >= budget.max_iterations or time.monotonic() - start >= budget.seconds:
-            stopped: StopReason = "budget"
+        if goal.reached(value):
+            stopped: StopReason = "target"
             break
+        if attempts >= budget.max_iterations or time.monotonic() - start >= budget.seconds:
+            stopped = "budget"
+            break
+        taken = None
         if fails > CONVERGED_FAILS and radius == r_min:
-            empty_cycles = 0 if cycle_accepted else empty_cycles + 1
-            if empty_cycles == CONVERGED_EMPTY_CYCLES:
-                stopped = "converged"
-                break
-            radius, fails, cycle_accepted = objective.initial_radius(route), 0, False
+            if not cycle_accepted and overshoot is not None:
+                taken = overshoot  # nothing smaller in a whole cycle: pass the band, then shrink
+            else:
+                empty_cycles = 0 if cycle_accepted else empty_cycles + 1
+                if empty_cycles == CONVERGED_EMPTY_CYCLES:
+                    stopped = "converged"
+                    break
+                radius = r_min if shrinking else objective.initial_radius(route)
+                fails, cycle_accepted = 0, False
         attempts += 1
-        if anchors_for != (accepted, radius):
-            anchors, anchors_for = unused.anchors(route, table, radius), (accepted, radius)
-        i, j = pick_segment(route, rng, anchors)
-        forbid, banned = route.release(data, i, j)
-        extra = _either(banned_edges, objective.banned_edges(data, route, i, j))
-        if extra is not None:
-            banned |= extra
-        found = find_detour(
-            backend,
-            spatial,
-            data,
-            route,
-            i,
-            j,
-            forbid=forbid,
-            banned=banned,
-            node_mask=node_mask,
-            radius=radius,
-            objective=objective,
-            rng=rng,
-            entry_edge=int(route.edges[i - 1]) if i > 0 else -1,
-            exit_edge=int(route.edges[j]) if j < len(route.edges) else -1,
-            refused=refused,
-        )
-        gain = 0.0 if found is None else objective.delta(route, i, j, *found)
-        if found is None or gain <= 0 or not objective.feasible_window(data, route, i, j, *found):
-            fails += 1
-            if fails % RADIUS_HALVE_EVERY == 0:
-                radius = max(radius / 2, r_min)
-            continue
+        if taken is not None:
+            i, j, found, gain, extra = taken.i, taken.j, taken.path, taken.gain, taken.extra
+        else:
+            if anchors_for != (accepted, radius):
+                anchors, anchors_for = unused.anchors(route, table, radius), (accepted, radius)
+            i, j = pick_segment(route, rng, anchors)
+            forbid, banned = route.release(data, i, j)
+            extra = _either(banned_edges, objective.banned_edges(data, route, i, j))
+            if extra is not None:
+                banned |= extra
+            detour = find_detour(
+                backend,
+                spatial,
+                data,
+                route,
+                i,
+                j,
+                forbid=forbid,
+                banned=banned,
+                node_mask=node_mask,
+                radius=radius,
+                objective=objective,
+                rng=rng,
+                entry_edge=int(route.edges[i - 1]) if i > 0 else -1,
+                exit_edge=int(route.edges[j]) if j < len(route.edges) else -1,
+                refused=refused,
+            )
+            gain = 0.0 if detour is None else objective.delta(route, i, j, *detour)
+            after = 0.0 if detour is None else goal.candidate(route, i, j, detour[1], gain)
+            if (
+                detour is None
+                or not goal.accepts(value, gain, after)
+                or not objective.feasible_window(data, route, i, j, *detour)
+            ):
+                if (
+                    detour is not None
+                    and goal.overshoots(value, gain, after)
+                    and (overshoot is None or after < overshoot.value)
+                    and objective.feasible_window(data, route, i, j, *detour)
+                ):
+                    overshoot = _Overshoot(i, j, detour, gain, after, extra)
+                fails += 1
+                if fails % RADIUS_HALVE_EVERY == 0:
+                    radius = max(radius / 2, r_min)
+                continue
+            found = detour
 
         score, metrics = objective.evaluate(*splice_arrays(route, i, j, *found))
         if check_delta and not math.isclose(gain, score - route.score, rel_tol=1e-9, abs_tol=1e-6):
@@ -256,9 +311,12 @@ def worsen(
         accepted += 1
         fails = 0
         cycle_accepted = True
-        radius = min(radius * RADIUS_GROWTH, r_max)
-        if objective.better(route, best):
-            best = route
+        overshoot = None
+        value = goal.value(score, metrics)
+        shrinking = goal.phase(value) == "shrink"
+        radius = r_min if shrinking else min(radius * RADIUS_GROWTH, r_max)
+        if goal.better(value, best_value):
+            best, best_value = route, value
         event = ProgressEvent(
             iteration=attempts,
             elapsed_s=time.monotonic() - start,
@@ -286,6 +344,7 @@ def run_worsen(
     *,
     r_max: float,
     banned_edges: BoolArray | None = None,
+    goal: Goal | None = None,
     check_delta: bool = False,
     on_event: Callable[[ProgressEvent], None] | None = None,
 ) -> WorsenResult:
@@ -301,6 +360,7 @@ def run_worsen(
         node_mask,
         r_max=r_max,
         banned_edges=banned_edges,
+        goal=goal,
         check_delta=check_delta,
     )
     while True:

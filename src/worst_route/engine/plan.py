@@ -5,8 +5,8 @@
 stops (`resolve_stops`: snapping and its fallback, which may move stops), builds the seed route
 and the baseline on them, makes the request's objective with the baseline length and the radius
 bound r_max = min(leash, the active area's extent) and its goal (`target.Goal`, the request's
-target against that baseline), and runs the worsen loop within the request's budget, handing
-each accepted splice and the baseline to `on_progress`. It searches
+target against that baseline), and runs the worsen loop toward that goal within the request's
+budget, handing each accepted splice and the baseline to `on_progress`. It searches
 with the backend it is given, else `make_backend`'s default (`config.DEFAULT_BACKEND`); every
 backend gives the same route, and the result records which one searched. The best
 route is then validated against the request's masks and the resolved stops; a route that fails
@@ -19,7 +19,8 @@ line from the CLI rather than a traceback.
 Two hooks serve the API (`docs/reference/api.md`). `on_start(snaps, masks, baseline, route)` is
 called once, after the route the loop starts from is made and before the loop. `base`, a route
 planned earlier on this build for the same stops, tier and leash, is what the loop starts from
-instead of the seed ("make it worse"). `check_base` refuses it with `BaseRouteMismatch` (a
+instead of the seed ("make it worse"; with a target, a base past it shrinks toward it).
+`check_base` refuses it with `BaseRouteMismatch` (a
 `ValueError` naming the field at fault) unless its stop nodes are the ones `resolve_stops`
 gives, every node lies in the request's active mask and none of its edges is one the request
 bans; `Route.new` then checks it as it checks any route (repeats, twins, transitions). Nothing
@@ -138,6 +139,7 @@ def plan_route(
         masks.active,
         r_max=r_max,
         banned_edges=masks.banned,
+        goal=goal,
         check_delta=check_delta,
         on_event=progress,
     )

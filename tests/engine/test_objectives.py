@@ -85,13 +85,6 @@ def test_initial_radius(baseline: float, r_max: float, radius: float) -> None:
     assert distance(baseline=baseline, r_max=r_max).initial_radius(route) == radius
 
 
-def test_better_is_a_higher_score() -> None:
-    a = route_on(GRID, [0, 1])
-    objective = distance()
-    longer = Route.new(GRID, a.nodes, a.edges, a.stop_idx, score=2.0, metrics=a.metrics, seed=0)
-    assert objective.better(longer, a) and not objective.better(a, longer)
-
-
 def test_the_registry_and_the_request_know_distance() -> None:
     assert set(OBJECTIVES) == {"distance"}
     objective: Objective = make_objective("distance", GRID, baseline_length_m=500.0, r_max=9000.0)

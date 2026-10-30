@@ -8,8 +8,9 @@ node terms over the route's nodes (a round trip's start once), edge terms over i
 terms over each two consecutive edges (only when `has_pair`), the global term over the whole
 route (only when `has_global`). Feasibility hooks (`feasible_pair`, `feasible_window`) and
 per-window bans (`banned_edges`) constrain it; search guidance (`search_weights`,
-`waypoint_pool`, `initial_radius`, `search_budget`) steers the detours; `better` orders routes;
-`target_value` is the quantity target modes compare; `describe` gives mode-specific numbers.
+`waypoint_pool`, `initial_radius`, `search_budget`) steers the detours; `target_value` is the
+mode's own quantity for target modes; `describe` gives mode-specific numbers. Which route is
+better, and when a run is done, is the run's goal (`engine.target.Goal`), not the objective's.
 A constraint is an objective with hooks and no terms. The worsen loop sees only this interface.
 
 `global_term` takes the route's node and edge arrays rather than a `Route`, so a candidate can
@@ -95,10 +96,6 @@ class Objective(Protocol):
 
     def search_budget(self, radius: float) -> float:
         """The cost bound of a detour search at this radius."""
-        ...
-
-    def better(self, a: Route, b: Route) -> bool:
-        """Whether route a is better (worse, for the user) than route b."""
         ...
 
     def target_value(self, G: GraphData, route: Route) -> float:  # noqa: N803
@@ -190,10 +187,6 @@ class BaseObjective:
     def search_budget(self, radius: float) -> float:
         """Four times the radius."""
         return SEARCH_BUDGET_FACTOR * radius
-
-    def better(self, a: Route, b: Route) -> bool:
-        """A higher score."""
-        return a.score > b.score
 
     def target_value(self, G: GraphData, route: Route) -> float:  # noqa: N803
         """The score."""

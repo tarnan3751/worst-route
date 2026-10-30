@@ -13,14 +13,19 @@ package's tests, which build their graphs with `worst_route.graph.testing`
 (`docs/reference/graph.md`, **Test builders**) and check both backends against networkx and
 against each other with hypothesis; `tests/engine/`, the engine's tests, with shared graph
 builders in `tests/engine/graphs.py` and a `data_dir` fixture for the `plan` / `validate` CLI tests
-(`docs/reference/engine.md`, **Tests**); `tests/golden/`, the golden routes, frozen per build and
+(`docs/reference/engine.md`, **Tests**); `tests/api/`, the API's tests, with lattice builds and
+helpers in `tests/api/support.py`, async tests on anyio's pytest plugin (`@pytest.mark.anyio`,
+which httpx's dependency anyio provides) and the app driven in-process over `httpx`
+(`docs/reference/api.md`, **Tests**); `tests/golden/`, the golden routes, frozen per build and
 `graph_version` and rewritten only under a tier A brief; and `tests/fixtures/osm/`, hand-written
 OSM XML that pyosmium reads directly, with no conversion (`docs/reference/pipeline.md`,
 **Fixtures**). `tests/` and every test folder under it are packages (an empty `__init__.py`
 each), so pytest's default import mode tolerates the same test file name in two folders and the
 `tests.*` mypy override applies; a new test folder gets an `__init__.py` too.
-The `data` marker is registered in `pyproject.toml`, which runs pytest with `--strict-markers`
-and a 300 s timeout per test.
+The `data` and `slow` markers are registered in `pyproject.toml`, which runs pytest with
+`--strict-markers` and a 300 s timeout per test. `slow` marks a test that starts real worker
+processes (`tests/api/test_worker_process.py`, a few seconds); the gate still runs it, and
+`-m "not slow"` leaves it out of a quick local run.
 
 The planned shape, from `docs/PLAN.md` §8.2: `tests/fixtures/osm/*.osm` hand-written
 OSM XML (a grid with one-ways, a divided highway with mismatched junctions, a cloverleaf, a

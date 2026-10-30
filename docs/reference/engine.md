@@ -21,7 +21,7 @@ routes either way; on a build with transition tables only `PythonBackend` can se
 | `objectives/` | `base.py` (`Objective`, `BaseObjective`), `distance.py` (`Distance`), `OBJECTIVES`, `make_objective` |
 | `detour.py` | `find_detour`, `pick_strategy`, `waypoint_path`, `random_weight_path`, `local_exhaustive_paths` |
 | `worsen.py` | `worsen`, `run_worsen`, `pick_segment`, `UnusedNodes`, `Budget`, `ProgressEvent`, `WorsenResult` |
-| `plan.py` | `plan_route`, `PlanResult` |
+| `plan.py` | `plan_route`, `PlanResult`, `check_base`, `BaseRouteMismatch` |
 | `io.py` | `route_document`, `read_route` / `SavedRoute`, `route_geojson` |
 
 `ENGINE_VERSION` (`engine/__init__.py`) is recorded with every route: bump it when the same
@@ -362,23 +362,36 @@ first, so a longer search needs `--max-iterations` raised as well as `--budget`.
 
 ## Planning
 
-`plan_route(data, request, *, backend=None, spatial=None, on_progress=None, check_delta=False)
--> PlanResult(request, masks, snaps, baseline, route, run, report, backend)` runs a request end
-to end. It searches with `backend`, else `make_backend(data)` (`config.DEFAULT_BACKEND`, `auto`:
-`CsrBackend` when numba imports); `PlanResult.backend` is the name of the one that searched. The
-steps run in this order:
+`plan_route(data, request, *, backend=None, spatial=None, base=None, on_start=None,
+on_progress=None, check_delta=False) -> PlanResult(request, masks, snaps, baseline, route, run,
+report, backend)` runs a request end to end. It searches with `backend`, else
+`make_backend(data)` (`config.DEFAULT_BACKEND`, `auto`: `CsrBackend` when numba imports);
+`PlanResult.backend` is the name of the one that searched. The steps run in this order:
 
 1. the masks;
 2. one `Generator(PCG64(request.seed))`;
 3. `resolve_stops` (snapping and its fallback, which may move stops; `snaps` are the final
    ones);
-4. `seed_route` on them;
+4. `seed_route` on them, or, given `base`, that route instead;
 5. `baseline_route` on those stops;
 6. `make_objective` with the baseline length and `r_max`;
-7. `Route.new` of the seed;
+7. `Route.new` of the seed (or the base), then `on_start(snaps, masks, baseline, route)`;
 8. `run_worsen` within the request's budget, calling `on_progress(event, baseline)` on every
    accepted splice;
 9. `validate_route` on the best route, against the request's masks and the resolved stops.
+
+The two hooks serve the API (`docs/reference/api.md`). `on_start` reports the route the loop
+starts from before the first splice: the seed is not the baseline once there are stops between
+the ends, and a client applying splices needs it. `base` ("make it worse") is a route planned
+earlier on this build for the same stops, tier and leash, anything the validator reads
+(`RouteLike`). Before the loop, `check_base(base, masks, stop_nodes)` refuses it with
+`BaseRouteMismatch`, a `ValueError` whose `field` is `"stops"` (its stop nodes are not the ones
+step 3 gives) or `"route"` (a node outside the request's active mask, or an edge the request
+bans); the API's pre-flight runs the same check. `Route.new` then checks the rest as for any
+route (repeats, twins, transitions; an `IllegalSplice` from it is raised as it is, not as
+`StopUnreachable`). Nothing is drawn from the rng before the loop, so a continuation is fixed
+by the base, the request and its seed, on either backend (`tests/engine/test_plan.py`).
+Without the hooks, planning is unchanged.
 
 A route that fails validation raises `ValidationFailed` and is never returned. The errors to
 expect are `SnapError` and `StopUnreachable`. The seed checks every leg itself, so a
@@ -589,6 +602,7 @@ bytes).
 | `test_detour.py` | each strategy's legal detours and None when none exists, the strategy weights, random weight drawing only near the window, the local-exhaustive ranking and the refused-candidate skip, no turn refused on a lattice of straight-only junctions (and many when the searches are made turn-blind) |
 | `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, a splice after two empty cycles and the run stopping only after three, the segment bias's rate and its anchors (the edges with the most unused nodes near), the unused-node grid's cap, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, and so do those with turn tables (no turn refused), a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable`; the same-seed test on both backends, and both backends planning the same route, splice for splice, on the grid and on one-way towns |
 | `test_io.py` | the route files |
+| `test_plan.py` | `plan_route`'s hooks: `on_start` once before the loop with the route it starts from (every splice replays from it to the result), the same route without the hooks, a continuation from `base` that never scores less, is fixed by its seed on both backends, and refuses a base for other stops, one leaving the request's area (before the loop) and, in `check_base`, a node outside the mask or an edge the request bans |
 | `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32, `--backend` on both commands (the same route.json on both backends but the backend and the time), `auto` taking `python` on a build with turn tables and saying so, `csr` there one line on both commands, a file from another engine version refused |
 
 **The acceptance run**, `tools/acceptance.py`, plans random stop pairs on a saved build, so it

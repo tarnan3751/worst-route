@@ -23,8 +23,10 @@ writes the build, and `qa`; Portland's build passes QA. The graph package is bui
 pure-Python reference backend and the CSR + Numba production backend (the default, M2's first
 step), snapping and masks. So is the engine (`docs/reference/engine.md`):
 the route and its splice, the seed route, the detours, the worsen loop, the distance objective,
-the validator, and `worst-route plan` / `validate` on a saved build. No other part of the app
-exists yet. The plan (`docs/PLAN.md`, 2026-10-30) is written and its open questions answered as
+the validator, and `worst-route plan` / `validate` on a saved build. So is the API
+(`docs/reference/api.md`, M2's second step): `worst-route serve`, jobs in worker processes, the
+route streamed over Server-Sent Events, the route store and "make it worse". The frontend does
+not exist yet. The plan (`docs/PLAN.md`, 2026-10-30) is written and its open questions answered as
 far as `docs/project_overview.md` §3 records. **M1 is built**: in the acceptance run on the
 Portland build (`uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20
 --seed 1 --budget 30`) all 20 pairs plan, the validator passes all 20, and the median ratio is
@@ -71,7 +73,7 @@ with the milestone that adds it, *(M1)* or *(M2)*.
 | Pipeline, one step (all eight are real, run in this order; `filter` and `build` also take `--source PATH`, `cleanup` and `tiers` take `--allow-fragmented`) | `uv run worst-route pipeline <download\|filter\|build\|cleanup\|enrich\|tiers\|save\|qa> --region portland` |
 | Plan a route from the CLI, validated (on a build with turn tables `auto` takes the Python backend) | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
 | Validate a saved route | `uv run worst-route validate route.json` |
-| API server (the coordinator only; agents use ports of their own) | `uv run worst-route serve` *(M2)* |
+| API server (the coordinator only; agents use `--port 0` or a port of their own, and `--store` in their own tree) | `uv run worst-route serve --region portland` |
 | Frontend dev server / build / typecheck | `cd frontend && npm run dev` / `npm run build` / `npm run typecheck` *(M2)* |
 | Land a delivered series | `tools/land_series.sh <patch-dir> <base-commit> <tree-hash>` |
 
@@ -93,7 +95,7 @@ first built and listed here when it exists.
 | Graph: a build's arrays and on-disk format, the backend protocol, the reference and CSR backends, Numba kernels, spatial (snapping, leash, bubbles), test builders, loader | `src/worst_route/graph/` | §2.7, §3.5, §3.9, §3.10 | `docs/reference/graph.md` |
 | Engine: `Route`, snapping, the seed route, detours, the worsen loop, the validator, exact mode | `src/worst_route/engine/` | §3.1–3.4, §3.11–3.13 | `docs/reference/engine.md` |
 | Objectives and constraints: the interface, each mode, the alphabet search | `src/worst_route/engine/objectives/`, `alphabet_search.py` | §3.6–3.8 | `docs/reference/engine.md` (**Objectives**) |
-| API: jobs, SSE, routes, geocode proxy, workers | `src/worst_route/api/`, `geocode/` | §4 | *(when built)* `docs/reference/api.md` |
+| API: jobs, SSE, routes, geocode proxy, workers | `src/worst_route/api/`, `geocode/` | §4 | `docs/reference/api.md` |
 | Presentation: directions, stats, comparisons, share image, jokes | `src/worst_route/presentation/` | §4.3, M4 | *(when built)* `docs/reference/presentation.md` |
 | Frontend: map, stops, settings, run controls, toasts, directions, share | `frontend/src/` | §5 | *(when built)* `docs/reference/frontend.md` |
 | Testing and tools: the gate, lanes, landing, fixtures, benchmarks | `tests/`, `tools/` | §8 | `docs/reference/testing-tools.md` |
@@ -151,8 +153,8 @@ really gives the same route), so treat them as hard rules.
 
 ### API and frontend
 
-- The API is the only contract between backend and frontend; the shapes are `docs/PLAN.md`
-  §4 until `docs/reference/api.md` exists. A shape change is tier A.
+- The API is the only contract between backend and frontend; the shapes are
+  `docs/reference/api.md`. A shape change is tier A.
 - Coordinates: `[lon, lat]` in GeoJSON, `{lat, lon}` in request objects. All metrics metric;
   the frontend converts.
 - No framework in `frontend/`; MapLibre owns the DOM of the map.
@@ -198,14 +200,14 @@ tools/           gates.sh, land_series.sh, acceptance.py (the M1 acceptance run)
 
 ## Seeing the app
 
-The coordinator runs the API and the frontend on the main tree (`uv run worst-route serve`,
-`cd frontend && npm run dev`) and looks through the browser (the `claude-in-chrome` skill, or
-the `run` skill); that is the coordinator's instance on the default ports. Agents see the app
-in their own clones through the CLI (`worst-route plan` and its validator), the API tests
-(`httpx` against the app in-process), and, once M2 lands, a Playwright script under `tools/`
-that drives a lane's own server on a free port and writes screenshots to `tools/out/`
-(gitignored). "It parses" is the floor; a route printed with its validator report, or a
-screenshot read, is proof.
+The coordinator runs the API and the frontend on the main tree
+(`uv run worst-route serve --region portland`, `cd frontend && npm run dev`) and looks through
+the browser (the `claude-in-chrome` skill, or the `run` skill); that is the coordinator's
+instance on the default ports. Agents see the app in their own clones through the CLI
+(`worst-route plan` and its validator), the API tests (`httpx` against the app in-process), and,
+once M2 lands, a Playwright script under `tools/` that drives a lane's own server on a free port
+and writes screenshots to `tools/out/` (gitignored). "It parses" is the floor; a route printed
+with its validator report, or a screenshot read, is proof.
 
 ## Agent workflow
 

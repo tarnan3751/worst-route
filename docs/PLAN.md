@@ -37,9 +37,9 @@ Stack push-backs (details in §1.3):
                                                    ├── job manager: queue, cancel, progress fan-out
                                                    │        │
                                                    │        ▼
-                                                   │   ProcessPool workers (N = cores − 2)
+                                                   │   a worker process per job (spawn), at most cores − 2 at once
                                                    │     each mmaps data/graphs/<region>/<build>/*.npy  (shared page cache)
-                                                   │     runs engine.worsen(...) as a generator → progress events
+                                                   │     runs engine.plan_route with progress hooks → a queue of events
                                                    │
                                                    ├── route store (sqlite): route_id → request, seed, node ids, graph build id
                                                    └── presentation: directions, stats, comparisons, share.png (matplotlib)
@@ -114,7 +114,7 @@ worst-route/
 │   ├── geocode/
 │   │   ├── base.py  nominatim.py  photon.py  cache.py
 │   └── api/
-│       ├── app.py  schemas.py  jobs.py  routes_api.py  sse.py  errors.py
+│       ├── app.py  routes_api.py  schemas.py  jobs.py  worker.py  sse.py  store.py
 ├── frontend/                   # Vite + TS, see §5
 ├── tests/
 │   ├── fixtures/osm/*.osm      # hand-written OSM XML: grid, divided highway, cloverleaf, roundabout, cul-de-sac, private roads
@@ -530,26 +530,30 @@ For a user-drawn box of ≤ ~300 nodes / ~1,000 directed edges:
 
 ## 4. API
 
-FastAPI, JSON bodies validated by pydantic. All coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in request objects. Long computations are **jobs**; progress is streamed with **Server-Sent Events** (one-directional, works through plain `fetch`/`EventSource`, no WebSocket upgrade or proxy headaches; cancellation is a separate `DELETE`).
+FastAPI, JSON bodies validated by pydantic. All coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in request objects. Long computations are **jobs**; progress is streamed with **Server-Sent Events** (one-directional, works through plain `fetch`/`EventSource`, no WebSocket upgrade or proxy headaches; cancellation is a separate `DELETE`). As built for M2, `docs/reference/api.md` is the reference for every shape below; the rows marked M3 and M4 arrive with those milestones.
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` | liveness + loaded builds |
 | GET | `/regions` | regions, tiers, bbox, `graph_version`, counts |
-| GET | `/geocode?q=&bbox=` | address → candidates (proxied, cached, rate-limited; §4.4) |
-| POST | `/snap` | `{lat, lon, tier?, role: start\|via\|end}` → snapped node |
-| GET | `/brands?q=` | brand autocomplete for the pilgrimage mode (local index, not Nominatim) |
-| POST | `/jobs` | create a route job → `{job_id, events_url}` |
+| GET | `/geocode?q=&bbox=` | address → candidates (proxied, cached, rate-limited; §4.4) *(M4)* |
+| POST | `/snap` | `{region, lat, lon, role: start\|via\|end, tier?}` → snapped node |
+| GET | `/brands?q=` | brand autocomplete for the pilgrimage mode (local index, not Nominatim) *(M3)* |
+| POST | `/jobs` | create a route job → `{job_id, events_url, seed}` |
 | GET | `/jobs/{id}/events` | SSE stream |
 | GET | `/jobs/{id}` | status + latest snapshot (polling fallback) |
 | DELETE | `/jobs/{id}` | cancel; the best-so-far route is still stored |
 | GET | `/routes/{route_id}` | full route document |
-| GET | `/routes/{route_id}/directions` | turn-by-turn only |
+| GET | `/routes/{route_id}/directions` | turn-by-turn only *(M4)* |
 | GET | `/routes/{route_id}/geojson` | geometry only (for "open in …") |
-| GET | `/routes/{route_id}/share.png?w=1200&h=630` | server-rendered share image |
+| GET | `/routes/{route_id}/share.png?w=1200&h=630` | server-rendered share image *(M4)* |
 | POST | `/routes/{route_id}/validate` | runs the validator, returns the report (debug/CI) |
 
+Every error answers `{code, message, ...}` (the error's own fields beside them), 422 for a request that cannot be planned, 429 when the server is full, 404 for an unknown job or route, 409 for a stored route whose build is gone.
+
 ### 4.1 `POST /jobs` request
+
+The engine's `RouteRequest` field for field, under the engine's names (the stops as `{lat, lon}` objects), plus the region, the target, what the presentation keeps, and the route to continue:
 
 ```json
 {
@@ -558,76 +562,76 @@ FastAPI, JSON bodies validated by pydantic. All coordinates are `[lon, lat]` in 
     {"lat": 45.5231, "lon": -122.6765, "label": "Powell's"},
     {"lat": 45.4817, "lon": -122.6263, "label": "Reed College"}
   ],
-  "objective": {"mode": "distance"},
-  "constraints": {"no_left": false, "no_right": false, "hard_mode": false},
-  "scale": {"tier": "auto", "leash_km": "auto"},
-  "target": {"kind": "max"},
-  "budget": {"seconds": 20, "max_iterations": 5000},
+  "objective": "distance",
+  "tier": "auto",
+  "leash_km": "auto",
+  "budget_s": 20,
+  "max_iterations": 1000000,
   "seed": 12345,
+  "target": {"kind": "max"},
   "vehicle": {"mpg": 24, "gas_price_usd": 3.89},
   "departure": "2026-10-31T09:00:00-07:00",
   "base_route_id": null
 }
 ```
 
-- `objective.mode` ∈ `distance | time | collect | brand | alphabet`; `collect` adds `"item": "toll_booth" | "level_crossing" | "roundabout" | "bridge"`; `brand` adds `"brand_key"`.
-- `target.kind` ∈ `max | ratio | duration` with `"value": 50` (×) or `"seconds": 32400`.
-- `scale.tier` ∈ `auto | T0..T4`; `scale.leash_km` ∈ `auto | number`.
-- `base_route_id` set → "Make it worse": the job starts from that route (same stops; objective, target and budget may differ). `seed` omitted → random, returned in the response.
+- `objective` ∈ `distance | time | collect | brand | alphabet`; only `distance` is built (the others are `NOT_YET`). M3 adds the collect item, the brand key and the turn constraints.
+- `target.kind` ∈ `max | ratio | duration` with `"value": 50` (×) or `"seconds": 32400`; only `max` is built until M2 step 4.
+- `tier` ∈ `auto | T0..T4`; `leash_km` ∈ `auto | number` (at most 150); `budget_s` at most 120; `max_iterations` defaults to 1,000,000 here, so the seconds budget ends a run (the CLI keeps 5,000).
+- `base_route_id` set → "Make it worse": the job starts from that route (its stops, tier and leash, which the request may leave out; the objective, target, budget and seed may differ). `seed` omitted → random, returned in the response.
 
-Response `202`: `{"job_id": "j_…", "events_url": "/jobs/j_…/events", "seed": 12345}`.
-Errors (`422`): `STOP_OUTSIDE_REGION`, `STOP_UNREACHABLE_WITHOUT_REPEAT {stop_index}`, `INFEASIBLE_TURN_CONSTRAINT`, `UNKNOWN_BRAND`, `BUDGET_TOO_LARGE`.
+Response `202`: `{"job_id": "…", "events_url": "/jobs/…/events", "seed": 12345}`.
+Errors (`422`): `INVALID_REQUEST`, `UNKNOWN_REGION`, `STOP_OUTSIDE_REGION {stop_index}`, `NO_NODE_NEAR {stop_index}`, `STOP_UNREACHABLE_WITHOUT_REPEAT {leg, stop_index}`, `BUDGET_TOO_LARGE`, `NOT_YET {field}`, `UNKNOWN_ROUTE`, `BUILD_MISMATCH`, `BASE_ROUTE_MISMATCH {field}`; later `INFEASIBLE_TURN_CONSTRAINT`, `UNKNOWN_BRAND`. `429`: `TOO_MANY_JOBS`. The stops are snapped and the seed's legs tried before the job exists (the worker repeats it, deterministically), so these come back at once.
 
 ### 4.2 SSE events
 
 ```
-event: snapped
-data: {"stops":[{"input":{"lat":..,"lon":..},"node":1234,"lat":..,"lon":..,"moved_m":12.4,"note":null}, ...],
+event: snapped                        # at creation, from the request's pre-flight
+data: {"stops":[{"input":{"lat":..,"lon":..},"label":"Powell's","node":1234,"lat":..,"lon":..,"moved_m":12.4,"note":null}, ...],
        "tier":"T4","leash_km":6.2,"active_nodes":118230}
 
 event: baseline
 data: {"length_m":7420,"time_s":1130,"geometry":{"type":"LineString","coordinates":[...]}}
 
-event: progress                       # coalesced to ≤ 10/s; `splices` lists every accepted splice since the last event
-data: {"iter":412,"score":38210,"metrics":{"length_m":38210,"time_s":5020,"ratio":5.15,"items":0},
-       "splices":[{"i":17,"j":18,"coords":[[lon,lat],...],"node_count":9}, ...]}
+event: snapshot                       # right after baseline (iteration 0: the route the loop starts from), every 50th progress event, and first on any (re)connect
+data: {"iteration":450,"elapsed_s":3.1,"node_count":812,"stop_idx":[0,811],
+       "geometry":{"type":"LineString","coordinates":[...]},"node_index":[0,3,...],"metrics":{...}}
 
-event: snapshot                       # every 50th progress event and on reconnect: full geometry, simplified to 1 m
-data: {"iter":450,"geometry":{"type":"LineString","coordinates":[...]},"node_count":812,"metrics":{...}}
+event: progress                       # coalesced to ≤ 10/s; `splices` lists every accepted splice since the last event
+data: {"iteration":412,"elapsed_s":2.8,"score":38210,"metrics":{"length_m":38210,"time_s":5020,"ratio":5.15},
+       "splices":[{"i":17,"j":18,"node_count":9,"coords":[[lon,lat],...],"node_index":[0,4,...]}, ...]}
 
 event: done
-data: {"route_id":"r_…","final":{"metrics":{...}},"stopped_because":"budget|target|converged|cancelled"}
+data: {"route_id":"…","stopped_because":"budget|converged|cancelled|timeout","metrics":{...}}
 
 event: error
-data: {"code":"STOP_UNREACHABLE_WITHOUT_REPEAT","stop_index":1,"message":"..."}
+data: {"code":"STOP_UNREACHABLE_WITHOUT_REPEAT","leg":[0,1],"stop_index":1,"message":"..."}
 ```
 
-The client applies each splice to its own coordinate array (indexed by route node position, which the server reports) and redraws; a `snapshot` replaces it wholesale. `Last-Event-ID` on reconnect returns a `snapshot` first.
+The client keeps the route's points and `node_index` (each route node's index among them; consecutive edges share their junction point): a `snapshot` replaces both, and each splice replaces route nodes `i..j` (positions before it) by its points. The snapshot after `baseline` is needed because the seed is not the baseline once there are stops between the ends. Snapshots are simplified edge by edge to about 1 m, keeping every node a vertex. Ids count up per job; `Last-Event-ID` on reconnect returns the stored `snapped`/`baseline` events after it, then a `snapshot`, then live events.
 
 ### 4.3 `GET /routes/{route_id}`
 
+As built for M2:
+
 ```json
 {
-  "route_id": "r_…", "graph_version": "sha256:…", "seed": 12345, "request": {…},
-  "stops": [{"label":"Powell's","node":1234,"lat":..,"lon":..,"route_index":0}, …],
+  "route_id": "…", "created": "…", "graph_version": "…", "engine_version": "2",
+  "region": "portland", "build_id": "…", "seed": 12345, "request": {…},
+  "stops": [{"label":"Powell's","node":1234,"lat":..,"lon":..,"moved_m":5.6,"note":null,"route_index":0}, …],
   "geometry": {"type":"LineString","coordinates":[…]},
   "legs": [{"from_stop":0,"to_stop":1,"node_range":[0,812]}],
   "metrics": {
     "length_m": 318402, "baseline_length_m": 7420, "ratio": 42.9,
     "time_s": 41880, "baseline_time_s": 1130, "time_ratio": 37.1,
-    "departure": "…", "arrival": "…",
-    "extra_fuel_gal": 8.05, "extra_cost_usd": 31.31,
-    "states": ["OR"], "towns": ["Portland","Milwaukie","Gresham"], "towns_n": 3,
-    "network_fraction": 0.031, "turns": {"left": 212, "right": 198, "straight": 402},
-    "items": {"toll_booth": 0, "level_crossing": 14, "roundabout": 3, "bridge": 9},
-    "alphabet": null, "letters": null
+    "departure": "…", "arrival": "…"
   },
-  "directions": [{"step":1,"text":"Head northeast on W Burnside St","distance_m":412,"time_s":55,"edge_range":[0,3],"kind":"depart"}, …],
-  "toasts": ["42.9× less efficient than the sensible route.", "You arrive Tuesday at 8:38 PM.", …],
-  "comparisons": ["Longer than driving the entire length of I-5 once.", …],
+  "run": {"attempts": 82841, "accepted": 800, "stopped_because": "converged", "elapsed_s": 11.4, "backend": "python"},
   "validation": {"ok": true, "checked_at": "…"}
 }
 ```
+
+M4 adds to `metrics` `extra_fuel_gal`, `extra_cost_usd`, `states`, `towns`, `towns_n`, `network_fraction`, `turns`, `items`, `alphabet` and `letters`, and to the document `directions` (`[{"step":1,"text":"Head northeast on W Burnside St","distance_m":412,"time_s":55,"edge_range":[0,3],"kind":"depart"}, …]`), `toasts` (`["42.9× less efficient than the sensible route.", …]`) and `comparisons` (`["Longer than driving the entire length of I-5 once.", …]`).
 
 ### 4.4 Geocoding proxy
 
@@ -639,10 +643,11 @@ Nominatim's public policy (verified 2026-10-30): max **1 request/s per applicati
 
 ### 4.5 Jobs and workers
 
-- `ProcessPoolExecutor(max_workers = cores − 2)`, `spawn` start method (macOS default); each worker memory-maps the build on first use (`loader.py` LRU by `graph_version`).
-- Engine events go worker → `multiprocessing.Queue` → asyncio reader → per-job `asyncio.Queue`s for SSE subscribers. Coalesce at 100 ms.
-- Job records live in memory with a 1 h TTL; finished routes persist in sqlite (`routes` table: id, created, graph_version, seed, request JSON, node ids as a blob). Share links are `?route=r_…`.
-- Limits (public): 1 running job per client IP, 3 queued, budget ≤ 60 s, leash ≤ 300 km. The CLI bypasses these.
+- One `multiprocessing` process per job, `spawn` start method (macOS default), at most cores − 2 running and 8 queued (`config.API_*`); each worker memory-maps the build (`graph/loader.py`, an LRU of two builds) and runs `plan_route` with its progress hooks.
+- Engine events go worker → a one-way `multiprocessing` pipe (the worker holds its only write end, so its death ends a read at once; it exits itself if the API process dies) → the job's follower task (reading in a thread) → per-subscriber `asyncio.Queue`s for SSE. The follower keeps the job's own copy of the route, splice by splice, so a cancel (or a hard kill at budget + 30 s) stores the best so far, validated first. Coalesce at 100 ms.
+- Job records live in memory with a 1 h TTL; finished routes persist in sqlite (`routes` table: id, created, region, build id, `graph_version`, engine version, seed, the engine's and the API's request JSON, the snapped stops, node and edge ids and the baseline's edges as blobs, stop positions, metrics, run). A route id is 12 hex digits of a sha256 over its `graph_version`, nodes, edges and stop positions. Share links are `?route=…`.
+- A job whose SSE subscribers have all gone for 15 s is cancelled (dropped if queued); the frontend also cancels on `pagehide`.
+- Limits (public, later): 1 running job per client IP, 3 queued, budget ≤ 60 s, leash ≤ 300 km. The CLI bypasses these.
 
 ---
 
@@ -763,7 +768,7 @@ Deliverable: `worst-route plan --region portland --from 45.5231,-122.6765 --to 4
 ### M2 — API + map, live growth
 
 1. `CSRBackend` + Numba kernels (node-state Dijkstra, bounded DFS); parity tests against the reference backend on fixtures; benchmark ≥ 10 attempts/s at Portland scale.
-2. FastAPI app: `/regions`, `/snap`, `/jobs` + SSE, `/routes/{id}`, `/routes/{id}/geojson`, sqlite route store, worker pool.
+2. FastAPI app: `/regions`, `/snap`, `/jobs` + SSE, `/routes/{id}`, `/routes/{id}/geojson`, sqlite route store, worker pool. Built (`docs/reference/api.md`): a process per job, "make it worse" from a stored route, cancel storing the route so far, `worst-route serve`.
 3. Frontend: map, stop picker, run controls, route layer with splice application, ratio counter; settings panel with inefficiency target (max / ratio / duration), tier override, leash; Reroll; Make it worse.
 4. Target modes (ratio and duration) in the engine, including run replacement for trimming.
 5. Acceptance: a 15-minute Portland drive becomes a 9-hour route within ±2% of target in < 20 s; the map shows it growing; closing the tab cancels the job.

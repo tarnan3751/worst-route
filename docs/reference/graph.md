@@ -3,7 +3,8 @@
 The routing graph of one build: its arrays (`GraphData`), the on-disk build format and its
 `graph_version`, the `GraphBackend` protocol the engine searches through, the pure-Python
 reference backend and the CSR + Numba production backend, the spatial helpers (projection,
-snapping, leash and bubble masks), and the builders tests use to make small graphs by hand.
+snapping, leash and bubble masks), loading saved builds for the API, and the builders tests use
+to make small graphs by hand.
 Code: `src/worst_route/graph/`. The design it implements is `docs/PLAN.md` §2.6–2.7, §3.2,
 §3.9–3.10; the conventions are `CLAUDE.md`.
 
@@ -16,6 +17,7 @@ Code: `src/worst_route/graph/`. The design it implements is `docs/PLAN.md` §2.6
 | `csr_backend.py` | `CsrBackend`, the production implementation, over `kernels.py` |
 | `kernels.py` | the Numba kernels `dijkstra_masked` and `simple_paths_dfs` |
 | `backends.py` | `make_backend` |
+| `loader.py` | `load_build`, `Loaded`, `BuildNotFound` |
 | `spatial.py` | `SpatialIndex` (`project`, `snap`, `leash_mask`, `bubble_mask`), `Snap`, `SnapError`, `active_mask` |
 | `testing.py` | `make_graph`, `grid_graph`, `Edge`, `edge_id`, `GRID_ORIGIN` |
 
@@ -303,6 +305,20 @@ Where both backends can search, the choice changes only the speed. `plan_route` 
 `make_backend`'s default when it is given no backend, and `worst-route plan` and `validate`
 take `--backend` (`docs/reference/engine.md`).
 
+## Loading builds
+
+`load_build(data_dir, region, build_id="latest", *, backend=DEFAULT_BACKEND) -> Loaded(data,
+spatial, backend)` (`loader.py`) is how the API process and each job's worker process load a
+build: `read_build` of `<data_dir>/graphs/<region>/<build_id>/`, every array memory-mapped (the
+workers share the OS page cache), its `SpatialIndex`, and `make_backend(data, backend)`.
+`"latest"` is the id in `graphs/<region>/latest`, read on every call, so the cache never pins
+an old build under that name. The two builds used last stay loaded (`lru_cache(maxsize=2)` keyed
+by data directory, region, build id and backend: the region the API serves, and one other a
+stored route was planned on). A missing `latest` or `meta.json` raises `BuildNotFound` (a
+`FileNotFoundError`) naming the step to run; `make_backend`'s `ImportError` for `csr` without
+numba passes through. On Portland a load takes about 0.35 s in a fresh process, mostly imports.
+The CLI's `plan` and `validate` keep their own loading, with its one-line errors.
+
 ## Spatial
 
 `SpatialIndex(data)` builds, once per build, a `cKDTree` on every node's (x, y) and a pyproj
@@ -377,8 +393,9 @@ hand; nothing outside tests uses it.
 
 `tests/graph/`: `test_data.py` (every malformation `validate` rejects), `test_testing.py` (the
 builders), `test_store.py` (round trips, the version and its pin, refusals), `test_backends.py`,
-`test_edge_search.py` and `test_spatial.py` (snapping roles, masks, `exclude` and notes; leash
-and bubble masks; the masked balls against `bubble_mask`, radii on lattice nodes included).
+`test_edge_search.py`, `test_spatial.py` (snapping roles, masks, `exclude` and notes; leash and
+bubble masks; the masked balls against `bubble_mask`, radii on lattice nodes included), and
+`test_loader.py` (`latest`, the two builds kept, memory-mapped arrays, missing builds).
 
 `test_backends.py` runs the reference's tests on both backends through the `backend_type`
 fixture:

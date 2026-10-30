@@ -1,8 +1,8 @@
 # Worst Route — project overview
 
-Last updated: 2026-10-30. Snapshot taken after the pipeline's last steps landed: the plan is
-written; the project scaffolding, every pipeline step, the graph package and the engine are
-built; Portland has a saved build, and the M1 acceptance run on it passes (§2.2): M1 is built.
+Last updated: 2026-10-30. Snapshot taken after the API landed: the plan is written; the
+project scaffolding, every pipeline step, the graph package, the engine and the API are built;
+Portland has a saved build, and the M1 acceptance run on it passes (§2.2): M1 is built.
 
 This file answers three questions: what the project is meant to become, how far along it is, and
 what has been decided. It is written for a human reader and for an AI agent picking up the
@@ -40,8 +40,9 @@ Claude: Python for the pipeline, engine, API and rendering; TypeScript + MapLibr
   result legal. `docs/PLAN.md` §3. Built for M1 with the distance mode, and searched with the
   CSR + Numba backend since M2's first step; target modes and the other modes are later
   milestones.
-- **API and frontend** (Planned): FastAPI jobs with Server-Sent Events progress, a MapLibre map
+- **API and frontend** (In progress): FastAPI jobs with Server-Sent Events progress, a MapLibre map
   that shows the route getting worse live, settings, reroll, make it worse. `docs/PLAN.md` §4–5.
+  The API is built for the distance mode (`docs/reference/api.md`); the frontend is next.
 - **Modes** (Planned): longest distance, slowest time, never/only turn left, collect toll booths /
   rail crossings / roundabouts / bridges, brand pilgrimage, alphabet route, hard mode; targets
   by ratio or duration.
@@ -102,6 +103,12 @@ transition tables and avoid driving both carriageways of a road, the three detou
 the distance mode, the validator that proves a route from the original OSM ids, route files,
 and `worst-route plan` / `validate`, which run on any saved build. A golden route freezes the
 engine's output on a test lattice.
+The API is built (`docs/reference/api.md`, M2 step 2): `worst-route serve` runs a FastAPI app
+that plans each request as a job in a worker process of its own, streams the route as it grows
+over Server-Sent Events (splices, periodic snapshots, resumable with `Last-Event-ID`), stores
+finished routes in sqlite, continues a stored route ("make it worse"), and on a cancel, a time
+limit or a closed stream stores the route so far once the validator passes it. On Portland,
+Powell's → Reed streams to 62.4× in 11.8 s through it, the engine's own result for that seed.
 The workflow scaffolding exists: `CLAUDE.md`, the four agents,
 `tools/gates.sh`, `tools/land_series.sh`, this overview, `docs/PLAN.md`. The M1 bootstrap is
 built: the uv project (Python 3.12, `src` layout, the M1 dependencies), the gate running ruff,
@@ -115,7 +122,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 | Milestone | Status | Summary |
 |---|---|---|
 | M1 — Portland, distance mode, CLI | Built | bootstrap, every pipeline step (download to qa; Portland's build passes QA), the graph package and the engine (snapping, seed route, transition-aware searches, splice loop, distance objective, validator, `worst-route plan` / `validate`). The acceptance run (`docs/PLAN.md` §7 M1 step 9; `uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` on build e4b3b4ad90db, `graph_version` 45f650e868fa, the reference backend: 20 random Portland pairs 3–15 km apart): all 20 plan and the validator passes all 20; the median ratio is 21.5× (3.3–45.2×); seeds 1 and 2 share 10–16% of their edges (Jaccard on 5 pairs, all < 0.3); the cul-de-sac via moves 86 m to the nearest through street with its note. Powell's → Reed gives 58–62×, PDX → Beaverton 7.3× (`docs/reference/engine.md`, **On Portland**) |
-| M2 — API + map, live growth | In progress | CSR + Numba backend built (the default; byte-identical to the reference); remaining: its edge-state kernel (until then `auto` takes the reference on a build with transition tables, Portland's among them); FastAPI jobs + SSE; MapLibre frontend; targets by ratio and duration; reroll, make it worse |
+| M2 — API + map, live growth | In progress | CSR + Numba backend built (the default; byte-identical to the reference); the API built (jobs in worker processes, SSE progress, the route store, make it worse, `worst-route serve`); remaining: the CSR edge-state kernel (until then `auto` takes the reference on a build with transition tables, Portland's among them); MapLibre frontend; targets by ratio and duration |
 | M3 — Modes and constraints | Planned | turn-aware kernel, never/only-left; slowest time; collectibles; brands; hard mode; the search honouring stage B transitions (built at M1); alphabet search |
 | M4 — Presentation | Planned | directions, stats, toasts, comparisons, share image, geocoding proxy, share links |
 | M5 — Scaling up | Planned | Oregon; array-based simplify/consolidate; US at T1; the national decision gate; public-hosting prep |
@@ -233,6 +240,21 @@ brief):
   refuses a route made by another engine version.
 - **Alphabet mode is a constructive search**, not a splice objective.
 - **SSE for progress, not WebSockets.**
+- **The API as built for M2** (2026-10-30, at the API plan): the job request mirrors the
+  engine's `RouteRequest` field for field, stops as `{lat, lon, label}`, with a default
+  `max_iterations` of 1,000,000 so the seconds budget rules (the CLI keeps 5,000); `plan_route`
+  gained `on_start` and `base` hooks; a job runs in a spawned process of its own (at most
+  cores − 2, 8 queued), its stops resolved before it exists so their errors are a 422; the
+  stream sends the route the loop starts from as a snapshot and every point list with each
+  node's index, so a client applies splices by node position; a cancel, a hard kill at budget
+  + 30 s (`"timeout"`) or 15 s without a subscriber (once one connected) stores the route so
+  far, validated; route ids are 12 hex digits over `graph_version`, nodes, edges and stop
+  positions; "make it worse" keeps the base route's stops, tier and leash and refuses another
+  build or engine version; `serve` needs `--region` and takes `--store`; the frontend sends
+  `DELETE` on `pagehide`. At the review (same day): a worker's messages come down a one-way
+  pipe rather than a `multiprocessing.Queue`, so a worker that dies mid-message fails its job at
+  once, and a worker whose API process has died exits; a stored route keeps the id of its
+  content, so a request that produces it again gets the first record.
 - **Share image rendered from our own data** (route, faint network, Census outlines), no
   third-party basemap.
 - **Towns from the Census Gazetteer** with an area-equivalent radius; states from Census

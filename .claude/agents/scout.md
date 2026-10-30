@@ -41,7 +41,7 @@ itself.
   an area you haven't looked at yet, read the map, which tells you where things live, then the
   plan section or reference file for that area, then the module header comments of the files
   involved. The areas are `pipeline/` (pbf → graph → cleanup → enrich → tiers → store),
-  `graph/` (the `GraphBackend` protocol, networkx and CSR backends, kernels, spatial),
+  `graph/` (`GraphData`, the build format, the `GraphBackend` protocol, the pure-Python reference backend, later the Numba kernels, spatial),
   `engine/` (`Route`, snapping, the seed route, detours, the worsen loop, objectives, the
   validator), `presentation/`, `geocode/`, `api/`, and `frontend/src/`. Tests use fixtures
   under `tests/fixtures/osm/`, never `data/`.

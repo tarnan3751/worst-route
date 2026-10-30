@@ -42,7 +42,7 @@ it can act on.
   section and `docs/reference/<area>.md` for every area the question touches, then the module
   header comments of the files involved (and `docs/project_overview.md` §3 when the question is
   about a recorded decision) so your answer accounts for what the project already uses: Python
-  3.12, masks over graph copies, fixtures not data in tests, no network in tests, Parquet + NPZ
+  3.12, masks over graph copies, fixtures not data in tests, no network in tests, `.npy` arrays + JSON
   on disk, SSE not WebSockets, no frontend framework, the Nominatim and tile policies. Point out
   when an option conflicts with those.
 - **Read-only.** Never create or edit project files. Never run the pipeline, the server, the

@@ -82,7 +82,7 @@ first built and listed here when it exists.
 
 | Area | Code | Plan | Reference |
 |---|---|---|---|
-| Pipeline: download, filter, build, exclusions, simplify, consolidate (stages A and B), carriageway twins, connectivity, enrich, tiers, store, qa | `src/worst_route/pipeline/` | §2 | `docs/reference/pipeline.md` |
+| Pipeline: download, filter, build, exclusions, simplify, consolidate (stages A and B), carriageway twins, connectivity, enrich, tiers, save (to the graph package's build format), qa | `src/worst_route/pipeline/` | §2 | `docs/reference/pipeline.md` |
 | Graph: a build's arrays and on-disk format, the backend protocol, the reference and CSR backends, Numba kernels, spatial (snapping, leash, bubbles), test builders, loader | `src/worst_route/graph/` | §2.7, §3.5, §3.9, §3.10 | `docs/reference/graph.md` |
 | Engine: `Route`, snapping, the seed route, detours, the worsen loop, the validator, exact mode | `src/worst_route/engine/` | §3.1–3.4, §3.11–3.13 | *(when built)* `docs/reference/engine.md` |
 | Objectives and constraints: the interface, each mode, the alphabet search | `src/worst_route/engine/objectives/`, `alphabet_search.py` | §3.6–3.8 | *(when built)* `docs/reference/objectives.md` |

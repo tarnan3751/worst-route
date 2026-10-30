@@ -71,7 +71,7 @@ hard-case probes unless the diff gives you a reason.
      rng, `random`, time, or set iteration order in the hot loop; the golden tests unchanged
      outside a tier A brief that says so.
    - **Masks and backends.** No graph copies or subgraph views in the engine; the kernels honour
-     forbidden nodes, banned edges, the active mask and `max_cost`; the networkx and CSR
+     forbidden nodes, banned edges, the active mask and `max_cost`; the reference and Numba
      backends agree on the fixtures (ties by edge id); Numba kernels get arrays, not objects.
    - **Objectives.** `delta()` equals a full re-score on every accepted splice; pair terms at
      both splice boundaries; a global term re-evaluated when declared; a target mode lands

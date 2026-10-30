@@ -24,7 +24,7 @@ decisions; when the brief leaves one open, stop and ask rather than guess.
    installed package, never from memory:
    `uv run --no-sync python -c "import inspect, osmnx; print(inspect.signature(osmnx.simplification.consolidate_intersections))"`
    or grep `.venv/lib/python3.12/site-packages/`. OSMnx 1.x versus 2.x drift, Leaflet idioms
-   against MapLibre, and networkx habits against the CSR backend are the common mistakes here.
+   against MapLibre, and networkx habits against the array backends are the common mistakes here.
 3. A tier A brief gets a plan first (see **Plan format**): deliver it and stop; do not write code
    until the coordinator approves it. When continued after approval, implement the approved plan;
    if implementation reveals the plan was wrong, stop and report rather than improvising. A tier B

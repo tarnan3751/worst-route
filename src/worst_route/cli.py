@@ -26,8 +26,14 @@ Both take `--backend auto|csr|python` (`config.DEFAULT_BACKEND`) and print the o
 which, where both can search, changes only the speed. `auto` is python on a build with
 transition tables, which the CSR kernels cannot search yet, and the `backend:` line says so;
 `csr` asked for there is one line, `cannot plan: the csr backend cannot search turn tables yet;
-use --backend python`, and exit 1, as is `csr` when numba does not import. `serve` arrives with
-the API.
+use --backend python`, and exit 1, as is `csr` when numba does not import.
+
+`serve` runs the API (`docs/reference/api.md`) with uvicorn, in one process (jobs live in its
+memory; each runs in a worker process of its own, `--workers` at once): it loads the region's
+build first, so a missing one is one line and exit 1, as is `csr` on a build with transition
+tables, and keeps its routes in `--store` (default `<WORST_ROUTE_DATA>/routes.sqlite`).
+`--port 0` binds a free port, which uvicorn logs, and the job manager's lines (a job
+cancelled, a worker failed) go to the same log.
 """
 
 import json
@@ -40,11 +46,13 @@ import typer
 
 from worst_route import __version__
 from worst_route.config import (
+    API_MAX_JOBS,
     DEFAULT_BACKEND,
     DEFAULT_BUDGET_S,
     DEFAULT_MAX_ITERATIONS,
     REGIONS,
     BackendName,
+    settings,
 )
 from worst_route.pipeline import PIPELINE_VERSION, layout
 
@@ -765,3 +773,49 @@ def validate(
     if not report.ok:
         raise typer.Exit(code=1)
     typer.echo("valid")
+
+
+@app.command()
+def serve(
+    region: RegionOption,
+    build_id: Annotated[str | None, typer.Option(help="Build id (default: latest).")] = None,
+    host: Annotated[str, typer.Option(help="Address to bind.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(help="Port to bind (0: a free one).")] = 8000,
+    workers: Annotated[
+        int, typer.Option(min=1, help="Jobs running at once, each in a worker process.")
+    ] = API_MAX_JOBS,
+    backend: BackendOption = DEFAULT_BACKEND,
+    store: Annotated[
+        Path | None, typer.Option(help="The route store (default: <data>/routes.sqlite).")
+    ] = None,
+) -> None:
+    """Serve the API."""
+    import copy
+
+    import uvicorn
+
+    from worst_route.api.app import ApiSettings, create_app
+    from worst_route.api.jobs import JobSettings
+    from worst_route.graph.loader import BuildNotFound
+
+    config = ApiSettings(
+        data_dir=settings().data_dir,
+        region=region,
+        build_id=build_id or "latest",
+        backend=cast(BackendName, backend),
+        store_path=store,
+        jobs=JobSettings(max_jobs=workers),
+    )
+    try:
+        application = create_app(config)
+    except BuildNotFound as error:
+        _fail(str(error))
+    except NotImplementedError as error:
+        _fail(f"cannot serve: {error}")
+    except ImportError as error:  # only csr needs numba; auto falls back to python
+        _fail(f"the csr backend needs numba, which did not import: {error}")
+    loaded = application.state.api.builds[region]
+    typer.echo(f"backend: {loaded.backend.name}{_auto_note(loaded.data, backend)}")
+    log_config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
+    log_config["loggers"]["worst_route"] = {"handlers": ["default"], "level": "INFO"}
+    uvicorn.run(application, host=host, port=port, log_config=log_config)

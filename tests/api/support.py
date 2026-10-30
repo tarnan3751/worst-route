@@ -25,10 +25,21 @@ from ..engine.graphs import at_node, lattice
 
 GRID = lattice(10, 10, rounded_lonlat=True)
 BIG = lattice(20, 20, rounded_lonlat=True)
+# The grid build's region: 0.1° around its nodes, so a stop can be inside it and still more
+# than the 5 km snapping reaches from every node.
+GRID_BBOX = [
+    round(float(GRID.node_lon.min()) - 0.1, 7),
+    round(float(GRID.node_lat.min()) - 0.1, 7),
+    round(float(GRID.node_lon.max()) + 0.1, 7),
+    round(float(GRID.node_lat.max()) + 0.1, 7),
+]
 
 
-def save_build(data_dir: Path, g: GraphData, build_id: str, latest: bool = True) -> None:
-    g = replace(g, meta={**g.meta, "region": "portland", "build_id": build_id})
+def save_build(
+    data_dir: Path, g: GraphData, build_id: str, latest: bool = True, **params: Any
+) -> None:
+    meta = {**g.meta, "region": "portland", "build_id": build_id, "params": params}
+    g = replace(g, meta=meta)
     write_build(g, data_dir / "graphs" / "portland" / build_id)
     if latest:
         (data_dir / "graphs" / "portland" / "latest").write_text(f"{build_id}\n")

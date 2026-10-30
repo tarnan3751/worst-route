@@ -3,7 +3,9 @@
 Raw extracts are `raw/<state>-latest.osm.pbf`, each with the `.md5` file Geofabrik publishes
 beside it; a region's filtered roads and POIs are `filtered/<region>.roads.osm.pbf` and
 `filtered/<region>.pois.parquet`. A build is `graphs/<region>/<build_id>/`, its intermediate
-stages under `stages/`, and `graphs/<region>/latest` holds the id of the region's current build.
+stages under `stages/` and its QA report under `qa/` (the build's own files, written by
+`graph.store`, sit beside them), and `graphs/<region>/latest` holds the id of the region's
+current build.
 Paths are computed on every call, so a test that points `WORST_ROUTE_DATA` elsewhere and clears
 the settings cache sees its own tree.
 
@@ -59,6 +61,11 @@ def build_dir(region: str, build_id: str) -> Path:
 def stage_file(build: Path, name: str) -> Path:
     """An intermediate stage file of a build, e.g. `build.pkl`."""
     return build / "stages" / name
+
+
+def qa_file(build: Path, name: str) -> Path:
+    """A file of a build's QA report, e.g. `qa.json`."""
+    return build / "qa" / name
 
 
 def latest_file(region: str) -> Path:

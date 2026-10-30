@@ -619,3 +619,73 @@ def test_plan_on_a_build_the_pipeline_saved(data_dir: Path, tmp_path: Path) -> N
     result = runner.invoke(app, ["validate", str(route)])
     assert result.exit_code == 0, result.output
     assert result.stdout.strip().endswith("valid")
+
+
+def test_qa_after_save(data_dir: Path) -> None:
+    directory = saved_build(str(FIXTURES / "divided.osm"))
+    code, output = pipeline("qa", "--region", "portland")
+    assert code == 0, output
+    assert output.splitlines() == [
+        f"qa b1: wrote {directory / 'qa'} (qa.json and 4 layers)",
+        "twin coverage: n/a (at least 0.95): pass",
+        "SCC retained: 1.0000 (at least 0.99): pass",
+        *(f"T{t} retained: 1.0000 (at least 0.95): pass" for t in range(5)),
+        "qa passed",
+    ]
+    assert sorted(p.name for p in (directory / "qa").iterdir()) == [
+        "dropped_components.geojson",
+        "qa.json",
+        "qa.json.inputs.json",
+        "superjunctions.geojson",
+        "tiers.geojson",
+        "twins.geojson",
+    ]
+    code, output = pipeline("qa", "--region", "portland")
+    assert code == 0 and output.startswith("skipped: QA of build b1 is up to date")
+    assert output.strip().endswith("qa passed")
+    code, output = pipeline("qa", "--region", "portland", "--force")
+    assert code == 0 and output.startswith("qa b1: wrote ")
+
+
+def test_qa_of_a_fragmented_build(data_dir: Path) -> None:
+    saved_build(str(FIXTURES / "diamond.osm"), allow_fragmented=True)
+    for _ in range(2):  # then skipped: the stored result fails again
+        result = runner.invoke(app, ["pipeline", "qa", "--region", "portland"])
+        assert result.exit_code == 1
+        assert "T0 retained: 0.2000 (at least 0.95): FAIL" in result.stdout
+        assert result.stderr == "qa failed: T0 retained, T1 retained, T2 retained, T3 retained\n"
+    assert result.stdout.startswith("skipped: ")
+
+
+def test_qa_refuses_a_stale_build(data_dir: Path) -> None:
+    saved_build(str(FIXTURES / "divided.osm"))
+    # Another extract under the same build id, rerun up to enrich: save refuses, and so does qa.
+    source = str(FIXTURES / "culdesac.osm")
+    assert pipeline("filter", "--region", "portland", "--source", source)[0] == 0
+    for step in ("build", "cleanup", "enrich"):
+        assert pipeline(step, "--region", "portland", "--build-id", "b1")[0] == 0
+    assert runner.invoke(app, ["pipeline", "save", "--region", "portland"]).exit_code == 1
+    result = runner.invoke(app, ["pipeline", "qa", "--region", "portland"])
+    assert result.exit_code == 1 and result.stdout == ""
+    assert result.stderr == (
+        "stage tiers is stale: rerun `worst-route pipeline tiers --region portland`\n"
+    )
+    assert pipeline("tiers", "--region", "portland")[0] == 0
+    result = runner.invoke(app, ["pipeline", "qa", "--region", "portland"])
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "stage save is stale: rerun `worst-route pipeline save --region portland`\n"
+    )
+    assert pipeline("save", "--region", "portland", "--force")[0] == 0
+    code, output = pipeline("qa", "--region", "portland")
+    assert code == 0 and output.strip().endswith("qa passed")
+
+
+def test_qa_needs_a_saved_build(data_dir: Path) -> None:
+    cleaned_build(str(FIXTURES / "culdesac.osm"))
+    code, output = pipeline("qa", "--region", "portland")
+    assert code == 1 and "meta.json" in output and "pipeline save --region" in output
+    directory = saved_build(str(FIXTURES / "culdesac.osm"))
+    (directory / "stages" / "enrich.json").unlink()
+    code, output = pipeline("qa", "--region", "portland")
+    assert code == 1 and "enrich.json" in output and "pipeline enrich --region" in output

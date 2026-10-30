@@ -4,15 +4,15 @@
 named region (`docs/PLAN.md` §2): download, filter, build, cleanup, enrich, tiers, save, qa.
 Every step takes `--region` (a key of `config.REGIONS`), `--build-id` and `--force`; `filter`
 and `build` also take `--source`, a file read instead of the step's usual input (fixtures,
-tests); `cleanup` and `tiers` also take `--allow-fragmented`. Every step but `qa` is real
-(`docs/reference/pipeline.md`): each prints what it wrote and its counts, or that its output is
-up to date and was skipped; a failed download, a cleanup or tiers step whose graph is too
-fragmented, a step whose earlier stages are stale (`layout.stale_stages`), or a save that cannot
-write its build prints one line and exits 1. The steps from `cleanup` on read the build named by
-`--build-id`, else the region's latest. `save` writes the build beside the stages and never
-overwrites one without `--force`. Each imports its step module when it runs, so `version` and
-the other commands do not load the geo stack. `qa` is a skeleton for now: it exits with code 2
-and says it is not implemented yet.
+tests); `cleanup` and `tiers` also take `--allow-fragmented`. Each step
+(`docs/reference/pipeline.md`) prints what it wrote and its counts, or that its output is up to
+date and was skipped; a missing input, a failed download, a cleanup or tiers step whose graph
+is too fragmented, a step whose earlier stages are stale (`layout.stale_stages`), or a save that
+cannot write its build prints one line and exits 1. The steps from `cleanup` on read the build
+named by `--build-id`, else the region's latest. `save` writes the build beside the stages and
+never overwrites one without `--force`; `qa` prints its thresholds, also when it skips, and exits
+1 when one fails. Each imports its step module when it runs, so `version` and the other commands
+do not load the geo stack.
 
 `plan` plans a route on a saved build (`docs/reference/engine.md`, **The CLI**): it prints the
 snapped stops, the baseline, the worst route, the ratio, the search and the validator's report,
@@ -67,11 +67,6 @@ SourceOption = Annotated[
         dir_okay=False,
     ),
 ]
-
-
-def _not_implemented(step: str) -> NoReturn:
-    typer.echo(f"not implemented yet: pipeline {step}", err=True)
-    raise typer.Exit(code=2)
 
 
 def _require(path: Path, hint: str) -> None:
@@ -483,8 +478,44 @@ def save(region: RegionOption, build_id: BuildIdOption = None, force: ForceOptio
 
 @pipeline_app.command()
 def qa(region: RegionOption, build_id: BuildIdOption = None, force: ForceOption = False) -> None:
-    """Write the build's QA report and check its thresholds."""
-    _not_implemented("qa")
+    """Write the build's QA report and layers and check its thresholds."""
+    import json
+
+    from worst_route.pipeline import qa as step
+
+    build_id, directory = _build_of(region, build_id)
+    inputs = [directory / "meta.json"] + [
+        layout.stage_file(directory, name)
+        for name in ("cleanup.json", "enrich.json", "enrich.pkl", "tiers.json", "save.json")
+    ]
+    writers = ("save", "cleanup", "enrich", "enrich", "tiers", "save")
+    for path, writer in zip(inputs, writers, strict=True):
+        _require(path, f"run `worst-route pipeline {writer} --region {region}` first")
+    _require_fresh(region, directory, "qa")
+    output = layout.qa_file(directory, "qa.json")
+    record: dict[str, Any] = {
+        "step": "qa",
+        "inputs": [entry for path in inputs for entry in _inputs(path)],
+        "params": {"config": step.parameters(), "pipeline_version": PIPELINE_VERSION},
+    }
+    if not force and layout.sidecar_matches(output, record):
+        typer.echo(f"skipped: QA of build {build_id} is up to date at {output} (--force to redo)")
+        report = json.loads(output.read_text())
+        thresholds = [step.Threshold(**t) for t in report["thresholds"]]
+    else:
+        layout.sidecar(output).unlink(missing_ok=True)
+        output.unlink(missing_ok=True)
+        result = step.run_qa(directory)
+        layout.write_sidecar(output, record)
+        thresholds = result.thresholds
+        typer.echo(f"qa {build_id}: wrote {output.parent} (qa.json and {len(step.LAYERS)} layers)")
+    for t in thresholds:
+        value = "n/a" if t.value is None else f"{t.value:.4f}"
+        typer.echo(f"{t.name}: {value} (at least {t.minimum}): {'pass' if t.passed else 'FAIL'}")
+    failed = [t.name for t in thresholds if not t.passed]
+    if failed:
+        _fail(f"qa failed: {', '.join(failed)}")
+    typer.echo("qa passed")
 
 
 PROGRESS_EVERY_S = 2.0

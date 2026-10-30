@@ -244,3 +244,8 @@ BEARING_SAMPLE_M = 20.0
 # connected component of its own roads; the step fails when a tier keeps fewer than this
 # fraction of the nodes its roads touch, unless --allow-fragmented.
 TIER_MIN_RETAINED = 0.95
+
+# QA (`docs/PLAN.md` §2.8; `pipeline/qa.py`): a build is accepted when twins cover at least this
+# share of one-way motorway and trunk length, cleanup kept SCC_MIN_RETAINED of the nodes, and
+# every tier TIER_MIN_RETAINED of its own.
+QA_TWIN_COVERAGE_MIN = 0.95

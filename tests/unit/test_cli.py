@@ -1,13 +1,17 @@
+from pathlib import Path
+
 import pytest
 from typer.testing import CliRunner
 
 from worst_route import __version__
 from worst_route.cli import app
+from worst_route.config import settings
 
 runner = CliRunner()
 
-# The steps still to be built; download to save are tested in tests/pipeline/.
-STUB_STEPS = ["qa"]
+# Every step but download (which would fetch with --force) on an empty data directory: the
+# shared options parse and the step stops at its missing input.
+STEPS = ["filter", "build", "cleanup", "enrich", "tiers", "save", "qa"]
 
 
 def test_version_prints_version() -> None:
@@ -16,26 +20,23 @@ def test_version_prints_version() -> None:
     assert result.stdout.strip() == __version__ == "0.1.0"
 
 
-def test_pipeline_qa_not_implemented() -> None:
-    result = runner.invoke(app, ["pipeline", "qa", "--region", "portland"])
-    assert result.exit_code == 2
-    assert result.stderr.strip() == "not implemented yet: pipeline qa"
-    assert result.stdout == ""
-
-
-@pytest.mark.parametrize("step", STUB_STEPS)
-def test_every_step_takes_the_shared_options(step: str) -> None:
+@pytest.mark.parametrize("step", STEPS)
+def test_every_step_takes_the_shared_options(
+    step: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WORST_ROUTE_DATA", str(tmp_path))
+    settings.cache_clear()
     args = ["pipeline", step, "--region", "oregon", "--build-id", "b1", "--force"]
     result = runner.invoke(app, args)
-    assert result.exit_code == 2
-    assert result.stderr.strip() == f"not implemented yet: pipeline {step}"
+    settings.cache_clear()
+    assert result.exit_code == 1
+    assert result.stderr.startswith(f"missing input {tmp_path}/")
 
 
 def test_unknown_region_rejected() -> None:
     result = runner.invoke(app, ["pipeline", "download", "--region", "nowhere"])
     assert result.exit_code != 0
     assert "nowhere" in result.output
-    assert "not implemented" not in result.output
 
 
 def test_region_required() -> None:

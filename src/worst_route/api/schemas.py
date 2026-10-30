@@ -15,6 +15,8 @@ The responses: `Health`, `RegionOut`, `SnapOut`, `JobCreated`, `JobStatus`, `Rou
 The SSE events' payloads are `Snapped`, `BaselineOut`, `Progress` (with `SpliceOut`s),
 `Snapshot`, `Done` and `ErrorBody`. Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in
 requests; every number is metric.
+
+`GeocodeOut`, with its `GeocodeCandidateOut`s, answers `GET /geocode` (at the end of the module).
 """
 
 from datetime import datetime
@@ -375,3 +377,25 @@ class ValidationOut(_Out):
     graph_version: str
     ok: bool
     checks: list[CheckOut]
+
+
+# --- Geocoding (`GET /geocode`; `docs/reference/api.md`, **Geocoding**) ---------------------
+
+
+class GeocodeCandidateOut(_Out):
+    """A place a query may mean: its label, where it is, its main OSM tag (`amenity/cafe`)."""
+
+    label: str
+    lat: float
+    lon: float
+    category: str
+
+
+class GeocodeOut(_Out):
+    """`GET /geocode`: the query as normalised, the region, at most `GEOCODE_LIMIT` candidates
+    (best first), and whether the cache answered."""
+
+    query: str
+    region: str
+    candidates: list[GeocodeCandidateOut]
+    cached: bool

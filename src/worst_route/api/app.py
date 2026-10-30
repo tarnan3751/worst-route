@@ -2,9 +2,12 @@
 
 `create_app(settings)` loads the region's build (memory-mapped, `graph.loader`) when it is
 called, so `worst-route serve` fails before it listens when the build is missing; it opens the
-route store and mounts the endpoints (`routes_api`). Its
-lifespan starts and stops the job manager. `ApiSettings` says which build, which backend, where
-the store is, and the job limits.
+route store, builds the geocoding service (Nominatim, with its cache `geocode.sqlite` beside
+the route store; none when the geocoder is `none`; a test passes its own) and mounts the
+endpoints (`routes_api`, `geocode_api`). Its lifespan starts and stops the job manager, and
+closes the geocoder's client. `ApiSettings` says which build, which backend, where the store
+is, the job limits, and the geocoder: which, at what URL, with what contact in its User-Agent
+(`geocoder_user_agent`).
 
 Every error answers an `ErrorBody` (`{code, message, ...}`): an endpoint refuses with
 `routes_api.ApiError(status, code, message, **fields)`, a malformed request is 422
@@ -23,13 +26,17 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
-from worst_route import __version__
-from worst_route.api import routes_api
+from worst_route import __version__, config
+from worst_route.api import geocode_api, routes_api
 from worst_route.api.jobs import JobManager, JobSettings
 from worst_route.api.routes_api import ApiError
 from worst_route.api.schemas import ErrorBody
 from worst_route.api.store import RouteStore
-from worst_route.config import DEFAULT_BACKEND, BackendName
+from worst_route.config import DEFAULT_BACKEND, NOMINATIM_URL, BackendName, GeocoderName
+from worst_route.geocode.cache import GeocodeCache
+from worst_route.geocode.limiter import RateLimiter
+from worst_route.geocode.nominatim import NominatimGeocoder, user_agent
+from worst_route.geocode.service import GeocodeService
 from worst_route.graph.loader import Loaded, load_build
 
 
@@ -43,6 +50,9 @@ class ApiSettings:
     backend: BackendName = DEFAULT_BACKEND
     store_path: Path | None = None  # default: <data_dir>/routes.sqlite
     jobs: JobSettings = field(default_factory=JobSettings)
+    geocoder: GeocoderName = "nominatim"
+    nominatim_url: str = NOMINATIM_URL
+    contact: str | None = None  # in the geocoder's User-Agent (WORST_ROUTE_CONTACT)
 
 
 @dataclass(frozen=True, eq=False)
@@ -53,15 +63,31 @@ class Api:
     builds: dict[str, Loaded]  # by region
     store: RouteStore
     jobs: JobManager
+    geocode: GeocodeService | None  # None when the geocoder is "none"
 
 
-def create_app(settings: ApiSettings) -> FastAPI:
-    """The application for `settings`, its build loaded."""
+def geocoder_user_agent(settings: ApiSettings) -> str:
+    """The User-Agent the geocoder sends: the machine's (`config.Settings.user_agent`), with
+    the contact when there is one."""
+    return user_agent(config.settings().user_agent, settings.contact)
+
+
+def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> FastAPI:
+    """The application for `settings`, its build loaded; `geocode` stands in for the geocoding
+    service `settings` would build (tests), unless the geocoder is "none"."""
     loaded = load_build(
         settings.data_dir, settings.region, settings.build_id, backend=settings.backend
     )
-    store = RouteStore(settings.store_path or settings.data_dir / "routes.sqlite")
+    store_path = settings.store_path or settings.data_dir / "routes.sqlite"
+    store = RouteStore(store_path)
     jobs = JobManager(settings.jobs, store, data_dir=settings.data_dir, backend=settings.backend)
+    service = None
+    if settings.geocoder == "nominatim":
+        service = geocode or GeocodeService(
+            NominatimGeocoder(settings.nominatim_url, geocoder_user_agent(settings)),
+            GeocodeCache(store_path.parent / "geocode.sqlite"),
+            RateLimiter(),
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -70,10 +96,13 @@ def create_app(settings: ApiSettings) -> FastAPI:
             yield
         finally:
             await jobs.stop()
+            if service is not None:
+                await service.aclose()
 
     app = FastAPI(title="worst-route", version=__version__, lifespan=lifespan)
-    app.state.api = Api(settings, {settings.region: loaded}, store, jobs)
+    app.state.api = Api(settings, {settings.region: loaded}, store, jobs, service)
     app.include_router(routes_api.router)
+    app.include_router(geocode_api.router)
 
     @app.exception_handler(ApiError)
     async def refused(request: Request, error: ApiError) -> JSONResponse:

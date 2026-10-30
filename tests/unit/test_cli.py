@@ -12,6 +12,7 @@ from worst_route.graph.store import write_build
 from worst_route.graph.testing import grid_graph
 
 from ..engine.graphs import lattice
+from ..geocode.support import offline_clients
 
 runner = CliRunner()
 
@@ -72,6 +73,7 @@ def test_serve_runs_the_app_for_its_options(
     write_build(g, tmp_path / "graphs" / "portland" / "b1")
     ran: dict[str, Any] = {}
     monkeypatch.setattr(uvicorn, "run", lambda application, **kw: ran.update(app=application, **kw))
+    offline_clients(monkeypatch)  # the default geocoder's client, on a MockTransport
     monkeypatch.setenv("WORST_ROUTE_DATA", str(tmp_path))
     settings.cache_clear()
     args = ["serve", "--region", "portland", "--build-id", "b1", "--port", "0", "--workers", "3"]
@@ -98,10 +100,53 @@ def test_serve_takes_csr_on_a_build_with_turn_tables(
     (tmp_path / "graphs" / "portland" / "latest").write_text("b1\n")
     ran: dict[str, Any] = {}
     monkeypatch.setattr(uvicorn, "run", lambda application, **kw: ran.update(app=application))
+    offline_clients(monkeypatch)
     monkeypatch.setenv("WORST_ROUTE_DATA", str(tmp_path))
+    monkeypatch.delenv("WORST_ROUTE_CONTACT", raising=False)
     settings.cache_clear()
     served = runner.invoke(app, ["serve", "--region", "portland", "--store", str(tmp_path / "r")])
     settings.cache_clear()
     assert served.exit_code == 0, served.output
-    assert served.stdout == "backend: csr\n"
+    assert served.stdout == (
+        "backend: csr\n"
+        "geocoder: nominatim https://nominatim.openstreetmap.org as "
+        '"worst-route/0.1.0 (https://github.com/tarnan3751/worst-route)"\n'
+    )
     assert ran["app"].state.api.builds["portland"].backend.name == "csr"
+
+
+def test_serve_takes_the_geocoder_s_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import uvicorn
+
+    from worst_route.geocode.nominatim import NominatimGeocoder
+
+    g = grid_graph(3, 3, 100)
+    g = replace(g, meta={**g.meta, "region": "portland", "build_id": "b1"})
+    write_build(g, tmp_path / "graphs" / "portland" / "b1")
+    (tmp_path / "graphs" / "portland" / "latest").write_text("b1\n")
+    ran: dict[str, Any] = {}
+    monkeypatch.setattr(uvicorn, "run", lambda application, **kw: ran.update(app=application))
+    made = offline_clients(monkeypatch)
+    monkeypatch.setenv("WORST_ROUTE_DATA", str(tmp_path))
+    monkeypatch.setenv("WORST_ROUTE_CONTACT", "ops@example.org")
+    settings.cache_clear()
+    store = tmp_path / "lane" / "routes.sqlite"
+    base = ["serve", "--region", "portland", "--backend", "python", "--store", str(store)]
+    served = runner.invoke(app, [*base, "--nominatim-url", "http://127.0.0.1:9"])
+    assert served.exit_code == 0, served.output
+    assert served.stdout.splitlines()[-1] == (
+        "geocoder: nominatim http://127.0.0.1:9 as "
+        '"worst-route/0.1.0 (https://github.com/tarnan3751/worst-route; ops@example.org)"'
+    )
+    geocode = ran["app"].state.api.geocode
+    assert isinstance(geocode.geocoder, NominatimGeocoder)
+    assert geocode.geocoder.base_url == "http://127.0.0.1:9"
+    assert geocode.cache.path == tmp_path / "lane" / "geocode.sqlite"
+    assert made == [geocode.geocoder.client]
+    off = runner.invoke(app, [*base, "--geocoder", "none"])
+    assert off.stdout.splitlines()[-1] == "geocoder: none"
+    assert ran["app"].state.api.geocode is None
+    assert runner.invoke(app, [*base, "--geocoder", "photon"]).exit_code == 2
+    settings.cache_clear()

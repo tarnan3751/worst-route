@@ -536,7 +536,7 @@ FastAPI, JSON bodies validated by pydantic. All coordinates are `[lon, lat]` in 
 |---|---|---|
 | GET | `/health` | liveness + loaded builds |
 | GET | `/regions` | regions, tiers, bbox, `graph_version`, counts |
-| GET | `/geocode?q=&bbox=` | address → candidates (proxied, cached, rate-limited; §4.4) *(M4)* |
+| GET | `/geocode?q=&region=` | address → candidates (proxied, cached, rate-limited; §4.4; built) |
 | POST | `/snap` | `{region, lat, lon, role: start\|via\|end, tier?}` → snapped node |
 | GET | `/brands?q=` | brand autocomplete for the pilgrimage mode (local index, not Nominatim) *(M3)* |
 | POST | `/jobs` | create a route job → `{job_id, events_url, seed}` |
@@ -640,6 +640,8 @@ Nominatim's public policy (verified 2026-10-30): max **1 request/s per applicati
 - Backend proxy only; the browser never talks to Nominatim. Token bucket at 1 rps; a search **button**, not type-ahead; sqlite cache keyed by `(normalised query, bbox)` with a 30-day TTL; `User-Agent: worst-route/<version> (<contact email>)`; `countrycodes=us`, `viewbox` = region bbox, `bounded=1`.
 - Map click / marker drag is the primary way to set stops, so geocoding is a convenience, not a dependency.
 - Public hosting: either self-hosted **Photon** (Java + OpenSearch; the US-only index is tens of GB, workable on a small VPS) or a paid geocoder with a free tier. Interface `Geocoder.search(q, bbox) -> list[Candidate]` so this is a config switch.
+
+As built (M4, `docs/reference/api.md`, **Geocoding**): `GET /geocode?q=&region=` (the region names the bbox) answers at most 5 candidates `{label, lat, lon, category}` from Nominatim's jsonv2 search, with `countrycodes=us`, the region's bbox as `viewbox` and `bounded=1`. The cache is `geocode.sqlite` beside the route store, keyed by the region, its bbox and the normalised query (casefolded, whitespace collapsed), 30 days, empty answers included. Requests go upstream one at a time per process, at least a second after the previous answer came back (so a slow connection never brings two closer); a search that finds five already queued is `RATE_LIMITED` (429), identical searches queued behind one in flight are answered from the cache, and after Nominatim refuses (429, 403) the proxy asks nothing for 60 s (502 `GEOCODER_ERROR` meanwhile). The User-Agent is `worst-route/<version> (<repo url>)`, with `; <contact>` from `WORST_ROUTE_CONTACT`. `worst-route serve --geocoder none` turns it off; `--nominatim-url` points it elsewhere.
 
 ### 4.5 Jobs and workers
 

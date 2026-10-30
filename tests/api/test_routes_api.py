@@ -45,7 +45,10 @@ def job_body(**fields: Any) -> dict[str, Any]:
 @asynccontextmanager
 async def serving(data: Path, **jobs: Any) -> AsyncIterator[tuple[httpx.AsyncClient, FastAPI]]:
     settings = JobSettings(**{"inline_workers": True, "coalesce_s": 0.0, **jobs})
-    app = create_app(ApiSettings(data_dir=data, region="portland", backend="python", jobs=settings))
+    config = ApiSettings(
+        data_dir=data, region="portland", backend="python", jobs=settings, geocoder="none"
+    )
+    app = create_app(config)
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

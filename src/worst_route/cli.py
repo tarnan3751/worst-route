@@ -35,7 +35,10 @@ memory; each runs in a worker process of its own, `--workers` at once): it loads
 build first, so a missing one is one line and exit 1, and keeps its routes in `--store`
 (default `<WORST_ROUTE_DATA>/routes.sqlite`). It takes `--backend` and prints the one used as
 `plan` does. `--port 0` binds a free port, which uvicorn logs, and the job manager's lines (a
-job cancelled, a worker failed) go to the same log.
+job cancelled, a worker failed) go to the same log. `--geocoder nominatim|none` and
+`--nominatim-url` set the geocoding proxy (`docs/reference/api.md`, **Geocoding**), whose
+cache is `geocode.sqlite` beside the store; it prints the geocoder and the User-Agent it sends,
+the contact from `WORST_ROUTE_CONTACT` included.
 """
 
 import json
@@ -53,9 +56,11 @@ from worst_route.config import (
     DEFAULT_BACKEND,
     DEFAULT_BUDGET_S,
     DEFAULT_MAX_ITERATIONS,
+    NOMINATIM_URL,
     REGIONS,
     TARGET_TOLERANCE,
     BackendName,
+    GeocoderName,
     settings,
 )
 from worst_route.pipeline import PIPELINE_VERSION, layout
@@ -889,6 +894,13 @@ def validate(
     typer.echo("valid")
 
 
+def _check_geocoder(value: str) -> str:
+    if value not in get_args(GeocoderName):
+        known = ", ".join(get_args(GeocoderName))
+        raise typer.BadParameter(f"unknown geocoder {value!r}; known: {known}")
+    return value
+
+
 @app.command()
 def serve(
     region: RegionOption,
@@ -902,13 +914,21 @@ def serve(
     store: Annotated[
         Path | None, typer.Option(help="The route store (default: <data>/routes.sqlite).")
     ] = None,
+    geocoder: Annotated[
+        str,
+        typer.Option(
+            help="The place search's geocoder: nominatim, or none (no search).",
+            callback=_check_geocoder,
+        ),
+    ] = "nominatim",
+    nominatim_url: Annotated[str, typer.Option(help="Nominatim's address.")] = NOMINATIM_URL,
 ) -> None:
     """Serve the API."""
     import copy
 
     import uvicorn
 
-    from worst_route.api.app import ApiSettings, create_app
+    from worst_route.api.app import ApiSettings, create_app, geocoder_user_agent
     from worst_route.api.jobs import JobSettings
     from worst_route.graph.loader import BuildNotFound
 
@@ -919,6 +939,9 @@ def serve(
         backend=cast(BackendName, backend),
         store_path=store,
         jobs=JobSettings(max_jobs=workers),
+        geocoder=cast(GeocoderName, geocoder),
+        nominatim_url=nominatim_url,
+        contact=settings().contact,
     )
     try:
         application = create_app(config)
@@ -928,6 +951,10 @@ def serve(
         _fail(f"the csr backend needs numba, which did not import: {error}")
     loaded = application.state.api.builds[region]
     typer.echo(f"backend: {loaded.backend.name}")
+    if config.geocoder == "none":
+        typer.echo("geocoder: none")
+    else:
+        typer.echo(f'geocoder: nominatim {nominatim_url} as "{geocoder_user_agent(config)}"')
     log_config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
     log_config["loggers"]["worst_route"] = {"handlers": ["default"], "level": "INFO"}
     uvicorn.run(application, host=host, port=port, log_config=log_config)

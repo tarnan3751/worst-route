@@ -9,8 +9,9 @@ else: every route it returns has passed the validator.
 
 | Module | What it holds |
 |---|---|
-| `app.py` | `create_app`, `ApiSettings`, `Api` (the app's state), the error handlers |
-| `routes_api.py` | the endpoints, the checks `POST /jobs` makes before a job exists, `ApiError` |
+| `app.py` | `create_app`, `ApiSettings`, `Api` (the app's state), `geocoder_user_agent`, the error handlers |
+| `routes_api.py` | the endpoints, the checks `POST /jobs` makes before a job exists, `ApiError`, `api_of`, `region_of`, `bbox_of` |
+| `geocode_api.py` | `GET /geocode` (**Geocoding**) |
 | `schemas.py` | the request and response models (pydantic), the SSE payloads |
 | `jobs.py` | `JobManager`, `JobSettings`, `Job`, `Subscription`, `prepare`, `TooManyJobs` |
 | `worker.py` | `run_job` (what a worker process runs), `JobSpec`, `RouteArrays`, the worker's messages |
@@ -27,6 +28,7 @@ Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in requests; every numb
 ```
 worst-route serve --region R [--build-id ID] [--host 127.0.0.1] [--port 8000] [--workers N]
                   [--backend auto|csr|python] [--store PATH]
+                  [--geocoder nominatim|none] [--nominatim-url URL]
 ```
 
 It loads the region's build (`--build-id`, else the region's `latest`) before it listens, so a
@@ -34,14 +36,29 @@ missing build is one line on stderr and exit 1. Then uvicorn serves one process.
 in that process's memory, and each runs in a worker process of its own, `--workers` at once
 (default `API_MAX_JOBS`, cores − 2). The routes go to `--store`, by default
 `<WORST_ROUTE_DATA>/routes.sqlite`; a lane that reads the main tree's builds through
-`WORST_ROUTE_DATA` points `--store` into its own tree. `--port 0` binds a free port, which
+`WORST_ROUTE_DATA` points `--store` into its own tree, and runs with `--geocoder none` or
+`--nominatim-url` pointed at a stub of its own (no agent calls Nominatim). `--port 0` binds a free port, which
 uvicorn's log line names. The job manager's own lines (a job cancelled for want of a subscriber,
 a worker's traceback) go to the same log. `--backend` is the engine's
 (`docs/reference/graph.md`, **Choosing a backend**), and `serve` prints the one it took as
 `plan` does (`backend: csr`): `auto`, the default, is csr when numba imports.
 
-`create_app(ApiSettings(data_dir, region, build_id="latest", backend, store_path, jobs))` builds
-the same application in-process; the tests drive it over `httpx` (**Tests**).
+`--geocoder` is the place search's (**Geocoding**): `nominatim`, the default, asks
+`--nominatim-url` (default `https://nominatim.openstreetmap.org`); `none` turns `GET /geocode`
+off. The geocoder's cache is `geocode.sqlite` beside the route store (in the same directory as
+`--store`), so a lane's stays in its own tree. A contact for the User-Agent comes from
+`WORST_ROUTE_CONTACT` (never written in the code), and `serve` prints, after the backend, the
+geocoder and the User-Agent it will send:
+
+```
+backend: csr
+geocoder: nominatim https://nominatim.openstreetmap.org as "worst-route/0.1.0 (https://github.com/tarnan3751/worst-route)"
+```
+
+`create_app(ApiSettings(data_dir, region, build_id="latest", backend, store_path, jobs,
+geocoder="nominatim", nominatim_url, contact))` builds the same application in-process, and
+`create_app(settings, geocode=service)` with a geocoding service of the caller's own (a
+`FakeGeocoder` behind it, in the tests); the tests drive it over `httpx` (**Tests**).
 
 ## Requests and errors
 
@@ -84,7 +101,7 @@ FastAPI's `detail`):
 
 | Status | Code | When |
 |---|---|---|
-| 422 | `INVALID_REQUEST` (+ `errors`, pydantic's without their `input`; or + `field`) | a body or field that does not parse (a seed beyond 2⁶³ − 1 included, `Infinity` or `NaN` for a number), an unknown objective, a target out of bounds, a ratio target for a round trip (`field: "target"`) |
+| 422 | `INVALID_REQUEST` (+ `errors`, pydantic's without their `input`; or + `field`) | a body or field that does not parse (a seed beyond 2⁶³ − 1 included, `Infinity` or `NaN` for a number), an unknown objective, a target out of bounds, a ratio target for a round trip (`field: "target"`); a place search's query empty or over 200 characters once normalised (`field: "q"`) |
 | 422 | `UNKNOWN_REGION` | a region this server does not serve |
 | 422 | `STOP_OUTSIDE_REGION` (+ `stop_index`) | outside the region's bbox: the build's `params.bbox`, else its nodes' extent |
 | 422 | `NO_NODE_NEAR` (+ `stop_index`, null when no single stop is to blame) | no node within 5 km can play the stop's role |
@@ -95,6 +112,9 @@ FastAPI's `detail`):
 | 422 | `BUILD_MISMATCH` | a base route planned on another region, `graph_version` or engine version; `/validate` on a route another engine version made (its stops could be re-derived differently: re-plan it), as `worst-route validate` refuses one |
 | 422 | `BASE_ROUTE_MISMATCH` (+ `field`) | stops, tier or leash given that differ from the base route's; or a base route `plan.check_base` refuses under its request's resolved stops and masks (`field` `stops`: its stops are not where they resolve now; `route`: a node outside the area or an edge the request bans) |
 | 429 | `TOO_MANY_JOBS` | every worker busy and the queue full |
+| 429 | `RATE_LIMITED` (+ `retry_after_s`) | a place search that finds the geocoder's queue full: five already queued for a turn (**Geocoding**); the message is "the geocoder is busy, try again in a few seconds" |
+| 502 | `GEOCODER_ERROR` | Nominatim failed: an error status, a timeout, no connection, an answer that does not parse; or refused (429, 403), which pauses the geocoder 60 s, during which a search the cache cannot answer gets this at once ("the geocoder refused; paused for N s") |
+| 503 | `GEOCODER_DISABLED` | a place search on a server whose geocoder is `none` |
 | 404 | `NOT_FOUND` | an unknown (or expired) job, an unknown route, an unknown path |
 | 405 | `METHOD_NOT_ALLOWED` | a method a path does not take |
 | 409 | `BUILD_UNAVAILABLE` | a stored route whose build is no longer on disk at its `graph_version` |
@@ -128,6 +148,7 @@ later.
 | GET | `/routes/{id}` | the route document |
 | GET | `/routes/{id}/geojson` | the FeatureCollection `engine.io.feature_collection` makes: the route, the baseline (null for a round trip) and the stops |
 | POST | `/routes/{id}/validate` | `{route_id, graph_version, ok, checks: [{name, ok, index, detail}]}`, the stops re-derived from the stored request (by this engine version only) |
+| GET | `/geocode` | `{query, region, candidates: [{label, lat, lon, category}], cached}`, for `?q=&region=` (**Geocoding**) |
 
 **`/snap`** judges the stop in the tier's nodes and every node within `BUBBLE_KM` (3 km) of it,
 as a job's masks do near a stop (`auto` is T4); its `note` says why a stop moved ("moved 214 m
@@ -328,7 +349,28 @@ The place search's backend (`docs/PLAN.md` §4.4): a place name to at most `GEOC
 points in the region, asked of Nominatim behind a cache and a rate limit, so that the browser
 never talks to Nominatim and the application keeps to its usage policy (at most one request a
 second for the whole application, no autocomplete, an identifying User-Agent, results cached).
-Code: `src/worst_route/geocode/`.
+Code: `src/worst_route/geocode/` and the endpoint, `api/geocode_api.py`.
+
+**`GET /geocode?q=<text>&region=<region>`** answers the places the text may mean in the region,
+best first:
+
+```
+{"query": "powell's books", "region": "portland", "cached": false,
+ "candidates": [{"label": "Powell's City of Books, 1005, West Burnside Street, …",
+                 "lat": 45.5231165, "lon": -122.6812548, "category": "shop/books"}, …]}
+```
+
+`query` is the text as normalised; `cached` says whether the cache answered (a second search for
+`  POWELL'S   Books` does). In order, it refuses: a missing `region` (FastAPI's own 422
+`INVALID_REQUEST`, from the request's validation, before the endpoint runs); a query empty or
+over `GEOCODE_MAX_QUERY_CHARS` (200) characters once normalised (422 `INVALID_REQUEST`, `field:
+"q"`; a missing `q` is empty); a region this server does not serve (422 `UNKNOWN_REGION`); a
+server whose geocoder is `none` (503 `GEOCODER_DISABLED`). Then the cache answers if it can;
+else a paused geocoder (502 `GEOCODER_ERROR`, "the geocoder refused; paused for N s"), a full
+queue (429 `RATE_LIMITED`, `retry_after_s`) and a failure upstream (502 `GEOCODER_ERROR`; a
+refusal starts the pause) refuse. The region's bbox is the one `/regions` gives (the build's
+`params.bbox`, else its nodes' extent). The service lives on the app's state
+(`Api.geocode`, none for `none`), as the job manager does.
 
 | Module | What it holds |
 |---|---|
@@ -363,8 +405,8 @@ timeout, a transport error or a body that is not a list of such places is a `Geo
 Nothing is retried. The field names are Nominatim's documented ones, held to the example of its
 search documentation (`tests/fixtures/geocode/`).
 
-**The cache** (`GeocodeCache`): a sqlite file, `geocode.sqlite`, in WAL mode with a connection
-per call, one table:
+**The cache** (`GeocodeCache`): a sqlite file, `geocode.sqlite`, beside the route store, in WAL
+mode with a connection per call, one table:
 
 ```
 queries(key TEXT PRIMARY KEY, created REAL, body TEXT)
@@ -387,8 +429,11 @@ place, when `waiting + 1` intervals exceed `GEOCODE_MAX_WAIT_S` (5 s), and told
 `ceil((waiting + 1) × interval − 5)` seconds (at least 1). The cap counts intervals, not
 latencies: the last caller let in waits about five seconds plus the answers ahead of it. Of a
 burst of ten distinct queries six go upstream (one at once, five queued) and four are refused
-at once. A caller that goes away while it is queued leaves the queue, and one whose turn ends
-without a request (the cache answered) takes no interval.
+at once. Only a cancelled task leaves the queue; one whose turn ends without a request (the
+cache answered) takes no interval. An HTTP client that disconnects while its search is queued
+does not cancel it (Starlette does not cancel a plain endpoint when its client goes away), so
+the search keeps its place, goes upstream in its turn and caches its answer, which a retry then
+finds.
 
 **The pause**: when Nominatim refuses (429, too many requests; 403, blocked: the usage policy's
 signals), the service asks it nothing more for `GEOCODE_PAUSE_S` (60 s) from when the refusal
@@ -449,11 +494,22 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 | `test_sse.py` | path points and node indices, the per-edge simplification keeping nodes and original values, splices, metrics, the event encoding |
 | `test_jobs.py` | the manager with inline workers: event order and ids, a client replay equal to the stored route, late subscribers (after a worker that died with splices waiting too: they come before its `error`, ids rising strictly), `Last-Event-ID` resync, cancel (validated, stored, reproduced by its attempts), the queue and its limit, cancel before the route exists, continuations, the time limit, orphans running and queued, a worker that raises, a store failure while cancelling (by hand and by the sweep, which goes on), a worker that does not start (the queue moves on), the TTL; a target run whose best is not its last route (an overshoot on a 5 × 5 lattice): a snapshot of the stored route before `done`, for live and late clients, and a cancel after the overshoot storing the closest route, reproduced by its attempts |
 | `test_worker_process.py` (`slow`) | real spawned workers: a run to `done`, a cancel mid-run, a worker killed from outside (`WORKER_FAILED`), a fake worker that dies 60 kB into a 2 MB message (`WORKER_FAILED`, then a clean `stop()`), and a worker whose API process (a probe) is killed exiting within 3 s; about 4 s |
+| `test_geocode_api.py` | `GET /geocode` with a `FakeGeocoder`: the answer's shape, at most five candidates, the cache across casing and spacing (one upstream call), each refusal (an empty, blank, missing or too long query; a missing or unknown region; `RATE_LIMITED` from a full queue with its `retry_after_s`, a cached query still answered; `GEOCODER_ERROR`; a 429 upstream, on an `httpx.MockTransport`, pausing the geocoder, the next search refused without a request; `GEOCODER_DISABLED`, with no cache file); the default service, its client on a `MockTransport` (`offline_clients`): Nominatim at its URL with the User-Agent and contact, the cache beside the store, the limits and the pause, its client closed by the lifespan. The other API tests serve with `geocoder="none"`, so they build no geocoder |
 | `test_routes_api.py` | every endpoint over `httpx.AsyncClient` in-process, every refusal code, cancel over HTTP, a closed stream cancelling its job, a stream that subscribes only once it runs, make it worse and its mismatches (a base outside its request's masks included), a continuation that changes nothing reporting the stored route; ratio and duration jobs ending `target` with the target in `done` and the document (none for max), a target out of bounds or a ratio for a round trip refused, make it worse with a smaller target shrinking; a stored route differing from the drawn one by a parallel edge sent as a snapshot before `done`, with `GET /jobs/{id}` agreeing; a ratio target for a round trip refused before anything else, for a base route too; `Infinity` and `NaN` in a body refused |
 
 `tests/engine/test_plan.py` covers `plan_route`'s hooks, `tests/graph/test_loader.py` the loader,
-and `tests/unit/test_cli.py` `serve`'s errors, options and its taking `csr` on a build with
-transition tables. httpx's ASGI transport hands a response over once the app has finished it, so
+and `tests/unit/test_cli.py` `serve`'s errors, options (the geocoder's included, with the line
+it prints) and its taking `csr` on a build with transition tables. `tests/geocode/` covers the
+geocoding package: `normalise`; the cache and its TTL on a fake clock; the rate limit on a fake
+clock (a burst of ten serving six and refusing four, requests the interval plus a 300 ms
+latency apart, the interval from the answer, a failure spacing the next request too, a turn
+without a request taking no interval, `retry_after_s`, a refused caller taking no place and a
+cancelled one leaving the queue); Nominatim's request and its parse of jsonv2 (the example of
+Nominatim's documentation and a hand-written Portland body, `tests/fixtures/geocode/`), the
+bbox filter, each failure and the refusals (429, 403), all on an `httpx.MockTransport`; and the
+service's order (a cached answer taking no turn, identical queries queued behind one in flight
+asking once, at most five candidates whatever the geocoder answers, the pause after a 429 or
+403 and its end). httpx's ASGI transport hands a response over once the app has finished it, so
 an SSE stream is read whole after its end; reconnecting mid-run is tested on the manager, and
 over a real socket by hand (**Measured**).
 
@@ -464,5 +520,18 @@ over a real socket by hand (**Measured**).
 - **No public limits** beyond the job cap and queue: no per-client limits, no authentication,
   no CORS (the frontend's dev server proxies). `docs/PLAN.md` §4.5 lists what public hosting
   adds.
+- **The geocoder's rate limit is per process**: one request at a time from this server, a
+  second from each answer to the next request, which is the application's only while uvicorn
+  runs one process and one server asks Nominatim (two servers, as the coordinator's and a lane's
+  pointed at the real service, would share the policy's second). The pause after a refusal is
+  per process too. One client can take every slot: there is no per-client share. Nominatim
+  itself is for light use; public hosting moves to Photon or a paid geocoder (`docs/PLAN.md`
+  §4.4).
+- **An abandoned search holds its place in the geocoder's queue**: a search whose client has
+  disconnected still waits for its turn, goes upstream and caches its answer (**Geocoding**).
+  And the queue's cap counts intervals, not upstream latencies: each request ahead may take up
+  to the 10 s upstream timeout as well as its second, so the last caller let into the queue
+  (four queued ahead of it, one in flight) can wait about a minute in the worst case, during
+  which the frontend shows "Searching…".
 - **Spawn cost**: a job's first events after `snapped` wait for a fresh process (0.26–1.4 s
   measured).

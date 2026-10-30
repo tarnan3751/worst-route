@@ -300,9 +300,15 @@ have. Each attempt:
 splice, up to `r_max`, and halves after every 20 failures in a row, down to
 `min(300 m, r_max)`. A failure is no detour, a gain of zero or less, or an infeasible window.
 
+**Cycles.** The run goes in cycles, so it keeps searching while searching still pays. A cycle
+ends after more than 400 failures in a row (`CONVERGED_FAILS`) at the smallest radius. If it
+accepted a splice, the radius goes back to `objective.initial_radius` and a new cycle starts,
+giving every radius its 20 tries again around the longer route.
+
 **Stopping**: `"budget"` when `max_iterations` attempts are made or `budget.seconds` have
-passed; `"converged"` after more than 400 failures in a row at the smallest radius. Target
-modes (ratio, duration) are M2; their hooks (`target_value`, `better`) are in the interface.
+passed; `"converged"` when a whole cycle accepts nothing, so a run ends 802 attempts after its
+last splice at the latest: the rest of that splice's cycle, then an empty one. Target modes
+(ratio, duration) are M2; their hooks (`target_value`, `better`) are in the interface.
 
 **Determinism.** Every random choice is drawn from one `numpy.random.Generator(PCG64(seed))`, in
 a fixed order: the round-trip seed, then the loop's windows, strategies, waypoints and weights.
@@ -318,8 +324,8 @@ sequence of splices on any machine. The clock only decides when to stop:
 
 | Graph | Result |
 |---|---|
-| 20 × 20 grid, corner to corner | converges in about 1 s at a ratio of about 10, using 383–391 of 400 nodes |
-| 30 × 30 grid, start, centre via and end | converges in 1–3 s at about 15× |
+| 20 × 20 grid, corner to corner | converges in 0.3–0.4 s (1,900–2,700 attempts) at a ratio of about 10, using 373–393 of 400 nodes (seeds 0–3) |
+| 30 × 30 grid, start, centre via and end | converges in 1.0–1.3 s at about 15× |
 | `grid_graph(100, 100, 100)` corner to corner, 20 s budget | about 490 attempts/s (the review's run), so the default `max_iterations` of 5000 stops it at about 10 s, at 33×; after random weight was limited to the window's ball, about 680 attempts/s, the 5000 attempts in about 7.4 s, at 33–34× |
 | the same, 5000 attempts, both backends in one session (seeds 1 and 2) | reference 1007–1072 attempts/s, `CsrBackend` 1101–1164 attempts/s; identical routes, at 34.00× and 33.44× |
 
@@ -544,7 +550,7 @@ bytes).
 | `test_seed_route.py` | `resolve_stops` deterministic, node-disjoint legs, legs avoiding later stops, the penalty re-solve on a corridor, the baseline, the re-snap walk out of a one-entrance ring, the start never moving, a point-to-point trip never collapsing onto the start, a leg between two stops on one node, unreachable legs named by both ends, a leg going round a junction that allows only straight on, the turn at a via, the baseline's legal legs and its turn-blind fallback, a leg driving both carriageways going round, a round trip to a neighbour not one road out and back, round-trip loops (never back along the way out) |
 | `test_objectives.py` | `Distance`, the radius, and `delta` against a full re-score for every kind of term |
 | `test_detour.py` | each strategy's legal detours and None when none exists, the strategy weights, random weight drawing only near the window, the local-exhaustive ranking and the refused-candidate skip, no turn refused on a lattice of straight-only junctions (and many when the searches are made turn-blind) |
-| `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, and so do those with turn tables (no turn refused), a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable`; the same-seed test on both backends, and both backends planning the same route, splice for splice, on the grid and on one-way towns |
+| `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, a later cycle accepting after the first one runs out and the run stopping only after an empty cycle, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, and so do those with turn tables (no turn refused), a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable`; the same-seed test on both backends, and both backends planning the same route, splice for splice, on the grid and on one-way towns |
 | `test_io.py` | the route files |
 | `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32, `--backend` on both commands (the same route.json on both backends but the backend and the time), `auto` taking `python` on a build with turn tables and saying so, `csr` there one line on both commands, a file from another engine version refused |
 

@@ -18,8 +18,11 @@ turn a transition table forbids (the searches see the tables, so this should sta
 - The ambition radius starts at `objective.initial_radius`, grows ×1.5 on every accepted splice
   up to `r_max`, and halves after every 20 failures in a row down to `RADIUS_MIN_M` (or r_max
   when that is smaller). A failure is no detour, a gain of zero or less, or an infeasible window.
+- The run goes in cycles. A cycle ends after more than `CONVERGED_FAILS` (400) failures in a
+  row at the smallest radius; if it accepted a splice, the radius goes back to
+  `objective.initial_radius` and a new cycle starts.
 - The run stops when `budget.max_iterations` attempts are made or `budget.seconds` have passed
-  ("budget"), or after more than 400 failures in a row at the smallest radius ("converged").
+  ("budget"), or when a whole cycle accepts nothing ("converged").
 
 Every random choice is `rng`'s, in a fixed order, and candidate lists are sorted arrays, so a
 seed gives the same sequence of splices on any machine. The clock decides only when to stop: a
@@ -130,6 +133,7 @@ def worsen(
     radius = objective.initial_radius(route)
     best = route
     attempts = accepted = fails = 0
+    cycle_accepted = False
     events: list[ProgressEvent] = []
     refused: Counter[type[IllegalSplice]] = Counter()
     while True:
@@ -137,8 +141,10 @@ def worsen(
             stopped: StopReason = "budget"
             break
         if fails > CONVERGED_FAILS and radius == r_min:
-            stopped = "converged"
-            break
+            if not cycle_accepted:
+                stopped = "converged"
+                break
+            radius, fails, cycle_accepted = objective.initial_radius(route), 0, False
         attempts += 1
         i, j = pick_segment(route, rng)
         forbid, banned = route.release(data, i, j)
@@ -175,6 +181,7 @@ def worsen(
         route = route.splice(data, i, j, *found, score=score, metrics=metrics, extra_banned=extra)
         accepted += 1
         fails = 0
+        cycle_accepted = True
         radius = min(radius * RADIUS_GROWTH, r_max)
         if objective.better(route, best):
             best = route

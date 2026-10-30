@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from worst_route.config import HighwayClass
+from worst_route.config import CONVERGED_FAILS, HighwayClass
 from worst_route.engine.objectives import make_objective
 from worst_route.engine.objectives.base import Objective
 from worst_route.engine.plan import plan_route
@@ -129,6 +129,22 @@ def test_a_small_town_converges() -> None:
     )
     assert result.stopped_because == "converged"
     assert result.attempts > 400 and result.accepted > 0
+
+
+def test_a_new_cycle_starts_until_one_accepts_nothing() -> None:
+    # a cycle ends after more than CONVERGED_FAILS failures in a row at the smallest radius;
+    # here a later cycle still finds a splice, so the run goes on past the first cycle's end
+    g = lattice(15, 15)
+    result = run(
+        start(g, [at_node(g, 0), at_node(g, 224)], 1), Budget(seconds=600, max_iterations=10**6)
+    )
+    iterations = [0] + [e.iteration for e in result.events]
+    gaps = [b - a for a, b in zip(iterations, iterations[1:], strict=False)]
+    assert max(gaps) > CONVERGED_FAILS + 1
+    # it stops when a whole cycle accepts nothing: the one the last splice was in runs out, then
+    # the next one
+    assert result.stopped_because == "converged"
+    assert result.attempts - iterations[-1] == 2 * (CONVERGED_FAILS + 1)
 
 
 def test_the_generator_yields_events_and_returns_the_result() -> None:

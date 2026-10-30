@@ -177,7 +177,8 @@ ROUND_TRIP_SEED_TRIES = 20
 # The worsen loop (`docs/PLAN.md` §3.4). A window is one edge with SINGLE_EDGE_PROBABILITY, else
 # a run of RUN_EDGES edges. The radius grows RADIUS_GROWTH × on every accepted splice (up to the
 # leash or the active area's extent) and halves after every RADIUS_HALVE_EVERY failures in a row
-# (down to RADIUS_MIN_M); more than CONVERGED_FAILS failures in a row at the floor end the run.
+# (down to RADIUS_MIN_M); more than CONVERGED_FAILS failures in a row at the floor end a cycle,
+# which starts the radius again, and a cycle that accepted nothing ends the run.
 SINGLE_EDGE_PROBABILITY = 0.8
 RUN_EDGES = (2, 4)
 RADIUS_GROWTH = 1.5

@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="hand">
+  <!-- A dual carriageway: SW Barbur Blvd (primary, ref OR 99W) splits at 70 into an eastbound way
+       (500 then 501, identical tags, meeting at 72) on the south and a westbound way (502, ref
+       written OR-99W) 25 m north, rejoining at 80; two-way Barbur continues west to 95 and east to
+       96. Side streets do not line up: SW Oak St leaves the eastbound side at 31 (x -250), SW Elm
+       St the westbound side at 33 (x -150), and SW Plaza Dr is a right-in/right-out access on the
+       eastbound side only at 32 (x +250). SE Main St crosses as a divided street: its northbound
+       half (531, through shape point 54) and southbound half (532) meet the carriageways at 50,
+       51, 52, 53, a 25 m square that stage A merges into one cluster.
+       Expected: build 19 nodes, 23 segments, 30 edges; simplify removes 72: 18 nodes, 29 edges;
+       stage A one cluster of 50, 51, 52, 53 (members 50-54), 4 edges absorbed: 15 nodes, 25 edges;
+       stage B none; twins: 7 candidates, all paired, 5 pairs: eastbound 70-31 with westbound
+       33-70, 31-crossing with crossing-33 and 33-70, crossing-32 and 32-80 with 80-crossing;
+       connectivity keeps everything: 15 nodes, 25 edges. -->
+  <!-- two-way SW Barbur Blvd west of the split, then the eastbound carriageway -->
+  <node id="95" version="1" lat="45.5300000" lon="-122.6089762"/>
+  <node id="70" version="1" lat="45.5300000" lon="-122.6064116"/>
+  <node id="71" version="1" lat="45.5298875" lon="-122.6057704"/>
+  <node id="72" version="1" lat="45.5298875" lon="-122.6044881"/>
+  <node id="31" version="1" lat="45.5298875" lon="-122.6032058"/>
+  <node id="73" version="1" lat="45.5298875" lon="-122.6019235"/>
+  <node id="50" version="1" lat="45.5298875" lon="-122.6001603"/>
+  <node id="51" version="1" lat="45.5298875" lon="-122.5998397"/>
+  <node id="74" version="1" lat="45.5298875" lon="-122.5980765"/>
+  <node id="32" version="1" lat="45.5298875" lon="-122.5967942"/>
+  <node id="75" version="1" lat="45.5298875" lon="-122.5955119"/>
+  <node id="76" version="1" lat="45.5298875" lon="-122.5942296"/>
+  <!-- where the carriageways rejoin, then two-way Barbur east -->
+  <node id="80" version="1" lat="45.5300000" lon="-122.5935884"/>
+  <node id="96" version="1" lat="45.5300000" lon="-122.5910238"/>
+  <!-- westbound carriageway, east to west -->
+  <node id="81" version="1" lat="45.5301125" lon="-122.5942296"/>
+  <node id="82" version="1" lat="45.5301125" lon="-122.5955119"/>
+  <node id="83" version="1" lat="45.5301125" lon="-122.5967942"/>
+  <node id="84" version="1" lat="45.5301125" lon="-122.5980765"/>
+  <node id="53" version="1" lat="45.5301125" lon="-122.5998397"/>
+  <node id="52" version="1" lat="45.5301125" lon="-122.6001603"/>
+  <node id="33" version="1" lat="45.5301125" lon="-122.6019235"/>
+  <node id="86" version="1" lat="45.5301125" lon="-122.6032058"/>
+  <node id="87" version="1" lat="45.5301125" lon="-122.6044881"/>
+  <node id="88" version="1" lat="45.5301125" lon="-122.6057704"/>
+  <!-- side streets' far ends -->
+  <node id="90" version="1" lat="45.5286503" lon="-122.6032058"/>
+  <node id="91" version="1" lat="45.5313497" lon="-122.6019235"/>
+  <node id="92" version="1" lat="45.5286503" lon="-122.5967942"/>
+  <!-- SE Main St, south to north; 50-53 is the crossing -->
+  <node id="60" version="1" lat="45.5277504" lon="-122.6000000"/>
+  <node id="61" version="1" lat="45.5294601" lon="-122.6000000"/>
+  <node id="54" version="1" lat="45.5300000" lon="-122.5998269"/>
+  <node id="62" version="1" lat="45.5305399" lon="-122.6000000"/>
+  <node id="63" version="1" lat="45.5322496" lon="-122.6000000"/>
+  <way id="500" version="1">
+    <nd ref="70"/>
+    <nd ref="71"/>
+    <nd ref="72"/>
+    <tag k="highway" v="primary"/>
+    <tag k="name" v="SW Barbur Blvd"/>
+    <tag k="ref" v="OR 99W"/>
+    <tag k="oneway" v="yes"/>
+  </way>
+  <way id="501" version="1">
+    <nd ref="72"/>
+    <nd ref="31"/>
+    <nd ref="73"/>
+    <nd ref="50"/>
+    <nd ref="51"/>
+    <nd ref="74"/>
+    <nd ref="32"/>
+    <nd ref="75"/>
+    <nd ref="76"/>
+    <nd ref="80"/>
+    <tag k="highway" v="primary"/>
+    <tag k="name" v="SW Barbur Blvd"/>
+    <tag k="ref" v="OR 99W"/>
+    <tag k="oneway" v="yes"/>
+  </way>
+  <way id="502" version="1">
+    <nd ref="80"/>
+    <nd ref="81"/>
+    <nd ref="82"/>
+    <nd ref="83"/>
+    <nd ref="84"/>
+    <nd ref="53"/>
+    <nd ref="52"/>
+    <nd ref="33"/>
+    <nd ref="86"/>
+    <nd ref="87"/>
+    <nd ref="88"/>
+    <nd ref="70"/>
+    <tag k="highway" v="primary"/>
+    <tag k="name" v="SW Barbur Blvd"/>
+    <tag k="ref" v="OR-99W"/>
+    <tag k="oneway" v="yes"/>
+  </way>
+  <way id="510" version="1">
+    <nd ref="31"/>
+    <nd ref="90"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="SW Oak St"/>
+  </way>
+  <way id="511" version="1">
+    <nd ref="33"/>
+    <nd ref="91"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="SW Elm St"/>
+  </way>
+  <way id="512" version="1">
+    <nd ref="32"/>
+    <nd ref="92"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="SW Plaza Dr"/>
+  </way>
+  <way id="520" version="1">
+    <nd ref="95"/>
+    <nd ref="70"/>
+    <tag k="highway" v="primary"/>
+    <tag k="name" v="SW Barbur Blvd"/>
+    <tag k="ref" v="OR 99W"/>
+  </way>
+  <way id="521" version="1">
+    <nd ref="80"/>
+    <nd ref="96"/>
+    <tag k="highway" v="primary"/>
+    <tag k="name" v="SW Barbur Blvd"/>
+    <tag k="ref" v="OR 99W"/>
+  </way>
+  <way id="530" version="1">
+    <nd ref="60"/>
+    <nd ref="61"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="SE Main St"/>
+  </way>
+  <way id="531" version="1">
+    <nd ref="61"/>
+    <nd ref="51"/>
+    <nd ref="54"/>
+    <nd ref="53"/>
+    <nd ref="62"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="SE Main St"/>
+    <tag k="oneway" v="yes"/>
+  </way>
+  <way id="532" version="1">
+    <nd ref="62"/>
+    <nd ref="52"/>
+    <nd ref="50"/>
+    <nd ref="61"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="SE Main St"/>
+    <tag k="oneway" v="yes"/>
+  </way>
+  <way id="533" version="1">
+    <nd ref="62"/>
+    <nd ref="63"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="SE Main St"/>
+  </way>
+</osm>

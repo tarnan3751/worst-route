@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="hand">
+  <!-- A four-arm roundabout 30 m across: way 400 (tertiary, junction=roundabout) runs counter-
+       clockwise 10 (north) - 12 (west) - 14 (south) - 16 (east) - 10 through shape points 11, 13,
+       15, 17. Two-way arms: NE 42nd Ave north (10-20) and south (14-21), NE Going St east (16-22)
+       and west (12-23). Ring nodes take the 1 m stage A tolerance, so stage B sees the whole ring.
+       Expected: build 8 nodes, 8 segments, 12 edges; simplify removes none; stage A no clusters;
+       stage B one roundabout super-node replacing 10, 12, 14, 16 (members 10-17), 4 internal ring
+       edges, every one of its 4 x 4 (in, out) pairs allowed: 5 nodes, 8 edges; no twin candidates;
+       connectivity keeps everything. -->
+  <!-- the ring, counter-clockwise from north -->
+  <node id="10" version="1" lat="45.5201350" lon="-122.6200000"/>
+  <node id="11" version="1" lat="45.5200954" lon="-122.6201360"/>
+  <node id="12" version="1" lat="45.5200000" lon="-122.6201923"/>
+  <node id="13" version="1" lat="45.5199046" lon="-122.6201360"/>
+  <node id="14" version="1" lat="45.5198650" lon="-122.6200000"/>
+  <node id="15" version="1" lat="45.5199046" lon="-122.6198640"/>
+  <node id="16" version="1" lat="45.5200000" lon="-122.6198077"/>
+  <node id="17" version="1" lat="45.5200954" lon="-122.6198640"/>
+  <!-- the arms' far ends -->
+  <node id="20" version="1" lat="45.5213497" lon="-122.6200000"/>
+  <node id="21" version="1" lat="45.5186503" lon="-122.6200000"/>
+  <node id="22" version="1" lat="45.5200000" lon="-122.6180769"/>
+  <node id="23" version="1" lat="45.5200000" lon="-122.6219231"/>
+  <way id="400" version="1">
+    <nd ref="10"/>
+    <nd ref="11"/>
+    <nd ref="12"/>
+    <nd ref="13"/>
+    <nd ref="14"/>
+    <nd ref="15"/>
+    <nd ref="16"/>
+    <nd ref="17"/>
+    <nd ref="10"/>
+    <tag k="highway" v="tertiary"/>
+    <tag k="junction" v="roundabout"/>
+  </way>
+  <way id="401" version="1">
+    <nd ref="10"/>
+    <nd ref="20"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="NE 42nd Ave"/>
+  </way>
+  <way id="402" version="1">
+    <nd ref="14"/>
+    <nd ref="21"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="NE 42nd Ave"/>
+  </way>
+  <way id="403" version="1">
+    <nd ref="16"/>
+    <nd ref="22"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="NE Going St"/>
+  </way>
+  <way id="404" version="1">
+    <nd ref="12"/>
+    <nd ref="23"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="NE Going St"/>
+  </way>
+</osm>

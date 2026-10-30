@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="hand">
+  <!-- Two roads crossing with no shared node: SE Holgate Blvd (100-101-102, tertiary) passes under
+       SE 21st Ave (200-201-202-203), whose way 303 (201-202) is a bridge on layer 1. Node 101
+       (where Holgate's speed limit changes) and 201 (where the bridge starts) are 14 m apart,
+       inside each other's stage A buffers, but no edge joins them, so they stay apart. Connector
+       St (100-200) makes the two one strongly connected network.
+       Expected: build 7 nodes, 6 segments, 12 edges; simplify removes none (101, 201 and 202 end
+       ways whose tags differ); stage A no clusters; stage B none; no twins; connectivity keeps
+       everything: 7 nodes, 12 edges. -->
+  <!-- SE Holgate Blvd, west to east -->
+  <node id="100" version="1" lat="45.5100000" lon="-122.6138456"/>
+  <node id="101" version="1" lat="45.5100000" lon="-122.6101025"/>
+  <node id="102" version="1" lat="45.5100000" lon="-122.6061544"/>
+  <!-- SE 21st Ave, south to north, over Holgate -->
+  <node id="200" version="1" lat="45.5073005" lon="-122.6100000"/>
+  <node id="201" version="1" lat="45.5099010" lon="-122.6100000"/>
+  <node id="202" version="1" lat="45.5103599" lon="-122.6100000"/>
+  <node id="203" version="1" lat="45.5126995" lon="-122.6100000"/>
+  <!-- Connector St's corner -->
+  <node id="210" version="1" lat="45.5073005" lon="-122.6138456"/>
+  <way id="300" version="1">
+    <nd ref="100"/>
+    <nd ref="101"/>
+    <tag k="highway" v="tertiary"/>
+    <tag k="name" v="SE Holgate Blvd"/>
+    <tag k="maxspeed" v="30 mph"/>
+  </way>
+  <way id="301" version="1">
+    <nd ref="101"/>
+    <nd ref="102"/>
+    <tag k="highway" v="tertiary"/>
+    <tag k="name" v="SE Holgate Blvd"/>
+    <tag k="maxspeed" v="35 mph"/>
+  </way>
+  <way id="302" version="1">
+    <nd ref="200"/>
+    <nd ref="201"/>
+    <tag k="highway" v="tertiary"/>
+    <tag k="name" v="SE 21st Ave"/>
+  </way>
+  <way id="303" version="1">
+    <nd ref="201"/>
+    <nd ref="202"/>
+    <tag k="highway" v="tertiary"/>
+    <tag k="name" v="SE 21st Ave"/>
+    <tag k="bridge" v="yes"/>
+    <tag k="layer" v="1"/>
+  </way>
+  <way id="304" version="1">
+    <nd ref="202"/>
+    <nd ref="203"/>
+    <tag k="highway" v="tertiary"/>
+    <tag k="name" v="SE 21st Ave"/>
+  </way>
+  <way id="305" version="1">
+    <nd ref="100"/>
+    <nd ref="210"/>
+    <nd ref="200"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Connector St"/>
+  </way>
+</osm>

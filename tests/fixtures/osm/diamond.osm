@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="hand">
+  <!-- A diamond interchange: I-5 (motorway, one-way carriageways 30 m apart, northbound 100-105 on
+       the east, southbound 110-115 on the west) passes over SE Main St (secondary, two-way,
+       120-121-122-123) with no shared node. Ramps (motorway_link, one way by the motorway rule):
+       northbound off 102-122 and on 122-103, southbound off 112-121 and on 121-113. Frontage roads
+       join the carriageways' ends (115-100 south, 105-110 north) so the network is one.
+       Expected: build 12 nodes, 15 segments, 20 edges; simplify removes none; stage A no clusters;
+       twins: 6 candidates, 3 pairs (northbound approach with southbound departure, northbound
+       departure with southbound approach, and the two runs between the gores); stage B joins the
+       two sides' ramp components (both connect I 5 with SE Main St) into one interchange
+       replacing 102, 103, 112, 113, 121, 122 (members also the ramps' shape points 130-133), 8
+       internal edges, all 4 x 4 (in, out) pairs allowed, 2 twin pairs carried (the runs between
+       the gores are inside it): 7 nodes, 12 edges; connectivity keeps everything. -->
+  <!-- I-5 northbound, south to north -->
+  <node id="100" version="1" lat="45.4919015" lon="-122.6398078"/>
+  <node id="101" version="1" lat="45.4946010" lon="-122.6398078"/>
+  <node id="102" version="1" lat="45.4968506" lon="-122.6398078"/>
+  <node id="103" version="1" lat="45.5031494" lon="-122.6398078"/>
+  <node id="104" version="1" lat="45.5053990" lon="-122.6398078"/>
+  <node id="105" version="1" lat="45.5080985" lon="-122.6398078"/>
+  <!-- I-5 southbound, north to south -->
+  <node id="110" version="1" lat="45.5080985" lon="-122.6401922"/>
+  <node id="111" version="1" lat="45.5053990" lon="-122.6401922"/>
+  <node id="112" version="1" lat="45.5031494" lon="-122.6401922"/>
+  <node id="113" version="1" lat="45.4968506" lon="-122.6401922"/>
+  <node id="114" version="1" lat="45.4946010" lon="-122.6401922"/>
+  <node id="115" version="1" lat="45.4919015" lon="-122.6401922"/>
+  <!-- SE Main St, west to east, under I-5 -->
+  <node id="120" version="1" lat="45.5000000" lon="-122.6438449"/>
+  <node id="121" version="1" lat="45.5000000" lon="-122.6410253"/>
+  <node id="122" version="1" lat="45.5000000" lon="-122.6389747"/>
+  <node id="123" version="1" lat="45.5000000" lon="-122.6361551"/>
+  <!-- ramp shape points -->
+  <node id="130" version="1" lat="45.4982003" lon="-122.6393592"/>
+  <node id="131" version="1" lat="45.5017997" lon="-122.6393592"/>
+  <node id="132" version="1" lat="45.5017997" lon="-122.6406408"/>
+  <node id="133" version="1" lat="45.4982003" lon="-122.6406408"/>
+  <way id="160" version="1">
+    <nd ref="100"/>
+    <nd ref="101"/>
+    <nd ref="102"/>
+    <nd ref="103"/>
+    <nd ref="104"/>
+    <nd ref="105"/>
+    <tag k="highway" v="motorway"/>
+    <tag k="ref" v="I 5"/>
+    <tag k="oneway" v="yes"/>
+  </way>
+  <way id="161" version="1">
+    <nd ref="110"/>
+    <nd ref="111"/>
+    <nd ref="112"/>
+    <nd ref="113"/>
+    <nd ref="114"/>
+    <nd ref="115"/>
+    <tag k="highway" v="motorway"/>
+    <tag k="ref" v="I-5"/>
+    <tag k="oneway" v="yes"/>
+  </way>
+  <way id="140" version="1">
+    <nd ref="120"/>
+    <nd ref="121"/>
+    <nd ref="122"/>
+    <nd ref="123"/>
+    <tag k="highway" v="secondary"/>
+    <tag k="name" v="SE Main St"/>
+  </way>
+  <way id="150" version="1">
+    <nd ref="102"/>
+    <nd ref="130"/>
+    <nd ref="122"/>
+    <tag k="highway" v="motorway_link"/>
+  </way>
+  <way id="151" version="1">
+    <nd ref="122"/>
+    <nd ref="131"/>
+    <nd ref="103"/>
+    <tag k="highway" v="motorway_link"/>
+  </way>
+  <way id="152" version="1">
+    <nd ref="112"/>
+    <nd ref="132"/>
+    <nd ref="121"/>
+    <tag k="highway" v="motorway_link"/>
+  </way>
+  <way id="153" version="1">
+    <nd ref="121"/>
+    <nd ref="133"/>
+    <nd ref="113"/>
+    <tag k="highway" v="motorway_link"/>
+  </way>
+  <way id="170" version="1">
+    <nd ref="115"/>
+    <nd ref="100"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="S Frontage Rd"/>
+  </way>
+  <way id="171" version="1">
+    <nd ref="105"/>
+    <nd ref="110"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="N Frontage Rd"/>
+  </way>
+</osm>

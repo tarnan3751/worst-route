@@ -20,6 +20,7 @@ from worst_route.graph.backend import (
     Path,
     WeightCheck,
     as_cost,
+    as_limits,
     banned_mask,
     check_ends,
     enterable,
@@ -99,6 +100,7 @@ class PythonBackend:
         check_ends(self.data, src, dst)
         enter = enterable(self.data, node_mask, forbid_nodes)
         banned = banned_mask(self.data, banned_edges)
+        max_depth, max_paths = as_limits(max_depth, max_paths)
         if max_paths <= 0 or not (enter[src] and enter[dst]):
             return []
         if src == dst:

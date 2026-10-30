@@ -20,6 +20,7 @@ from worst_route.graph.backend import (
     Path,
     WeightCheck,
     as_cost,
+    as_limits,
     banned_mask,
     check_ends,
     enterable,
@@ -68,6 +69,44 @@ class CsrBackend:
             max_cost,
         )
         return (nodes, edges) if found else None
+
+    def simple_paths_dfs(
+        self,
+        src: int,
+        dst: int,
+        *,
+        node_mask: NDArray[np.bool_] | None = None,
+        forbid_nodes: NDArray[np.bool_] | None = None,
+        banned_edges: NDArray[np.bool_] | None = None,
+        max_depth: int,
+        max_paths: int,
+    ) -> list[Path]:
+        """The first `max_paths` simple paths src → dst of at most `max_depth` edges."""
+        check_ends(self.data, src, dst)
+        enter = enterable(self.data, node_mask, forbid_nodes)
+        banned = banned_mask(self.data, banned_edges)
+        max_depth, max_paths = as_limits(max_depth, max_paths)
+        if max_paths <= 0 or not (enter[src] and enter[dst]):
+            return []
+        if src == dst:
+            return [(np.array([src], dtype=np.int32), np.array([], dtype=np.int32))]
+        g = self.data
+        offsets, nodes, edges = kernels.simple_paths_dfs(
+            g.out_indptr,
+            g.out_edges,
+            g.edge_v,
+            enter.view(np.uint8),
+            banned.view(np.uint8),
+            src,
+            dst,
+            max_depth,
+            max_paths,
+        )
+        ends = offsets.tolist()
+        return [
+            (nodes[a + p : b + p + 1], edges[a:b])
+            for p, (a, b) in enumerate(zip(ends[:-1], ends[1:], strict=True))
+        ]
 
     def largest_scc_mask(self, edge_mask: NDArray[np.bool_] | None = None) -> NDArray[np.bool_]:
         """The nodes of the largest strongly connected component over `edge_mask`."""

@@ -240,8 +240,10 @@ def test_dijkstra_follows_the_tie_rule(backend_type, case: Case, max_cost: float
 
 @EXAMPLES
 @given(cases(max_nodes=6, max_edges=24), st.integers(0, 6).map(lambda d: 6 - d), st.integers(1, 20))
-def test_simple_paths_match_networkx(case: Case, max_depth: int, max_paths: int) -> None:
-    backend = PythonBackend(case.g)
+def test_simple_paths_match_networkx(
+    backend_type, case: Case, max_depth: int, max_paths: int
+) -> None:
+    backend = backend_type(case.g)
     every = backend.simple_paths_dfs(
         case.src, case.dst, max_depth=max_depth, max_paths=10**6, **case.masks()
     )
@@ -283,9 +285,10 @@ def test_largest_scc_matches_networkx(backend_type, case: Case) -> None:
         assert set(np.flatnonzero(mask).tolist()) == components[0]
 
 
-def test_python_backend_is_a_graph_backend() -> None:
-    backend: GraphBackend = PythonBackend(grid_graph(2, 2, 10.0))
-    assert backend.data.n == 4
+def test_the_backends_are_graph_backends() -> None:
+    for backend in (PythonBackend(GRID), CsrBackend(GRID)):
+        typed: GraphBackend = backend
+        assert typed.data.n == 9
 
 
 def test_ties_go_to_the_first_node_settled_then_the_lowest_edge(backend_type) -> None:
@@ -346,8 +349,8 @@ def test_forbidden_nodes_and_banned_edges_are_avoided(backend_type) -> None:
     assert nodes_of(b.dijkstra(0, 2, LENGTHS, node_mask=mask)) == [0, 1, 2]
 
 
-def test_endpoints_obey_the_masks() -> None:
-    b = PythonBackend(GRID)
+def test_endpoints_obey_the_masks(backend_type) -> None:
+    b = backend_type(GRID)
     forbid = np.zeros(9, dtype=bool)
     forbid[0] = True
     assert b.dijkstra(0, 8, LENGTHS, forbid_nodes=forbid) is None
@@ -356,8 +359,8 @@ def test_endpoints_obey_the_masks() -> None:
     assert b.dijkstra(0, 0, LENGTHS, forbid_nodes=forbid) is None
 
 
-def test_source_equals_destination() -> None:
-    b = PythonBackend(GRID)
+def test_source_equals_destination(backend_type) -> None:
+    b = backend_type(GRID)
     path = b.dijkstra(4, 4, LENGTHS)
     assert path is not None and path[0].tolist() == [4] and path[1].tolist() == []
     assert nodes_of(b.dijkstra(4, 4, LENGTHS, max_cost=0.0)) == [4]
@@ -383,8 +386,8 @@ def test_one_way_streets_are_respected(backend_type) -> None:
     assert nodes_of(b.dijkstra(2, 0, lengths)) == [2, 5, 4, 3, 0]
 
 
-def test_bad_arguments_are_rejected() -> None:
-    b = PythonBackend(GRID)
+def test_bad_arguments_are_rejected(backend_type) -> None:
+    b = backend_type(GRID)
     with pytest.raises(ValueError, match="weights"):
         b.dijkstra(0, 8, LENGTHS[:-1])
     with pytest.raises(ValueError, match="weights"):
@@ -407,8 +410,8 @@ def test_bad_arguments_are_rejected() -> None:
         b.largest_scc_mask(np.ones(3, dtype=bool))
 
 
-def test_simple_paths_on_a_grid_match_networkx() -> None:
-    b = PythonBackend(GRID)
+def test_simple_paths_on_a_grid_match_networkx(backend_type) -> None:
+    b = backend_type(GRID)
     paths = b.simple_paths_dfs(0, 8, max_depth=100, max_paths=10**6)
     graph = nx.DiGraph(zip(GRID.edge_u.tolist(), GRID.edge_v.tolist(), strict=True))
     expected = {tuple(p) for p in nx.all_simple_paths(graph, 0, 8)}
@@ -417,8 +420,8 @@ def test_simple_paths_on_a_grid_match_networkx() -> None:
     assert edge_sequences(paths) == sorted(edge_sequences(paths))
 
 
-def test_simple_paths_depth_and_count_limits() -> None:
-    b = PythonBackend(GRID)
+def test_simple_paths_depth_and_count_limits(backend_type) -> None:
+    b = backend_type(GRID)
     every = b.simple_paths_dfs(0, 8, max_depth=100, max_paths=10**6)
     for depth in range(9):
         within = b.simple_paths_dfs(0, 8, max_depth=depth, max_paths=10**6)
@@ -469,16 +472,27 @@ def assert_same(paths: list[Path | None]) -> None:
         weight=st.sampled_from([0.0, 0.5, 1.0, 2.0, math.inf]),
     ),
     st.sampled_from([-1.0, 0.0, 1.0, 1.5, 2.0, 3.0, math.inf]),
+    st.integers(-1, 7),
+    st.sampled_from([-1, 0, 1, 2, 5, 10**6]),
 )
-def test_the_backends_agree(case: Case, max_cost: float) -> None:
+def test_the_backends_agree(case: Case, max_cost: float, max_depth: int, max_paths: int) -> None:
+    backends = [make(case.g) for make in BACKENDS.values()]
     assert_same(
         [
-            make(case.g).dijkstra(
-                case.src, case.dst, case.weights, max_cost=max_cost, **case.masks()
-            )
-            for make in BACKENDS.values()
+            b.dijkstra(case.src, case.dst, case.weights, max_cost=max_cost, **case.masks())
+            for b in backends
         ]
     )
+    reference, *others = (
+        b.simple_paths_dfs(
+            case.src, case.dst, max_depth=max_depth, max_paths=max_paths, **case.masks()
+        )
+        for b in backends
+    )
+    for paths in others:
+        assert len(paths) == len(reference)
+        for ours, theirs in zip(paths, reference, strict=True):
+            assert_same([theirs, ours])
 
 
 def test_the_backends_agree_on_a_town() -> None:
@@ -534,3 +548,44 @@ def test_weights_are_scanned_once_per_array(backend_type) -> None:
         b.dijkstra(0, 8, weights.copy())  # a new array is
     with pytest.raises(ValueError, match="weights: must be non-negative and not NaN"):
         backend_type(GRID).dijkstra(0, 8, weights)  # and so is the array on another backend
+
+
+def test_the_backends_agree_on_every_path_of_a_grid() -> None:
+    # 8512 simple paths corner to corner on a 5 × 5 grid: the kernel's output buffers grow
+    # many times over; then the same under masks, a depth limit and a count limit.
+    g = grid_graph(5, 5, 100.0)
+    forbid = np.zeros(g.n, dtype=bool)
+    forbid[12] = True
+    banned = np.zeros(g.m, dtype=bool)
+    banned[[edge_id(g, 1, 2), edge_id(g, 19, 24)]] = True
+    for masks, max_depth, max_paths in [
+        ({}, 100, 10**6),
+        ({"forbid_nodes": forbid, "banned_edges": banned}, 100, 10**6),
+        ({"forbid_nodes": forbid}, 12, 100),
+    ]:
+        reference, ours = (
+            make(g).simple_paths_dfs(0, 24, max_depth=max_depth, max_paths=max_paths, **masks)
+            for make in BACKENDS.values()
+        )
+        assert len(ours) == len(reference) >= 100
+        for a, b in zip(reference, ours, strict=True):
+            assert_same([a, b])
+
+
+def test_limits_are_ints_in_the_int64_range(backend_type) -> None:
+    b = backend_type(GRID)
+    every = edge_sequences(b.simple_paths_dfs(0, 8, max_depth=100, max_paths=10**6))
+    assert len(every) == 12
+    for depth, paths in [(2**63, 2**63), (2**100, 10**6), (np.int64(100), np.int32(1000))]:
+        assert edge_sequences(b.simple_paths_dfs(0, 8, max_depth=depth, max_paths=paths)) == every
+    assert b.simple_paths_dfs(0, 8, max_depth=100, max_paths=-(2**70)) == []
+    assert b.simple_paths_dfs(0, 8, max_depth=-(2**70), max_paths=5) == []
+    for depth, paths in [
+        (100, 2.5),
+        (2.5, 5),
+        (100, math.inf),
+        (math.inf, 5),
+        (100, np.float64(5)),
+    ]:
+        with pytest.raises(TypeError):
+            b.simple_paths_dfs(0, 8, max_depth=depth, max_paths=paths)

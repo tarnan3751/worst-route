@@ -37,6 +37,7 @@ def _readonly(dtype: Any) -> Any:
 
 _I8, _I4, _F8, _U1 = (_readonly(t) for t in (types.int64, types.int32, types.float64, types.uint8))
 _PATH = types.Tuple((types.boolean, types.int32[::1], types.int32[::1]))  # type: ignore[no-untyped-call]
+_PATHS = types.Tuple((types.int64[::1], types.int32[::1], types.int32[::1]))  # type: ignore[no-untyped-call]
 
 I32 = NDArray[np.int32]
 I64 = NDArray[np.int64]
@@ -140,3 +141,89 @@ def dijkstra_masked(
                 heap_cost[i] = c
                 heap_node[i] = w
     return False, np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)
+
+
+@_kernel(_PATHS(_I8, _I4, _I4, _U1, _U1, types.int64, types.int64, types.int64, types.int64))
+def simple_paths_dfs(
+    out_indptr: I64,
+    out_edges: I32,
+    edge_v: I32,
+    enter: U8,
+    banned: U8,
+    src: int,
+    dst: int,
+    max_depth: int,
+    max_paths: int,
+) -> tuple[I64, I32, I32]:
+    """(offsets, nodes, edges): the first `max_paths` simple paths src → dst of at most
+    `max_depth` edges, in ascending edge-id order, src ≠ dst both enterable, max_paths > 0.
+
+    Packed: path p is `edges[offsets[p]:offsets[p + 1]]` and
+    `nodes[offsets[p] + p : offsets[p + 1] + p + 1]`.
+    """
+    n = out_indptr.shape[0] - 1
+    # The path so far: its nodes (current), the edges between them, and per depth the next
+    # out-edge to try. A simple path has at most n - 1 edges, whatever max_depth says.
+    levels = max(min(max_depth, n), 0) + 1
+    current = np.empty(levels, dtype=np.int64)
+    path_edges = np.empty(levels, dtype=np.int32)
+    cursor = np.empty(levels, dtype=np.int64)
+    on_path = np.zeros(n, dtype=np.uint8)
+    # The output, doubled whenever it fills.
+    offsets = np.zeros(64, dtype=np.int64)
+    edges = np.empty(1024, dtype=np.int32)
+    nodes = np.empty(1024, dtype=np.int32)
+    count = 0
+    n_edges = 0
+    n_nodes = 0
+
+    depth = 0
+    current[0] = src
+    cursor[0] = out_indptr[src]
+    on_path[src] = 1
+    while True:
+        v = current[depth]
+        k = cursor[depth]
+        if k == out_indptr[v + 1]:  # every out-edge of v tried: step back
+            if depth == 0:
+                break
+            on_path[v] = 0
+            depth -= 1
+            continue
+        cursor[depth] = k + 1
+        e = out_edges[k]
+        w = edge_v[e]
+        if on_path[w] or banned[e] or not enter[w] or depth >= max_depth:
+            continue
+        if w == dst:
+            if count + 2 > offsets.shape[0]:
+                bigger_offsets = np.zeros(2 * offsets.shape[0], dtype=np.int64)
+                bigger_offsets[: count + 1] = offsets[: count + 1]
+                offsets = bigger_offsets
+            if n_nodes + depth + 2 > nodes.shape[0]:
+                size = 2 * (nodes.shape[0] + depth + 2)
+                bigger_edges = np.empty(size, dtype=np.int32)
+                bigger_edges[:n_edges] = edges[:n_edges]
+                edges = bigger_edges
+                bigger_nodes = np.empty(size, dtype=np.int32)
+                bigger_nodes[:n_nodes] = nodes[:n_nodes]
+                nodes = bigger_nodes
+            for t in range(depth):
+                edges[n_edges + t] = path_edges[t]
+                nodes[n_nodes + t] = current[t]
+            edges[n_edges + depth] = e
+            nodes[n_nodes + depth] = v
+            nodes[n_nodes + depth + 1] = w
+            n_edges += depth + 1
+            n_nodes += depth + 2
+            count += 1
+            offsets[count] = n_edges
+            if count == max_paths:
+                break
+        elif depth + 1 < max_depth:
+            path_edges[depth] = e
+            depth += 1
+            current[depth] = w
+            cursor[depth] = out_indptr[w]
+            on_path[w] = 1
+    return offsets[: count + 1].copy(), nodes[:n_nodes].copy(), edges[:n_edges].copy()

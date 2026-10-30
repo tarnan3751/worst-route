@@ -35,11 +35,13 @@ to itself it is that one node and no edge.
 What follows the protocol is what every backend shares, so their errors, their scalars and
 the SCC mask are the same whichever backend runs: `check_ends`; `WeightCheck`, one per
 backend, which remembers the last weights array it passed; `as_cost`, which makes `max_cost`
-a Python float, so it compares in float64 on every backend; `enterable` (the combined "may
+a Python float, so it compares in float64 on every backend; `as_limits`, which makes
+`max_depth` and `max_paths` ints in the int64 range; `enterable` (the combined "may
 enter" mask, checking `node_mask` and `forbid_nodes`); `banned_mask`; `largest_scc_mask`.
 """
 
 import math
+import operator
 import weakref
 from typing import Protocol
 
@@ -122,6 +124,18 @@ class WeightCheck:
 def as_cost(max_cost: float) -> float:
     """`max_cost` as a Python float: a NumPy float32 would otherwise compare in float32."""
     return float(max_cost)
+
+
+INT64_MIN, INT64_MAX = -(2**63), 2**63 - 1
+
+
+def as_limits(max_depth: int, max_paths: int) -> tuple[int, int]:
+    """`max_depth` and `max_paths` as ints (`operator.index`: a float, inf included, raises
+    `TypeError`), clamped to the int64 range (no search reaches its ends)."""
+    depth, paths = (
+        min(max(operator.index(x), INT64_MIN), INT64_MAX) for x in (max_depth, max_paths)
+    )
+    return depth, paths
 
 
 def enterable(

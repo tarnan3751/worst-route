@@ -15,6 +15,8 @@ from worst_route.engine.seed_route import baseline_route, resolve_stops, seed_ro
 from worst_route.engine.snap import StopUnreachable
 from worst_route.engine.validator import validate_route
 from worst_route.engine.worsen import Budget, ProgressEvent, pick_segment, run_worsen, worsen
+from worst_route.graph.backend import GraphBackend
+from worst_route.graph.csr_backend import CsrBackend
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
 from worst_route.graph.spatial import SpatialIndex
@@ -152,24 +154,50 @@ def test_the_generator_yields_events_and_returns_the_result() -> None:
     assert result.events == tuple(events) and result.attempts == 60
 
 
-def plan(seed: int, iterations: int = 300, data: GraphData = GRID, stops=None):
+def plan(
+    seed: int,
+    iterations: int = 300,
+    data: GraphData = GRID,
+    stops=None,
+    backend: GraphBackend | None = None,
+):
     request = RouteRequest(
         stops=stops or CORNERS, seed=seed, max_iterations=iterations, budget_s=120
     )
     return plan_route(
         data,
         request,
-        backend=BACKEND if data is GRID else None,
+        backend=backend if backend is not None else BACKEND if data is GRID else None,
         spatial=SPATIAL if data is GRID else None,
         check_delta=True,
     )
 
 
-def test_the_same_seed_gives_the_same_route() -> None:
-    one, two = plan(5), plan(5)
+@pytest.mark.parametrize("backend", [BACKEND, CsrBackend(GRID)], ids=["python", "csr"])
+def test_the_same_seed_gives_the_same_route(backend: GraphBackend) -> None:
+    one, two = plan(5, backend=backend), plan(5, backend=backend)
     assert one.route.nodes.tobytes() == two.route.nodes.tobytes()
     assert one.route.edges.tobytes() == two.route.edges.tobytes()
     assert one.run.attempts == two.run.attempts == 300
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_both_backends_plan_the_same_route(seed: int) -> None:
+    # every search the loop makes returns the same bytes, so the whole run does: on the grid
+    # and on a one-way town with twins
+    g = random_town(seed)
+    scc = np.flatnonzero(PythonBackend(g).largest_scc_mask())
+    for data, stops in [(GRID, CORNERS), (g, [at_node(g, int(scc[0])), at_node(g, int(scc[-1]))])]:
+        one, two = (
+            plan(seed, data=data, stops=stops, backend=b(data)) for b in (PythonBackend, CsrBackend)
+        )
+        assert one.route.nodes.tobytes() == two.route.nodes.tobytes()
+        assert one.route.edges.tobytes() == two.route.edges.tobytes()
+        assert (one.run.attempts, one.run.accepted) == (two.run.attempts, two.run.accepted)
+        assert one.run.accepted > 0
+        assert [e.splice.edges.tobytes() for e in one.run.events] == [
+            e.splice.edges.tobytes() for e in two.run.events
+        ]
 
 
 def test_different_seeds_give_different_routes() -> None:

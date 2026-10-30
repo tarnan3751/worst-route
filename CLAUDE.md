@@ -25,11 +25,11 @@ step), snapping and masks. So is the engine (`docs/reference/engine.md`):
 the route and its splice, the seed route, the detours, the worsen loop, the distance objective,
 the validator, and `worst-route plan` / `validate` on a saved build. No other part of the app
 exists yet. The plan (`docs/PLAN.md`, 2026-10-30) is written and its open questions answered as
-far as `docs/project_overview.md` §3 records. **M1** is not done: on the Portland build the
-validator passes every route `plan` returns, but in the acceptance run (`uv run python
-tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30`) 6 of the
-20 pairs cannot be planned (the seed does not see transition tables, or twins within one leg) and
-the median ratio is 6.4×, not 10× (`docs/project_overview.md` §2.2, §2.3).
+far as `docs/project_overview.md` §3 records. **M1 is built**: in the acceptance run on the
+Portland build (`uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20
+--seed 1 --budget 30`) all 20 pairs plan, the validator passes all 20, and the median ratio is
+21.5× (`docs/project_overview.md` §2.2). On Portland the default backend (`auto`) is the Python
+reference: the CSR backend cannot search transition tables yet.
 `docs/project_overview.md` holds the roadmap (§2.2) and the decisions (§3).
 
 ## Stack (pinned)
@@ -69,7 +69,7 @@ with the milestone that adds it, *(M1)* or *(M2)*.
 | Lint and format check | `uv run ruff check . && uv run ruff format --check .` |
 | Types | `uv run mypy src` |
 | Pipeline, one step (all eight are real, run in this order; `filter` and `build` also take `--source PATH`, `cleanup` and `tiers` take `--allow-fragmented`) | `uv run worst-route pipeline <download\|filter\|build\|cleanup\|enrich\|tiers\|save\|qa> --region portland` |
-| Plan a route from the CLI, validated | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
+| Plan a route from the CLI, validated (on a build with turn tables `auto` takes the Python backend) | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
 | Validate a saved route | `uv run worst-route validate route.json` |
 | API server (the coordinator only; agents use ports of their own) | `uv run worst-route serve` *(M2)* |
 | Frontend dev server / build / typecheck | `cd frontend && npm run dev` / `npm run build` / `npm run typecheck` *(M2)* |

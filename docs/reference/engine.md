@@ -499,19 +499,32 @@ check, then `valid`, or exits 1.
 
 **On Portland** (the M1 acceptance, `docs/PLAN.md` §7 M1 step 9: `uv run python tools/acceptance.py
 --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30`, on build e4b3b4ad90db,
-`graph_version` 45f650e868fa; the reference backend, attempts unlimited; the named trips with
-`worst-route plan --budget 30 --max-iterations 1000000`): Powell's Books → Reed College, 7.71 km by
-the baseline, gives 49.7×, 48.9× and 44.3× on seeds 1–3 (342–384 km, about 4,000 nodes), converging
-in 10–11 s at about 1,600 attempts/s. On 20 random pairs 3–15 km apart (seed 1), 14 plan and the
-validator passes all 14; the median ratio is 6.4× (2.4–31.1×), every run stopping as converged, 12
-of 14 within 7 s, at 1,500–4,700 attempts/s: the budget is not what limits the ratio. Seeds 1 and 2
-share 12–23% of their edges (Jaccard, 5 pairs). A cul-de-sac via moves 86 m to the nearest through
-street with its note; a round trip from Pioneer Courthouse Square makes a 100.7 km loop. The other
-6 pairs end in `StopUnreachable`, below.
+`graph_version` 45f650e868fa; the reference backend, attempts unlimited; engine version 2; the
+named trips with `worst-route plan --budget 30 --max-iterations 1000000 --backend python`):
 
-**On Portland with `CsrBackend`** (the same build). The machine was busy with other work (load
-average about 20 during the acceptance runs), so a rate compares only with the run made just
-before or after it.
+| | Result |
+|---|---|
+| 20 random pairs 3–15 km apart, seed 1 | all 20 plan and the validator passes all 20; median ratio 21.5× (quartiles 9.0× and 27.0×, range 3.3–45.2×); every run converged, in 0.8–19.3 s; median 5,400 attempts/s; no stop moved; `refused_transitions` 0 |
+| the first 5 pairs again with seed 2 | Jaccard of the two routes' edges 0.10–0.16, of their road units 0.20–0.28 |
+| Powell's Books → Reed College, 7.71 km by the baseline, seeds 1–3 | 62.4×, 62.2×, 57.9× (447–482 km, 4,673–4,913 nodes), converged in 9.9–12.5 s |
+| PDX → Beaverton Transit Center, 26.4 km | 7.3× (192.1 km), converged in 4.5 s; before the searches saw the transition tables it could not be planned |
+| SE Caruthers cul-de-sac via | the via moves 86 m to the nearest through street with its note; 71.6× (389.8 km) |
+| Round trip from Pioneer Courthouse Square | a 164.4 km loop |
+
+Along the way (same pairs, seed 1): with the searches blind to the tables, 14 pairs planned at a
+median of 6.4×; seeing them, 19 at 6.6× (`refused_transitions` 0 from then on); with the twin
+re-search, 20 at 7.0× (4 re-searches in seed legs, 2 legs, which had made one pair fail and moved
+another's stop 1,024 m; 219 in detours); with the cycles, the ban counts and the masked balls,
+8.2×; then the loop's tuning (**The loop**), each step measured on the 20 pairs: the segment bias
+8.3× (and 7.1× → 8.8× on seed 2), longer runs 8.3×, an 8 × radius search budget 13.3×, half the
+waypoints drawn uniformly 18.0×, three empty cycles to stop 20.2×. Runs before the tuning used
+2–23% of the road their request allows; the ratio was the search running out of moves, not the
+leash.
+
+**On Portland with `CsrBackend`** (the same build, engine version 1, before the searches saw the
+transition tables; `CsrBackend` cannot search them yet, so Portland now plans on the reference).
+The machine was busy with other work (load average about 20 during the acceptance runs), so a
+rate compares only with the run made just before or after it.
 - **Powell's → Reed, seed 1, `--budget 30 --max-iterations 1000000`.** The reference's 49.74×
   with the same route bytes, converging after 18,708 attempts in 11.0 s (1,700 attempts/s); the
   reference took 12.0 s (1,560/s).
@@ -537,9 +550,10 @@ before or after it.
 - **Twins within a leg.** A leg driving an edge and its twin is searched again without the
   later one, up to 8 times; a leg that needs more rounds, or whose only way drives a twin
   pair, falls back as an unreachable one.
-- **Speed.** `CsrBackend`'s searches are 8–13× the reference's on large searches, but a run on
-  a city-sized grid or on Portland is now bound by the loop's own NumPy work (**The loop**,
-  Measured; **On Portland with `CsrBackend`**), so a whole run gains only 10–20%.
+- **Speed.** `CsrBackend` has no transition-aware kernel yet, so a build with transition tables,
+  Portland's among them, plans on the reference, which `auto` takes there. On a build without
+  tables its searches are 8–13× the reference's, and a whole run 1.5–1.9× (**The loop**,
+  Measured).
 - **Time budgets.** A run that stops on time is reproducible only through its recorded attempt
   count.
 - **The strategy mix.** Random weight found a path other than the removed run in 3 of 64

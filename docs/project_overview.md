@@ -2,8 +2,7 @@
 
 Last updated: 2026-10-30. Snapshot taken after the pipeline's last steps landed: the plan is
 written; the project scaffolding, every pipeline step, the graph package and the engine are
-built; Portland has a saved build, and the M1 acceptance run on it was made (§2.2): the
-pipeline and the validator hold, the engine does not yet meet the acceptance.
+built; Portland has a saved build, and the M1 acceptance run on it passes (§2.2): M1 is built.
 
 This file answers three questions: what the project is meant to become, how far along it is, and
 what has been decided. It is written for a human reader and for an AI agent picking up the
@@ -91,13 +90,15 @@ memory-mapped on-disk format with its `graph_version`, the `GraphBackend` protoc
 pure-Python reference backend, snapping with the leash and bubble masks, and the builders tests
 use for small graphs. The CSR + Numba production backend (M2 step 1) is built too: Numba kernels
 for the masked Dijkstra and the simple-path search, byte-identical to the reference and 8–13×
-faster on large searches; whole runs gain 10–20%, now bound by the loop's own NumPy work. The engine and `worst-route plan` / `validate` use it by default
-(`--backend auto|csr|python`).
+faster on large searches; whole runs on a build without transition tables gain 1.5–1.9×. The
+engine and `worst-route plan` / `validate` use it by default (`--backend auto|csr|python`),
+except on a build with transition tables, which it cannot search yet: there, Portland's among
+them, the default (`auto`) takes the reference.
 The engine is built (`docs/reference/engine.md`): the route model whose splice is its only
 mutation and refuses any repeat, the request with its tier, leash and bubble masks (a tier also
 bans lower-class roads away from the stops), snapping with the re-snap fallback, the baseline
-and the seed route with node-disjoint legs (and loops for round trips), the three detour
-strategies, the worsen loop with its ambition radius and budget, the objective interface with
+and the seed route with node-disjoint legs (and loops for round trips), searches that see the
+transition tables and avoid driving both carriageways of a road, the three detour strategies, the worsen loop with its ambition radius and budget, the objective interface with
 the distance mode, the validator that proves a route from the original OSM ids, route files,
 and `worst-route plan` / `validate`, which run on any saved build. A golden route freezes the
 engine's output on a test lattice.
@@ -113,8 +114,8 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 
 | Milestone | Status | Summary |
 |---|---|---|
-| M1 — Portland, distance mode, CLI | In progress | bootstrap, every pipeline step (download to qa; Portland's build passes QA), the graph package and the engine (snapping, seed route, splice loop, distance objective, validator, `worst-route plan` / `validate`) built. The acceptance run (`docs/PLAN.md` §7 M1 step 9; `uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` on build e4b3b4ad90db, `graph_version` 45f650e868fa: 20 random Portland pairs 3–15 km apart): 14 of 20 plan and the validator passes all 14; 6 end in `StopUnreachable`, 4 of them on a turn a transition table forbids (they plan without the tables) and 2 on a leg whose shortest path uses an edge and its twin; the median ratio is 6.4× (2.4–31.1×), every run stopping as converged, 12 of 14 within 7 s; seeds 1 and 2 share 12–23% of their edges (Jaccard on 5 pairs, all < 0.3); the cul-de-sac via moves 86 m to the nearest through street with its note. Remaining: the seed and the detours seeing transitions and twins within a leg, and a loop that converges early (a median of 6×), though Powell's → Reed already gives 44–50× |
-| M2 — API + map, live growth | In progress | CSR + Numba backend built (the default; byte-identical to the reference); remaining: FastAPI jobs + SSE; MapLibre frontend; targets by ratio and duration; reroll, make it worse |
+| M1 — Portland, distance mode, CLI | Built | bootstrap, every pipeline step (download to qa; Portland's build passes QA), the graph package and the engine (snapping, seed route, transition-aware searches, splice loop, distance objective, validator, `worst-route plan` / `validate`). The acceptance run (`docs/PLAN.md` §7 M1 step 9; `uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` on build e4b3b4ad90db, `graph_version` 45f650e868fa, the reference backend: 20 random Portland pairs 3–15 km apart): all 20 plan and the validator passes all 20; the median ratio is 21.5× (3.3–45.2×); seeds 1 and 2 share 10–16% of their edges (Jaccard on 5 pairs, all < 0.3); the cul-de-sac via moves 86 m to the nearest through street with its note. Powell's → Reed gives 58–62×, PDX → Beaverton 7.3× (`docs/reference/engine.md`, **On Portland**) |
+| M2 — API + map, live growth | In progress | CSR + Numba backend built (the default; byte-identical to the reference); remaining: its edge-state kernel (until then `auto` takes the reference on a build with transition tables, Portland's among them); FastAPI jobs + SSE; MapLibre frontend; targets by ratio and duration; reroll, make it worse |
 | M3 — Modes and constraints | Planned | turn-aware kernel, never/only-left; slowest time; collectibles; brands; hard mode; the search honouring stage B transitions (built at M1); alphabet search |
 | M4 — Presentation | Planned | directions, stats, toasts, comparisons, share image, geocoding proxy, share links |
 | M5 — Scaling up | Planned | Oregon; array-based simplify/consolidate; US at T1; the national decision gate; public-hosting prep |
@@ -124,18 +125,25 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 
 The risks the plan anticipates are `docs/PLAN.md` §8.3. Found on the Portland build:
 
-- **The search does not see transition tables** (`docs/reference/engine.md`, **Limitations**).
-  Portland has 11,378 rows at 657 super-junctions, 180 of which forbid some turns; a seed leg
-  whose shortest path takes a forbidden turn fails, so 4 of the 20 acceptance pairs and PDX →
-  Beaverton cannot be planned, though they can on the same build without its rows.
-- **A seed leg does not see twins within itself.** A shortest path that drives both
-  carriageways of one road (a U-turn on E Burnside St) is refused, and the leg is not rebuilt
-  around it.
+- **Only the reference backend searches transition tables.** The engine's searches see them
+  (Portland has 11,378 rows at 657 super-junctions, 180 of which forbid some turns), through the
+  reference backend's Python edge-state search; `CsrBackend` has no kernel for it yet, so
+  `auto` takes the reference on Portland (the `backend:` line says why), and `plan --backend
+  csr` there says so in one line.
+- **The transition-aware search answers no path** when the cheapest legal way passes a node
+  twice; it does not look for the cheapest node-simple legal way, so a leg can fall back (a
+  re-snapped stop) where a longer legal one exists. No seed leg of the acceptance pairs did;
+  in their detour searches the review counted 23 such answers in about 155,000 calls, each
+  costing one failed attempt.
+- **Most of the road a request allows stays unused**: the loop converges before its budget on
+  every acceptance pair (quartiles 9× and 27×); the remaining levers are the search's
+  (`docs/reference/engine.md`, **On Portland**), and a faster backend helps only runs that hit
+  the budget.
 - **A twin false positive at hairpins** (cleanup): two consecutive one-way edges of one road
   that bend back on themselves are twinned with each other when the bend is split between two
   OSM ways, which the shared-way exclusion does not catch (an OR 224 Sunrise Expressway hairpin,
-  ways 842904309 and 842904310), so the hairpin can never be driven; 1 of the 20 acceptance
-  pairs fails on it.
+  ways 842904309 and 842904310), so the hairpin can never be driven; the acceptance pair that
+  failed on it plans now, around it.
 - **Delays mostly undercount**: of Portland's 5,960 stop signs, 4,471 are mapped on the
   approach as shape points, as are 829 of 3,377 signals, and add no delay in M1.
 - **Junction collectibles** count on the node's lowest-id out-edge only, and **bearings** at a
@@ -210,6 +218,19 @@ brief):
   attempts, so the 30 s budget is the limit.
 - **Three detour strategies** (waypoint, random-weight Dijkstra, local exhaustive) mixed by the
   objective; strict improvement for max modes; a stopping rule for target modes.
+- **The engine's searches and loop as built for M1** (2026-10-30, at the engine-fixes plan and
+  its review): on a build with transition rows every path is searched over edge states
+  (`dijkstra_edges`, the DFS with turn checks), on one without by the node-state search, so the
+  backends agree byte for byte there; a cheapest legal walk that repeats a node is no path. The
+  baseline turns legally inside each leg, independently at vias, and falls back to the
+  turn-blind path, so it never exceeds the seed. Seed legs and detour searches are searched
+  again without a twin they drive (up to 8 rounds); the baseline is not, since a GPS may drive
+  both carriageways. The loop runs in cycles and stops after 3 empty ones; windows start with
+  probability 0.3 at the route edges with the most unused nodes near, runs are 1 + geometric
+  (mean 3, at most 12), searches are bounded by 8 × radius, and half the waypoints are drawn
+  uniformly in the ball, each kept for raising the acceptance median. `auto` takes the
+  reference on a build with transition tables until the CSR edge-state kernel lands; `validate`
+  refuses a route made by another engine version.
 - **Alphabet mode is a constructive search**, not a splice objective.
 - **SSE for progress, not WebSockets.**
 - **Share image rendered from our own data** (route, faint network, Census outlines), no

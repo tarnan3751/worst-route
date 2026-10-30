@@ -398,11 +398,29 @@ and exit 1. It refuses a build whose `graph_version` differs, recomputes the req
 from the file's request, and re-derives the stops with `resolve_stops`. It prints one line per
 check, then `valid`, or exits 1.
 
+**On Portland** (the M1 acceptance, `docs/PLAN.md` §7 M1 step 9: `uv run python tools/acceptance.py
+--region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30`, on build e4b3b4ad90db,
+`graph_version` 45f650e868fa; the reference backend, attempts unlimited; the named trips with
+`worst-route plan --budget 30 --max-iterations 1000000`): Powell's Books → Reed College, 7.71 km by
+the baseline, gives 49.7×, 48.9× and 44.3× on seeds 1–3 (342–384 km, about 4,000 nodes), converging
+in 10–11 s at about 1,600 attempts/s. On 20 random pairs 3–15 km apart (seed 1), 14 plan and the
+validator passes all 14; the median ratio is 6.4× (2.4–31.1×), every run stopping as converged, 12
+of 14 within 7 s, at 1,500–4,700 attempts/s: the budget is not what limits the ratio. Seeds 1 and 2
+share 12–23% of their edges (Jaccard, 5 pairs). A cul-de-sac via moves 86 m to the nearest through
+street with its note; a round trip from Pioneer Courthouse Square makes a 100.7 km loop. The other
+6 pairs end in `StopUnreachable`, below.
+
 ## Limitations
 
 - **Transitions.** The searches do not know transition tables, so on a build with rows the
-  seed and the detours can fail where a turn-aware search would succeed. No M1 build has rows;
-  stage B allows every turn in M1.
+  seed and the detours can fail where a turn-aware search would succeed. Portland's build has
+  11,378 rows at 657 super-junctions, 180 of which forbid some turns. A seed leg whose shortest
+  path takes a forbidden turn is refused by `check_route`, and re-snapping the stop rarely helps:
+  4 of the M1 acceptance's 20 pairs and PDX → Beaverton end in `StopUnreachable`, and all five
+  resolve on the same build with its rows removed.
+- **Twins within a leg.** A seed leg is a plain shortest path; when it drives an edge and its
+  twin (both carriageways of one road, as in a U-turn on E Burnside St, or a cleanup false twin
+  on an OR 224 hairpin), the leg is refused and not rebuilt around it: 2 of the 20 pairs.
 - **Speed.** The reference backend is pure Python; the CSR + Numba backend is M2.
 - **Time budgets.** A run that stops on time is reproducible only through its recorded attempt
   count.
@@ -439,6 +457,25 @@ bytes).
 | `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable` |
 | `test_io.py` | the route files |
 | `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32 |
+
+**The acceptance run**, `tools/acceptance.py`, plans random stop pairs on a saved build, so it
+needs `WORST_ROUTE_DATA` and is not part of the gate:
+
+```
+uv run python tools/acceptance.py --region portland [--build-id ID] [--pairs 20] [--seed 1]
+    [--budget 30] [--backend python] [--min-km 3] [--max-km 15] [--jaccard 5]
+    [--pair-seed 2026] [--near-m 250] [--out tools/out/acceptance.json]
+```
+
+The pairs are uniform points in the region's bbox with a node within `--near-m`, the end at a
+straight-line distance within the bounds, drawn from `PCG64(--pair-seed)`; each is planned with
+`plan_route` and no attempt limit, so the budget bounds every run. The first `--jaccard` pairs
+that plan are planned again with the next seed and compared (Jaccard of edges and of road
+units). A pair that cannot be planned, or whose stop the re-snap fallback moved, is resolved
+again on the build without its transition rows, to tell whether the tables stopped it. It prints
+a table row per pair and a summary (planned, validator passes, median ratio and range, attempts
+per second, the failures the transitions caused, the Jaccards), writes the JSON report, and
+exits 1 only when a planned route fails the validator. On Portland it takes under two minutes.
 
 `tests/golden/` freezes one route (seed 7, three stops) on a 20 × 20 lattice whose lon/lat are
 rounded to 1e-7°, so its bytes and pinned `graph_version` do not depend on PROJ's last bits.

@@ -209,16 +209,19 @@ Semantics: **using edge E bans every edge in twins(E).** This is conservative (a
 `dual_carriageway=yes` is rare and unreliable; it is a hint, not the detector.
 
 **f. Connectivity** (`connectivity.py`):
-- Strongly connected components (networkx at cleanup; `scipy.sparse.csgraph.connected_components(connection="strong")` on the CSR arrays for the per-tier pass). Keep the largest. Report dropped node count, total dropped length, and the 20 largest dropped components (size, length, centroid) — a large dropped component means a filtering bug (e.g. a town whose only access got excluded), not noise.
+- Strongly connected components (networkx, at cleanup and again per tier in `tiers`, §2.6). Keep the largest. Report dropped node count, total dropped length, and the 20 largest dropped components (size, length, centroid) — a large dropped component means a filtering bug (e.g. a town whose only access got excluded), not noise.
 - Thresholds that fail the build: all-roads graph must retain ≥ 99% of nodes (`pipeline cleanup` fails unless `--allow-fragmented`); each tier ≥ 95% of its own nodes.
 - Fragmentation test for tiers: a fixture list of city pairs per region (Portland–Salem, Portland–Bend, …) must be mutually reachable at every tier that is supposed to cover that trip length.
 
 ### 2.5 `enrich`
 
-- **Speed:** parse `maxspeed` ("45 mph", "35", "signals", "none" → class default; multi-values take the first). Defaults by class (mph): motorway 65, trunk 55, primary 45, secondary 35, tertiary 30, unclassified 25, residential 25, living_street 15, alley 10, `_link` 35. `time_s = length / speed`. Node delay for `highway=stop` (10 s) and `traffic_signals` (30 s) feeds the slowest-time mode.
-- **Identity (hard mode):** `identity_id` per edge: normalized ref set if present (`"I 5"`, `"I-5"`, `"Interstate 5"` → `I 5`; `"US 26;OR 8"` → both refs, identity = the first after sorting by class I > US > state), else normalized name (case-folded, abbreviations expanded: `St→Street`, `NE→Northeast`, directional suffixes kept). Dictionary of identities saved with the build.
-- **Twin units:** `unit_id` groups the forward/backward edges of a two-way road (implied by node-simplicity, except in a two-edge round trip out along a road and back, which `Route.splice` and the validator refuse by unit) and the twins table from §2.4e.
-- **Collectibles:** toll booths and level crossings are nodes on ways; map each to the simplified edge whose original node list contains it → `toll_booth_n`, `level_crossing_n` per edge. `bridge=yes` per edge. Roundabout → super-node flag. Stop signs/signals → node delay.
+Built for M1 without brands, states and places (M3, M4); how it works and Portland's numbers are `docs/reference/pipeline.md`, **enrich**.
+
+- **Speed:** parse `maxspeed` ("45 mph", "35" in mph by US convention, "50 km/h", "signals", "none" → class default; multi-values take the first). Defaults by class (mph): motorway 65, trunk 55, primary 45, secondary 35, tertiary 30, unclassified 25, residential 25, living_street 15, alley 10, `_link` 35. `time_s = length / speed`. Node delay for `highway=stop` (10 s) and `traffic_signals` (30 s) feeds the slowest-time mode: the largest among a node's merged junctions (a signal cluster delays once); a stop sign or signal mapped as a shape point before the junction adds none in M1.
+- **Identity (hard mode):** `identity_id` per edge: normalized ref set if present (`"I 5"`, `"I-5"`, `"Interstate 5"` → `I 5`; `"US 26;OR 8"` → both refs, identity = the first after sorting by class I > US > state (a state's postal code or `SR`) > other, alphabetically within a class; a `Business`/`Spur`/`Alt` suffix stays on its ref, so such a route never takes its mainline's identity), else normalized name (case-folded, abbreviations expanded: `St→Street`, `NE→Northeast`, directional suffixes kept). Dictionary of identities saved with the build.
+- **Twin units:** `unit_id` groups the forward/backward edges of a two-way road (the edges whose original node lists run opposite ways; the unit's id is the smaller edge id; implied by node-simplicity, except in a two-edge round trip out along a road and back, which `Route.splice` and the validator refuse by unit); the twins table from §2.4e stays a table of its own.
+- **Bearings:** `bearing_out` over the first 20 m of the geometry (leaving u) and `bearing_in` over the last 20 m (arriving at v), as §3.6's turn rule reads them.
+- **Collectibles:** toll booths and level crossings are nodes on ways; map each to the simplified edges whose original node list contains it (both directions of a two-way road; a route uses one) → `toll_booth_n`, `level_crossing_n` per edge; one at a junction counts on the node's lowest-id out-edge until node collectibles (M3). `bridge=yes` per edge. Roundabout → super-node flag. Stop signs/signals → node delay.
 - **Brands:** POIs with `brand` or `brand:wikidata`; snap each to the nearest kept edge within 50 m (STRtree nearest on edge geometries). Table `pois(brand_key, wikidata, name, lon, lat, edge_id, offset_m)`; `brand_key` = `brand:wikidata` when present else normalized brand name. Index by brand for the `/brands` autocomplete.
 - **States:** Census cartographic boundary file `cb_2024_us_state_500k` → `state_fips` per node (STRtree `contains` on node points).
 - **Places:** Census Gazetteer `2024_Gaz_place_national.txt` (GEOID, NAME, LSAD, ALAND, INTPTLAT/INTPTLONG). Store as a table with `radius_m = clamp(sqrt(ALAND/π), 400 m, 12 km)`. "Passed through" is evaluated at request time (§3.9).
@@ -234,7 +237,7 @@ Semantics: **using edge E bans every edge in twins(E).** This is conservative (a
 | T3 | + tertiary (+links) | 15–60 km |
 | T4 | + residential, unclassified, living_street, alleys | < 15 km |
 
-Each tier is an edge mask on the master graph plus a node mask after re-running SCC within the tier. Node ids never change across tiers, so a manual override at runtime is just a different mask.
+Each tier is an edge mask on the master graph plus a node mask after re-running SCC within the tier: the tier's nodes are the largest strongly connected component of its own roads, and its edges those roads between kept nodes; `pipeline tiers` fails when a tier keeps less than 95% of the nodes its roads touch (`docs/reference/pipeline.md`, **tiers**). Node ids never change across tiers, so a manual override at runtime is just a different mask.
 **Local bubbles:** at request time, the active mask is `leash ∧ (tier_mask ∨ within(R, any stop))` with `R` = 3 km of all-roads graph around each stop, so a cross-state trip still starts from the user's actual street instead of snapping 10 km to the nearest primary road. The request also bans every edge outside the tier's edge mask unless both its ends lie in a bubble, so a lower-class road between two of the tier's own nodes stays out away from the stops (`docs/reference/engine.md`, **Requests**).
 
 ### 2.7 `save` — on-disk format
@@ -258,20 +261,21 @@ data/graphs/<region>/<build_id>/
     transitions      trans_node, trans_in, trans_out: allowed (in_edge, out_edge) pairs at super-nodes, sorted
     tiers            tier_node_mask [T0..T4, n], tier_edge_mask [T0..T4, m], after SCC
   stages/            the pipeline's intermediate state between its steps (docs/reference/pipeline.md)
+  qa/                qa.json; GeoJSON: twin pairs, super-junctions, dropped components, nodes the tiers dropped
   later, with their steps:
   internal_paths     coordinate runs for drawing through super-junctions (stage B)
   pois.parquet       brand POIs (§2.5)
   places.parquet     Gazetteer places with radius_m (national file, shared)
-  qa/                GeoJSON: twin pairs, super-junctions, dropped components, snapping oddities; qa.html summary
+  qa/                snapping oddities; qa.html summary
 ```
 
-Edge ids are sorted by (u, v, original order), so each node's out-edges are one contiguous run of ascending ids. `graph_version` is the sha256 over each array's name, dtype, shape and bytes in a fixed order, then `strings.json`, then the build `params`; nothing else in `meta` enters it, so rewriting the same build reproduces it. `graph/store.py` writes a build into its build directory, beside the pipeline's `stages/`: it stages the files in a temporary sibling directory, moves `strings.json` and `arrays/` in, and moves `meta.json` in last as the commit marker, so a reader never sees half a build. A directory that already has `meta.json` is refused, so a build is never overwritten; `arrays/` or `strings.json` without `meta.json` are a crashed write's leftovers and are replaced.
+Built: `pipeline save` writes it from the enriched graph and the tiers (`docs/reference/pipeline.md`, **save**), with `params` holding the configuration each step ran with, and refuses a super-junction whose transition table allows no turn, which the format cannot say. Edge ids are sorted by (u, v, original order), so each node's out-edges are one contiguous run of ascending ids. `graph_version` is the sha256 over each array's name, dtype, shape and bytes in a fixed order, then `strings.json`, then the build `params`; nothing else in `meta` enters it, so rewriting the same build reproduces it. `graph/store.py` writes a build into its build directory, beside the pipeline's `stages/`: it stages the files in a temporary sibling directory, moves `strings.json` and `arrays/` in, and moves `meta.json` in last as the commit marker, so a reader never sees half a build. A directory that already has `meta.json` is refused, so a build is never overwritten; `arrays/` or `strings.json` without `meta.json` are a crashed write's leftovers and are replaced.
 
 Why: `np.load(mmap_mode="r")` makes load time ~0 and lets worker processes share memory; `.npy` is language-neutral if a Rust kernel ever replaces Numba. Parquet exports of the node and edge tables, for DuckDB and QGIS, become a `qa` convenience later.
 
 ### 2.8 `qa`
 
-Per build: counts by class and tier, SCC drop report, twin-pair statistics (pairs per class, unpaired one-way motorway length — should be near zero), super-junction count and size histogram, 50 random snap tests, and a map HTML with the GeoJSON layers. The build is "accepted" only when the QA thresholds in §2.4f pass. This is the fastest way to catch the classic failures (a ramp class missing, all of I-84 unpaired, a bridge tagged `access=private`).
+Per build: counts by class and tier, SCC drop report, twin-pair statistics (pairs per class, unpaired one-way motorway length — should be near zero), super-junction count and size histogram, 50 random snap tests, and a map HTML with the GeoJSON layers. The build is "accepted" only when the QA thresholds in §2.4f pass. Built for M1 (`docs/reference/pipeline.md`, **qa**): `qa.json` with the counts, the reports, the twin coverage, the histogram and the thresholds (twin coverage ≥ 0.95, SCC retained ≥ 0.99, every tier ≥ 0.95), and the GeoJSON layers; the snap tests and the map page are later. This is the fastest way to catch the classic failures (a ramp class missing, all of I-84 unpaired, a bridge tagged `access=private`).
 
 ---
 
@@ -747,12 +751,12 @@ Deliverable: `worst-route plan --region portland --from 45.5231,-122.6765 --to 4
 1. Repo bootstrap: `uv init`, src layout, ruff/mypy/pytest, `justfile`, `.gitignore` for `data/`, CI running tests on fixtures only (no downloads).
 2. Pipeline `download → filter → build` for `portland` (bbox clip from Oregon).
 3. Cleanup: simplify, consolidate stage A, stage B with its transition tables (enforced by `Route.splice`, ignored by the search until M3), twin detection, SCC + report.
-4. Enrich: length, speed defaults (needed for time stats later anyway), identities, `pass_through`.
-5. Save/load in the §2.7 format; `qa` report with GeoJSON layers.
+4. Enrich: length, speed defaults (needed for time stats later anyway), identities, `pass_through`; also road units, flags, bearings, toll booths, level crossings and node delays.
+5. Save/load in the §2.7 format; `qa` report with GeoJSON layers. Built: Portland's pipeline runs from the Oregon extract in under a minute and a half and passes QA (`docs/reference/pipeline.md`).
 6. `GraphBackend` protocol + `PythonBackend` (pure Python over the arrays; networkx as the tests' oracle).
 7. Engine: snapping with fallback, seed route with disjoint legs, `Route.splice`, `worsen` loop with the three detour strategies, distance objective, budget, progress events to stdout.
 8. **Validator** (§8.1) and the fixture suite (§8.2). The CLI runs the validator on every result and refuses to print a route that fails.
-9. Acceptance: on 20 random Portland stop pairs, 30 s budget: validator passes 20/20; median ratio ≥ 10× with the reference backend; two seeds give Jaccard < 0.3; a cul-de-sac intermediate stop produces a snap note instead of a failure.
+9. Acceptance: on 20 random Portland stop pairs, 30 s budget: validator passes 20/20; median ratio ≥ 10× with the reference backend; two seeds give Jaccard < 0.3; a cul-de-sac intermediate stop produces a snap note instead of a failure. First run (2026-10-30, `uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30`, `docs/project_overview.md` §2.2): the validator passes every route returned, but only 14 of 20 pairs plan (the seed does not see transition tables or twins within a leg) and the median ratio is 6.4×; Jaccard (0.12–0.23) and the cul-de-sac note hold.
 
 ### M2 — API + map, live growth
 

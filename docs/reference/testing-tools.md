@@ -50,7 +50,8 @@ leftover scan alone.
 The main working tree is the coordinator's. A developer or reviewer works in a `git clone` under
 its scratch directory: `uv sync` builds the virtualenv from the lockfile; `npm ci` under
 `frontend/` when it exists. A lane reads built graphs through `WORST_ROUTE_DATA` pointing at the
-main tree's `data/` (builds are immutable per build id) and writes pipeline output only under its
+main tree's `data/` (builds are immutable unless `pipeline save --force` replaces one, which
+changes its `graph_version`) and writes pipeline output only under its
 own `data/`. Nothing in a lane downloads. A lane's server binds a free port. Heavy jobs (a
 state-scale pipeline step, a benchmark) run one at a time, arranged by the brief.
 

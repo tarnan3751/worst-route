@@ -5,8 +5,9 @@ sidecars, and the rules each step applies. The design is `docs/PLAN.md` §2; the
 `src/worst_route/pipeline/`, one module per step, and each module's header comment states its
 contract.
 
-Built: `download`, `filter`, `build`, `cleanup`. Still stubs that exit with code 2: `enrich`,
-`tiers`, `save`, `qa`.
+Built: every step, `download`, `filter`, `build`, `cleanup`, `enrich`, `tiers`, `save` and `qa`.
+`save` writes the build in the format `docs/reference/graph.md` describes, which `worst-route
+plan` reads.
 
 ## Commands
 
@@ -15,16 +16,25 @@ uv run worst-route pipeline download --region portland [--force]
 uv run worst-route pipeline filter   --region portland [--source PATH] [--force]
 uv run worst-route pipeline build    --region portland [--source PATH] [--build-id ID] [--force]
 uv run worst-route pipeline cleanup  --region portland [--build-id ID] [--force] [--allow-fragmented]
+uv run worst-route pipeline enrich   --region portland [--build-id ID] [--force]
+uv run worst-route pipeline tiers    --region portland [--build-id ID] [--force] [--allow-fragmented]
+uv run worst-route pipeline save     --region portland [--build-id ID] [--force]
+uv run worst-route pipeline qa       --region portland [--build-id ID] [--force]
 ```
 
 `--region` is a key of `config.REGIONS` (a Geofabrik state slug, an optional bbox, a projected
 CRS). `--source` makes `filter` or `build` read that file instead of its usual input (a fixture,
 in tests). Every step accepts `--build-id` and `--force`; `download` and `filter` ignore the
-build id; `cleanup` reads the build `--build-id` names, else the region's `latest`. Each step
-prints what it wrote and its counts, or that its output is up to date and was skipped. A missing
-input exits with code 1 and names the step to run first; a failed download (an md5 mismatch, an
-HTTP or connection error) prints one line on stderr and exits 1, and so does a cleanup whose
-largest strongly connected component keeps too few nodes, unless `--allow-fragmented`.
+build id; the steps from `cleanup` on read the build `--build-id` names, else the region's
+`latest`. Each step prints what it wrote and its counts, or that its output is up to date and
+was skipped. A missing input (a stage file, a sidecar) exits with code 1 and names the step to
+run first. One line on stderr and exit 1 also for: a stage before the step that is stale (made
+from inputs that have changed since; below), naming the step to rerun; a failed download (an
+md5 mismatch, an HTTP or connection error); a cleanup whose largest strongly connected
+component keeps too few nodes, or a tiers step with a tier that keeps too few of its own,
+unless `--allow-fragmented`; a save that would overwrite a written build, whose filtered
+extract has changed since the build was built, or that cannot express the build; a qa whose
+thresholds fail (after it printed them and wrote its report).
 
 ## Data layout
 
@@ -38,10 +48,16 @@ is the one place that names these paths.
 | `graphs/<region>/<build_id>/stages/build.pkl`, `stages/build.json` | `build` |
 | `graphs/<region>/latest` (the region's current build id, one line) | `build` |
 | `graphs/<region>/<build_id>/stages/cleanup.pkl`, `stages/cleanup.json` | `cleanup` |
-| `<output>.inputs.json` beside a step's output (its sidecar) | `filter`, `build`, `cleanup` |
+| `graphs/<region>/<build_id>/stages/enrich.pkl`, `stages/enrich.json` | `enrich` |
+| `graphs/<region>/<build_id>/stages/tiers.json` | `tiers` |
+| `graphs/<region>/<build_id>/meta.json`, `strings.json`, `arrays/`; `stages/save.json` | `save` (the build, through `graph.store.write_build`) |
+| `graphs/<region>/<build_id>/qa/qa.json`, `qa/*.geojson` | `qa` |
+| `<output>.inputs.json` beside a step's output (its sidecar) | every step but `download` |
 
 `stages/` holds intermediate state between the steps of one build. `stages/*.pkl` is the only
-place the pipeline pickles; the final on-disk format (`docs/PLAN.md` §2.7) never does.
+place the pipeline pickles; the final on-disk format (`docs/PLAN.md` §2.7) never does. The build
+itself, what `worst-route plan` reads, sits beside `stages/` in the same directory, and the QA
+report beside it in `qa/`.
 
 ## Build ids, sidecars, skipping
 
@@ -53,16 +69,33 @@ place the pipeline pickles; the final on-disk format (`docs/PLAN.md` §2.7) neve
   `{"step", "inputs": [{"file", "md5"}], "params"}` in `<output>.inputs.json` (filter: the
   bbox and the pipeline version; build: the region, bbox, CRS and pipeline version; cleanup:
   `allow_fragmented`, the config values it depends on, `cleanup.parameters()`, and the pipeline
-  version, its input being `build.pkl`). Inputs are
-  recorded by file name and md5, so moving the data directory does not invalidate them. The
+  version, its input being `build.pkl`; enrich: its config and the pipeline version, its inputs
+  `cleanup.pkl` and the POI table; tiers: like cleanup, its input `enrich.pkl`; save: the
+  pipeline version and the `params` it copies into the build's meta, so a changed parameter that
+  leaves every stage byte-identical is still another input, its inputs `enrich.pkl` and
+  `tiers.json`, its output `stages/save.json`;
+  qa: its thresholds, its inputs `meta.json` and the stage reports, its output `qa/qa.json`).
+  Inputs are recorded by file name and md5, so moving the data directory does not invalidate
+  them. The
   filter's sidecar also records `source_timestamp`, the extract's data date from its header
   (`osmosis_replication_timestamp`, read by `filter.source_timestamp`; null when the header has
   none, as in the fixtures), for the `save` step to carry into the build's metadata.
 - **Skipping:** a step is skipped, with a message, while its outputs exist and its sidecar
   equals what it would record now; `--force` runs it anyway. The sidecar is deleted before a
   step runs, so an interrupted run is never mistaken for a finished one (`cleanup` also deletes
-  its old outputs, so a failed run leaves none). `build` writes `latest` whether it ran or was
-  skipped.
+  its old outputs, so a failed run leaves none, and so do `enrich` and `tiers`). `build` writes
+  `latest` whether it ran or was skipped. `save` is the exception, because a written build is
+  never overwritten: with its sidecar matching it skips; with a build already written from other
+  inputs it refuses without `--force`; `--force` deletes the build (`meta.json` first) and writes
+  it again. `qa` prints its stored thresholds when it skips, and fails again when they fail.
+- **Stale stages:** a step reads earlier stages only when they are fresh. `layout.stale_stages`
+  walks the chain `STAGE_CHAIN` (cleanup from `build.pkl`, enrich from `cleanup.pkl`, tiers
+  from `enrich.pkl`, save from `enrich.pkl` and `tiers.json`) and names each stage whose sidecar
+  records an input md5 that the file there no longer has (or a file now gone); a stage not yet
+  made is not stale. `enrich`, `tiers`, `save` and `qa` refuse with one line, "stage X is stale:
+  rerun `worst-route pipeline X --region R`", when a stage before them is (`qa` checks the whole
+  chain, `save` included): rerunning cleanup and enrich and then `save`, without `tiers`, is refused
+  rather than saving tiers computed on the old graph.
 - **Download** is skipped while the extract on disk matches its local `.md5` file (no sidecar;
   the check reads only local files).
 
@@ -381,6 +414,155 @@ inside); connectivity keeps 65,810
 of 66,072 nodes (99.6%), dropping 262 nodes and 62.9 km in 157 components, the largest 11 nodes.
 The cleaned graph has 65,810 nodes and 168,167 edges.
 
+## `enrich`
+
+`enrich.run_enrich(graph, pois) -> EnrichReport` adds to the cleaned graph, in place, what the
+engine and the modes read, then `enrich.save_stage` pickles it to `stages/enrich.pkl` and writes
+the report to `stages/enrich.json`. Edges are visited in key order; nothing is random. The
+constants are in `config.py`.
+
+- **Speed and time.** `parse_maxspeed` reads the `maxspeed` tag: `"45 mph"`, `"45mph"`; a bare
+  number is mph, the US convention; `"50 km/h"`, `kmh`, `kph`; a `;` list takes its first value.
+  Anything else (`signals`, `none`, `US:urban`, `0`, knots) falls back to the class default,
+  `SPEED_DEFAULT_MPH` (motorway 65, trunk 55, primary 45, secondary 35, tertiary 30,
+  unclassified and residential 25, living street 15, alley 10, every `_link` 35). `speed_kmh`
+  is stored, `speed_parsed` says which, and `time_s = length / (speed_kmh / 3.6)`.
+- **Identity** (hard mode, directions): `names.identity_of`, the highest-class ref (Interstate,
+  then US, then a state's postal code or `SR`, then any other, such as a county's `CR`;
+  alphabetical within a class), each ref keeping its `BUSINESS`, `SPUR` or `ALT` suffix so such a
+  route never takes its mainline's identity; else the normalised name; else none.
+- **Road unit.** The two directions of a two-way road are the edges whose `osm_nodes` run
+  opposite ways; both get the smaller key of the two as `unit`, which `save` turns into the
+  smaller edge id. A one-way edge is its own unit. Parallel roads between the same junctions
+  differ in their shape points and stay separate units.
+- **Flags** (`EdgeFlag`): bridge and tunnel when the tag is present and not `no` (`viaduct`,
+  `building_passage` count), toll for `toll=yes`, roundabout for `junction` `roundabout` or
+  `circular`, link for a `*_link` class. Almost every ring and ramp edge is inside a
+  super-junction after cleanup, so few edges carry the last two.
+- **Bearings**, whole degrees clockwise from the projected CRS's grid north, 0–359 (in UTM zone
+  10 grid north is within 0.2° of true north around Portland, but about 4° off in eastern
+  Oregon): `bearing_out`, leaving u, over the first `BEARING_SAMPLE_M` (20 m) of the geometry;
+  `bearing_in`, arriving at v, over the last 20 m; over the whole edge when it is shorter. This
+  is the format's definition (`docs/reference/graph.md`), which the turn rule of
+  `docs/PLAN.md` §3.6, `wrap(bearing_out(e_out) − bearing_in(e_in))`, needs. At a cluster or
+  super-node the 20 m include the stub cleanup added to reach its centre, which skews them: on
+  Portland, 15% of the edges leaving a stage A cluster (stubs of 7 m median) have a
+  `bearing_out` more than 30° off the road's own, and at interchanges, whose stubs run to the
+  centroid (66 m median), 55%.
+- **Collectibles**, from the POI table's node rows (a way row is not counted): a toll booth or
+  level crossing whose OSM id lies inside edges counts on every edge that holds it, both
+  directions of a two-way road, of which a legal route uses one; one that is a node's member (at
+  a junction, or a shape point a cluster absorbed) counts on that node's lowest-key out-edge, an
+  M1 approximation until node collectibles (M3); any other is off the graph.
+- **Node delay**: the largest `NODE_DELAY_S` (stop 10 s, signals 30 s) among the stop signs and
+  signals in the node's members, so a signal cluster delays once. One that is a shape point adds
+  none: most stop signs are mapped a few metres before the junction, on the approach.
+- **Pass-through**: some in-neighbour u and out-neighbour w with u ≠ w, self-loops ignored.
+
+`stages/enrich.json` is `EnrichReport`: edges whose speed was parsed and defaulted, by class;
+distinct identities and the edges with one; units and two-way pairs; edges per flag; per
+collectible kind the POI nodes found, placed inside edges, at junctions and off the graph, and
+the edges with a count; per delay kind the same, shape points counted apart; nodes with a delay;
+pass-through nodes; seconds.
+
+**Portland** (the 2026-10-30 extract, 4–6 s): 89,902 of 168,167 edges have a parsed speed;
+16,864 identities on 163,645 edges; 87,793 units, 80,374 of them two-way pairs; 1,088 bridge, 23
+tunnel, 4 toll and 54 link edges; 2 toll booths (on 4 edges), 1,442 level crossings (550 inside
+edges, 146 at junctions, 746 on roads the filter dropped); of 5,960 stop signs 730 are junction
+members and 4,471 shape points, of 3,377 signals 2,469 and 829; 2,438 nodes have a delay; 51,406
+of 65,810 nodes are pass-through.
+
+## `tiers`
+
+`tiers.run_tiers(graph, allow_fragmented=False) -> TiersReport`, then `tiers.save_stage`. Tier
+`t`'s roads are the edges whose class is in `config.TIERS[t]`, its own nodes the nodes they
+touch. Each tier keeps the largest strongly connected component of its roads (networkx; ties to
+the component holding the smallest node id), so a search restricted to the tier reaches every
+node it keeps and can leave it again. T4 holds every class and keeps the whole cleaned graph.
+When a tier keeps less than `TIER_MIN_RETAINED` (0.95) of its own nodes, `run_tiers` raises
+`FragmentedTierError`, naming each such tier, and the CLI exits 1 without writing the stage,
+unless `--allow-fragmented`.
+
+`stages/tiers.json` lists, per tier: `name`, `classes`, `edges` and `nodes` of its roads,
+`kept_nodes`, `kept_edges` (its roads with both ends kept), `components`, `retained`, and
+`node_ids`, the kept nodes ascending, which `save` turns into the masks.
+
+The small fixtures cut through networks, so their upper tiers are often fragments: a motorway
+whose ramps are inside its interchange is one-way stubs around the super-node at T0 (diamond,
+cloverleaf), and the overpass's two tertiary roads meet only through a residential connector.
+**Portland** (2–3 s): T0 keeps 1,345 of 1,345 nodes, T1 5,202 of 5,202, T2 11,693 of 11,693,
+T3 20,202 of 20,213 (99.95%; 7 components), T4 all 65,810.
+
+## `save`
+
+`save.graph_data(graph, tier_nodes, meta) -> GraphData`, then `save.save_build(data,
+build_dir)`. The arrays are `docs/reference/graph.md`'s; how they come from the enriched graph:
+
+- **Edge ids** are the positions of the sorted edge keys `(u, v, key)`, the format's (u, v,
+  original order); `out_edges` and `in_edges` list each node's edges in ascending id. A unit's
+  id is the id of its key.
+- **Nodes**: `x, y, lon, lat`; `node_kind` from `kind` (`NodeKind`); `node_state` −1 (states
+  arrive with places, M4); `pass_through`; `delay_s`; `members`.
+- **Edges**: `length` and the enriched values; `edge_highway` from the class string
+  (`HighwayClass`); `edge_tier` the first tier holding the class; `edge_name` and `edge_ref`
+  index the raw `name` and `ref` tags, `edge_identity` the identities, each table sorted;
+  `way_osm_ids` from `osmids`, `osmnode_ids` from `osm_nodes`; `coords` the projected geometry
+  turned back into (lon, lat), float32, so each edge runs from its tail's position to its head's.
+- **Twins** and **transitions**: the cleaned graph's tables, keys turned into ids, rows sorted.
+- **Tiers**: `tier_node_mask[t]` what `tiers` kept, `tier_edge_mask[t]` the tier's classes with
+  both ends kept.
+
+A super-node whose transition table is empty allows no turn through it, which the format cannot
+say (a node without rows allows every turn): `graph_data` raises `EmptyTransitionsError`, naming
+the node and its position, and the CLI exits 1. Portland has none.
+
+`save.build_meta` assembles `meta`: `region`, `build_id`, `crs_epsg`, `created` (UTC),
+`pipeline_version`, `sources` and `params`. `save.build_sources` gives the extract `filter`
+read (file, md5 and `source_timestamp`) after checking that the filtered roads are still the
+ones `build` read (their md5 against `build.pkl`'s sidecar); otherwise it raises
+`SourcesChangedError` and the CLI says "the filtered extract changed since this build was
+built; rebuild". `save.build_params` gives the `region`, its `bbox` and `crs_epsg`, and the
+`config` and `allow_fragmented` the cleanup, enrich and tiers sidecars recorded, so
+`graph_version` covers what the build was made with; `pipeline_version` stays out of
+`params`. `graph_data` fills `counts`: nodes, edges, twin
+pairs, transition rows, super-junctions. `save_build` writes the build with `write_build`
+(which validates it), reads it back with `read_build`, raises `RuntimeError` if any array, the
+strings or the meta differ, and writes `stages/save.json` (`graph_version`, the counts, the
+size, seconds). `save.remove_build` deletes a written build, `meta.json` first, for `--force`.
+
+**Portland** (2–4 s): 65,810 nodes, 168,167 edges, 3,353 twin pairs, 11,378 transition rows at
+657 super-junctions, 39.8 MB.
+
+## `qa`
+
+`qa.run_qa(build_dir) -> QaReport` reads the saved build, the stage reports and the
+super-junction records in `stages/enrich.pkl`, and writes under the build's `qa/`:
+
+- `twins.geojson`: one feature per twin pair, a MultiLineString of the two edges, with their
+  ids, classes, identities and lengths;
+- `superjunctions.geojson`: a point per super-junction with its kind, parts (nodes replaced),
+  members, transition rows, in- and out-edges and whether every turn is allowed;
+- `dropped_components.geojson`: a point per component cleanup dropped and listed (the 20
+  largest), at its centroid, with its nodes and length;
+- `tiers.geojson`: a point per node a tier dropped (its roads touch it, its largest component
+  does not hold it);
+- `qa.json`: counts by class (edges, and km with a two-way road counted once) and by tier, node
+  kinds, the twins (cleanup's statistics, among them the pairs found on the stage A graph and
+  the coverage, and `pairs_saved`, the pairs the build holds), the super-junction histogram (parts → super-junctions, by
+  kind), the cleanup, enrich, tiers (without their node lists) and save reports, the
+  thresholds, and `passed`.
+
+**Thresholds** (`docs/PLAN.md` §2.4f, §2.8): twins cover at least `QA_TWIN_COVERAGE_MIN` (0.95)
+of one-way motorway and trunk length (cleanup's figure; with none to measure it passes as n/a);
+cleanup kept at least `SCC_MIN_RETAINED` (0.99) of the nodes; every tier kept at least
+`TIER_MIN_RETAINED` (0.95) of its own. `pipeline qa` prints each with its value and exits 1 when
+one fails. No map page and no random snap tests yet (§2.8 has them for later).
+
+**Portland** (1–1.5 s): twin coverage 0.9588, SCC retained 0.9960, tiers 1.0, 1.0, 1.0, 0.9995,
+1.0: passed. The whole pipeline from the Oregon extract takes 47–75 s on the dev machine,
+depending on its load; on the quieter run: filter 13 s, build 3 s, cleanup 23 s, enrich 4 s,
+tiers 2 s, save 2 s, qa 1 s.
+
 ## Fixtures
 
 Hand-written OSM XML under `tests/fixtures/osm/`, read directly by pyosmium (no conversion),
@@ -409,8 +591,16 @@ and one touching no other road, a diamond whose cross road bridges between its t
 crossover between carriageways, a roundabout bypassed by a slip lane),
 `test_carriageways.py` (with in-memory cases: ramps on one side only, offset gores),
 `test_connectivity.py`, `test_cleanup.py` (the whole step on every fixture, determinism, the
-fragmented failure), `test_cli_steps.py` (the steps through the CLI under a temporary
-`WORST_ROUTE_DATA`, including the sidecar skips), and `test_cleanup_data.py`, marked `data`: the
-invariants and the report on Portland's latest build. `invariants.py` holds the invariant checks
-the cleanup tests share, and `osm.py` writes the in-memory cases' OSM files from positions in
-metres.
+fragmented failure), `test_enrich.py` (maxspeed parsing, bearings, identities, units, flags,
+collectibles inside edges and at junctions, delays, pass-through, determinism), `test_tiers.py`
+(each fixture's tiers, the tie rule, the fragmented failure), `test_save.py` (every fixture saved,
+read back and checked with `check_build` and `check_saved`, the empty-transitions refusal, a
+stable `graph_version`), `test_qa.py` (a passing and a failing build, the layers),
+`test_cli_steps.py` (the steps through the CLI under a temporary `WORST_ROUTE_DATA`, including
+the sidecar skips, save's refusal, and `worst-route plan` and `validate` on a build the
+pipeline saved), and, marked `data`, `test_cleanup_data.py` (the invariants and the report on
+Portland's latest build) and `test_build_data.py` (Portland's saved build: valid, its
+`graph_version`, `check_build`, `check_saved` against `stages/enrich.pkl`, the tier masks, QA
+passed). `invariants.py` holds the invariant checks the tests share (`check_build` and
+`check_saved` on a saved build's arrays), `chain.py` runs the steps in memory on a fixture, and
+`osm.py` writes the in-memory cases' OSM files from positions in metres.

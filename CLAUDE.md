@@ -17,17 +17,19 @@ A section named in bold is a heading of this file or of a doc.
 ## Status
 
 **The bootstrap is built**: the uv project, the gate wired to ruff, mypy and pytest, and the
-CLI. Of the pipeline steps, `download`, `filter`, `build` and `cleanup` are real
-(`docs/reference/pipeline.md`) and the rest are stubs. The graph package is built too
+CLI. Every pipeline step is real (`docs/reference/pipeline.md`), from `download` to `save`, which
+writes the build, and `qa`; Portland's build passes QA. The graph package is built too
 (`docs/reference/graph.md`): a build's arrays and on-disk format, the backend protocol and its
 pure-Python reference backend, snapping and masks. So is the engine (`docs/reference/engine.md`):
 the route and its splice, the seed route, the detours, the worsen loop, the distance objective,
 the validator, and `worst-route plan` / `validate` on a saved build. No other part of the app
 exists yet. The plan (`docs/PLAN.md`, 2026-10-30) is written and its open questions answered as
-far as `docs/project_overview.md` §3 records. The next step is the rest of **M1**: the Portland
-build (the pipeline's enrich to qa steps, `save` among them) and the acceptance run of
-`worst-route plan` on it. `docs/project_overview.md` holds the roadmap (§2.2) and the decisions
-(§3).
+far as `docs/project_overview.md` §3 records. **M1** is not done: on the Portland build the
+validator passes every route `plan` returns, but in the acceptance run (`uv run python
+tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30`) 6 of the
+20 pairs cannot be planned (the seed does not see transition tables, or twins within one leg) and
+the median ratio is 6.4×, not 10× (`docs/project_overview.md` §2.2, §2.3).
+`docs/project_overview.md` holds the roadmap (§2.2) and the decisions (§3).
 
 ## Stack (pinned)
 
@@ -65,7 +67,7 @@ with the milestone that adds it, *(M1)* or *(M2)*.
 | Tests that need a built graph (skipped by the gate) | `uv run pytest -m data` |
 | Lint and format check | `uv run ruff check . && uv run ruff format --check .` |
 | Types | `uv run mypy src` |
-| Pipeline, one step (`download` to `cleanup` are real; `filter` and `build` also take `--source PATH`, `cleanup` takes `--allow-fragmented`; `enrich` to `qa` are stubs that exit 2) | `uv run worst-route pipeline <download\|filter\|build\|cleanup\|enrich\|tiers\|save\|qa> --region portland` |
+| Pipeline, one step (all eight are real, run in this order; `filter` and `build` also take `--source PATH`, `cleanup` and `tiers` take `--allow-fragmented`) | `uv run worst-route pipeline <download\|filter\|build\|cleanup\|enrich\|tiers\|save\|qa> --region portland` |
 | Plan a route from the CLI, validated | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
 | Validate a saved route | `uv run worst-route validate route.json` |
 | API server (the coordinator only; agents use ports of their own) | `uv run worst-route serve` *(M2)* |
@@ -75,9 +77,9 @@ with the milestone that adds it, *(M1)* or *(M2)*.
 **Run the gate after every change.** The gate never downloads anything and never needs `data/`;
 tests that need a built graph carry the `data` marker and run on demand.
 
-`WORST_ROUTE_DATA` names the data directory (default `./data`). Built graphs are immutable per
-build id, so a lane may **read** the main tree's `data/graphs/` through that variable; it
-**writes** only into its own.
+`WORST_ROUTE_DATA` names the data directory (default `./data`). Built graphs are immutable unless
+`pipeline save --force` replaces one, which changes its `graph_version`, so a lane may **read**
+the main tree's `data/graphs/` through that variable; it **writes** only into its own.
 
 ## Where things live
 
@@ -170,7 +172,7 @@ data/            gitignored: raw/, filtered/, aux/, graphs/<region>/<build_id>/
 src/worst_route/ config, cli; pipeline/, graph/, engine/ (objectives/), presentation/, geocode/, api/
 frontend/        Vite + TS app: src/{main,state,api,map,stops,settings,run,toasts,directions,share}
 tests/           fixtures/osm/*.osm, unit/, graph/, pipeline/, engine/, api/, property/, golden/, bench/
-tools/           gates.sh, land_series.sh; later: fetch_census.sh, bench
+tools/           gates.sh, land_series.sh, acceptance.py (the M1 acceptance run); later: fetch_census.sh, bench
 .claude/agents/  scout, researcher, developer, reviewer
 .github/         workflows/gate.yml: the gate on every push and pull request
 ```
@@ -272,8 +274,9 @@ it, its index, its `.venv` or its `data/`. A developer or a reviewer works in a 
 its own under its scratch directory; `uv sync` there builds the virtualenv from the lockfile
 (the uv cache makes it seconds) and `npm ci` under `frontend/` when the frontend exists. Two
 developers may run at once on disjoint areas, under these rules: a lane reads built graphs
-through `WORST_ROUTE_DATA` pointing at the main tree's `data/` (builds are immutable per build
-id) and writes pipeline output only under its own `data/`; nothing in a lane downloads from
+through `WORST_ROUTE_DATA` pointing at the main tree's `data/` (builds are immutable unless
+`pipeline save --force` replaces one, which changes its `graph_version`) and writes pipeline
+output only under its own `data/`; nothing in a lane downloads from
 Geofabrik, Census, Nominatim or a tile server; a lane's server binds a free port, never the
 default; heavy jobs (a state-scale build, a benchmark) run one at a time, which the brief
 arranges; the second lane rebases its series onto `main` before delivery; a lane's docs changes

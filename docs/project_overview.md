@@ -1,9 +1,9 @@
 # Worst Route — project overview
 
-Last updated: 2026-10-30. Snapshot taken after the cleanup step landed: the plan is
-written; the project scaffolding, the pipeline's first four steps, the graph package and
-the engine are built; the rest of the pipeline (enrich to qa) does not exist yet, so there
-is no saved Portland build to plan on.
+Last updated: 2026-10-30. Snapshot taken after the pipeline's last steps landed: the plan is
+written; the project scaffolding, every pipeline step, the graph package and the engine are
+built; Portland has a saved build, and the M1 acceptance run on it was made (§2.2): the
+pipeline and the validator hold, the engine does not yet meet the acceptance.
 
 This file answers three questions: what the project is meant to become, how far along it is, and
 what has been decided. It is written for a human reader and for an AI agent picking up the
@@ -78,7 +78,13 @@ rules applied, saved as an intermediate stage. `cleanup` turns that graph into t
 no-repeat rule rests on: degree-2 chains collapsed, signal clusters and divided crossings merged
 (OSMnx, stage A), interchanges and roundabouts made super-junctions with their allowed
 transitions (stage B), divided carriageways paired as twins, and the largest strongly connected
-component kept, with a report of what was dropped.
+component kept, with a report of what was dropped. `enrich` adds speeds and times, identities,
+road units, flags, bearings, toll booths and level crossings per edge, and delays and
+pass-through per node; `tiers` keeps each tier's largest strongly connected component; `save`
+writes the build in the graph package's format, with the configuration it was made with in its
+`graph_version`; `qa` writes the build's report and GeoJSON layers and checks its thresholds.
+Portland's whole pipeline runs from the Oregon extract in under a minute and a half and
+passes QA.
 The graph package is built (`docs/reference/graph.md`): a build's arrays and their
 memory-mapped on-disk format with its `graph_version`, the `GraphBackend` protocol and its
 pure-Python reference backend, snapping with the leash and bubble masks, and the builders tests
@@ -95,8 +101,7 @@ The workflow scaffolding exists: `CLAUDE.md`, the four agents,
 `tools/gates.sh`, `tools/land_series.sh`, this overview, `docs/PLAN.md`. The M1 bootstrap is
 built: the uv project (Python 3.12, `src` layout, the M1 dependencies), the gate running ruff,
 mypy and pytest for real, locally and in GitHub Actions, and the `worst-route` CLI (`version`,
-and `pipeline <step>`: `download`, `filter`, `build` and `cleanup` real, the other steps stubs
-that exit as not implemented yet).
+and `pipeline <step>` for every step).
 
 ### 2.2 Roadmap
 
@@ -104,7 +109,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 
 | Milestone | Status | Summary |
 |---|---|---|
-| M1 — Portland, distance mode, CLI | In progress | bootstrap, the pipeline's first four steps (download, filter, build, cleanup), the graph package and the engine (snapping, seed route, splice loop, distance objective, validator, `worst-route plan` / `validate`) built; remaining: the rest of the Portland pipeline (enrich to qa) and the acceptance run of `worst-route plan` on the Portland build |
+| M1 — Portland, distance mode, CLI | In progress | bootstrap, every pipeline step (download to qa; Portland's build passes QA), the graph package and the engine (snapping, seed route, splice loop, distance objective, validator, `worst-route plan` / `validate`) built. The acceptance run (`docs/PLAN.md` §7 M1 step 9; `uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` on build e4b3b4ad90db, `graph_version` 45f650e868fa: 20 random Portland pairs 3–15 km apart): 14 of 20 plan and the validator passes all 14; 6 end in `StopUnreachable`, 4 of them on a turn a transition table forbids (they plan without the tables) and 2 on a leg whose shortest path uses an edge and its twin; the median ratio is 6.4× (2.4–31.1×), every run stopping as converged, 12 of 14 within 7 s; seeds 1 and 2 share 12–23% of their edges (Jaccard on 5 pairs, all < 0.3); the cul-de-sac via moves 86 m to the nearest through street with its note. Remaining: the seed and the detours seeing transitions and twins within a leg, and a loop that converges early (a median of 6×), though Powell's → Reed already gives 44–50× |
 | M2 — API + map, live growth | Planned | CSR + Numba backend; FastAPI jobs + SSE; MapLibre frontend; targets by ratio and duration; reroll, make it worse |
 | M3 — Modes and constraints | Planned | turn-aware kernel, never/only-left; slowest time; collectibles; brands; hard mode; the search honouring stage B transitions (built at M1); alphabet search |
 | M4 — Presentation | Planned | directions, stats, toasts, comparisons, share image, geocoding proxy, share links |
@@ -113,7 +118,29 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 
 ### 2.3 Known limitations
 
-None recorded yet; the risks the plan anticipates are `docs/PLAN.md` §8.3.
+The risks the plan anticipates are `docs/PLAN.md` §8.3. Found on the Portland build:
+
+- **The search does not see transition tables** (`docs/reference/engine.md`, **Limitations**).
+  Portland has 11,378 rows at 657 super-junctions, 180 of which forbid some turns; a seed leg
+  whose shortest path takes a forbidden turn fails, so 4 of the 20 acceptance pairs and PDX →
+  Beaverton cannot be planned, though they can on the same build without its rows.
+- **A seed leg does not see twins within itself.** A shortest path that drives both
+  carriageways of one road (a U-turn on E Burnside St) is refused, and the leg is not rebuilt
+  around it.
+- **A twin false positive at hairpins** (cleanup): two consecutive one-way edges of one road
+  that bend back on themselves are twinned with each other when the bend is split between two
+  OSM ways, which the shared-way exclusion does not catch (an OR 224 Sunrise Expressway hairpin,
+  ways 842904309 and 842904310), so the hairpin can never be driven; 1 of the 20 acceptance
+  pairs fails on it.
+- **Delays mostly undercount**: of Portland's 5,960 stop signs, 4,471 are mapped on the
+  approach as shape points, as are 829 of 3,377 signals, and add no delay in M1.
+- **Junction collectibles** count on the node's lowest-id out-edge only, and **bearings** at a
+  cluster or super-junction include the stub to its centre: 15% of the edges leaving a stage A
+  cluster have a `bearing_out` more than 30° off the road's own, 55% at interchanges, whose
+  stubs run 66 m (median) to the centroid. Both are M3's to refine, before turn modes.
+- **A possible stage B over-restriction**: the I-84 / NE Halsey super-junction (node 65437 of
+  the 2026-10-30 Portland build) forbids NE 42nd Ave → NE Sandy Blvd, a turn that looks
+  drivable; to investigate in the next cleanup fold.
 
 ## 3. Decisions
 
@@ -166,6 +193,17 @@ brief):
   banned conservatively, not merged.
 - **Tiers T0–T4 as masks on one master graph**, auto-selected by trip length, with local
   all-roads bubbles around stops and a leash along the stop polyline.
+- **Enrich, tiers, save and qa as built for M1** (2026-10-30, at their plan): bearings follow
+  the format, `bearing_out` over the first 20 m leaving u and `bearing_in` over the last 20 m
+  arriving at v; a toll booth or level crossing inside a two-way road counts on both directions
+  (a route drives one), one at a junction on its lowest-id out-edge; a node's delay is the
+  largest of its merged stop signs and signals, not their sum; an identity keeps a
+  `Business`/`Spur`/`Alt` suffix, and state-prefixed refs are a state's postal code or `SR`, so
+  county routes rank below; a written build is never overwritten without `--force`; a QA
+  threshold with nothing to measure passes as n/a; `meta.params` holds the configuration the
+  steps' sidecars recorded. The M1 acceptance (`tools/acceptance.py`) draws its 20 pairs uniformly
+  in the bbox (a node within 250 m, 3–15 km apart, `PCG64(2026)`) and runs them with unlimited
+  attempts, so the 30 s budget is the limit.
 - **Three detour strategies** (waypoint, random-weight Dijkstra, local exhaustive) mixed by the
   objective; strict improvement for max modes; a stopping rule for target modes.
 - **Alphabet mode is a constructive search**, not a splice objective.

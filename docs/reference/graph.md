@@ -64,8 +64,9 @@ on.
 `strings` is `Strings(names, refs, identities)`, three lists of str. `meta` is a dict with
 `region`, `build_id`, `crs_epsg`, `created` (ISO time), `pipeline_version`, `graph_version`,
 `counts` (at least `nodes` and `edges`), `params` (the build parameters: free-form, but
-JSON-native with string keys, so no int keys, tuples, NaN or other objects) and `sources` (a
-list).
+JSON-native with string keys, so no int keys, tuples, NaN or other objects; `pipeline save`
+puts the `region`, its `bbox` and `crs_epsg` there with each step's configuration, so they
+enter `graph_version`, `docs/reference/pipeline.md`) and `sources` (a list).
 
 `validate()` raises `ValueError` naming the array at fault. `validate(deep=False)` checks only
 what costs nothing to read: every array present as a NumPy array of its dtype and shape, the
@@ -88,7 +89,9 @@ arrays/<name>.npy    one file per array of ARRAY_SPECS, written by np.save witho
 
 - `write_build(data, path) -> str` runs `validate()` and writes the build into `path`, which
   may already exist and hold other files. A `path` that has `meta.json` raises
-  `FileExistsError`: a written build is never overwritten (builds are immutable per build id).
+  `FileExistsError`: a written build is never overwritten. Builds are immutable unless
+  `pipeline save --force` deletes one and writes it again, which changes its `graph_version`
+  when its contents or params differ.
   It stages all three in a sibling `.<name>.tmp` directory, moves `strings.json` and `arrays/`
   into `path`, then moves `meta.json` in last as the commit marker: `read_build` needs
   `meta.json`, so a reader never sees half a build. What a crashed write leaves is replaced by
@@ -109,8 +112,9 @@ arrays/<name>.npy    one file per array of ARRAY_SPECS, written by np.save witho
 `name|dtype.str|[shape]` line and its raw bytes; then the `strings.json` bytes; then the JSON
 of `meta["params"]` with sorted keys and compact separators (which stands for the params
 exactly because `validate()` requires them JSON-native). Nothing else in `meta` enters it
-(not `created`, `region`, `build_id`, `pipeline_version`, `sources`, `counts`), so rewriting
-the same build reproduces it. A test pins its value for a small build (`tests/graph/test_store.py`);
+(not `created`, `build_id`, `pipeline_version`, `sources`, `counts`, nor the top-level
+`region` and `crs_epsg`, though a pipeline build's `params` repeat those two, so they enter
+through them), so rewriting the same build reproduces it. A test pins its value for a small build (`tests/graph/test_store.py`);
 changing the array order, a dtype or the hash recipe changes every version and is a format
 change (tier A, a new build id).
 

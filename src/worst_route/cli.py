@@ -14,18 +14,21 @@ never overwrites one without `--force`; `qa` prints its thresholds, also when it
 1 when one fails. Each imports its step module when it runs, so `version` and the other commands
 do not load the geo stack.
 
-`plan` plans a route on a saved build (`docs/reference/engine.md`, **The CLI**): it prints the
-snapped stops, the baseline, the worst route, the ratio, the target and what was achieved (for
+`plan` plans a route on a saved build (`docs/reference/engine.md`, **The CLI**), on the
+`--objective` (distance or time), with `--no-left` or `--no-right` (such turns cost a kilometre
+each; none with `--strict`): it prints the objective and constraints when not the default, the
+snapped stops, the baseline, the worst route, the ratio and the time ratio (of the experienced
+time, with its drive and delays), its turns and delays, the target and what was achieved (for
 `--target ratio:<x>` or `duration:<time>`), the search, the backend it searched with and the
 validator's report, with a progress line on stderr on an accepted splice, at most one every
 2 s, and writes `route.json` and GeoJSON when asked; a stop that cannot be snapped or reached,
 or a missing build, is one line and exit 1, and a route that fails the validator is never
 printed. `--base route.json` continues a saved route ("make it worse", toward the new target):
-its stops, tier, leash and objective come from the file, which must have been planned on the
-build at its graph_version by this engine version. `validate` re-checks a saved `route.json`
-against the build it names, with its stops re-derived from its request (`resolve_stops`), and
-exits 1 when a check fails; a file made by another engine version is one line and exit 1 (its
-stops could be re-derived differently).
+its stops, tier, leash, objective and constraints come from the file, which must have been
+planned on the build at its graph_version by this engine version.
+`validate` re-checks a saved `route.json` against the build it names, with its stops re-derived
+from its request (`resolve_stops`), and exits 1 when a check fails; a file made by another
+engine version is one line and exit 1 (its stops could be re-derived differently).
 Both take `--backend auto|csr|python` (`config.DEFAULT_BACKEND`, `auto`: csr when numba
 imports) and print the one used, which changes only the speed; `csr` when numba does not import
 is one line and exit 1.
@@ -66,6 +69,7 @@ from worst_route.config import (
 from worst_route.pipeline import PIPELINE_VERSION, layout
 
 if TYPE_CHECKING:
+    from worst_route.engine.request import RouteRequest
     from worst_route.graph.backend import GraphBackend
     from worst_route.graph.data import GraphData
 
@@ -655,6 +659,15 @@ def _target_line(kind: str, wanted: float, achieved: float, within: bool) -> str
     return f"target: {what} → achieved {got} ({band})"
 
 
+def _mode_line(request: "RouteRequest") -> str:
+    """`objective: time, few left turns` (or `no left turns` when strict)."""
+    parts: list[str] = [request.objective]
+    for kind in request.constraints.kinds:
+        way = "left" if kind.key == "no_left" else "right"
+        parts.append(f"{'no' if request.constraints.strict else 'few'} {way} turns")
+    return "objective: " + ", ".join(parts)
+
+
 @app.command()
 def plan(
     ctx: typer.Context,
@@ -682,6 +695,16 @@ def plan(
     target: Annotated[
         str, typer.Option(help="max, ratio:<x> (× the baseline) or duration:<time> (9h, 2h30m).")
     ] = "max",
+    objective: Annotated[str, typer.Option(help="distance or time.")] = "distance",
+    no_left: Annotated[
+        bool, typer.Option("--no-left", help="Left turns cost a kilometre (none, --strict).")
+    ] = False,
+    no_right: Annotated[
+        bool, typer.Option("--no-right", help="Right turns cost a kilometre (none, --strict).")
+    ] = False,
+    strict: Annotated[
+        bool, typer.Option("--strict", help="No such turn at all, or no route.")
+    ] = False,
     base: Annotated[
         Path | None,
         typer.Option(
@@ -700,7 +723,8 @@ def plan(
     from worst_route.engine.request import RouteRequest
     from worst_route.engine.route import IllegalSplice
     from worst_route.engine.seed_route import Baseline
-    from worst_route.engine.snap import StopUnreachable, is_round_trip
+    from worst_route.engine.snap import InfeasibleTurnConstraint, StopUnreachable, is_round_trip
+    from worst_route.engine.turns import count_turns
     from worst_route.engine.validator import ValidationFailed
     from worst_route.engine.worsen import ProgressEvent
     from worst_route.graph.spatial import SnapError
@@ -710,11 +734,15 @@ def plan(
         "max_iterations": max_iterations,
         "seed": seed if seed is not None else secrets.randbelow(2**31),
         "target": _target(target),
+        "objective": objective,
+        "constraints": {"no_left": no_left, "no_right": no_right, "strict": strict},
     }
     saved: SavedRoute | None = None
     if base is None:
         if from_ is None or to is None:
             _fail("--from and --to are needed, unless --base names a route", code=2)
+        if strict and not (no_left or no_right):
+            _fail("--strict needs --no-left or --no-right", code=2)
         fields["stops"] = [_latlon(from_), *(_latlon(v) for v in via or []), _latlon(to)]
         fields["tier"] = tier
         try:
@@ -732,6 +760,16 @@ def plan(
                 f"--base takes the stops, tier and leash from its route: drop {', '.join(given)}"
             )
             _fail(message, code=2)
+        mode = [
+            f"--{name.replace('_', '-')}"
+            for name in ("objective", "no_left", "no_right", "strict")
+            if (source := ctx.get_parameter_source(name)) is not None and source.name != "DEFAULT"
+        ]
+        if mode:
+            message = (
+                f"--base takes the objective and constraints from its route: drop {', '.join(mode)}"
+            )
+            _fail(message, code=2)
         try:
             saved = read_route(base)
         except (KeyError, TypeError, ValueError, OverflowError, ValidationError) as error:
@@ -747,6 +785,7 @@ def plan(
         fields.update(
             stops=saved.request.stops,
             objective=saved.request.objective,
+            constraints=saved.request.constraints,
             tier=saved.request.tier,
             leash_km=saved.request.leash_km,
         )
@@ -777,6 +816,8 @@ def plan(
 
     try:
         result = plan_route(data, request, backend=engine, base=saved, on_progress=progress)
+    except InfeasibleTurnConstraint as error:
+        _fail(f"cannot plan: {error}; try without --strict")
     except (SnapError, StopUnreachable, BaseRouteMismatch) as error:
         _fail(f"cannot plan: {error}")
     except (IllegalSplice, IndexError) as error:
@@ -796,6 +837,8 @@ def plan(
         f"request: tier {masks.tier}, leash {masks.leash_m / 1000:.1f} km, seed {request.seed}, "
         f"budget {request.budget_s:g} s or {request.max_iterations} attempts"
     )
+    if request.objective != "distance" or request.constraints.kinds:
+        typer.echo(_mode_line(request))
     for k, s in enumerate(result.snaps):
         role = "start" if k == 0 else "end" if k == len(result.snaps) - 1 else "via"
         note = f" ({s.note})" if s.note else ""
@@ -813,6 +856,16 @@ def plan(
         typer.echo(f"ratio: {route.metrics.length_m / baseline.length_m:.2f}x")
     else:
         typer.echo("ratio: n/a (a round trip's baseline is 0 m)")
+    if baseline.time_s > 0:  # the experienced time, driving and delays, as the API's
+        drive, delays = route.metrics.time_s, route.metrics.delay_s
+        experienced = (drive + delays) / (baseline.time_s + baseline.delay_s)
+        breakdown = f"drive {_duration(drive)} + delays {_duration(delays)}"
+        typer.echo(f"time ratio: {experienced:.2f}x ({breakdown} = {_duration(drive + delays)})")
+    turns = count_turns(data, route.edges)
+    typer.echo(
+        f"turns: {turns['left']} left, {turns['right']} right, {turns['straight']} straight, "
+        f"{turns['u_turn']} u-turns; delays {_duration(route.metrics.delay_s)}"
+    )
     reached = result.goal.describe(result.goal.value(route.score, route.metrics))
     if reached is not None:
         typer.echo(
@@ -884,6 +937,7 @@ def validate(
         stop_nodes=[s.node for s in stops],
         node_mask=masks.active,
         banned_edges=masks.banned,
+        banned_turn_classes=saved.request.constraints.banned_turn_classes,
     )
     typer.echo(f"{route_file}: {len(saved.nodes)} nodes on {saved.region}/{saved.build_id}")
     typer.echo(f"backend: {engine.name}")

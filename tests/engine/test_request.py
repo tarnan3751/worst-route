@@ -1,11 +1,20 @@
 import json
+from typing import get_args
 
 import numpy as np
 import pytest
 from pydantic import ValidationError
 
 from worst_route.config import HighwayClass
-from worst_route.engine.request import RouteRequest, auto_leash_m, auto_tier, request_masks
+from worst_route.engine.constraints import NO_CONSTRAINTS
+from worst_route.engine.objectives import OBJECTIVES
+from worst_route.engine.request import (
+    ObjectiveKey,
+    RouteRequest,
+    auto_leash_m,
+    auto_tier,
+    request_masks,
+)
 from worst_route.engine.target import Target
 from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import SpatialIndex
@@ -158,3 +167,20 @@ def test_a_tier_bans_lower_classes_outside_the_bubbles() -> None:
 
     auto = request_masks(SpatialIndex(g), g, RouteRequest(stops=stops, seed=0))
     assert auto.tier == "T4" and not auto.banned.any() and auto.active.all()
+
+
+def test_the_objective_and_the_turn_constraints() -> None:
+    assert set(get_args(ObjectiveKey)) == set(OBJECTIVES)
+    assert RouteRequest(stops=PORTLAND, seed=1, objective="time").objective == "time"
+    with pytest.raises(ValidationError, match="unknown objective 'slowest'; known: distance, time"):
+        RouteRequest(stops=PORTLAND, seed=1, objective="slowest")
+    plain = RouteRequest(stops=PORTLAND, seed=1)
+    assert plain.constraints == NO_CONSTRAINTS
+    assert "constraints" not in plain.model_dump(mode="json")  # as before constraints existed
+    assert RouteRequest.model_validate(plain.model_dump(mode="json")) == plain
+    soft = RouteRequest(stops=PORTLAND, seed=1, constraints={"no_left": True})
+    written = json.loads(soft.model_dump_json())
+    assert written["constraints"] == {"no_left": True, "no_right": False, "strict": False}
+    assert RouteRequest.model_validate(written) == soft
+    with pytest.raises(ValidationError, match="straight only is not a route"):
+        RouteRequest(stops=PORTLAND, seed=1, constraints={"no_left": True, "no_right": True})

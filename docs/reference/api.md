@@ -69,7 +69,9 @@ what the API and the presentation need:
 {"region": "portland",
  "stops": [{"lat": 45.5231, "lon": -122.6765, "label": "Powell's"},
            {"lat": 45.4817, "lon": -122.6263, "label": "Reed College"}],
- "objective": "distance", "tier": "auto", "leash_km": "auto",
+ "objective": "distance",
+ "constraints": {"no_left": false, "no_right": false, "strict": false},
+ "tier": "auto", "leash_km": "auto",
  "budget_s": 20, "max_iterations": 1000000, "seed": 12345,
  "target": {"kind": "max"},
  "vehicle": {"mpg": 24, "gas_price_usd": 3.89},
@@ -79,38 +81,52 @@ what the API and the presentation need:
 
 - `stops`: at least two, in order; the same point first and last makes a round trip. `label` is
   kept for the presentation.
-- `objective`: `distance`; `time`, `collect`, `brand` and `alphabet` are `NOT_YET`.
+- `objective`: `distance` (the longest) or `time` (the slowest: driving time and the delays at
+  signals and stop signs; `docs/reference/engine.md`, **Objectives**); `collect`, `brand` and
+  `alphabet` are `NOT_YET`.
+- `constraints`: `{no_left, no_right, strict}`, all false by default (and left out of the
+  engine's request then). `no_left` makes each left turn (and U-turn) cost the route a
+  kilometre's worth of its score (1,000 m, or 90 s under `time`: `TURN_PENALTY_M`,
+  `TURN_PENALTY_S`), so they are rare; `no_right` the same for right turns; both at once is
+  `INVALID_REQUEST` ("straight only is not a route"). With `strict`, none at all: a trip that
+  cannot be driven so, but can without `strict`, is `INFEASIBLE_TURN_CONSTRAINT`, which on a
+  street grid is most trips (one that cannot be driven either way is
+  `STOP_UNREACHABLE_WITHOUT_REPEAT`, as without the constraint)
+  (`docs/reference/engine.md`, **Constraints**); `strict` without `no_left` or `no_right` is
+  `INVALID_REQUEST` ("strict needs no_left or no_right"). Both name `field: "constraints"`.
 - `tier`: `auto` or `T0`..`T4`. `leash_km`: `auto` or in (0, 150].
 - `budget_s`: in (0, 120] (over 120 is `BUDGET_TOO_LARGE`), default 20.
 - `max_iterations`: default 1,000,000, so the seconds budget ends a run. The CLI keeps the
   engine's 5,000.
 - `seed`: in [0, 2⁶³ − 1]; left out, a random one below 2³¹, returned in the 202.
 - `target`: `{kind: "max"}` (the default: as bad as the budget allows), `{kind: "ratio",
-  value}` (the route's length as `value` × the baseline's, more than 1; not for a round trip)
-  or `{kind: "duration", seconds}` (at most 7 days); reached within ±2 %
+  value}` (the route's length as `value` × the baseline's, more than 1; under `time` its
+  experienced time, driving and the delays, against the baseline's; not for a round trip) or
+  `{kind: "duration", seconds}` (at most 7 days, of experienced time); reached within ±2 %
   (`docs/reference/engine.md`, **Targets**). Each kind takes only its own number. A target out
   of these bounds is `INVALID_REQUEST`, and so is a ratio target for a round trip (its stops',
   or for "make it worse" its base route's): `{code: "INVALID_REQUEST", message: "a round trip
   has no ratio target: its baseline is 0 m", field: "target"}`, before any other check.
 - `vehicle` and `departure` are kept with the route; `departure` gives the document's `arrival`.
 - `base_route_id`: "make it worse" (**Make it worse**).
-- An unknown field is refused, so `constraints` is `INVALID_REQUEST` until M3.
+- An unknown field is refused.
 
 **Every error** answers `{code, message}` and the error's own fields, at the top level (not
 FastAPI's `detail`):
 
 | Status | Code | When |
 |---|---|---|
-| 422 | `INVALID_REQUEST` (+ `errors`, pydantic's without their `input`; or + `field`) | a body or field that does not parse (a seed beyond 2⁶³ − 1 included, `Infinity` or `NaN` for a number), an unknown objective, a target out of bounds, a ratio target for a round trip (`field: "target"`); a place search's query empty or over 200 characters once normalised (`field: "q"`) |
+| 422 | `INVALID_REQUEST` (+ `errors`, pydantic's without their `input`, and `field` when every error lies in one field of the body; or + `field`) | a body or field that does not parse (a seed beyond 2⁶³ − 1 included, `Infinity` or `NaN` for a number), an unknown objective, a target out of bounds, a ratio target for a round trip (`field: "target"`), both turn constraints or `strict` without one (`field: "constraints"`); a place search's query empty or over 200 characters once normalised (`field: "q"`) |
 | 422 | `UNKNOWN_REGION` | a region this server does not serve |
 | 422 | `STOP_OUTSIDE_REGION` (+ `stop_index`) | outside the region's bbox: the build's `params.bbox`, else its nodes' extent |
 | 422 | `NO_NODE_NEAR` (+ `stop_index`, null when no single stop is to blame) | no node within 5 km can play the stop's role |
-| 422 | `STOP_UNREACHABLE_WITHOUT_REPEAT` (+ `leg`, `stop_index`) | no route covers the leg without repeating a road, after the re-snap fallback (`stop_index` is the leg's later stop) |
+| 422 | `STOP_UNREACHABLE_WITHOUT_REPEAT` (+ `leg`, `stop_index`) | no route covers the leg without repeating a road, after the re-snap fallback (`stop_index` is the leg's later stop), with or without a strict turn constraint: under one, when the seed's legs cannot be built without it either |
+| 422 | `INFEASIBLE_TURN_CONSTRAINT` (+ `leg`, `stop_index`, `constraint`) | under a strict turn constraint (`constraint`: `no_left` or `no_right`), no route covers the leg without repeating a road or turning that way, after the re-snap fallback, while the seed's legs can be built without the constraint (one more build, on failure only); the message ends "under the strict no-left constraint; try without strict" |
 | 422 | `BUDGET_TOO_LARGE` (+ `max_s`) | `budget_s` over 120 |
 | 422 | `NOT_YET` (+ `field`) | an objective the engine does not have yet |
 | 422 | `UNKNOWN_ROUTE` (+ `base_route_id`) | a base route that is not stored |
 | 422 | `BUILD_MISMATCH` | a base route planned on another region, `graph_version` or engine version; `/validate` on a route another engine version made (its stops could be re-derived differently: re-plan it), as `worst-route validate` refuses one |
-| 422 | `BASE_ROUTE_MISMATCH` (+ `field`) | stops, tier or leash given that differ from the base route's; or a base route `plan.check_base` refuses under its request's resolved stops and masks (`field` `stops`: its stops are not where they resolve now; `route`: a node outside the area or an edge the request bans) |
+| 422 | `BASE_ROUTE_MISMATCH` (+ `field`) | stops, tier or leash given that differ from the base route's; or a base route `plan.check_base` refuses under its request's resolved stops and masks (`field` `stops`: its stops are not where they resolve now; `route`: a node outside the area, an edge the request bans, or a turn its strict constraint refuses) |
 | 429 | `TOO_MANY_JOBS` | every worker busy and the queue full |
 | 429 | `RATE_LIMITED` (+ `retry_after_s`) | a place search that finds the geocoder's queue full: five already queued for a turn (**Geocoding**); the message is "the geocoder is busy, try again in a few seconds" |
 | 502 | `GEOCODER_ERROR` | Nominatim failed: an error status, a timeout, no connection, an answer that does not parse; or refused (429, 403), which pauses the geocoder 60 s, during which a search the cache cannot answer gets this at once ("the geocoder refused; paused for N s") |
@@ -169,16 +185,25 @@ of the last splice applied; `elapsed_s` the wall time since it started.
  stops:      [{label, node, lat, lon, moved_m, note, route_index}],
  geometry:   LineString along every edge,
  legs:       [{from_stop, to_stop, node_range: [a, b]}],
- metrics:    {length_m, baseline_length_m, ratio, time_s, baseline_time_s, time_ratio,
-              departure, arrival, target},
+ metrics:    {length_m, baseline_length_m, ratio, time_s, baseline_time_s, baseline_delay_s,
+              time_ratio, departure, arrival, target, delay_s,
+              turns: {left, right, straight, u_turn}},
  run:        {attempts, accepted, stopped_because, elapsed_s, backend},
  validation: {ok: true, checked_at}}
 ```
 
-`ratio` and `time_ratio` are null for a round trip (its baseline is 0 m); `arrival` is
-`departure` plus `time_s`, null without one; `target` is `{kind, value, achieved,
-within_tolerance}` for a ratio or duration target (the target, the route's ratio or seconds, and
-whether that is within ±2 %), null for `max`; `stopped_because` is `target` (within it),
+Time, wherever a ratio or an arrival is shown, is the experienced time: the driving (`time_s`)
+and the waiting at signals and stop signs (`delay_s`), which are reported apart. `time_ratio` is
+the route's experienced time over the baseline's (`baseline_time_s` plus `baseline_delay_s`, the
+baseline's delays, worked out from the build along its stored edges, so a route stored before
+documents carried them has them too); `ratio` and `time_ratio` are null for a round trip (its
+baseline is 0 m); `arrival` is `departure` plus the experienced time, null without one; `target` is `{kind, value, achieved,
+within_tolerance}` for a ratio or duration target (the target; what the route achieved, its
+ratio, of lengths or under `time` of experienced times, or its experienced time in seconds,
+driving and the delays; and whether that is within ±2 %), null for `max`; `delay_s` is the waiting at the route's signals and
+stop signs, and `turns` counts its turns by class (`docs/reference/engine.md`, **Turns**), both
+worked out from the build, so a route stored before they existed has them too;
+`stopped_because` is `target` (within it),
 `budget`, `converged`, `cancelled` or `timeout`. The presentation's fields (directions, toasts, comparisons, fuel,
 states, towns) arrive with M4.
 
@@ -193,7 +218,7 @@ Each event has an `id`, counting up per job, an `event` name and a JSON `data`:
 | `baseline` | when the worker has built the route the loop starts from | `{length_m, time_s, geometry}` (null for a round trip) |
 | `snapshot` | right after `baseline` (iteration 0: the seed, or the base route), after every 50th `progress`, just before `done` when the stored route is not the one the splices drew (**Jobs**), and first on every (re)connect once the route exists | `{iteration, elapsed_s, node_count, stop_idx, geometry, node_index, metrics}` |
 | `progress` | at most every 0.1 s while splices are accepted | `{iteration, elapsed_s, score, metrics: {length_m, time_s, ratio}, splices: [{i, j, node_count, coords, node_index}]}` |
-| `done` | the route is stored (or was already: its existing id, **The store**) | `{route_id, stopped_because, metrics}`: the stored route's `{length_m, time_s, ratio, target}`, `target` as in the document (null for `max`) |
+| `done` | the route is stored (or was already: its existing id, **The store**) | `{route_id, stopped_because, metrics}`: the stored route's `{length_m, time_s, ratio, time_ratio, target, delay_s, turns: {left, right, straight, u_turn}}`, as in the document (`target` null for `max`) |
 | `error` | the job ended without a route | `{code, message, ...}` |
 
 The stream ends after `done` or `error`. A browser's `EventSource` reconnects when a stream
@@ -315,7 +340,9 @@ stops, tier and leash come from the base route's request; given ones must match 
 been planned on this region's build at its `graph_version` and by this engine version
 (`BUILD_MISMATCH`), and `plan.check_base` must accept it under the request's resolved stops and
 masks: its stop nodes where the stops resolve now, every node in the active area, no edge the
-request bans (`BASE_ROUTE_MISMATCH`, in the pre-flight and again in the worker). The new
+request bans, under a strict turn constraint no turn it refuses (a soft one takes any base;
+`BASE_ROUTE_MISMATCH`, in the pre-flight and again in the worker). The objective and the
+constraints are the new request's. The new
 route's document records `base_route_id` in its `request`; it is reproduced by the base route,
 the seed and the request. A continuation that changes nothing (no splice accepted, as with
 `max_iterations: 0` or a base that has converged) produces the base route itself: its `done`
@@ -477,7 +504,8 @@ machine, with curl:
 - **Targets** (`serve --port 0`, the default backend, csr, 2026-10-30; Powell's → Reed): a 20×
   ratio, seed 1, `done` after 1.0 s with `stopped_because: "target"` at 19.60× (the route
   `worst-route plan --target ratio:20 --seed 1` gives); a 9 h duration (`seconds: 32400`), seed
-  2, `done` after 1.8 s at 8 h 49 min (37.9×); a max run, seed 1, still `5ea844bffd40`; "make it
+  2, `done` after 1.8 s at 8 h 49 min of driving (37.9×; a duration counted only the driving
+  then, the delays too since M3); a max run, seed 1, still `5ea844bffd40`; "make it
   worse" from it with a 30× ratio, seed 1, `done` after 5.7 s at 30.58×, every `progress` lower
   than the one before, its `/validate` ok. Each target job's `done` and document carry its
   `target`.
@@ -489,13 +517,13 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 
 | Test file | What it covers |
 |---|---|
-| `test_schemas.py` | the request mirrors the engine's, its defaults, the seed's bounds, stops left out only with a base, malformed requests refused; the target as the engine's, each kind with its own number and within its bounds; `done`'s target typed |
+| `test_schemas.py` | the request mirrors the engine's, its defaults, the seed's bounds, stops left out only with a base, malformed requests refused (both turn constraints at once, an unknown one); the target as the engine's, each kind with its own number and within its bounds; `done`'s time ratio, target, delays and turns typed |
 | `test_store.py` | the round trip (the stored route validates), unknown ids, the first record kept, what the id covers |
 | `test_sse.py` | path points and node indices, the per-edge simplification keeping nodes and original values, splices, metrics, the event encoding |
 | `test_jobs.py` | the manager with inline workers: event order and ids, a client replay equal to the stored route, late subscribers (after a worker that died with splices waiting too: they come before its `error`, ids rising strictly), `Last-Event-ID` resync, cancel (validated, stored, reproduced by its attempts), the queue and its limit, cancel before the route exists, continuations, the time limit, orphans running and queued, a worker that raises, a store failure while cancelling (by hand and by the sweep, which goes on), a worker that does not start (the queue moves on), the TTL; a target run whose best is not its last route (an overshoot on a 5 × 5 lattice): a snapshot of the stored route before `done`, for live and late clients, and a cancel after the overshoot storing the closest route, reproduced by its attempts |
 | `test_worker_process.py` (`slow`) | real spawned workers: a run to `done`, a cancel mid-run, a worker killed from outside (`WORKER_FAILED`), a fake worker that dies 60 kB into a 2 MB message (`WORKER_FAILED`, then a clean `stop()`), and a worker whose API process (a probe) is killed exiting within 3 s; about 4 s |
 | `test_geocode_api.py` | `GET /geocode` with a `FakeGeocoder`: the answer's shape, at most five candidates, the cache across casing and spacing (one upstream call), each refusal (an empty, blank, missing or too long query; a missing or unknown region; `RATE_LIMITED` from a full queue with its `retry_after_s`, a cached query still answered; `GEOCODER_ERROR`; a 429 upstream, on an `httpx.MockTransport`, pausing the geocoder, the next search refused without a request; `GEOCODER_DISABLED`, with no cache file); the default service, its client on a `MockTransport` (`offline_clients`): Nominatim at its URL with the User-Agent and contact, the cache beside the store, the limits and the pause, its client closed by the lifespan. The other API tests serve with `geocoder="none"`, so they build no geocoder |
-| `test_routes_api.py` | every endpoint over `httpx.AsyncClient` in-process, every refusal code, cancel over HTTP, a closed stream cancelling its job, a stream that subscribes only once it runs, make it worse and its mismatches (a base outside its request's masks included), a continuation that changes nothing reporting the stored route; ratio and duration jobs ending `target` with the target in `done` and the document (none for max), a target out of bounds or a ratio for a round trip refused, make it worse with a smaller target shrinking; a stored route differing from the drawn one by a parallel edge sent as a snapshot before `done`, with `GET /jobs/{id}` agreeing; a ratio target for a round trip refused before anything else, for a base route too; `Infinity` and `NaN` in a body refused |
+| `test_routes_api.py` | every endpoint over `httpx.AsyncClient` in-process, every refusal code, cancel over HTTP, a closed stream cancelling its job, a stream that subscribes only once it runs, make it worse and its mismatches (a base outside its request's masks included), a continuation that changes nothing reporting the stored route; ratio and duration jobs ending `target` with the target in `done` and the document (none for max), a target out of bounds or a ratio for a round trip refused, make it worse with a smaller target shrinking; a stored route differing from the drawn one by a parallel edge sent as a snapshot before `done`, with `GET /jobs/{id}` agreeing; a ratio target for a round trip refused before anything else, for a base route too; `Infinity` and `NaN` in a body refused; a slowest-time job under a soft no-left constraint, its turns and delays in `done` and the document; a strict constraint refusing a base route that turns left, a soft one taking it; a leg a strict constraint cannot drive answered `INFEASIBLE_TURN_CONSTRAINT` with its leg and constraint, one no route covers without it either (two one-way rings) `STOP_UNREACHABLE_WITHOUT_REPEAT` with strict set too; a body cut short refused without a `field`; `strict` alone and both constraints refused on `field: "constraints"`; on a lattice with signals, the document's `time_ratio`, `done`'s, and `arrival` counting the delays, the route's and the baseline's, for a route stored before the documents carried `baseline_delay_s` too |
 
 `tests/engine/test_plan.py` covers `plan_route`'s hooks, `tests/graph/test_loader.py` the loader,
 and `tests/unit/test_cli.py` `serve`'s errors, options (the geocoder's included, with the line

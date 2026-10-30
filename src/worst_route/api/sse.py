@@ -14,7 +14,8 @@ as degrees of latitude, applied to lon/lat as they are, so the kept points are t
 values exactly (a node lands where a splice puts it, to the last digit); a degree of longitude
 being shorter, the tolerance across a north-south line is less, 0.7 of it at 45°.
 `route_metrics` is a route's numbers with its ratio to the baseline (None for a round trip,
-whose baseline is 0 m); `baseline_out` is the `baseline` event's payload.
+whose baseline is 0 m); `time_ratio` is its experienced time's, driving and delays, to the
+baseline's (None for a round trip too); `baseline_out` is the `baseline` event's payload.
 """
 
 from dataclasses import dataclass
@@ -72,6 +73,16 @@ def route_metrics(metrics: Metrics, baseline_length_m: float) -> RouteMetrics:
     return RouteMetrics(
         length_m=metrics.length_m, time_s=metrics.time_s, ratio=ratio, **metrics.counters
     )
+
+
+def time_ratio(
+    time_s: float, delay_s: float, baseline_time_s: float, baseline_delay_s: float
+) -> float | None:
+    """The experienced time, driving and delays, over the baseline's (None for a round trip,
+    whose baseline drives nothing)."""
+    if baseline_time_s <= 0:
+        return None
+    return (time_s + delay_s) / (baseline_time_s + baseline_delay_s)
 
 
 def splice_out(data: GraphData, i: int, j: int, nodes: IntArray, edges: IntArray) -> SpliceOut:

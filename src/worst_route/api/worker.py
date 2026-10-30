@@ -39,7 +39,7 @@ from worst_route.engine.plan import BaseRouteMismatch, plan_route
 from worst_route.engine.request import RequestMasks, RouteRequest
 from worst_route.engine.route import IntArray, Metrics, Route
 from worst_route.engine.seed_route import Baseline
-from worst_route.engine.snap import StopUnreachable
+from worst_route.engine.snap import InfeasibleTurnConstraint, StopUnreachable
 from worst_route.engine.validator import ValidationFailed
 from worst_route.engine.worsen import ProgressEvent
 from worst_route.graph.loader import load_build
@@ -131,6 +131,17 @@ class _Orphaned(Exception):  # noqa: N818 (not an error: the API process is gone
     pass
 
 
+def unreachable(error: StopUnreachable) -> tuple[str, str, dict[str, Any]]:
+    """The API's (code, message, fields) for a leg no route covers: `INFEASIBLE_TURN_CONSTRAINT`
+    when a strict turn constraint is why (its message suggesting to drop `strict`), else
+    `STOP_UNREACHABLE_WITHOUT_REPEAT`."""
+    fields: dict[str, Any] = {"leg": list(error.leg), "stop_index": error.stop_index}
+    if isinstance(error, InfeasibleTurnConstraint):
+        message = f"{error}; try without strict"
+        return "INFEASIBLE_TURN_CONSTRAINT", message, {**fields, "constraint": error.constraint}
+    return "STOP_UNREACHABLE_WITHOUT_REPEAT", str(error), fields
+
+
 def run_in_process(spec: JobSpec, conn: Connection) -> None:
     """A worker process's main: `run_job` down `conn`; exits at once if the API process goes."""
     try:
@@ -202,8 +213,7 @@ def run_job(
     except BaseRouteMismatch as error:
         out.put(Failed("BASE_ROUTE_MISMATCH", str(error), {"field": error.field}))
     except StopUnreachable as error:
-        fields = {"leg": list(error.leg), "stop_index": error.stop_index}
-        out.put(Failed("STOP_UNREACHABLE_WITHOUT_REPEAT", str(error), fields))
+        out.put(Failed(*unreachable(error)))
     except SnapError as error:
         out.put(Failed("NO_NODE_NEAR", str(error), {"stop_index": None}))
     except ValidationFailed as error:

@@ -1,5 +1,6 @@
 import json
 import math
+import re
 import subprocess
 import sys
 from dataclasses import replace
@@ -15,7 +16,7 @@ from worst_route.graph.data import GraphData
 from worst_route.graph.store import write_build
 from worst_route.graph.testing import make_graph
 
-from .graphs import X0, Y0, at, at_node, lattice
+from .graphs import X0, Y0, at, at_node, lattice, left_only
 
 runner = CliRunner()
 GRID = lattice(10, 10, rounded_lonlat=True)
@@ -498,3 +499,84 @@ def test_a_route_that_fails_validation_is_never_printed(
     )
     assert code == 1 and stdout == ""
     assert stderr == "the route failed validation (an engine bug): metrics: FAILED: made up\n"
+
+
+def test_the_objective_and_the_turn_constraints(data_dir: Path, tmp_path: Path) -> None:
+    save(data_dir, GRID, "b1")
+    trip = ("--from", latlon(GRID, 22), "--to", latlon(GRID, 77), "--seed", "3")
+    out = tmp_path / "time.json"
+    code, stdout, stderr = plan(*trip, "--objective", "time", "--no-left", "--out", str(out))
+    assert code == 0, stdout + stderr
+    lines = stdout.splitlines()
+    assert lines[2] == "objective: time, few left turns"
+    # the experienced time's ratio, with its drive and delays (none on this lattice)
+    (timed,) = [line for line in lines if line.startswith("time ratio: ")]
+    assert re.fullmatch(r"time ratio: \d+\.\d\dx \(drive (.+) \+ delays 0 min 0 s = \1\)", timed)
+    doc = json.loads(out.read_text())
+    assert doc["request"]["objective"] == "time"
+    assert doc["request"]["constraints"] == {"no_left": True, "no_right": False, "strict": False}
+    turns = doc["metrics"]["turns"]
+    line = f"turns: {turns['left']} left, {turns['right']} right, {turns['straight']} straight, "
+    assert f"{line}{turns['u_turn']} u-turns; delays 0 min 0 s" in lines
+    result = runner.invoke(app, ["validate", str(out)])
+    assert result.exit_code == 0 and result.stdout.splitlines()[-1] == "valid", result.output
+
+    code, stdout, _ = plan(*trip, "--no-right", "--strict")
+    assert code == 0 and "objective: distance, no right turns" in stdout.splitlines()
+    code, stdout, _ = plan(*trip, "--out", str(out))
+    assert code == 0 and not any(line.startswith("objective:") for line in stdout.splitlines())
+    assert "constraints" not in json.loads(out.read_text())["request"]
+    for bad in (("--no-left", "--no-right"), ("--objective", "slowest")):
+        code, stdout, _ = plan(*trip, *bad)
+        assert code == 2 and stdout == "", bad
+    assert plan(*trip, "--strict") == (2, "", "--strict needs --no-left or --no-right\n")
+
+
+def test_a_strict_constraint_no_route_keeps_is_one_line(data_dir: Path) -> None:
+    g = save(data_dir, left_only(), "t1")
+    trip = ("--from", latlon(g, 0), "--to", latlon(g, 14), "--seed", "1")
+    assert plan(*trip, "--no-left")[0] == 0  # soft: the left turn it cannot avoid
+    assert plan(*trip, "--no-left", "--strict") == (
+        1,
+        "",
+        "cannot plan: no route from stop 0 to stop 1 without repeating a road, after moving "
+        "stop 1 up to 10 times, under the strict no-left constraint; try without --strict\n",
+    )
+
+
+def test_base_takes_its_objective_and_constraints_from_its_file(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    save(data_dir, GRID, "b1")
+    first = tmp_path / "first.json"
+    trip = ("--from", latlon(GRID, 22), "--to", latlon(GRID, 77), "--seed", "1")
+    assert plan(*trip, "--objective", "time", "--no-left", "--out", str(first))[0] == 0
+    second = tmp_path / "second.json"
+    code, stdout, stderr = plan("--base", str(first), "--seed", "2", "--out", str(second))
+    assert code == 0, stdout + stderr
+    request = json.loads(second.read_text())["request"]
+    assert request["objective"] == "time" and request["constraints"]["no_left"] is True
+    assert plan("--base", str(first), "--no-right", "--strict") == (
+        2,
+        "",
+        "--base takes the objective and constraints from its route: drop --no-right, --strict\n",
+    )
+
+
+def test_validate_proves_a_strict_constraint(data_dir: Path, tmp_path: Path) -> None:
+    # a soft no-left route with a left turn, its file edited to claim a strict constraint
+    save(data_dir, GRID, "b1")
+    out = tmp_path / "soft.json"
+    trip = ("--from", latlon(GRID, 22), "--to", latlon(GRID, 77), "--seed", "3")
+    assert plan(*trip, "--no-left", "--out", str(out))[0] == 0
+    doc = json.loads(out.read_text())
+    assert doc["metrics"]["turns"]["left"] > 0
+    assert runner.invoke(app, ["validate", str(out)]).exit_code == 0
+    doc["request"]["constraints"]["strict"] = True
+    out.write_text(json.dumps(doc))
+    result = runner.invoke(app, ["validate", str(out)])
+    assert result.exit_code == 1
+    assert any(
+        line.startswith("constraints: FAILED at ") and "left turn" in line
+        for line in result.stdout.splitlines()
+    ), result.output

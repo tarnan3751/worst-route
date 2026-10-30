@@ -28,13 +28,14 @@ move (two stops on one node), or an assembled route `check_route` refuses names 
 on failure only), else the plain `StopUnreachable`, the constraint not being the reason.
 
 `resolve_stops(data, spatial, backend, request, masks)` settles where the stops go before the
-seed is built, deterministically for a request and a build, so `worst-route validate` can
-re-derive them. It snaps them (`snap.snap_stops`) and, when the seed cannot be built, falls
-back (`docs/PLAN.md` §3.2): the failing leg's earlier stop, if it is a via, is re-snapped to its
-next-nearest node up to `SNAP_FALLBACK_CANDIDATES` times, trying the whole seed each time;
-then, with it back on its node, the later stop the same way (a via or the end); the start never
-moves. Then `StopUnreachable` names the leg. So a via trapped where the route can enter but not
-leave walks out, and the stops after it stay. It costs a few seed builds.
+seed is built (under the request's strict turn constraint, if any), deterministically for a
+request and a build, so `worst-route validate` can re-derive them. It snaps them
+(`snap.snap_stops`) and, when the seed cannot be built, falls back (`docs/PLAN.md` §3.2): the
+failing leg's earlier stop, if it is a via, is re-snapped to its next-nearest node up to
+`SNAP_FALLBACK_CANDIDATES` times, trying the whole seed each time; then, with it back on its
+node, the later stop the same way (a via or the end); the start never moves. Then
+`StopUnreachable` names the leg. So a via trapped where the route can enter but not leave walks
+out, and the stops after it stay. It costs a few seed builds.
 
 A round trip with no stop between its ends (start and end on one node) has no legs: its seed is
 a loop through a waypoint, the waypoint strategy from the start back to itself on length, with
@@ -155,7 +156,7 @@ def resolve_stops(
     snaps = snap_stops(spatial, data, stops, masks.active)
     if len(snaps) == 2 and snaps[0].node == snaps[1].node:
         return snaps  # a round trip without legs: nothing to fall back from
-    builder = _Builder(backend, data, masks.active, masks.banned, NO_CONSTRAINTS)
+    builder = _Builder(backend, data, masks.active, masks.banned, request.constraints)
     try:
         builder.seed(snaps)
         return snaps
@@ -171,7 +172,8 @@ def resolve_stops(
             exclude[tried + apart_from(snaps, stop, len(snaps), round_trip)] = True
             role = role_of(stop, len(snaps))
             try:
-                snaps[stop] = resnap(spatial, stops[stop], role, masks.active, exclude)
+                reason = request.constraints.note or "without repeating one"
+                snaps[stop] = resnap(spatial, stops[stop], role, masks.active, exclude, reason)
             except SnapError:
                 break
             tried.append(snaps[stop].node)
@@ -183,9 +185,9 @@ def resolve_stops(
         snaps[stop] = original
     names = " and ".join(f"stop {k}" for k in moved)
     each = " each" if len(moved) > 1 else ""
-    raise StopUnreachable(
-        (leg, leg + 1), f"after moving {names} up to {SNAP_FALLBACK_CANDIDATES} times{each}"
-    )
+    after = f"after moving {names} up to {SNAP_FALLBACK_CANDIDATES} times{each}"
+    plain = _Builder(backend, data, masks.active, masks.banned, NO_CONSTRAINTS)
+    raise _unreachable(request.constraints, (leg, leg + 1), after, lambda: plain.seed(snaps))
 
 
 def seed_route(

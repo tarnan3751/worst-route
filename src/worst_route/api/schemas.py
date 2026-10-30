@@ -1,17 +1,19 @@
 """The API's request and response shapes (`docs/reference/api.md`; `docs/PLAN.md` §4).
 
 `RouteRequestIn`, the body of `POST /jobs`, mirrors `engine.request.RouteRequest` field for
-field under the engine's names, with the stops as `{lat, lon, label}` objects and the target as
+field under the engine's names, with the stops as `{lat, lon, label}` objects, the target as
 `{kind: "max"}`, `{kind: "ratio", value}` or `{kind: "duration", seconds}` (the engine's
-`Target`, whose bounds it checks), plus `region`, `vehicle` and `departure` (kept with the
+`Target`, whose bounds it checks) and the turn constraints as the engine's
+`{no_left, no_right, strict}`, plus `region`, `vehicle` and `departure` (kept with the
 route for the presentation) and `base_route_id` ("make it worse": the stops, tier and leash then
 come from that route, so `stops` may be left out). `engine_request(seed)` is the engine's
 request. `SnapIn` is the body of `POST /snap`.
 
 The responses: `Health`, `RegionOut`, `SnapOut`, `JobCreated`, `JobStatus`, `RouteDocument`
 (its metrics with `TargetMetrics` for a ratio or duration target), `ValidationOut`, and
-`ErrorBody` (`{code, message}` and the error's own fields) for every error. `Done`'s metrics
-(`DoneMetrics`) carry the target too.
+`ErrorBody` (`{code, message}` and the error's own fields) for every error. The document's
+metrics count the route's turns (`Turns`) and its delays; `Done`'s metrics (`DoneMetrics`)
+carry the target, the turns and the delays too.
 The SSE events' payloads are `Snapped`, `BaselineOut`, `Progress` (with `SpliceOut`s),
 `Snapshot`, `Done` and `ErrorBody`. Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in
 requests; every number is metric.
@@ -20,16 +22,17 @@ requests; every number is metric.
 """
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from worst_route.config import API_DEFAULT_MAX_ITERATIONS, DEFAULT_BUDGET_S, LEASH_MAX_KM
-from worst_route.engine.request import RouteRequest, TierChoice
+from worst_route.engine.constraints import NO_CONSTRAINTS, Constraints
+from worst_route.engine.request import ObjectiveKey, RouteRequest, TierChoice
 from worst_route.engine.target import Target as EngineTarget
 
 # Modes the plan describes that the engine does not have yet: asked for, they are NOT_YET.
-PLANNED_OBJECTIVES = ("time", "collect", "brand", "alphabet")
+PLANNED_OBJECTIVES = ("collect", "brand", "alphabet")
 StopReason = Literal["budget", "converged", "target", "cancelled", "timeout"]
 JobState = Literal["queued", "running", "done", "error"]
 
@@ -87,6 +90,7 @@ class RouteRequestIn(_In):
     region: str
     stops: list[StopIn] | None = Field(default=None, min_length=2)
     objective: str = "distance"
+    constraints: Constraints = NO_CONSTRAINTS
     tier: TierChoice = "auto"
     leash_km: Annotated[float, Field(gt=0, le=LEASH_MAX_KM)] | Literal["auto"] = "auto"
     budget_s: float = Field(default=DEFAULT_BUDGET_S, gt=0)
@@ -109,7 +113,8 @@ class RouteRequestIn(_In):
             raise ValueError("no stops")
         return RouteRequest(
             stops=[(s.lat, s.lon) for s in self.stops],
-            objective=self.objective,
+            objective=cast(ObjectiveKey, self.objective),  # checked by the endpoint, and here
+            constraints=self.constraints,
             tier=self.tier,
             leash_km=self.leash_km,
             budget_s=self.budget_s,
@@ -202,10 +207,23 @@ class TargetMetrics(_Out):
     within_tolerance: bool
 
 
-class DoneMetrics(RouteMetrics):
-    """`done`'s metrics: the stored route's, with its target (null for max)."""
+class Turns(_Out):
+    """A route's turns by class (`engine/turns.py`)."""
 
+    left: int
+    right: int
+    straight: int
+    u_turn: int
+
+
+class DoneMetrics(RouteMetrics):
+    """`done`'s metrics: the stored route's, with its experienced time's ratio to the
+    baseline's, its target (null for max), its delays and its turns."""
+
+    time_ratio: float | None
     target: TargetMetrics | None = None
+    delay_s: float
+    turns: Turns
 
 
 class LatLon(_Out):
@@ -325,10 +343,13 @@ class DocumentMetrics(_Out):
     ratio: float | None
     time_s: float
     baseline_time_s: float
+    baseline_delay_s: float
     time_ratio: float | None
     departure: datetime | None
     arrival: datetime | None
     target: TargetMetrics | None
+    delay_s: float
+    turns: Turns
 
 
 class Run(_Out):

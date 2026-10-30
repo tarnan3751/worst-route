@@ -19,7 +19,8 @@ against the region's bbox (`meta.params.bbox`, else the nodes' extent), then the
 (`jobs.prepare`: snapping and the re-snap fallback, in a worker thread), and for a base route
 `plan.check_base` on the pre-flight's stops and masks (`BASE_ROUTE_MISMATCH`). The errors are
 `ApiError`s, answered as `ErrorBody`: 422 `INVALID_REQUEST`, `UNKNOWN_REGION`,
-`STOP_OUTSIDE_REGION`, `NO_NODE_NEAR`, `STOP_UNREACHABLE_WITHOUT_REPEAT`, `BUDGET_TOO_LARGE`,
+`STOP_OUTSIDE_REGION`, `NO_NODE_NEAR`, `STOP_UNREACHABLE_WITHOUT_REPEAT`,
+`INFEASIBLE_TURN_CONSTRAINT`, `BUDGET_TOO_LARGE`,
 `NOT_YET`, `UNKNOWN_ROUTE`, `BUILD_MISMATCH` (also `/validate` on a route another engine version
 made), `BASE_ROUTE_MISMATCH`; 429 `TOO_MANY_JOBS`; 404
 `NOT_FOUND`; 409 `BUILD_UNAVAILABLE` (a stored route whose build is no longer on disk at its
@@ -62,20 +63,23 @@ from worst_route.api.schemas import (
     SnapIn,
     SnapOut,
     TierOut,
+    Turns,
     Validation,
     ValidationOut,
 )
-from worst_route.api.sse import server_sent
+from worst_route.api.sse import server_sent, time_ratio
 from worst_route.api.store import StoredRoute
-from worst_route.api.worker import RouteArrays
+from worst_route.api.worker import RouteArrays, unreachable
 from worst_route.config import BUBBLE_KM, BUDGET_MAX_S
 from worst_route.engine import ENGINE_VERSION
 from worst_route.engine.io import feature_collection, line_coordinates
 from worst_route.engine.objectives import OBJECTIVES
+from worst_route.engine.objectives.base import route_delay_s
 from worst_route.engine.plan import BaseRouteMismatch, check_base
 from worst_route.engine.request import RouteRequest, request_masks
 from worst_route.engine.seed_route import resolve_stops
 from worst_route.engine.snap import StopUnreachable, is_round_trip, role_of
+from worst_route.engine.turns import count_turns
 from worst_route.engine.validator import validate_route
 from worst_route.graph.loader import BuildNotFound, Loaded, load_build
 from worst_route.graph.spatial import SnapError
@@ -226,7 +230,7 @@ async def create_job(body: RouteRequestIn, request: Request) -> JobCreated:
         _check_round_trip(body, [(s.lat, s.lon) for s in body.stops])
     loaded = region_of(api, body.region)
     if body.objective in PLANNED_OBJECTIVES:
-        message = f"the {body.objective} objective is not built yet; distance is"
+        message = f"the {body.objective} objective is not built yet; distance and time are"
         raise ApiError(422, "NOT_YET", message, field="objective")
     if body.objective not in OBJECTIVES:
         message = f"unknown objective {body.objective!r}; known: {', '.join(OBJECTIVES)}"
@@ -256,7 +260,13 @@ async def create_job(body: RouteRequestIn, request: Request) -> JobCreated:
     arrays = None
     if base is not None:
         try:
-            check_base(base, prepared.masks, [s.node for s in prepared.snaps])
+            check_base(
+                base,
+                prepared.masks,
+                [s.node for s in prepared.snaps],
+                data=loaded.data,
+                constraints=engine_request.constraints,
+            )
         except BaseRouteMismatch as error:
             raise ApiError(422, "BASE_ROUTE_MISMATCH", str(error), field=error.field) from None
         arrays = RouteArrays(base.nodes, base.edges, base.stop_idx, base.metrics)
@@ -321,8 +331,8 @@ def _preflight(loaded: Loaded, request: RouteRequest) -> Prepared:
         stop_index = _unsnappable(loaded, request)
         raise ApiError(422, "NO_NODE_NEAR", str(error), stop_index=stop_index) from None
     except StopUnreachable as error:
-        fields = {"leg": list(error.leg), "stop_index": error.stop_index}
-        raise ApiError(422, "STOP_UNREACHABLE_WITHOUT_REPEAT", str(error), **fields) from None
+        code, message, fields = unreachable(error)
+        raise ApiError(422, code, message, **fields) from None
 
 
 def _unsnappable(loaded: Loaded, request: RouteRequest) -> int | None:
@@ -381,9 +391,15 @@ def route(route_id: str, request: Request) -> RouteDocument:
     asked = RouteRequestIn.model_validate(stored.input)
     labels = [s.label for s in asked.stops or []]
     m = stored.metrics_json
-    baseline_time_s = float(m["baseline_time_s"])
+    time_s, baseline_time_s = float(m["time_s"]), float(m["baseline_time_s"])
+    # the delays from the build, the baseline's along its stored edges (a route stored before
+    # the documents carried them has them too)
+    delay_s = route_delay_s(data, stored.nodes)
+    first = np.array([stored.stops[0].node], dtype=np.int32)
+    baseline_nodes = np.concatenate((first, data.edge_v[stored.baseline_edges]))
+    baseline_delay_s = route_delay_s(data, baseline_nodes)
     departure = asked.departure
-    arrival = departure + timedelta(seconds=float(m["time_s"])) if departure else None
+    arrival = departure + timedelta(seconds=time_s + delay_s) if departure else None
     return RouteDocument(
         route_id=stored.route_id,
         created=stored.created,
@@ -414,12 +430,15 @@ def route(route_id: str, request: Request) -> RouteDocument:
             length_m=m["length_m"],
             baseline_length_m=m["baseline_length_m"],
             ratio=m["ratio"],
-            time_s=m["time_s"],
+            time_s=time_s,
             baseline_time_s=baseline_time_s,
-            time_ratio=m["time_s"] / baseline_time_s if baseline_time_s > 0 else None,
+            baseline_delay_s=baseline_delay_s,
+            time_ratio=time_ratio(time_s, delay_s, baseline_time_s, baseline_delay_s),
             departure=departure,
             arrival=arrival,
             target=m.get("target"),
+            delay_s=delay_s,
+            turns=Turns(**count_turns(data, stored.edges)),
         ),
         run=Run(**stored.run),
         validation=Validation(ok=True, checked_at=stored.created),
@@ -463,6 +482,7 @@ def validate(route_id: str, request: Request) -> ValidationOut:
         stop_nodes=[s.node for s in stops],
         node_mask=masks.active,
         banned_edges=masks.banned,
+        banned_turn_classes=stored.request.constraints.banned_turn_classes,
     )
     return ValidationOut(
         route_id=stored.route_id,

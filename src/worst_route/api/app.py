@@ -12,13 +12,15 @@ is, the job limits, and the geocoder: which, at what URL, with what contact in i
 Every error answers an `ErrorBody` (`{code, message, ...}`): an endpoint refuses with
 `routes_api.ApiError(status, code, message, **fields)`, a malformed request is 422
 `INVALID_REQUEST` with pydantic's `errors` (without their `input`, which may be a body's
-`Infinity` or `NaN`), and an unknown path or method is `NOT_FOUND` / `METHOD_NOT_ALLOWED`.
+`Infinity` or `NaN`) and, when every error lies in one field of the body, that `field`, and
+an unknown path or method is `NOT_FOUND` / `METHOD_NOT_ALLOWED`.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -114,7 +116,10 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
         # without each error's `input`: a body's Infinity or NaN is not JSON to send back
         errors = [{k: v for k, v in e.items() if k != "input"} for e in error.errors()]
         body = ErrorBody(
-            code="INVALID_REQUEST", message="; ".join(problems), errors=jsonable_encoder(errors)
+            code="INVALID_REQUEST",
+            message="; ".join(problems),
+            errors=jsonable_encoder(errors),
+            **_one_field(error.errors()),
         )
         return JSONResponse(body.model_dump(), status_code=422)
 
@@ -126,3 +131,13 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
         return JSONResponse(body.model_dump(), status_code=error.status_code)
 
     return app
+
+
+def _one_field(errors: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """`{"field": name}` when every error lies in the same field of the body, else nothing (a
+    body that does not parse has a character's position where a field's name would be)."""
+    names = {
+        loc[1] if len(loc) > 1 and loc[0] == "body" and isinstance(loc[1], str) else None
+        for loc in (e["loc"] for e in errors)
+    }
+    return {"field": names.pop()} if len(names) == 1 and None not in names else {}

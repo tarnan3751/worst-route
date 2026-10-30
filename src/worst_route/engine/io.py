@@ -7,7 +7,8 @@
      stops:    [{lat, lon, node, moved_m, note}]  (where each stop was snapped),
      nodes, edges, stop_idx,
      metrics:  {length_m, time_s, delay_s (at signals and stop signs), baseline_length_m,
-                baseline_time_s, ratio (null for a round trip, whose baseline is 0 m), turns:
+                baseline_time_s, baseline_delay_s, ratio (null for a round trip, whose
+                baseline is 0 m), turns:
                 {left, right, straight, u_turn}, the objective's own numbers, and for a ratio
                 or duration target, target: {kind, value, achieved, within_tolerance}},
      run:      {attempts, accepted, stopped_because, elapsed_s, backend}}
@@ -85,6 +86,7 @@ def route_document(data: GraphData, result: PlanResult) -> dict[str, Any]:
             "delay_s": route.metrics.delay_s,
             "baseline_length_m": baseline.length_m,
             "baseline_time_s": baseline.time_s,
+            "baseline_delay_s": baseline.delay_s,
             "ratio": ratio,
             "turns": count_turns(data, route.edges),
             **route.metrics.counters,

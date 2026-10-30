@@ -1,12 +1,14 @@
 """A route request and the masks it implies (`docs/reference/engine.md`, **Requests**).
 
 `RouteRequest` is what a caller asks for: the stops as (lat, lon) in order (the first the start,
-the last the end; the same point first and last makes a round trip), the objective's key (one
-of `objectives.OBJECTIVES`), the tier (`"auto"` or `"T0"`..`"T4"`), the leash in km (`"auto"` or
-a number, at most 150), the budget in seconds (at most 120) and iterations, the seed, and the
-target (`target.Target`: max by default; a ratio target is refused for a round trip, whose
-baseline is 0 m). Every number is finite, so it round-trips through JSON
-(`model_dump(mode="json")`) without `Infinity`.
+the last the end; the same point first and last makes a round trip), the objective's key
+(`"distance"` or `"time"`, the keys of `objectives.OBJECTIVES`), the turn constraints
+(`constraints.Constraints`: none by default), the tier (`"auto"` or `"T0"`..`"T4"`), the leash
+in km (`"auto"` or a number, at most 150), the budget in seconds (at most 120) and iterations,
+the seed, and the target (`target.Target`: max by default; a ratio target is refused for a
+round trip, whose baseline is 0 m). Every number is finite, so it round-trips through JSON
+(`model_dump(mode="json")`) without `Infinity`; its JSON leaves the constraints out when there
+are none, so a request without them reads as it did before they existed.
 
 `request_masks(spatial, data, request)` turns it into `RequestMasks`, from the request alone,
 so the validator can recompute them from a saved route. The stops are projected and the trip
@@ -27,11 +29,19 @@ Every array is read-only.
 """
 
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 import numpy as np
 from numpy.typing import NDArray
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from worst_route.config import (
     BUBBLE_KM,
@@ -43,6 +53,7 @@ from worst_route.config import (
     LEASH_MIN_KM,
     TIER_AUTO_KM,
 )
+from worst_route.engine.constraints import NO_CONSTRAINTS, Constraints
 from worst_route.engine.objectives import OBJECTIVES
 from worst_route.engine.snap import is_round_trip
 from worst_route.engine.target import Target
@@ -50,16 +61,18 @@ from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import SpatialIndex, active_mask
 
 TierChoice = Literal["auto", "T0", "T1", "T2", "T3", "T4"]
+ObjectiveKey = Literal["distance", "time"]  # the keys of OBJECTIVES
 
 
 class RouteRequest(BaseModel):
-    """What to plan: stops in order, the objective, the scale, the budget, the seed and the
-    target."""
+    """What to plan: stops in order, the objective and its constraints, the scale, the budget,
+    the seed and the target."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     stops: list[tuple[float, float]] = Field(min_length=2)
-    objective: str = "distance"
+    objective: ObjectiveKey = "distance"
+    constraints: Constraints = NO_CONSTRAINTS
     tier: TierChoice = "auto"
     leash_km: Annotated[float, Field(gt=0, le=LEASH_MAX_KM)] | Literal["auto"] = "auto"
     budget_s: float = Field(default=DEFAULT_BUDGET_S, gt=0, le=BUDGET_MAX_S)
@@ -67,10 +80,10 @@ class RouteRequest(BaseModel):
     seed: int = Field(ge=0)
     target: Target = Target()
 
-    @field_validator("objective")
+    @field_validator("objective", mode="before")
     @classmethod
-    def _known(cls, objective: str) -> str:
-        if objective not in OBJECTIVES:
+    def _known(cls, objective: object) -> object:
+        if isinstance(objective, str) and objective not in OBJECTIVES:
             raise ValueError(f"unknown objective {objective!r}; known: {', '.join(OBJECTIVES)}")
         return objective
 
@@ -87,6 +100,13 @@ class RouteRequest(BaseModel):
         if self.target.kind == "ratio" and is_round_trip(self.stops):
             raise ValueError("a round trip has no ratio target: its baseline is 0 m")
         return self
+
+    @model_serializer(mode="wrap")
+    def _no_constraints_left_out(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        fields: dict[str, Any] = handler(self)
+        if self.constraints == NO_CONSTRAINTS:
+            del fields["constraints"]
+        return fields
 
 
 @dataclass(frozen=True, eq=False)

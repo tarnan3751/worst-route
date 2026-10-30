@@ -17,7 +17,8 @@ export type TargetKind = "max" | "ratio" | "duration";
 export type StopReason = "budget" | "converged" | "target" | "cancelled" | "timeout";
 export type JobState = "queued" | "running" | "done" | "error";
 
-/** `{code, message}` and the error's own fields (`stop_index`, `leg`, `field`, ...). */
+/** `{code, message}` and the error's own fields (`stop_index`, `leg`, `field`, `constraint`,
+ * ...). */
 export interface ErrorBody {
   code: string;
   message: string;
@@ -45,11 +46,19 @@ export interface Vehicle {
   gas_price_usd: number;
 }
 
+/** The turn constraints: left (or right) turns at a kilometre each, or with `strict` none. */
+export interface Constraints {
+  no_left?: boolean;
+  no_right?: boolean;
+  strict?: boolean;
+}
+
 /** `POST /jobs`; a route document's `request` has every field. */
 export interface RouteRequest {
   region: string;
   stops?: StopIn[] | null;
   objective?: Objective;
+  constraints?: Constraints;
   tier?: Tier;
   leash_km?: number | "auto";
   budget_s?: number;
@@ -102,10 +111,22 @@ export interface TargetMetrics {
   within_tolerance: boolean;
 }
 
-/** `done`'s metrics: the stored route's, with the run's target (null for max; absent from
- * servers older than the targets). */
+/** A route's turns by class. */
+export interface Turns {
+  left: number;
+  right: number;
+  straight: number;
+  u_turn: number;
+}
+
+/** `done`'s metrics: the stored route's, with its experienced time's ratio to the baseline's,
+ * the run's target (null for max), its delays and its turns (each absent from servers older than
+ * it). */
 export interface DoneMetrics extends Metrics {
+  time_ratio?: number | null;
   target?: TargetMetrics | null;
+  delay_s?: number;
+  turns?: Turns;
 }
 
 /** `GET /jobs/{id}` (with the snapshot) and `DELETE /jobs/{id}` (without). */
@@ -150,10 +171,13 @@ export interface DocumentMetrics {
   ratio: number | null;
   time_s: number;
   baseline_time_s: number;
-  time_ratio: number | null;
+  baseline_delay_s?: number; // absent from servers older than it
+  time_ratio: number | null; // experienced: driving and delays
   departure: string | null;
   arrival: string | null;
   target?: TargetMetrics | null; // null for max
+  delay_s?: number; // absent from servers older than the turn counts
+  turns?: Turns;
 }
 
 export interface Run {

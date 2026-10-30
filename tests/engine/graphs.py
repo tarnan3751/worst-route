@@ -97,6 +97,20 @@ def at(x: float, y: float) -> tuple[float, float]:
     return float(lat), float(lon)
 
 
+def left_only(spacing_m: float = 100.0, arm: int = 12) -> GraphData:
+    """A one-way stem north from node 0 to a junction J (node 2), whose ways on are a right turn
+    east to one node and a left turn west along `arm` nodes (3, 4, ...): a trip to the far end
+    of the arm turns left at J, and so does a trip to any of the nearer nodes the re-snap
+    fallback tries."""
+    xy = [(X0, Y0), (X0, Y0 + spacing_m), (X0, Y0 + 2 * spacing_m)]
+    xy += [(X0 - k * spacing_m, Y0 + 2 * spacing_m) for k in range(1, arm + 1)]
+    xy.append((X0 + spacing_m, Y0 + 2 * spacing_m))
+    edges = [Edge(0, 1, spacing_m), Edge(1, 2, spacing_m), Edge(2, 3, spacing_m)]
+    edges += [Edge(k, k + 1, spacing_m) for k in range(3, arm + 2)]
+    edges.append(Edge(2, arm + 3, spacing_m))
+    return make_graph(xy, edges)
+
+
 def two_rings(radius_m: float = 300.0, apart_m: float = 2000.0) -> GraphData:
     """Two one-way rings of 12 nodes, `apart_m` between their centres and no road between them:
     nodes 0-11 round the first (node 0 at (radius_m, 0)), 12-23 round the second (node 12 at

@@ -6,6 +6,7 @@ import json
 import sqlite3
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,12 +17,13 @@ from fastapi import FastAPI, Request
 from worst_route.api import routes_api
 from worst_route.api.app import Api, ApiSettings, create_app
 from worst_route.api.jobs import JobSettings
+from worst_route.engine.constraints import Constraints
 from worst_route.engine.io import feature_collection
 from worst_route.engine.snap import StopUnreachable
 from worst_route.graph.testing import Edge, make_graph
 
-from ..engine.graphs import X0, Y0, at_node
-from .support import GRID, GRID_BBOX, save_build, slow_splices, until
+from ..engine.graphs import X0, Y0, at, at_node, two_rings
+from .support import GRID, GRID_BBOX, SLOW, save_build, slow_splices, until
 
 pytestmark = pytest.mark.anyio
 
@@ -152,6 +154,7 @@ async def test_a_job_streams_its_route_and_stores_it(data: Path) -> None:
         assert doc["legs"][0]["node_range"] == [0, doc["stops"][1]["route_index"]]
         m = doc["metrics"]
         assert m["ratio"] == pytest.approx(m["length_m"] / m["baseline_length_m"])
+        assert m["baseline_delay_s"] == m["delay_s"] == 0.0  # the lattice has no signals
         assert m["time_ratio"] == pytest.approx(m["time_s"] / m["baseline_time_s"])
         assert m["departure"] is None and m["arrival"] is None
         assert doc["run"]["attempts"] == 300 and doc["run"]["backend"] == "python"
@@ -278,6 +281,12 @@ async def test_a_body_with_infinity_or_nan_is_refused(data: Path) -> None:
             assert r.status_code == 422 and r.json()["code"] == "INVALID_REQUEST", r.text
             assert r.json()["message"].startswith("body.budget_s: ")
             assert "input" not in r.json()["errors"][0]
+            assert r.json()["field"] == "budget_s"
+        # a body cut short: its error lies at a character, not in a field
+        text = json.dumps(job_body())[:33]
+        r = await client.post("/jobs", content=text, headers={"content-type": "application/json"})
+        assert r.status_code == 422 and r.json()["code"] == "INVALID_REQUEST", r.text
+        assert r.json()["errors"][0]["loc"] == ["body", 33] and "field" not in r.json()
 
 
 async def test_make_it_worse_with_a_smaller_target_shrinks_the_route(data: Path) -> None:
@@ -302,6 +311,37 @@ async def test_make_it_worse_with_a_smaller_target_shrinks_the_route(data: Path)
         )
 
 
+async def test_the_time_ratio_and_the_arrival_count_the_delays(tmp_path: Path) -> None:
+    # a lattice with signals and stop signs on its primary rows and columns, which the route
+    # and its baseline both pass
+    root = tmp_path / "data"
+    save_build(root, SLOW, "slow")
+    async with serving(root) as (client, app):
+        body = job_body(stops=[stop(22), stop(77)], departure="2026-10-31T09:00:00-07:00")
+        _, events = await finished(client, body)
+        done = events[-1]["data"]
+        doc = (await client.get(f"/routes/{done['route_id']}")).json()
+        m = doc["metrics"]
+        assert m["delay_s"] > 0 and m["baseline_delay_s"] > 0
+        experienced = (m["time_s"] + m["delay_s"]) / (m["baseline_time_s"] + m["baseline_delay_s"])
+        assert m["time_ratio"] == pytest.approx(experienced)
+        assert done["metrics"]["time_ratio"] == m["time_ratio"]
+        trip = datetime.fromisoformat(m["arrival"]) - datetime.fromisoformat(m["departure"])
+        assert trip.total_seconds() == pytest.approx(m["time_s"] + m["delay_s"])
+        api: Api = app.state.api
+        stored = api.store.get(done["route_id"])
+        assert stored is not None
+        assert stored.metrics_json["baseline_delay_s"] == m["baseline_delay_s"]
+        # a route stored before the documents carried the baseline's delays has them too
+        older = {k: v for k, v in stored.metrics_json.items() if k != "baseline_delay_s"}
+        with sqlite3.connect(api.store.path) as con:
+            con.execute(
+                "UPDATE routes SET metrics_json = ? WHERE id = ?",
+                (json.dumps(older), done["route_id"]),
+            )
+        assert (await client.get(f"/routes/{done['route_id']}")).json()["metrics"] == m
+
+
 async def test_a_departure_gives_an_arrival(data: Path) -> None:
     async with serving(data) as (client, _):
         body = job_body(
@@ -318,10 +358,12 @@ async def test_a_departure_gives_an_arrival(data: Path) -> None:
     ("fields", "code"),
     [
         ({"stops": None}, "INVALID_REQUEST"),
-        ({"constraints": {"no_left": True}}, "INVALID_REQUEST"),
+        ({"constraints": {"no_left": True, "no_right": True}}, "INVALID_REQUEST"),
+        ({"constraints": {"no_u_turns": True}}, "INVALID_REQUEST"),
+        ({"constraints": {"strict": True}}, "INVALID_REQUEST"),
         ({"objective": "nonsense"}, "INVALID_REQUEST"),
         ({"region": "atlantis"}, "UNKNOWN_REGION"),
-        ({"objective": "time"}, "NOT_YET"),
+        ({"objective": "collect"}, "NOT_YET"),
         ({"target": {"kind": "ratio", "value": 1}}, "INVALID_REQUEST"),
         ({"target": {"kind": "ratio", "seconds": 600}}, "INVALID_REQUEST"),
         ({"target": {"kind": "duration", "seconds": 8 * 24 * 3600}}, "INVALID_REQUEST"),
@@ -370,6 +412,55 @@ async def test_an_unreachable_stop_names_its_leg(
             "leg": [1, 2],
             "stop_index": 2,
         }
+
+
+async def test_a_leg_a_strict_constraint_cannot_drive_names_the_constraint(
+    data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def infeasible(*args: object) -> None:
+        strict = Constraints(no_left=True, strict=True)
+        raise strict.unreachable((0, 1), "after moving stop 1 up to 10 times")
+
+    monkeypatch.setattr(routes_api, "prepare", infeasible)
+    async with serving(data) as (client, _):
+        r = await client.post("/jobs", json=job_body(constraints={"no_left": True, "strict": True}))
+        assert r.status_code == 422 and r.json() == {
+            "code": "INFEASIBLE_TURN_CONSTRAINT",
+            "message": "no route from stop 0 to stop 1 without repeating a road, after moving "
+            "stop 1 up to 10 times, under the strict no-left constraint; try without strict",
+            "leg": [0, 1],
+            "stop_index": 1,
+            "constraint": "no_left",
+        }
+
+
+async def test_a_leg_no_route_covers_without_the_constraint_either_is_not_its_fault(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "data"
+    save_build(root, two_rings(), "rings")
+    async with serving(root) as (client, _):
+        stops = [{"lat": lat, "lon": lon} for lat, lon in (at(300.0, 0.0), at(2300.0, 0.0))]
+        for constraints in ({}, {"no_left": True, "strict": True}):
+            r = await client.post("/jobs", json=job_body(stops=stops, constraints=constraints))
+            assert r.status_code == 422, r.text
+            assert {k: r.json()[k] for k in ("code", "leg", "stop_index")} == {
+                "code": "STOP_UNREACHABLE_WITHOUT_REPEAT",
+                "leg": [0, 1],
+                "stop_index": 1,
+            }
+            assert "constraint" not in r.json() and "strict" not in r.json()["message"]
+
+
+async def test_strict_without_a_constraint_is_refused_on_its_field(data: Path) -> None:
+    async with serving(data) as (client, _):
+        for constraints, why in (
+            ({"strict": True}, "strict needs no_left or no_right"),
+            ({"no_left": True, "no_right": True}, "straight only is not a route"),
+        ):
+            r = await client.post("/jobs", json=job_body(constraints=constraints))
+            assert r.status_code == 422 and r.json()["code"] == "INVALID_REQUEST"
+            assert r.json()["field"] == "constraints" and why in r.json()["message"]
 
 
 async def test_a_full_server_answers_429(data: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -550,3 +641,41 @@ async def test_make_it_worse_continues_a_stored_route(data: Path) -> None:
         ):
             assert r.status_code == 422 and r.json()["code"] == "BUILD_MISMATCH"
             assert "engine version 1" in r.json()["message"]
+
+
+async def test_a_time_job_under_a_turn_constraint_reports_its_turns(data: Path) -> None:
+    async with serving(data) as (client, _):
+        body = job_body(stops=[stop(22), stop(77)], objective="time", constraints={"no_left": True})
+        _, events = await finished(client, body)
+        done = events[-1]["data"]
+        assert events[-1]["event"] == "done"
+        doc = (await client.get(f"/routes/{done['route_id']}")).json()
+        assert doc["request"]["objective"] == "time"
+        assert doc["request"]["constraints"] == {
+            "no_left": True,
+            "no_right": False,
+            "strict": False,
+        }
+        turns, metrics = doc["metrics"]["turns"], doc["metrics"]
+        assert set(turns) == {"left", "right", "straight", "u_turn"}
+        assert sum(turns.values()) == len(doc["geometry"]["coordinates"]) - 2
+        assert metrics["delay_s"] == 0.0  # the lattice has no signals
+        assert done["metrics"]["turns"] == turns and done["metrics"]["delay_s"] == 0.0
+        assert (await client.post(f"/routes/{done['route_id']}/validate")).json()["ok"] is True
+
+
+async def test_a_strict_constraint_refuses_a_base_that_breaks_it(data: Path) -> None:
+    async with serving(data) as (client, _):
+        # a trip a strict no-left seed can plan, so the pre-flight passes and the base is judged
+        body = job_body(stops=[stop(22), stop(77)], max_iterations=60)
+        _, events = await finished(client, body)
+        base_id = events[-1]["data"]["route_id"]
+        doc = (await client.get(f"/routes/{base_id}")).json()
+        assert doc["metrics"]["turns"]["left"] > 0
+        worse = {"region": "portland", "base_route_id": base_id, "seed": 4, "max_iterations": 50}
+        strict = {**worse, "constraints": {"no_left": True, "strict": True}}
+        r = await client.post("/jobs", json=strict)
+        assert r.status_code == 422 and r.json()["code"] == "BASE_ROUTE_MISMATCH"
+        assert r.json()["field"] == "route" and "strict no-left" in r.json()["message"]
+        soft = {**worse, "constraints": {"no_left": True}}
+        assert (await client.post("/jobs", json=soft)).status_code == 202

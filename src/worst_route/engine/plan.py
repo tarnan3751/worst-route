@@ -4,11 +4,13 @@
 `numpy.random.Generator(PCG64(request.seed))` for every random draw that follows, settles the
 stops (`resolve_stops`: snapping and its fallback, which may move stops), builds the seed route
 and the baseline on them, makes the request's objective with the baseline's metrics and
-the radius bound r_max = min(leash, the active area's extent) and its goal (`target.Goal`, the
-request's target against that baseline), and runs the worsen loop toward that goal within the
-request's budget, handing each accepted splice and the baseline to `on_progress`. It searches
-with the backend it is given, else `make_backend`'s default (`config.DEFAULT_BACKEND`); every
-backend gives the same route, and the result records which one searched. The best
+the radius bound r_max = min(leash, the active area's extent), with the request's turn
+constraints (`constraints.constrain`; a strict one constrains the seed too), and its goal
+(`target.Goal`, the request's target against that baseline), and runs the worsen loop toward
+that goal within the request's budget, handing each accepted splice and the baseline to
+`on_progress`. It searches with the backend it is given, else `make_backend`'s default
+(`config.DEFAULT_BACKEND`); every backend gives the same route, and the result records which
+one searched. The best
 route is then validated against the request's masks and the resolved stops; a route that fails
 raises `ValidationFailed` and is never returned. Errors a caller should expect: `SnapError` (no
 node near a stop can play its role) and `StopUnreachable` (a leg no route covers without
@@ -22,10 +24,11 @@ planned earlier on this build for the same stops, tier and leash, is what the lo
 instead of the seed ("make it worse"; with a target, a base past it shrinks toward it).
 `check_base` refuses it with `BaseRouteMismatch` (a
 `ValueError` naming the field at fault) unless its stop nodes are the ones `resolve_stops`
-gives, every node lies in the request's active mask and none of its edges is one the request
-bans; `Route.new` then checks it as it checks any route (repeats, twins, transitions). Nothing
-is drawn from the rng before the loop then, so the run is fixed by the base, the request and
-its seed. Without them, planning is exactly as above.
+gives, every node lies in the request's active mask, none of its edges is one the request
+bans and, under a strict turn constraint, none of its turns is one the constraint refuses (a
+soft one takes any base); `Route.new` then checks it as it checks any route (repeats, twins,
+transitions). Nothing is drawn from the rng before the loop then, so the run is fixed by the
+base, the request and its seed. Without them, planning is exactly as above.
 """
 
 from bisect import bisect_right
@@ -34,12 +37,14 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from worst_route.engine.constraints import Constraints, constrain
 from worst_route.engine.objectives import make_objective
 from worst_route.engine.request import RequestMasks, RouteRequest, request_masks
 from worst_route.engine.route import IllegalSplice, Route
 from worst_route.engine.seed_route import Baseline, baseline_route, resolve_stops, seed_route
 from worst_route.engine.snap import StopUnreachable
 from worst_route.engine.target import Goal
+from worst_route.engine.turns import turn_classes
 from worst_route.engine.validator import (
     RouteLike,
     ValidationFailed,
@@ -92,16 +97,28 @@ def plan_route(
     if base is None:
         try:
             seed = seed_route(
-                backend, spatial, data, snaps, masks.active, masks.banned, rng, r_max=r_max
+                backend,
+                spatial,
+                data,
+                snaps,
+                masks.active,
+                masks.banned,
+                rng,
+                r_max=r_max,
+                constraints=request.constraints,
             )
         except (ValueError, IllegalSplice) as error:
             raise _refused(error, None) from error
         nodes, edges, stop_idx = seed.nodes, seed.edges, seed.stop_idx
     else:
-        check_base(base, masks, stop_nodes)
+        check_base(base, masks, stop_nodes, data=data, constraints=request.constraints)
         nodes, edges, stop_idx = base.nodes, base.edges, base.stop_idx
     baseline = baseline_route(backend, data, stop_nodes, masks.active, masks.banned)
-    objective = make_objective(request.objective, data, baseline=baseline.metrics, r_max=r_max)
+    objective = constrain(
+        make_objective(request.objective, data, baseline=baseline.metrics, r_max=r_max),
+        request.constraints,
+        data,
+    )
     goal = Goal(request.target, data, primary=objective.primary, baseline=baseline.metrics)
     score, metrics = objective.evaluate(nodes, edges)
     try:
@@ -147,6 +164,7 @@ def plan_route(
         stop_nodes=stop_nodes,
         node_mask=masks.active,
         banned_edges=masks.banned,
+        banned_turn_classes=request.constraints.banned_turn_classes,
     )
     if not report.ok:
         raise ValidationFailed(report)
@@ -163,8 +181,16 @@ class BaseRouteMismatch(ValueError):  # noqa: N818 (the API error it becomes)
         self.field = field
 
 
-def check_base(base: RouteLike, masks: RequestMasks, stop_nodes: Sequence[int]) -> None:
-    """Raise `BaseRouteMismatch` unless `base` may be continued under these masks and stops."""
+def check_base(
+    base: RouteLike,
+    masks: RequestMasks,
+    stop_nodes: Sequence[int],
+    *,
+    data: GraphData,
+    constraints: Constraints,
+) -> None:
+    """Raise `BaseRouteMismatch` unless `base` may be continued under these masks, stops and
+    constraints."""
     nodes, edges = np.asarray(base.nodes), np.asarray(base.edges)
     if [int(nodes[k]) for k in base.stop_idx] != list(stop_nodes):
         message = "the base route's stops are not the ones the request resolves to"
@@ -176,6 +202,12 @@ def check_base(base: RouteLike, masks: RequestMasks, stop_nodes: Sequence[int]) 
     banned = np.flatnonzero(masks.banned[edges])
     if len(banned):
         message = f"the base route drives edge {edges[banned[0]]}, which the request bans"
+        raise BaseRouteMismatch("route", message)
+    classes = turn_classes(data, edges[:-1], edges[1:]) & constraints.banned_turn_classes
+    refused = np.flatnonzero(classes)
+    if len(refused):
+        node, label = nodes[refused[0] + 1], constraints.kinds[0].label
+        message = f"the base route turns at node {node} as the strict {label} constraint refuses"
         raise BaseRouteMismatch("route", message)
 
 

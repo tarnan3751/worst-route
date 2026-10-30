@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { RECORDINGS, loadStream } from "../__fixtures__/stream";
 import type {
   Baseline,
+  Constraints,
   DocumentMetrics,
   Done,
   DoneMetrics,
@@ -33,6 +34,7 @@ import type {
   Target,
   TargetMetrics,
   TierCount,
+  Turns,
   Validation,
   Vehicle,
 } from "./types";
@@ -124,13 +126,22 @@ const targetMetrics = object<TargetMetrics>({
   achieved: "number",
   within_tolerance: "boolean",
 });
-// Optional: the max-mode recording predates the targets.
+const turns = object<Turns>({
+  left: "integer",
+  right: "integer",
+  straight: "integer",
+  u_turn: "integer",
+});
+// Optional: the max-mode recording predates the targets, both the delays and the turns.
 const doneMetrics = object<DoneMetrics>(
   {
     length_m: "number",
     time_s: "number",
     ratio: nullable("number"),
+    time_ratio: optional(nullable("number")),
     target: optional(nullable(targetMetrics)),
+    delay_s: optional("number"),
+    turns: optional(turns),
   },
   nullable("number"),
 );
@@ -146,10 +157,16 @@ const target = object<Target>({
   seconds: optional(nullable("number")),
 });
 const vehicle = object<Vehicle>({ mpg: "number", gas_price_usd: "number" });
+const constraints = object<Constraints>({
+  no_left: optional("boolean"),
+  no_right: optional("boolean"),
+  strict: optional("boolean"),
+});
 const routeRequest = object<RouteRequest>({
   region: "string",
   stops: optional(nullable(array(stopIn))),
   objective: optional(literal("distance", "time", "collect", "brand", "alphabet")),
+  constraints: optional(constraints),
   tier: optional(tier),
   leash_km: optional({ anyOf: ["number", literal("auto")] }),
   budget_s: optional("number"),
@@ -274,10 +291,13 @@ const routeDocument = object<RouteDocument>({
     ratio: nullable("number"),
     time_s: "number",
     baseline_time_s: "number",
+    baseline_delay_s: optional("number"), // the recordings predate it
     time_ratio: nullable("number"),
     departure: nullable("string"),
     arrival: nullable("string"),
     target: optional(nullable(targetMetrics)),
+    delay_s: optional("number"), // the recordings predate the delays and the turns
+    turns: optional(turns),
   }),
   run: object<Run>({
     attempts: "integer",

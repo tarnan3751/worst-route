@@ -25,11 +25,13 @@ from worst_route.engine.objectives import make_objective
 from worst_route.engine.objectives.base import BaseObjective, BoolArray
 from worst_route.engine.objectives.composite import Composite
 from worst_route.engine.objectives.distance import Distance
+from worst_route.engine.plan import plan_route
 from worst_route.engine.request import RouteRequest, request_masks
 from worst_route.engine.route import Metrics, Route, check_route, splice_arrays
 from worst_route.engine.search import shortest_path, simple_paths
 from worst_route.engine.seed_route import SeedRoute, baseline_route, resolve_stops, seed_route
 from worst_route.engine.snap import InfeasibleTurnConstraint, StopUnreachable
+from worst_route.engine.target import Target
 from worst_route.engine.turns import count_turns, turn_classes
 from worst_route.engine.validator import validate_route
 from worst_route.engine.worsen import Budget, WorsenResult, run_worsen
@@ -440,6 +442,45 @@ def test_the_soft_loop_adds_an_avoided_turn_only_for_more_than_a_kilometre(
     assert best.metrics.length_m > 3 * run.start.metrics.length_m
     rate = avoided(best) / best.metrics.length_m
     assert rate < avoided(plain.result.best) / plain.result.best.metrics.length_m / 2
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_a_soft_base_shrunk_toward_a_target_never_adds_an_avoided_turn(seed: int) -> None:
+    # shrinking takes a splice only if it moves the length toward the target and adds no net
+    # left turn or U-turn: the penalty the constraint gives back is not a loss of length
+    g = lattice(10, 10)
+    request = RouteRequest(
+        stops=[at_node(g, 22), at_node(g, 77)],
+        seed=seed,
+        max_iterations=3000,
+        constraints=SOFT_LEFT,
+    )
+    worst = plan_route(g, request, backend=PythonBackend(g))
+    ratio = worst.route.metrics.length_m / worst.baseline.length_m
+
+    def avoided(route: Route) -> int:
+        turns = count_turns(g, route.edges)
+        return turns["left"] + turns["u_turn"]
+
+    for share in (0.6, 0.3):
+        target = Target(kind="ratio", value=round(ratio * share, 2))
+        shrunk = plan_route(
+            g,
+            request.model_copy(update={"target": target, "seed": seed + 10}),
+            backend=PythonBackend(g),
+            base=worst.route,
+            check_delta=True,
+        )
+        assert shrunk.run.accepted > 0 and shrunk.report.ok
+        route, seen = worst.route, [avoided(worst.route)]
+        for event in shrunk.run.events:
+            s = event.splice
+            route = route.splice(
+                g, s.i, s.j, s.nodes, s.edges, score=event.score, metrics=event.metrics
+            )
+            assert route.metrics.length_m < worst.route.metrics.length_m
+            seen.append(avoided(route))
+        assert all(b <= a for a, b in pairwise(seen)), seen
 
 
 def test_the_loop_under_a_constraint_is_the_same_on_both_backends() -> None:

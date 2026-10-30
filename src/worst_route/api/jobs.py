@@ -254,6 +254,7 @@ class Job:
     elapsed_s: float = 0.0
     baseline_length_m: float = 0.0
     baseline_time_s: float = 0.0
+    baseline_delay_s: float = 0.0
     baseline_edges: IntArray = field(default_factory=lambda: np.zeros(0, dtype=np.int32))
     pending: list[SpliceOut] = field(default_factory=list)
     progress_count: int = 0
@@ -474,7 +475,7 @@ class JobManager:
     def _started(self, job: Job, m: Started) -> None:
         job.route, job.score = m.route, m.score
         job.baseline_length_m, job.baseline_time_s = m.baseline_length_m, m.baseline_time_s
-        job.baseline_edges = m.baseline_edges
+        job.baseline_edges, job.baseline_delay_s = m.baseline_edges, m.baseline_delay_s
         data = job.loaded.data
         baseline = Metrics(m.baseline_length_m, m.baseline_time_s, delay_s=m.baseline_delay_s)
         primary = OBJECTIVES[job.request.objective].primary  # no objective to make for it
@@ -569,6 +570,7 @@ class JobManager:
             stop_nodes=[s.node for s in job.snaps],
             node_mask=masks.active,
             banned_edges=masks.banned,
+            banned_turn_classes=job.request.constraints.banned_turn_classes,
         )
         if not report.ok:
             failed = "; ".join(line for line in report.lines() if "FAILED" in line)
@@ -730,6 +732,7 @@ class JobManager:
                 "delay_s": route.metrics.delay_s,
                 "baseline_length_m": job.baseline_length_m,
                 "baseline_time_s": job.baseline_time_s,
+                "baseline_delay_s": job.baseline_delay_s,
                 "ratio": ratio,
                 "turns": count_turns(job.loaded.data, route.edges),
                 **route.metrics.counters,
@@ -746,9 +749,12 @@ class JobManager:
 
 
 def _done_metrics(document: dict[str, Any]) -> DoneMetrics:
-    """`done`'s metrics: a stored route's, but the baseline's (with its target, if any)."""
-    metrics = document["metrics"]
-    return DoneMetrics(**{k: v for k, v in metrics.items() if not k.startswith("baseline_")})
+    """`done`'s metrics: a stored route's, but the baseline's (with its target, if any), and its
+    experienced time's ratio to the baseline's."""
+    m = document["metrics"]
+    ratio = sse.time_ratio(m["time_s"], m["delay_s"], m["baseline_time_s"], m["baseline_delay_s"])
+    kept = {k: v for k, v in m.items() if not k.startswith("baseline_")}
+    return DoneMetrics(**kept, time_ratio=ratio)
 
 
 def _same_route(drawn: RouteArrays | None, stored: RouteArrays) -> bool:

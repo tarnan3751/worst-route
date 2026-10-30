@@ -57,7 +57,15 @@ def test_the_target_is_the_engine_s(target: dict[str, object], engine: Target) -
 
 
 def test_done_carries_a_typed_target() -> None:
-    metrics = {"length_m": 900.0, "time_s": 81.0, "ratio": 3.0}
+    turns = {"left": 2, "right": 3, "straight": 4, "u_turn": 0}
+    metrics = {
+        "length_m": 900.0,
+        "time_s": 81.0,
+        "ratio": 3.0,
+        "time_ratio": 3.0,
+        "delay_s": 0.0,
+        "turns": turns,
+    }
     target = {"kind": "ratio", "value": 3.0, "achieved": 3.0, "within_tolerance": True}
     done = Done(route_id="r", stopped_because="target", metrics={**metrics, "target": target})
     assert done.metrics.target == TargetMetrics(**target)
@@ -97,7 +105,8 @@ def test_stops_may_be_left_out_only_to_continue_a_route() -> None:
         {"target": {"kind": "duration", "value": 60}},
         {"target": {"kind": "duration", "seconds": 7 * 24 * 3600 + 1}},
         {"vehicle": {"mpg": 0, "gas_price_usd": 3}},
-        {"constraints": {"no_left": True}},
+        {"constraints": {"no_left": True, "no_right": True}},
+        {"constraints": {"no_u_turns": True}},
     ],
 )
 def test_a_malformed_request_is_refused(change: dict[str, object]) -> None:

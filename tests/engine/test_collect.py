@@ -6,16 +6,21 @@ import pytest
 
 from worst_route.config import COLLECT_ITEM_WEIGHT
 from worst_route.engine.detour import find_detour
+from worst_route.engine.io import route_document
 from worst_route.engine.objectives.collect import ITEMS, Collect, CollectItem, count_items
+from worst_route.engine.plan import plan_route
+from worst_route.engine.request import RouteRequest
 from worst_route.engine.route import Metrics, Route
+from worst_route.engine.target import Target
 from worst_route.engine.validator import validate_route
 from worst_route.engine.worsen import Budget, run_worsen
+from worst_route.graph.csr_backend import CsrBackend
 from worst_route.graph.data import EdgeFlag, GraphData, NodeKind
 from worst_route.graph.python_backend import PythonBackend
 from worst_route.graph.spatial import SpatialIndex
 from worst_route.graph.testing import Edge, edge_id, make_graph
 
-from .graphs import lattice, route_on
+from .graphs import at_node, lattice, route_on
 
 BRIDGE = {"flags": EdgeFlag.BRIDGE}
 
@@ -253,3 +258,38 @@ def test_a_run_collects_and_never_gives_an_item_back(item: CollectItem) -> None:
         g, result.best, stop_nodes=[0, 9], node_mask=everything, banned_edges=banned
     )
     assert report.ok
+
+
+def test_a_request_plans_a_collecting_route_the_same_on_both_backends() -> None:
+    g = sprinkled()
+    stops = [at_node(g, 0), at_node(g, 9)]  # the seed runs along the bottom row: no items
+    request = RouteRequest(
+        stops=stops, seed=5, objective="collect", item="bridge", max_iterations=400
+    )
+    documents = []
+    for backend_type in (PythonBackend, CsrBackend):
+        result = plan_route(g, request, backend=backend_type(g), check_delta=True)
+        assert result.report.ok
+        documents.append(route_document(g, result))
+    first, second = documents
+    assert first["edges"] == second["edges"] and first["metrics"] == second["metrics"]
+    metrics = first["metrics"]
+    assert metrics["item"] == "bridge" and metrics["items"]["bridge"] >= 3
+    nodes, edges = np.array(first["nodes"]), np.array(first["edges"])
+    assert metrics["items"] == count_items(g, nodes, edges)
+
+
+def test_a_collecting_route_reaches_a_duration_target() -> None:
+    g = sprinkled()
+    target = Target(kind="duration", value=600)  # the baseline drives 900 m in 81 s
+    request = RouteRequest(
+        stops=[at_node(g, 0), at_node(g, 9)],
+        seed=2,
+        objective="collect",
+        item="roundabout",
+        target=target,
+    )
+    result = plan_route(g, request, backend=PythonBackend(g), check_delta=True)
+    assert result.run.stopped_because == "target"
+    assert 588 <= result.route.metrics.time_s <= 612
+    assert result.route.metrics.counters["items"]["roundabout"] > 0

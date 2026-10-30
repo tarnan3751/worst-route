@@ -4,13 +4,13 @@
 `numpy.random.Generator(PCG64(request.seed))` for every random draw that follows, settles the
 stops (`resolve_stops`: snapping and its fallback, which may move stops), builds the seed route
 and the baseline on them, makes the request's objective with the baseline's metrics and
-the radius bound r_max = min(leash, the active area's extent), with the request's turn
-constraints (`constraints.constrain`; a strict one constrains the seed too), and its goal
-(`target.Goal`, the request's target against that baseline), and runs the worsen loop toward
-that goal within the request's budget, handing each accepted splice and the baseline to
-`on_progress`. It searches with the backend it is given, else `make_backend`'s default
-(`config.DEFAULT_BACKEND`); every backend gives the same route, and the result records which
-one searched. The best
+the radius bound r_max = min(leash, the active area's extent), a collecting one also with the
+request's item and active nodes, with the request's turn constraints (`constraints.constrain`;
+a strict one constrains the seed too), and its goal (`target.Goal`, the request's target
+against that baseline), and runs the worsen loop toward that goal within the request's budget,
+handing each accepted splice and the baseline to `on_progress`. It searches with the backend it
+is given, else `make_backend`'s default (`config.DEFAULT_BACKEND`); every backend gives the same
+route, and the result records which one searched. The best
 route is then validated against the request's masks and the resolved stops; a route that fails
 raises `ValidationFailed` and is never returned. Errors a caller should expect: `SnapError` (no
 node near a stop can play its role) and `StopUnreachable` (a leg no route covers without
@@ -115,7 +115,14 @@ def plan_route(
         nodes, edges, stop_idx = base.nodes, base.edges, base.stop_idx
     baseline = baseline_route(backend, data, stop_nodes, masks.active, masks.banned)
     objective = constrain(
-        make_objective(request.objective, data, baseline=baseline.metrics, r_max=r_max),
+        make_objective(
+            request.objective,
+            data,
+            baseline=baseline.metrics,
+            r_max=r_max,
+            item=request.item,
+            area=masks.active,
+        ),
         request.constraints,
         data,
     )

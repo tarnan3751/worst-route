@@ -16,6 +16,7 @@
    ]
   ],
   "objective": "distance",
+  "item": null,
   "tier": "auto",
   "leash_km": "auto",
   "budget_s": 120.0,

@@ -16,6 +16,7 @@
    ]
   ],
   "objective": "distance",
+  "item": null,
   "constraints": {
    "no_left": true,
    "no_right": false,

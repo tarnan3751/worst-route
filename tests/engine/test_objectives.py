@@ -9,6 +9,7 @@ from worst_route.config import HighwayClass
 from worst_route.engine.detour import find_detour
 from worst_route.engine.objectives import OBJECTIVES, make_objective
 from worst_route.engine.objectives.base import BaseObjective, FloatArray, Objective, route_delay_s
+from worst_route.engine.objectives.collect import Collect
 from worst_route.engine.objectives.distance import Distance
 from worst_route.engine.objectives.time import SlowestTime
 from worst_route.engine.request import RouteRequest
@@ -96,11 +97,17 @@ def test_initial_radius(baseline: float, r_max: float, radius: float) -> None:
 
 
 def test_the_registry_and_the_request_know_distance() -> None:
-    assert set(OBJECTIVES) == {"distance", "time"}
+    assert set(OBJECTIVES) == {"distance", "time", "collect"}
     objective: Objective = make_objective(
         "distance", GRID, baseline=Metrics(500.0, 45.0), r_max=9000.0
     )
     assert isinstance(objective, Distance) and objective.key == "distance"
+    collecting = make_objective(
+        "collect", GRID, baseline=Metrics(500.0, 45.0), r_max=9e3, item="bridge"
+    )
+    assert isinstance(collecting, Collect) and collecting.item == "bridge"
+    with pytest.raises(ValueError, match="needs an item"):
+        make_objective("collect", GRID, baseline=Metrics(500.0, 45.0), r_max=9000.0)
     with pytest.raises(ValidationError, match="unknown objective"):
         RouteRequest(stops=[(45.5, -122.6), (45.6, -122.5)], objective="slowest", seed=0)
 

@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 
 from worst_route.cli import _seconds, app
 from worst_route.engine import ENGINE_VERSION
-from worst_route.graph.data import GraphData
+from worst_route.graph.data import EdgeFlag, GraphData
 from worst_route.graph.store import write_build
 from worst_route.graph.testing import make_graph
 
@@ -456,6 +456,73 @@ def test_base_takes_its_stops_and_scale_from_its_file(data_dir: Path, tmp_path: 
         assert code == 1 and stdout == "" and message in stderr, stderr
 
 
+def test_a_collecting_plan_prints_and_records_its_items(data_dir: Path, tmp_path: Path) -> None:
+    roads = {(a, a + 1): {"flags": EdgeFlag.BRIDGE} for a in range(10, 90, 7) if a % 10 < 9}
+    bridged = save(data_dir, lattice(10, 10, rounded_lonlat=True, roads=roads), "b1")
+    out = tmp_path / "route.json"
+    trip = ["--from", latlon(bridged, 0), "--to", latlon(bridged, 9), "--seed", "1"]
+    collect = ["--objective", "collect", "--item", "bridge"]
+    code, stdout, stderr = plan(*trip, *collect, "--max-iterations", "300", "--out", str(out))
+    assert code == 0, stdout + stderr
+    doc = json.loads(out.read_text())
+    items = doc["metrics"]["items"]
+    assert items["bridge"] > 0 and doc["metrics"]["item"] == "bridge"
+    assert (doc["request"]["objective"], doc["request"]["item"]) == ("collect", "bridge")
+    every = f"toll_booth 0, level_crossing 0, roundabout 0, bridge {items['bridge']}"
+    assert f"collected: {items['bridge']} bridge ({every})" in stdout.splitlines()
+    assert runner.invoke(app, ["validate", str(out)]).exit_code == 0
+
+    more = tmp_path / "more.json"  # --base keeps the file's objective and item
+    code, stdout, stderr = plan("--base", str(out), "--seed", "2", "--out", str(more))
+    assert code == 0, stdout + stderr
+    assert json.loads(more.read_text())["request"]["item"] == "bridge"
+    assert json.loads(more.read_text())["metrics"]["items"]["bridge"] >= items["bridge"]
+
+    code, stdout, _ = plan(*trip, "--max-iterations", "50", "--out", str(out))
+    assert code == 0 and not any(line.startswith("collected: ") for line in stdout.splitlines())
+    assert json.loads(out.read_text())["metrics"]["items"].keys() == {
+        "toll_booth",
+        "level_crossing",
+        "roundabout",
+        "bridge",
+    }
+
+
+def test_an_objective_s_item_and_target_must_fit(data_dir: Path, tmp_path: Path) -> None:
+    save(data_dir, GRID, "b1")
+    trip = ["--from", latlon(GRID, 0), "--to", latlon(GRID, 99)]
+    needs = "the collect objective needs an item: toll_booth, level_crossing, roundabout, bridge"
+    for args, line in (
+        (["--objective", "collect"], f"invalid --item: {needs}"),
+        (["--item", "bridge"], "invalid --item: only the collect objective takes an item"),
+        (
+            ["--objective", "collect", "--item", "bridge", "--target", "ratio:3"],
+            "invalid --target: the collect objective takes no ratio target: it counts items, "
+            "not metres",
+        ),
+    ):
+        assert plan(*trip, *args) == (2, "", f"{line}\n")
+    unknown = "invalid --objective: unknown objective 'bogus'; known: distance, time, collect"
+    assert plan(*trip, "--objective", "bogus", "--item", "bridge") == (2, "", f"{unknown}\n")
+    for args in (["--objective", "collect", "--item", "ufo"], ["--objective", "brand"]):
+        code, stdout, _ = plan(*trip, *args)
+        assert code == 2 and stdout == ""
+
+    first = tmp_path / "first.json"
+    collect = ["--objective", "collect", "--item", "roundabout"]
+    assert plan(*trip, *collect, "--max-iterations", "20", "--out", str(first))[0] == 0
+    takes = "--base takes the objective, item and constraints from its route: drop"
+    for given, named in (
+        (["--objective", "distance"], "--objective"),
+        (["--item", "bridge"], "--item"),
+        (collect, "--objective, --item"),
+    ):
+        assert plan("--base", str(first), *given) == (2, "", f"{takes} {named}\n")
+    no_ratio = "invalid --target: the collect objective takes no ratio target"
+    code, _, stderr = plan("--base", str(first), "--target", "ratio:3")
+    assert code == 2 and stderr.startswith(no_ratio)
+
+
 def test_validate_re_derives_the_stops(data_dir: Path, tmp_path: Path) -> None:
     # a route cut short and its file re-edited to agree with itself: only the stops betray it
     g = save(data_dir, GRID, "b1")
@@ -581,7 +648,8 @@ def test_base_takes_its_objective_and_constraints_from_its_file(
     assert plan("--base", str(first), "--no-right", "--strict") == (
         2,
         "",
-        "--base takes the objective and constraints from its route: drop --no-right, --strict\n",
+        "--base takes the objective, item and constraints from its route: drop --no-right, "
+        "--strict\n",
     )
 
 

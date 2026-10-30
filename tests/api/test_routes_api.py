@@ -20,9 +20,10 @@ from worst_route.api.jobs import JobSettings
 from worst_route.engine.constraints import Constraints
 from worst_route.engine.io import feature_collection
 from worst_route.engine.snap import StopUnreachable
+from worst_route.graph.data import EdgeFlag
 from worst_route.graph.testing import Edge, make_graph
 
-from ..engine.graphs import X0, Y0, at, at_node, two_rings
+from ..engine.graphs import X0, Y0, at, at_node, lattice, two_rings
 from .support import GRID, GRID_BBOX, SLOW, save_build, slow_splices, until
 
 pytestmark = pytest.mark.anyio
@@ -363,7 +364,14 @@ async def test_a_departure_gives_an_arrival(data: Path) -> None:
         ({"constraints": {"strict": True}}, "INVALID_REQUEST"),
         ({"objective": "nonsense"}, "INVALID_REQUEST"),
         ({"region": "atlantis"}, "UNKNOWN_REGION"),
-        ({"objective": "collect"}, "NOT_YET"),
+        ({"objective": "brand"}, "NOT_YET"),
+        ({"objective": "collect"}, "INVALID_REQUEST"),
+        ({"objective": "collect", "item": "ufo"}, "INVALID_REQUEST"),
+        ({"item": "bridge"}, "INVALID_REQUEST"),
+        (
+            {"objective": "collect", "item": "bridge", "target": {"kind": "ratio", "value": 3}},
+            "INVALID_REQUEST",
+        ),
         ({"target": {"kind": "ratio", "value": 1}}, "INVALID_REQUEST"),
         ({"target": {"kind": "ratio", "seconds": 600}}, "INVALID_REQUEST"),
         ({"target": {"kind": "duration", "seconds": 8 * 24 * 3600}}, "INVALID_REQUEST"),
@@ -380,6 +388,46 @@ async def test_a_job_that_cannot_be_planned_is_refused(
         r = await client.post("/jobs", json=job_body(**fields))
         assert r.status_code == 422 and r.json()["code"] == code, r.text
         assert r.json()["message"]
+
+
+async def test_an_item_or_target_that_does_not_fit_the_objective_names_its_field(
+    data: Path,
+) -> None:
+    async with serving(data) as (client, _):
+        for fields, field in (
+            ({"objective": "collect"}, "item"),
+            ({"item": "roundabout"}, "item"),
+            (
+                {"objective": "collect", "item": "bridge", "target": {"kind": "ratio", "value": 3}},
+                "target",
+            ),
+        ):
+            r = await client.post("/jobs", json=job_body(**fields))
+            assert r.status_code == 422 and r.json()["field"] == field, r.text
+
+
+async def test_a_collecting_job_counts_its_item_as_it_grows(tmp_path: Path) -> None:
+    roads = {(a, a + 1): {"flags": EdgeFlag.BRIDGE} for a in range(10, 90, 7) if a % 10 < 9}
+    root = tmp_path / "data"  # the same lattice as GRID, with bridges off its bottom row
+    save_build(root, lattice(10, 10, rounded_lonlat=True, roads=roads), "bridged", bbox=GRID_BBOX)
+    async with serving(root) as (client, _):
+        body = job_body(objective="collect", item="bridge", stops=[stop(0), stop(9)])
+        _, events = await finished(client, body)
+        progress = [e["data"]["metrics"] for e in events if e["event"] == "progress"]
+        assert progress and all(m["item"] == "bridge" for m in progress)
+        counts = [m["items"]["bridge"] for m in progress]
+        assert counts == sorted(counts) and counts[-1] > 0
+        done = events[-1]["data"]
+        assert done["metrics"]["item"] == "bridge" and done["metrics"]["items"]["bridge"] > 0
+        doc = (await client.get(f"/routes/{done['route_id']}")).json()
+        assert doc["request"]["item"] == "bridge"
+        assert doc["metrics"]["items"] == done["metrics"]["items"]
+
+        _, events = await finished(client, job_body(stops=[stop(0), stop(9)]))  # distance
+        done = events[-1]["data"]
+        assert "item" not in done["metrics"] and done["metrics"]["items"]["toll_booth"] == 0
+        doc = (await client.get(f"/routes/{done['route_id']}")).json()
+        assert doc["metrics"]["items"] == done["metrics"]["items"]
 
 
 async def test_stops_outside_the_region_or_far_from_roads_are_named(data: Path) -> None:

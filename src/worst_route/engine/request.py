@@ -2,13 +2,16 @@
 
 `RouteRequest` is what a caller asks for: the stops as (lat, lon) in order (the first the start,
 the last the end; the same point first and last makes a round trip), the objective's key
-(`"distance"` or `"time"`, the keys of `objectives.OBJECTIVES`), the turn constraints
-(`constraints.Constraints`: none by default), the tier (`"auto"` or `"T0"`..`"T4"`), the leash
-in km (`"auto"` or a number, at most 150), the budget in seconds (at most 120) and iterations,
-the seed, and the target (`target.Target`: max by default; a ratio target is refused for a
-round trip, whose baseline is 0 m). Every number is finite, so it round-trips through JSON
-(`model_dump(mode="json")`) without `Infinity`; its JSON leaves the constraints out when there
-are none, so a request without them reads as it did before they existed.
+(`"distance"`, `"time"` or `"collect"`, the keys of `objectives.OBJECTIVES`), the item it
+collects (`collect` only, which needs one), the turn constraints (`constraints.Constraints`:
+none by default), the tier (`"auto"` or `"T0"`..`"T4"`), the leash in km (`"auto"` or a number,
+at most 150), the budget in seconds (at most 120) and iterations, the seed, and the target
+(`target.Target`: max by default; a ratio target is refused for a round trip, whose baseline is
+0 m, and for `collect`, which counts items rather than metres; `objective_problem` names what is
+wrong with an objective, its item and its target kind, for the API to refuse it as early).
+Every number is finite, so it round-trips through JSON (`model_dump(mode="json")`) without
+`Infinity`; its JSON leaves the constraints out when there are none, so a request without them
+reads as it did before they existed.
 
 `request_masks(spatial, data, request)` turns it into `RequestMasks`, from the request alone,
 so the validator can recompute them from a saved route. The stops are projected and the trip
@@ -55,13 +58,14 @@ from worst_route.config import (
 )
 from worst_route.engine.constraints import NO_CONSTRAINTS, Constraints
 from worst_route.engine.objectives import OBJECTIVES
+from worst_route.engine.objectives.collect import ITEMS, CollectItem
 from worst_route.engine.snap import is_round_trip
-from worst_route.engine.target import Target
+from worst_route.engine.target import Target, TargetKind
 from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import SpatialIndex, active_mask
 
 TierChoice = Literal["auto", "T0", "T1", "T2", "T3", "T4"]
-ObjectiveKey = Literal["distance", "time"]  # the keys of OBJECTIVES
+ObjectiveKey = Literal["distance", "time", "collect"]  # the keys of OBJECTIVES
 
 
 class RouteRequest(BaseModel):
@@ -72,6 +76,7 @@ class RouteRequest(BaseModel):
 
     stops: list[tuple[float, float]] = Field(min_length=2)
     objective: ObjectiveKey = "distance"
+    item: CollectItem | None = None
     constraints: Constraints = NO_CONSTRAINTS
     tier: TierChoice = "auto"
     leash_km: Annotated[float, Field(gt=0, le=LEASH_MAX_KM)] | Literal["auto"] = "auto"
@@ -101,12 +106,33 @@ class RouteRequest(BaseModel):
             raise ValueError("a round trip has no ratio target: its baseline is 0 m")
         return self
 
+    @model_validator(mode="after")
+    def _item_fits(self) -> "RouteRequest":
+        problem = objective_problem(self.objective, self.item, self.target.kind)
+        if problem is not None:
+            raise ValueError(problem[1])
+        return self
+
     @model_serializer(mode="wrap")
     def _no_constraints_left_out(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         fields: dict[str, Any] = handler(self)
         if self.constraints == NO_CONSTRAINTS:
             del fields["constraints"]
         return fields
+
+
+def objective_problem(
+    objective: str, item: str | None, target: TargetKind
+) -> tuple[str, str] | None:
+    """What is wrong with this objective, item and kind of target, as (the field at fault, a
+    sentence), or None: `collect` needs an item, only it takes one, and it takes no ratio."""
+    if objective == "collect" and item is None:
+        return "item", f"the collect objective needs an item: {', '.join(ITEMS)}"
+    if objective != "collect" and item is not None:
+        return "item", "only the collect objective takes an item"
+    if objective == "collect" and target == "ratio":
+        return "target", "the collect objective takes no ratio target: it counts items, not metres"
+    return None
 
 
 @dataclass(frozen=True, eq=False)

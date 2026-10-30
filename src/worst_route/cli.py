@@ -709,7 +709,14 @@ def plan(
     target: Annotated[
         str, typer.Option(help="max, ratio:<x> (× the baseline) or duration:<time> (9h, 2h30m).")
     ] = "max",
-    objective: Annotated[str, typer.Option(help="distance or time.")] = "distance",
+    objective: Annotated[str, typer.Option(help="distance, time or collect.")] = "distance",
+    item: Annotated[
+        str | None,
+        typer.Option(
+            help="What --objective collect collects: toll_booth, level_crossing, roundabout or "
+            "bridge."
+        ),
+    ] = None,
     no_left: Annotated[
         bool, typer.Option("--no-left", help="Left turns cost a kilometre (none, --strict).")
     ] = False,
@@ -722,7 +729,7 @@ def plan(
     base: Annotated[
         Path | None,
         typer.Option(
-            help="Continue this route.json (its stops, tier and leash).",
+            help="Continue this route.json (its stops, tier, leash and objective).",
             exists=True,
             dir_okay=False,
         ),
@@ -733,8 +740,9 @@ def plan(
 
     from worst_route.engine import ENGINE_VERSION
     from worst_route.engine.io import SavedRoute, read_route, route_document, route_geojson
+    from worst_route.engine.objectives import OBJECTIVES
     from worst_route.engine.plan import BaseRouteMismatch, plan_route
-    from worst_route.engine.request import RouteRequest
+    from worst_route.engine.request import RouteRequest, objective_problem
     from worst_route.engine.route import IllegalSplice
     from worst_route.engine.seed_route import Baseline
     from worst_route.engine.snap import InfeasibleTurnConstraint, StopUnreachable, is_round_trip
@@ -749,6 +757,7 @@ def plan(
         "seed": seed if seed is not None else secrets.randbelow(2**31),
         "target": _target(target),
         "objective": objective,
+        "item": item,
         "constraints": {"no_left": no_left, "no_right": no_right, "strict": strict},
     }
     saved: SavedRoute | None = None
@@ -776,12 +785,13 @@ def plan(
             _fail(message, code=2)
         mode = [
             f"--{name.replace('_', '-')}"
-            for name in ("objective", "no_left", "no_right", "strict")
+            for name in ("objective", "item", "no_left", "no_right", "strict")
             if (source := ctx.get_parameter_source(name)) is not None and source.name != "DEFAULT"
         ]
         if mode:
             message = (
-                f"--base takes the objective and constraints from its route: drop {', '.join(mode)}"
+                "--base takes the objective, item and constraints from its route: drop "
+                f"{', '.join(mode)}"
             )
             _fail(message, code=2)
         try:
@@ -799,12 +809,19 @@ def plan(
         fields.update(
             stops=saved.request.stops,
             objective=saved.request.objective,
+            item=saved.request.item,
             constraints=saved.request.constraints,
             tier=saved.request.tier,
             leash_km=saved.request.leash_km,
         )
     if fields["target"]["kind"] == "ratio" and is_round_trip(fields["stops"]):
         _fail("invalid --target: a round trip has no ratio target", code=2)
+    if fields["objective"] not in OBJECTIVES:  # before its item: the API refuses it first too
+        unknown, known = fields["objective"], ", ".join(OBJECTIVES)
+        _fail(f"invalid --objective: unknown objective {unknown!r}; known: {known}", code=2)
+    problem = objective_problem(fields["objective"], fields["item"], fields["target"]["kind"])
+    if problem is not None:
+        _fail(f"invalid --{problem[0]}: {problem[1]}", code=2)
     try:
         request = RouteRequest(**fields)
     except ValidationError as error:
@@ -887,6 +904,10 @@ def plan(
                 reached["kind"], reached["value"], reached["achieved"], reached["within_tolerance"]
             )
         )
+    if "item" in route.metrics.counters:
+        wanted, items = route.metrics.counters["item"], route.metrics.counters["items"]
+        every = ", ".join(f"{name} {count}" for name, count in items.items())
+        typer.echo(f"collected: {items[wanted]} {wanted} ({every})")
     typer.echo(f"route: {len(route.nodes)} nodes, {len(route.edges)} edges")
     typer.echo(
         f"search: {run.attempts} attempts, {run.accepted} accepted, {run.elapsed_s:.1f} s, "

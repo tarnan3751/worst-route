@@ -1,7 +1,8 @@
 """The API's request and response shapes (`docs/reference/api.md`; `docs/PLAN.md` §4).
 
 `RouteRequestIn`, the body of `POST /jobs`, mirrors `engine.request.RouteRequest` field for
-field under the engine's names, with the stops as `{lat, lon, label}` objects, the target as
+field under the engine's names (the objective as any string, so a planned one is `NOT_YET`, and
+the item `collect` collects), with the stops as `{lat, lon, label}` objects, the target as
 `{kind: "max"}`, `{kind: "ratio", value}` or `{kind: "duration", seconds}` (the engine's
 `Target`, whose bounds it checks) and the turn constraints as the engine's
 `{no_left, no_right, strict}`, plus `region`, `vehicle` and `departure` (kept with the
@@ -10,10 +11,12 @@ come from that route, so `stops` may be left out). `engine_request(seed)` is the
 request. `SnapIn` is the body of `POST /snap`.
 
 The responses: `Health`, `RegionOut`, `SnapOut`, `JobCreated`, `JobStatus`, `RouteDocument`
-(its metrics with `TargetMetrics` for a ratio or duration target), `ValidationOut`, and
-`ErrorBody` (`{code, message}` and the error's own fields) for every error. The document's
-metrics count the route's turns (`Turns`) and its delays; `Done`'s metrics (`DoneMetrics`)
-carry the target, the turns and the delays too.
+(its metrics with `TargetMetrics` for a ratio or duration target, and `ItemCounts`, the route's
+collectibles), `ValidationOut`, and `ErrorBody` (`{code, message}` and the error's own fields)
+for every error. The document's metrics count the route's turns (`Turns`), its delays and its
+collectibles; `Done`'s metrics (`DoneMetrics`) carry the target, the turns and the delays too,
+and the stored route's other metrics (its item counts, a collecting route's item) as extra
+fields.
 The SSE events' payloads are `Snapped`, `BaselineOut`, `Progress` (with `SpliceOut`s),
 `Snapshot`, `Done` and `ErrorBody`. Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in
 requests; every number is metric.
@@ -28,11 +31,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from worst_route.config import API_DEFAULT_MAX_ITERATIONS, DEFAULT_BUDGET_S, LEASH_MAX_KM
 from worst_route.engine.constraints import NO_CONSTRAINTS, Constraints
+from worst_route.engine.objectives.collect import CollectItem
 from worst_route.engine.request import ObjectiveKey, RouteRequest, TierChoice
 from worst_route.engine.target import Target as EngineTarget
 
 # Modes the plan describes that the engine does not have yet: asked for, they are NOT_YET.
-PLANNED_OBJECTIVES = ("collect", "brand", "alphabet")
+PLANNED_OBJECTIVES = ("brand", "alphabet")
 StopReason = Literal["budget", "converged", "target", "cancelled", "timeout"]
 JobState = Literal["queued", "running", "done", "error"]
 
@@ -90,6 +94,7 @@ class RouteRequestIn(_In):
     region: str
     stops: list[StopIn] | None = Field(default=None, min_length=2)
     objective: str = "distance"
+    item: CollectItem | None = None
     constraints: Constraints = NO_CONSTRAINTS
     tier: TierChoice = "auto"
     leash_km: Annotated[float, Field(gt=0, le=LEASH_MAX_KM)] | Literal["auto"] = "auto"
@@ -114,6 +119,7 @@ class RouteRequestIn(_In):
         return RouteRequest(
             stops=[(s.lat, s.lon) for s in self.stops],
             objective=cast(ObjectiveKey, self.objective),  # checked by the endpoint, and here
+            item=self.item,
             constraints=self.constraints,
             tier=self.tier,
             leash_km=self.leash_km,
@@ -337,6 +343,15 @@ class Leg(_Out):
     node_range: tuple[int, int]
 
 
+class ItemCounts(_Out):
+    """How many of each collectible a route passes (`objectives.collect.count_items`)."""
+
+    toll_booth: int
+    level_crossing: int
+    roundabout: int
+    bridge: int
+
+
 class DocumentMetrics(_Out):
     length_m: float
     baseline_length_m: float
@@ -350,6 +365,7 @@ class DocumentMetrics(_Out):
     target: TargetMetrics | None
     delay_s: float
     turns: Turns
+    items: ItemCounts
 
 
 class Run(_Out):

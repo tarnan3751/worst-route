@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from worst_route.config import HighwayClass
 from worst_route.engine.constraints import NO_CONSTRAINTS
 from worst_route.engine.objectives import OBJECTIVES
+from worst_route.engine.objectives.collect import ITEMS
 from worst_route.engine.request import (
     ObjectiveKey,
     RouteRequest,
@@ -75,6 +76,38 @@ def test_a_round_trip_has_no_ratio_target() -> None:
         RouteRequest(stops=loop, seed=1, target=Target(kind="ratio", value=5))
     assert RouteRequest(stops=loop, seed=1, target=Target(kind="duration", value=600)).target
     assert RouteRequest(stops=PORTLAND, seed=1, target=Target(kind="ratio", value=5)).target
+
+
+@pytest.mark.parametrize(
+    ("fields", "message"),
+    [
+        ({"objective": "collect"}, "the collect objective needs an item: toll_booth, "),
+        ({"item": "bridge"}, "only the collect objective takes an item"),
+        ({"objective": "collect", "item": "ufo"}, "Input should be 'toll_booth'"),
+        (
+            {"objective": "collect", "item": "bridge", "target": {"kind": "ratio", "value": 3}},
+            "no ratio",
+        ),
+        ({"objective": "slowest"}, "unknown objective 'slowest'; known: distance, time, collect"),
+    ],
+)
+def test_only_collect_takes_an_item_and_it_takes_no_ratio(
+    fields: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        RouteRequest.model_validate({"stops": PORTLAND, "seed": 1, **fields})
+
+
+def test_a_collecting_request_round_trips_through_json() -> None:
+    duration = Target(kind="duration", value=3600)
+    for item in ITEMS:
+        request = RouteRequest(
+            stops=PORTLAND, seed=1, objective="collect", item=item, target=duration
+        )
+        dumped = request.model_dump(mode="json")
+        assert (dumped["objective"], dumped["item"]) == ("collect", item)
+        assert RouteRequest.model_validate(json.loads(json.dumps(dumped))) == request
+    assert RouteRequest(stops=PORTLAND, seed=1).model_dump(mode="json")["item"] is None
 
 
 def test_round_trips_through_json() -> None:

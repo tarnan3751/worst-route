@@ -12,12 +12,14 @@
     POST   /routes/{id}/validate       the validator's report on it
 
 `POST /jobs` refuses before a job exists: a ratio target for a round trip first, then the
-objective and the budget (the target's bounds are the body's), then the job limit, then for
-"make it worse" (`base_route_id`) the base route (its build, engine and stops, tier and leash,
-which the request may leave out; a ratio target for a base round trip too), then each stop
-against the region's bbox (`meta.params.bbox`, else the nodes' extent), then the pre-flight
-(`jobs.prepare`: snapping and the re-snap fallback, in a worker thread), and for a base route
-`plan.check_base` on the pre-flight's stops and masks (`BASE_ROUTE_MISMATCH`). The errors are
+objective (one not built yet, an unknown one, or one whose item or target does not fit it:
+`request.objective_problem`) and the budget (the target's bounds are the body's), then the job
+limit, then for "make it worse" (`base_route_id`) the base route (its build, engine and stops,
+tier and leash, which the request may leave out; a ratio target for a base round trip too),
+then each stop against the region's bbox (`meta.params.bbox`, else the nodes' extent), then the
+pre-flight (`jobs.prepare`: snapping and the re-snap fallback, in a worker thread), and for a
+base route `plan.check_base` on the pre-flight's stops and masks (`BASE_ROUTE_MISMATCH`). The
+errors are
 `ApiError`s, answered as `ErrorBody`: 422 `INVALID_REQUEST`, `UNKNOWN_REGION`,
 `STOP_OUTSIDE_REGION`, `NO_NODE_NEAR`, `STOP_UNREACHABLE_WITHOUT_REPEAT`,
 `INFEASIBLE_TURN_CONSTRAINT`, `BUDGET_TOO_LARGE`,
@@ -75,8 +77,9 @@ from worst_route.engine import ENGINE_VERSION
 from worst_route.engine.io import feature_collection, line_coordinates
 from worst_route.engine.objectives import OBJECTIVES
 from worst_route.engine.objectives.base import route_delay_s
+from worst_route.engine.objectives.collect import count_items
 from worst_route.engine.plan import BaseRouteMismatch, check_base
-from worst_route.engine.request import RouteRequest, request_masks
+from worst_route.engine.request import RouteRequest, objective_problem, request_masks
 from worst_route.engine.seed_route import resolve_stops
 from worst_route.engine.snap import StopUnreachable, is_round_trip, role_of
 from worst_route.engine.turns import count_turns
@@ -230,11 +233,14 @@ async def create_job(body: RouteRequestIn, request: Request) -> JobCreated:
         _check_round_trip(body, [(s.lat, s.lon) for s in body.stops])
     loaded = region_of(api, body.region)
     if body.objective in PLANNED_OBJECTIVES:
-        message = f"the {body.objective} objective is not built yet; distance and time are"
+        message = f"the {body.objective} objective is not built yet; built: {', '.join(OBJECTIVES)}"
         raise ApiError(422, "NOT_YET", message, field="objective")
     if body.objective not in OBJECTIVES:
         message = f"unknown objective {body.objective!r}; known: {', '.join(OBJECTIVES)}"
         raise ApiError(422, "INVALID_REQUEST", message)
+    problem = objective_problem(body.objective, body.item, body.target.kind)
+    if problem is not None:
+        raise ApiError(422, "INVALID_REQUEST", problem[1], field=problem[0])
     if body.budget_s > BUDGET_MAX_S:
         message = f"a budget of {body.budget_s:g} s is over the {BUDGET_MAX_S:g} s allowed"
         raise ApiError(422, "BUDGET_TOO_LARGE", message, max_s=BUDGET_MAX_S)
@@ -439,6 +445,7 @@ def route(route_id: str, request: Request) -> RouteDocument:
             target=m.get("target"),
             delay_s=delay_s,
             turns=Turns(**count_turns(data, stored.edges)),
+            items=count_items(data, stored.nodes, stored.edges),
         ),
         run=Run(**stored.run),
         validation=Validation(ok=True, checked_at=stored.created),

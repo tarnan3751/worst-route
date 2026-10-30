@@ -6,7 +6,9 @@ inside the masks, and splices it in when the objective's `delta` is strictly pos
 `feasible_window` agrees; every accepted splice yields a `ProgressEvent` (the attempt number,
 the elapsed time, the new score and metrics, the `Splice` that made it). The generator returns
 a `WorsenResult`: the best route by `objective.better`, every event, the attempts and accepted
-splices, why it stopped, and the time it took. `run_worsen` drives it to the end.
+splices, why it stopped, the time it took, and how many candidates the splice refused for a
+turn a transition table forbids (the searches see the tables, so this should stay near zero).
+`run_worsen` drives it to the end.
 
 - The window is one edge (j = i + 1) with probability `SINGLE_EDGE_PROBABILITY`, else a run
   of 2 to 4 edges, cut short at the next stop so no stop is ever inside it.
@@ -29,6 +31,7 @@ equals the full re-score.
 import math
 import time
 from bisect import bisect_right
+from collections import Counter
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from typing import Literal
@@ -46,7 +49,14 @@ from worst_route.config import (
 )
 from worst_route.engine.detour import find_detour
 from worst_route.engine.objectives.base import Objective
-from worst_route.engine.route import Metrics, Route, Splice, splice_arrays
+from worst_route.engine.route import (
+    IllegalSplice,
+    Metrics,
+    Route,
+    Splice,
+    TransitionForbidden,
+    splice_arrays,
+)
 from worst_route.graph.backend import GraphBackend
 from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import SpatialIndex
@@ -84,6 +94,7 @@ class WorsenResult:
     accepted: int
     stopped_because: StopReason
     elapsed_s: float
+    refused_transitions: int
 
 
 def pick_segment(route: Route, rng: np.random.Generator) -> tuple[int, int]:
@@ -120,6 +131,7 @@ def worsen(
     best = route
     attempts = accepted = fails = 0
     events: list[ProgressEvent] = []
+    refused: Counter[type[IllegalSplice]] = Counter()
     while True:
         if attempts >= budget.max_iterations or time.monotonic() - start >= budget.seconds:
             stopped: StopReason = "budget"
@@ -148,6 +160,7 @@ def worsen(
             rng=rng,
             entry_edge=int(route.edges[i - 1]) if i > 0 else -1,
             exit_edge=int(route.edges[j]) if j < len(route.edges) else -1,
+            refused=refused,
         )
         gain = 0.0 if found is None else objective.delta(route, i, j, *found)
         if found is None or gain <= 0 or not objective.feasible_window(data, route, i, j, *found):
@@ -174,7 +187,10 @@ def worsen(
         )
         events.append(event)
         yield event
-    return WorsenResult(best, tuple(events), attempts, accepted, stopped, time.monotonic() - start)
+    elapsed = time.monotonic() - start
+    return WorsenResult(
+        best, tuple(events), attempts, accepted, stopped, elapsed, refused[TransitionForbidden]
+    )
 
 
 def run_worsen(

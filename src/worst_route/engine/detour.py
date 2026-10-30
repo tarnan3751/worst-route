@@ -4,33 +4,39 @@
 b = nodes[j], inside the masks the worsen loop passes (`forbid`: the nodes the route still
 uses; `banned`: the bans left once the window is released, with the request's and the
 objective's), and returns it only if it differs from the removed run and `route.check_splice`
-accepts it. The strategy is drawn
-from `rng` with `STRATEGY_WEIGHTS`, but local exhaustive only when a and b lie less than
-`LOCAL_EXHAUSTIVE_MAX_M` apart (otherwise waypoint 2/3, random weight 1/3); `strategy` forces
-one (tests, the round-trip seed).
+accepts it; a refused candidate is tallied in `refused` by its kind when the caller passes a
+counter. The strategy is drawn from `rng` with `STRATEGY_WEIGHTS`, but local exhaustive only
+when a and b lie less than `LOCAL_EXHAUSTIVE_MAX_M` apart (otherwise waypoint 2/3, random
+weight 1/3); `strategy` forces one (tests, the round-trip seed).
 
 - `waypoint_path`: a waypoint w drawn from the nodes the search may enter within
   `WAYPOINT_BALL_FACTOR × radius` of the midpoint of a and b (the objective's pool when it has
   one; never a or b; at least `min_dist_m` from the midpoint), with probability ∝
-  exp(−distance / radius); then a → w (not through b) and w → b (not through a → w, nor any
-  twin of its edges), each bounded by `max_cost`.
+  exp(−distance / radius); then a → w (not through b), continuing `entry_edge`, and w → b
+  (not through a → w, nor any twin of its edges), continuing a → w's last edge and handing
+  over to `exit_edge`, each bounded by `max_cost`.
 - `random_weight_path`: a → b on a copy of the search weights in which every edge leaving a
   node within `WAYPOINT_BALL_FACTOR × radius` of the midpoint is multiplied by a factor drawn
   from `RANDOM_WEIGHT_RANGE` (in ascending edge id; the edges farther out keep their weight,
-  so the draws do not grow with the graph), bounded by the same budget in scaled cost.
+  so the draws do not grow with the graph), bounded by the same budget in scaled cost, from
+  `entry_edge` to `exit_edge`.
 - `local_exhaustive_paths`: the simple paths a → b of at most `LOCAL_EXHAUSTIVE_MAX_DEPTH`
   edges, up to `LOCAL_EXHAUSTIVE_MAX_PATHS`, inside a ball around the midpoint of radius
-  `LOCAL_EXHAUSTIVE_BALL_FACTOR × dist(a, b)` capped at `LOCAL_EXHAUSTIVE_BALL_MAX_M`, after a
-  Dijkstra probe that skips the enumeration when b cannot be reached at all. `find_detour`
-  ranks them by `objective.delta` (stable, so ties keep the search's order) and returns the
-  first the splice accepts.
+  `LOCAL_EXHAUSTIVE_BALL_FACTOR × dist(a, b)` capped at `LOCAL_EXHAUSTIVE_BALL_MAX_M`, from
+  `entry_edge` to `exit_edge`, after a Dijkstra probe that skips the enumeration when b cannot
+  be reached at all (turns ignored: a legal path exists only if a turn-blind one does).
+  `find_detour` ranks them by `objective.delta` (stable, so ties keep the search's order) and
+  returns the first the splice accepts.
 
-What the searches cannot see makes a candidate fail the splice check: two twins inside one
-detour, a turn a transition table forbids (until the turn-aware kernel, M3), a two-edge round
-trip on one road. A refused candidate is a failed attempt, nothing worse. `entry_edge` and
-`exit_edge` are for that kernel and unused until then. The randomness is `rng`'s alone.
+Every search goes through `search.py`, so on a build with transition rows each turn of a
+detour, its two boundary junctions included (`entry_edge` = edges[i − 1] into its first edge,
+its last edge into `exit_edge` = edges[j]), is one the tables allow. What the searches cannot
+see makes a candidate fail the splice check: two twins inside one detour, a two-edge round
+trip on one road. A refused candidate is a failed attempt, nothing worse. The randomness is
+`rng`'s alone.
 """
 
+from collections import Counter
 from typing import Literal
 
 import numpy as np
@@ -48,6 +54,7 @@ from worst_route.config import (
 )
 from worst_route.engine.objectives.base import Objective
 from worst_route.engine.route import IllegalSplice, IntArray, Route, twins_of
+from worst_route.engine.search import shortest_path, simple_paths
 from worst_route.graph.backend import GraphBackend, Path
 from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import SpatialIndex
@@ -87,6 +94,7 @@ def find_detour(
     entry_edge: int,
     exit_edge: int,
     strategy: Strategy | None = None,
+    refused: Counter[type[IllegalSplice]] | None = None,
 ) -> Path | None:
     """A new detour for nodes[i..j] that the splice accepts, or None."""
     a, b = int(route.nodes[i]), int(route.nodes[j])
@@ -108,6 +116,8 @@ def find_detour(
             max_cost=objective.search_budget(radius),
             rng=rng,
             pool=objective.waypoint_pool(data, route),
+            entry_edge=entry_edge,
+            exit_edge=exit_edge,
         )
         candidates = [] if found is None else [found]
     elif chosen == "random_weight":
@@ -124,6 +134,8 @@ def find_detour(
             radius=radius,
             max_cost=objective.search_budget(radius),
             rng=rng,
+            entry_edge=entry_edge,
+            exit_edge=exit_edge,
         )
         candidates = [] if found is None else [found]
     else:
@@ -137,6 +149,8 @@ def find_detour(
             banned=banned,
             node_mask=node_mask,
             weights=weights,
+            entry_edge=entry_edge,
+            exit_edge=exit_edge,
         )
         gains = np.array([objective.delta(route, i, j, *p) for p in paths], dtype=np.float64)
         candidates = [paths[k] for k in np.argsort(-gains, kind="stable").tolist()]
@@ -146,7 +160,9 @@ def find_detour(
             continue
         try:
             route.check_splice(data, i, j, nodes, edges, extra_banned=banned)
-        except IllegalSplice:
+        except IllegalSplice as error:
+            if refused is not None:
+                refused[type(error)] += 1
             continue
         return nodes, edges
     return None
@@ -168,6 +184,8 @@ def waypoint_path(
     rng: np.random.Generator,
     pool: IntArray | None = None,
     min_dist_m: float = 0.0,
+    entry_edge: int = -1,
+    exit_edge: int = -1,
 ) -> Path | None:
     """a → w → b through a waypoint w drawn near the midpoint of a and b, or None."""
     middle = (_xy(data, a) + _xy(data, b)) / 2
@@ -190,10 +208,12 @@ def waypoint_path(
     first_forbid = forbid.copy()
     if a != b:
         first_forbid[b] = True
-    first = backend.dijkstra(
+    first = shortest_path(
+        backend,
         a,
         w,
         weights,
+        entry_edge=entry_edge,
         node_mask=node_mask,
         forbid_nodes=first_forbid,
         banned_edges=banned,
@@ -206,10 +226,13 @@ def waypoint_path(
     second_forbid[[w, b]] = False
     second_banned = banned.copy()
     second_banned[twins_of(data, first[1])[1]] = True
-    second = backend.dijkstra(
+    second = shortest_path(
+        backend,
         w,
         b,
         weights,
+        entry_edge=int(first[1][-1]),
+        exit_edge=exit_edge,
         node_mask=node_mask,
         forbid_nodes=second_forbid,
         banned_edges=second_banned,
@@ -234,6 +257,8 @@ def random_weight_path(
     radius: float,
     max_cost: float,
     rng: np.random.Generator,
+    entry_edge: int = -1,
+    exit_edge: int = -1,
 ) -> Path | None:
     """a → b with the weights near the window scaled at random, or None."""
     middle = (_xy(data, a) + _xy(data, b)) / 2
@@ -242,10 +267,13 @@ def random_weight_path(
     low, high = RANDOM_WEIGHT_RANGE
     scaled = weights.copy()
     scaled[drawn] *= rng.uniform(low, high, size=len(drawn))
-    return backend.dijkstra(
+    return shortest_path(
+        backend,
         a,
         b,
         scaled,
+        entry_edge=entry_edge,
+        exit_edge=exit_edge,
         node_mask=node_mask,
         forbid_nodes=forbid,
         banned_edges=banned,
@@ -264,6 +292,8 @@ def local_exhaustive_paths(
     banned: BoolArray,
     node_mask: BoolArray,
     weights: FloatArray,
+    entry_edge: int = -1,
+    exit_edge: int = -1,
 ) -> list[Path]:
     """The simple paths a → b in a small ball around their midpoint."""
     middle = (_xy(data, a) + _xy(data, b)) / 2
@@ -274,9 +304,12 @@ def local_exhaustive_paths(
         is None
     ):
         return []
-    return backend.simple_paths_dfs(
+    return simple_paths(
+        backend,
         a,
         b,
+        entry_edge=entry_edge,
+        exit_edge=exit_edge,
         node_mask=ball,
         forbid_nodes=forbid,
         banned_edges=banned,

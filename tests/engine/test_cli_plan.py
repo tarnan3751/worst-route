@@ -10,6 +10,7 @@ import pytest
 from typer.testing import CliRunner
 
 from worst_route.cli import app
+from worst_route.engine import ENGINE_VERSION
 from worst_route.graph.data import GraphData
 from worst_route.graph.store import write_build
 from worst_route.graph.testing import make_graph
@@ -140,6 +141,54 @@ def test_the_csr_backend_without_numba_is_one_line(data_dir: Path, tmp_path: Pat
         lines = failed.stderr.splitlines()
         assert len(lines) == 1
         assert lines[0].startswith("the csr backend needs numba, which did not import: ")
+
+
+def test_on_a_build_with_turn_tables_auto_is_python_and_csr_one_line(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    # the CSR kernels cannot search transition tables yet: auto takes the reference and says
+    # so; csr asked for by name is one line on both commands
+    straight = [
+        ((44, 45), (45, 46)),
+        ((46, 45), (45, 44)),
+        ((35, 45), (45, 55)),
+        ((55, 45), (45, 35)),
+    ]
+    g = save(data_dir, lattice(10, 10, transitions=straight, rounded_lonlat=True), "b1")
+    trip = ["--from", latlon(g, 0), "--to", latlon(g, 99), "--seed", "4"]
+    out = tmp_path / "route.json"
+    code, stdout, stderr = plan(*trip, "--max-iterations", "20", "--out", str(out))
+    assert code == 0, stderr
+    assert "backend: python (csr cannot search turn tables yet)" in stdout.splitlines()
+    assert json.loads(out.read_text())["run"]["backend"] == "python"
+    result = runner.invoke(app, ["validate", str(out)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines()[1] == "backend: python (csr cannot search turn tables yet)"
+    refusal = "the csr backend cannot search turn tables yet; use --backend python"
+    code, stdout, stderr = plan(*trip, "--backend", "csr")
+    assert (code, stdout, stderr.splitlines()) == (1, "", [f"cannot plan: {refusal}"])
+    result = runner.invoke(app, ["validate", str(out), "--backend", "csr"])
+    assert result.exit_code == 1 and result.stderr.splitlines() == [f"cannot validate: {refusal}"]
+
+
+def test_validate_refuses_a_route_from_another_engine_version(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    save(data_dir, GRID, "b1")
+    out = tmp_path / "route.json"
+    code, _, stderr = plan(
+        "--from", latlon(GRID, 0), "--to", latlon(GRID, 99), "--seed", "4",
+        "--max-iterations", "20", "--out", str(out),
+    )  # fmt: skip
+    assert code == 0, stderr
+    doc = json.loads(out.read_text())
+    doc["engine_version"] = "1"
+    out.write_text(json.dumps(doc))
+    result = runner.invoke(app, ["validate", str(out)])
+    assert result.exit_code == 1 and result.stdout == ""
+    assert result.stderr.splitlines() == [
+        f"{out} was made by engine version 1; this is version {ENGINE_VERSION}: re-plan"
+    ]
 
 
 def test_a_random_seed_is_printed_and_recorded(data_dir: Path, tmp_path: Path) -> None:

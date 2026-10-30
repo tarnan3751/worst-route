@@ -1,14 +1,17 @@
 """The M1 acceptance run on a saved build (`docs/PLAN.md` §7 M1 step 9).
 
     uv run python tools/acceptance.py --region portland [--build-id ID] [--pairs 20] [--seed 1]
-        [--budget 30] [--backend python|csr] [--min-km 3] [--max-km 15] [--jaccard 5]
+        [--budget 30] [--backend auto|csr|python] [--min-km 3] [--max-km 15] [--jaccard 5]
         [--pair-seed 2026] [--near-m 250] [--out tools/out/acceptance.json]
 
 It needs a build under `WORST_ROUTE_DATA`, so it is not part of the gate. M1's acceptance is
 `--region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` (the other options at their
-defaults). `--backend csr` runs it on the Numba kernels; the default stays the reference, which
-M1's numbers were measured on: a run bounded by time goes further on a faster backend, so the
-routes differ.
+defaults). `--backend` is `make_backend`'s: by default `auto`, the Numba kernels on a build
+without transition tables and the reference on one with them, such as Portland's (M1's numbers
+were measured on the reference); the report records which one ran. A run bounded by time goes
+further on a faster backend, so the routes can differ by backend. `--backend csr` asked for on
+a build with tables, which the kernels cannot search yet, is caught before anything is planned:
+one line, `cannot plan: ...`, and exit 1.
 
 **Drawing the pairs.** One `Generator(PCG64(--pair-seed))` draws every point, in order. A point
 is a latitude, then a longitude, each uniform within the region's bbox (the nodes' extent for a
@@ -24,8 +27,9 @@ Each pair is planned with `plan_route` and `--seed`, `--budget` seconds and no a
 the budget is what bounds a run. The first `--jaccard` pairs that plan are planned again with
 `--seed` + 1 and the two routes compared (Jaccard of their edge ids and of their road units). A
 pair that cannot be planned is resolved again on the build without its transition rows, so the
-report says whether the transition tables, which the seed's search cannot see, are what stopped it;
-a stop moved by the re-snap fallback is checked the same way.
+report says whether the transition tables are what stopped it; a stop moved by the re-snap
+fallback is checked the same way. Each run reports how many candidates the splice refused for a
+turn a table forbids (`refused_transitions`), which the turn-aware searches should keep at zero.
 
 It prints one table row per pair and a summary, and writes the JSON report to `--out` (by
 default under `tools/out/`, which git ignores). It exits 1 when a planned route fails the
@@ -39,29 +43,24 @@ import statistics
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import numpy as np
 from scipy.spatial import cKDTree
 
-from worst_route.config import REGIONS
+from worst_route.config import DEFAULT_BACKEND, REGIONS, BackendName
 from worst_route.engine.plan import PlanResult, plan_route
 from worst_route.engine.request import RouteRequest, request_masks
 from worst_route.engine.seed_route import resolve_stops
 from worst_route.engine.snap import StopUnreachable
 from worst_route.engine.validator import ValidationFailed
 from worst_route.graph.backend import GraphBackend
-from worst_route.graph.csr_backend import CsrBackend
+from worst_route.graph.backends import make_backend
 from worst_route.graph.data import GraphData
-from worst_route.graph.python_backend import PythonBackend
 from worst_route.graph.spatial import SnapError, SpatialIndex
 from worst_route.graph.store import read_build
 from worst_route.pipeline import layout
 
-BACKENDS: dict[str, type[PythonBackend] | type[CsrBackend]] = {
-    "python": PythonBackend,
-    "csr": CsrBackend,
-}
 UNLIMITED = 10**9  # attempts: the budget in seconds bounds a run
 RESNAP_NOTE = "nearer nodes cannot be reached"
 
@@ -145,7 +144,13 @@ def main(args: argparse.Namespace) -> int:
     build_id = args.build_id or layout.latest_file(args.region).read_text().strip()
     data = read_build(layout.build_dir(args.region, build_id))
     spatial = SpatialIndex(data)
-    backend = BACKENDS[args.backend](data)
+    backend = make_backend(data, args.backend)
+    if len(data.trans_node):  # every search will be the transition-aware one: can it run?
+        try:
+            backend.dijkstra_edges(0, 0, data.edge_length_m.astype(np.float64))
+        except NotImplementedError as refusal:
+            print(f"cannot plan: {refusal}", file=sys.stderr)
+            return 1
     bbox = region.bbox or (
         float(data.node_lon.min()),
         float(data.node_lat.min()),
@@ -184,6 +189,7 @@ def main(args: argparse.Namespace) -> int:
                 "accepted": result.run.accepted,
                 "elapsed_s": result.run.elapsed_s,
                 "stopped": result.run.stopped_because,
+                "refused_transitions": result.run.refused_transitions,
                 "notes": notes,
             }
             if any(RESNAP_NOTE in note for note in notes):
@@ -229,6 +235,7 @@ def main(args: argparse.Namespace) -> int:
         if planned
         else None,
         "median_attempts_per_s": statistics.median(rates) if rates else None,
+        "refused_transitions": sum(r["refused_transitions"] for r in planned),
         "unplanned_by_transitions": sum(
             1 for r in runs if not r["planned"] and r.get("transitions_matter")
         ),
@@ -241,6 +248,7 @@ def main(args: argparse.Namespace) -> int:
         "region": args.region,
         "build_id": build_id,
         "graph_version": data.meta["graph_version"],
+        "backend": backend.name,
         "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "args": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
         "summary": summary,
@@ -265,7 +273,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pairs", type=int, default=20)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--budget", type=float, default=30.0, help="seconds per run")
-    parser.add_argument("--backend", choices=sorted(BACKENDS), default="python")
+    parser.add_argument("--backend", choices=get_args(BackendName), default=DEFAULT_BACKEND)
     parser.add_argument("--min-km", type=float, default=3.0)
     parser.add_argument("--max-km", type=float, default=15.0)
     parser.add_argument("--jaccard", type=int, default=5, help="pairs planned with seed + 1")

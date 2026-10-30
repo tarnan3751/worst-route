@@ -20,9 +20,13 @@ with and the validator's report, with a progress line on stderr on an accepted s
 one every 2 s, and writes `route.json` and GeoJSON when asked; a stop that cannot be snapped or
 reached, or a missing build, is one line and exit 1, and a route that fails the validator is
 never printed. `validate` re-checks a saved `route.json` against the build it names, with its
-stops re-derived from its request (`resolve_stops`), and exits 1 when a check fails. Both take
-`--backend auto|csr|python` (`config.DEFAULT_BACKEND`) and print the one used, which changes
-only the speed; `csr` when numba does not import is one line and exit 1. `serve` arrives with
+stops re-derived from its request (`resolve_stops`), and exits 1 when a check fails; a file made
+by another engine version is one line and exit 1 (its stops could be re-derived differently).
+Both take `--backend auto|csr|python` (`config.DEFAULT_BACKEND`) and print the one used,
+which, where both can search, changes only the speed. `auto` is python on a build with
+transition tables, which the CSR kernels cannot search yet, and the `backend:` line says so;
+`csr` asked for there is one line, `cannot plan: the csr backend cannot search turn tables yet;
+use --backend python`, and exit 1, as is `csr` when numba does not import. `serve` arrives with
 the API.
 """
 
@@ -541,7 +545,8 @@ def _check_backend(value: str) -> str:
 BackendOption = Annotated[
     str,
     typer.Option(
-        help="Graph backend: csr, python, or auto (csr when numba imports).",
+        help="Graph backend: csr, python, or auto (csr when numba imports and the build has "
+        "no turn tables).",
         callback=_check_backend,
     ),
 ]
@@ -567,6 +572,12 @@ def _make_backend(data: "GraphData", name: str) -> "GraphBackend":
         return make_backend(data, cast(BackendName, name))
     except ImportError as error:  # only csr needs numba; auto falls back to python
         _fail(f"the csr backend needs numba, which did not import: {error}")
+
+
+def _auto_note(data: "GraphData", name: str) -> str:
+    from worst_route.graph.backends import auto_note
+
+    return auto_note(data, cast(BackendName, name))
 
 
 def _load_build(region: str, build_id: str | None) -> "GraphData":
@@ -652,7 +663,7 @@ def plan(
 
     try:
         result = plan_route(data, request, backend=engine, on_progress=progress)
-    except (SnapError, StopUnreachable) as error:
+    except (SnapError, StopUnreachable, NotImplementedError) as error:
         _fail(f"cannot plan: {error}")
     except ValidationFailed as error:
         lines = [line for line in error.report.lines() if "FAILED" in line]
@@ -685,7 +696,7 @@ def plan(
         f"search: {run.attempts} attempts, {run.accepted} accepted, {run.elapsed_s:.1f} s, "
         f"stopped: {run.stopped_because}"
     )
-    typer.echo(f"backend: {result.backend}")
+    typer.echo(f"backend: {result.backend}{_auto_note(data, backend)}")
     names = ", ".join(c.name for c in result.report.checks)
     typer.echo(f"validator: ok ({names})")
     if out is not None:
@@ -708,6 +719,7 @@ def validate(
     """Re-check a saved route against its build, with its stops re-derived from its request."""
     from pydantic import ValidationError
 
+    from worst_route.engine import ENGINE_VERSION
     from worst_route.engine.io import read_route
     from worst_route.engine.request import request_masks
     from worst_route.engine.seed_route import resolve_stops
@@ -719,6 +731,11 @@ def validate(
         saved = read_route(route_file)
     except (KeyError, TypeError, ValueError, OverflowError, ValidationError) as error:
         _fail(f"cannot read {route_file}: {type(error).__name__}: {error}")
+    if saved.engine_version != ENGINE_VERSION:  # its stops are re-derived with this engine
+        _fail(
+            f"{route_file} was made by engine version {saved.engine_version}; "
+            f"this is version {ENGINE_VERSION}: re-plan"
+        )
     data = _load_build(region or saved.region, build_id or saved.build_id)
     if data.meta["graph_version"] != saved.graph_version:
         _fail(
@@ -732,6 +749,8 @@ def validate(
         stops = resolve_stops(data, spatial, engine, saved.request, masks)
     except (SnapError, StopUnreachable) as error:
         _fail(f"{route_file}: its request cannot be planned on this build: {error}")
+    except NotImplementedError as error:
+        _fail(f"cannot validate: {error}")
     report = validate_route(
         data,
         saved,
@@ -740,7 +759,7 @@ def validate(
         banned_edges=masks.banned,
     )
     typer.echo(f"{route_file}: {len(saved.nodes)} nodes on {saved.region}/{saved.build_id}")
-    typer.echo(f"backend: {engine.name}")
+    typer.echo(f"backend: {engine.name}{_auto_note(data, backend)}")
     for line in report.lines():
         typer.echo(line)
     if not report.ok:

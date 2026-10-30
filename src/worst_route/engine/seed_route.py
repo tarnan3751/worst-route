@@ -1,18 +1,24 @@
 """The baseline and the seed route (`docs/PLAN.md` §3.3; `docs/reference/engine.md`, **Seed**).
 
 `baseline_route` is what a sane GPS would drive, the denominator of the inefficiency ratio: the
-shortest path between each pair of consecutive stops (Dijkstra on length in the request's
-masks, nothing else forbidden), concatenated. Its legs may share nodes; it is not a `Route`.
+shortest path between each pair of consecutive stops (on length in the request's masks, nothing
+else forbidden), concatenated. Its legs may share nodes; it is not a `Route`. Each leg turns
+only where the transition tables allow (`search.shortest_path`), independently of the leg
+before it, so the baseline is never longer than the seed; a leg whose cheapest legal path would
+pass a node twice is the turn-blind shortest path instead (a lower bound, and the baseline
+then exists whenever the seed does).
 
 `seed_route` is the shortest route through the stops that never repeats, the route the worsen
 loop starts from. Its legs are built in order on length, each forbidding the nodes of the
-other legs built so far and every other stop's node, and banning their edges' twins. When a
+other legs built so far and every other stop's node, and banning their edges' twins; each
+continues the leg before it (`entry_edge`) and hands over to the leg after it when that one is
+built (`exit_edge`), so every turn, at the vias too, is one the tables allow. When a
 leg cannot be built, the penalty re-solve runs up to `SEED_PENALTY_ROUNDS` rounds: the leg's
 unconstrained path names the nodes other legs hold that it needs; those legs are rebuilt with
 `SEED_PENALTY_FACTOR` × the weight on every edge touching those nodes (keeping their old path
 when no other exists), and the leg is tried again. A leg that still fails, a leg that would not
-move (two stops on one node), or an assembled route `check_route` refuses (a turn a transition
-table forbids: the search does not yet know them) names the leg: `StopUnreachable`.
+move (two stops on one node), or an assembled route `check_route` refuses (two twins inside
+one leg) names the leg: `StopUnreachable`.
 
 `resolve_stops(data, spatial, backend, request, masks)` settles where the stops go before the
 seed is built, deterministically for a request and a build, so `worst-route validate` can
@@ -51,6 +57,7 @@ from worst_route.config import (
 from worst_route.engine.detour import waypoint_path
 from worst_route.engine.request import RequestMasks, RouteRequest
 from worst_route.engine.route import IllegalSplice, IntArray, check_route, twins_of
+from worst_route.engine.search import shortest_path
 from worst_route.engine.snap import (
     StopUnreachable,
     apart_from,
@@ -104,7 +111,9 @@ def baseline_route(
     nodes: list[IntArray] = [np.array(stop_nodes[:1], dtype=np.int32)]
     edges: list[IntArray] = [np.zeros(0, dtype=np.int32)]
     for k, (s, t) in enumerate(pairwise(stop_nodes)):
-        path = backend.dijkstra(s, t, weights, node_mask=node_mask, banned_edges=banned_edges)
+        path = shortest_path(backend, s, t, weights, node_mask=node_mask, banned_edges=banned_edges)
+        if path is None and len(data.trans_node):  # the legal way passes a node twice
+            path = backend.dijkstra(s, t, weights, node_mask=node_mask, banned_edges=banned_edges)
         if path is None:
             raise StopUnreachable((k, k + 1), "nor any route in the request's area")
         nodes.append(path[0][1:])
@@ -267,7 +276,8 @@ class _Builder:
         leg: int,
         weights: NDArray[np.float64],
     ) -> Path | None:
-        """Leg `leg` avoiding the other built legs' nodes, every other stop and their twins."""
+        """Leg `leg` avoiding the other built legs' nodes, every other stop and their twins,
+        turning legally into it from the leg before and out of it into the leg after."""
         others = [p for k, p in enumerate(legs) if p is not None and k != leg]
         forbid = np.zeros(self.data.n, dtype=np.bool_)
         forbid[stops] = True
@@ -278,15 +288,32 @@ class _Builder:
             banned[twins_of(self.data, edges)[1]] = True
         s, t = stops[leg], stops[leg + 1]
         forbid[[s, t]] = False
-        return self.backend.dijkstra(
-            s, t, weights, node_mask=self.node_mask, forbid_nodes=forbid, banned_edges=banned
+        entry, exit_ = _turn_edges(legs, leg)
+        return shortest_path(
+            self.backend,
+            s,
+            t,
+            weights,
+            entry_edge=entry,
+            exit_edge=exit_,
+            node_mask=self.node_mask,
+            forbid_nodes=forbid,
+            banned_edges=banned,
         )
 
     def _penalty_resolve(self, stops: list[int], legs: list[Path | None], leg: int) -> Path | None:
         """Push the other legs off the nodes this leg needs, then try it again."""
         s, t = stops[leg], stops[leg + 1]
-        wanted = self.backend.dijkstra(
-            s, t, self.weights, node_mask=self.node_mask, banned_edges=self.banned
+        entry, exit_ = _turn_edges(legs, leg)
+        wanted = shortest_path(
+            self.backend,
+            s,
+            t,
+            self.weights,
+            entry_edge=entry,
+            exit_edge=exit_,
+            node_mask=self.node_mask,
+            banned_edges=self.banned,
         )
         if wanted is None:
             return None
@@ -312,3 +339,13 @@ class _Builder:
             if path is not None:
                 return path
         return None
+
+
+def _turn_edges(legs: list[Path | None], leg: int) -> tuple[int, int]:
+    """The edge leg `leg` continues (the last of the leg before) and the one it hands over to
+    (the first of the leg after), −1 where that leg is not built."""
+    before = legs[leg - 1] if leg > 0 else None
+    after = legs[leg + 1] if leg + 1 < len(legs) else None
+    entry = int(before[1][-1]) if before is not None and len(before[1]) else -1
+    exit_ = int(after[1][0]) if after is not None and len(after[1]) else -1
+    return entry, exit_

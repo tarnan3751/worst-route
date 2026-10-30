@@ -13,4 +13,4 @@ the seed route the loop starts from; `objectives` holds the `Objective` interfac
 would give a different route.
 """
 
-ENGINE_VERSION = "1"
+ENGINE_VERSION = "2"

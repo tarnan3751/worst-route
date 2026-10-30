@@ -20,7 +20,7 @@ from worst_route.graph.csr_backend import CsrBackend
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
 from worst_route.graph.spatial import SpatialIndex
-from worst_route.graph.testing import Edge, make_graph
+from worst_route.graph.testing import Edge, EdgePair, make_graph
 
 from .graphs import X0, Y0, at_node, lattice, route_on
 
@@ -237,8 +237,9 @@ def test_pick_segment_never_spans_a_stop() -> None:
     assert set(sizes) <= {1, 2, 3, 4}
 
 
-def random_town(seed: int) -> GraphData:
-    """A 7 × 7 street grid, a third of the streets one-way, and random twins."""
+def random_town(seed: int, *, turns: bool = False) -> GraphData:
+    """A 7 × 7 street grid, a third of the streets one-way, and random twins; with `turns`,
+    a transition table at a third of the junctions, each allowing a random part of its turns."""
     rng = np.random.default_rng(seed)
     xy = [(X0 + 100.0 * c, Y0 + 100.0 * r) for r in range(7) for c in range(7)]
     edges: list[Edge] = []
@@ -253,7 +254,17 @@ def random_town(seed: int) -> GraphData:
     picks = rng.choice(g.m, size=(8, 2), replace=False)
     u, v = g.edge_u, g.edge_v
     twins = [((int(u[a]), int(v[a])), (int(u[b]), int(v[b]))) for a, b in picks]
-    return make_graph(xy, edges, twins=twins)
+    table: list[EdgePair] = []
+    for node in rng.permutation(g.n)[: g.n // 3].tolist() if turns else []:
+        ins = g.in_edges[g.in_indptr[node] : g.in_indptr[node + 1]].tolist()
+        outs = g.out_edges[g.out_indptr[node] : g.out_indptr[node + 1]].tolist()
+        pairs = [(a, b) for a in ins for b in outs]
+        keep = rng.random(len(pairs)) < 0.6
+        keep[:1] = True  # a table cannot be empty
+        for (a, b), kept in zip(pairs, keep.tolist(), strict=True):
+            if kept:
+                table.append(((int(u[a]), node), (node, int(v[b]))))
+    return make_graph(xy, edges, twins=twins, transitions=table)
 
 
 @pytest.mark.parametrize("seed", range(10))
@@ -265,6 +276,23 @@ def test_random_towns_always_give_valid_routes(seed: int) -> None:
     scores = [e.score for e in result.run.events]
     assert scores == sorted(scores)
     assert len(set(result.route.nodes.tolist())) == len(result.route.nodes)
+
+
+def test_random_towns_with_turn_tables_always_give_valid_routes() -> None:
+    planned = accepted = 0
+    for seed in range(12):
+        g = random_town(seed, turns=True)
+        scc = np.flatnonzero(PythonBackend(g).largest_scc_mask())
+        stops = [at_node(g, int(scc[0])), at_node(g, int(scc[-1]))]
+        try:
+            # raises if the route is invalid; the CSR kernels cannot search turn tables yet
+            result = plan(seed, 200, data=g, stops=stops, backend=PythonBackend(g))
+        except StopUnreachable:
+            continue
+        planned += 1
+        accepted += result.run.accepted
+        assert result.run.refused_transitions == 0
+    assert planned >= 8 and accepted > 0
 
 
 def test_a_tier_bans_a_lower_class_shortcut_between_its_own_nodes() -> None:

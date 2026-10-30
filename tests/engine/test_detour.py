@@ -1,4 +1,5 @@
 from collections import Counter
+from typing import Any
 
 import numpy as np
 import pytest
@@ -13,8 +14,8 @@ from worst_route.engine.detour import (
     waypoint_path,
 )
 from worst_route.engine.objectives.distance import Distance
-from worst_route.engine.route import Route
-from worst_route.graph.backend import Path
+from worst_route.engine.route import IllegalSplice, Route, TransitionForbidden
+from worst_route.graph.backend import GraphBackend, Path
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
 from worst_route.graph.spatial import SpatialIndex
@@ -41,6 +42,7 @@ def detour(
     seed: int,
     data: GraphData = GRID,
     extra: np.ndarray | None = None,
+    refused: Counter[type[IllegalSplice]] | None = None,
 ) -> Path | None:
     forbid, banned = route.release(data, i, j)
     if extra is not None:
@@ -58,9 +60,10 @@ def detour(
         radius=300.0,
         objective=Distance(data, baseline_length_m=700.0, r_max=5000.0),
         rng=rng(seed),
-        entry_edge=-1,
-        exit_edge=-1,
+        entry_edge=int(route.edges[i - 1]) if i > 0 else -1,
+        exit_edge=int(route.edges[j]) if j < len(route.edges) else -1,
         strategy=strategy,
+        refused=refused,
     )
 
 
@@ -157,15 +160,56 @@ def test_local_exhaustive_skips_a_candidate_the_splice_refuses() -> None:
     route.check_splice(twinned, 0, 1, *second)
 
 
-def test_a_transition_the_search_cannot_see_fails_the_attempt() -> None:
-    straight = [((3, 4), (4, 5)), ((5, 4), (4, 3)), ((1, 4), (4, 7)), ((7, 4), (4, 1))]
-    g = lattice(3, 3, transitions=straight)
-    route = route_on(g, [0, 1, 2])
+def straight_lattice() -> tuple[GraphData, Route]:
+    """A 5 × 5 lattice whose junctions off its edge go only straight on, and a route that
+    crosses the middle row and turns up the east side."""
+    straight = []
+    for v in (r * 5 + c for r in range(1, 4) for c in range(1, 4)):
+        for a, b in [(v - 1, v + 1), (v + 1, v - 1), (v - 5, v + 5), (v + 5, v - 5)]:
+            straight.append(((a, v), (v, b)))
+    g = lattice(5, 5, transitions=straight)
+    return g, route_on(g, [10, 11, 12, 13, 14, 19, 24])
+
+
+def refusals(route: Route, g: GraphData) -> tuple[int, Counter[type[IllegalSplice]]]:
+    """The detours found over a set of windows, strategies and seeds, and the refusals."""
+    refused: Counter[type[IllegalSplice]] = Counter()
+    found = 0
     for strategy in STRATEGIES:
-        for seed in range(6):
-            found = detour(route, 0, 2, strategy, seed, data=g)
-            if found is not None:
-                route.check_splice(g, 0, 2, *found)
+        for seed in range(8):
+            for i, j in [(0, 1), (1, 2), (2, 4), (3, 4), (4, 6), (0, 6)]:
+                path = detour(route, i, j, strategy, seed, data=g, refused=refused)
+                if path is not None:
+                    route.check_splice(g, i, j, *path)
+                    found += 1
+    return found, refused
+
+
+def test_detours_turn_only_where_the_tables_allow() -> None:
+    # the searches see the tables, so the splice refuses no candidate for a turn, at the
+    # window's boundary junctions included
+    g, route = straight_lattice()
+    found, refused = refusals(route, g)
+    assert found > 0 and refused[TransitionForbidden] == 0
+
+
+def test_a_turn_blind_search_would_be_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    from worst_route.engine import detour as detour_module
+
+    def blind_path(
+        backend: GraphBackend, src: int, dst: int, weights: np.ndarray, **kw: Any
+    ) -> Path | None:
+        kw.pop("entry_edge", None), kw.pop("exit_edge", None)
+        return backend.dijkstra(src, dst, weights, **kw)
+
+    def blind_paths(backend: GraphBackend, src: int, dst: int, **kw: Any) -> list[Path]:
+        kw.pop("entry_edge", None), kw.pop("exit_edge", None)
+        return backend.simple_paths_dfs(src, dst, **kw)
+
+    monkeypatch.setattr(detour_module, "shortest_path", blind_path)
+    monkeypatch.setattr(detour_module, "simple_paths", blind_paths)
+    g, route = straight_lattice()
+    assert refusals(route, g)[1][TransitionForbidden] > 0
 
 
 def test_the_local_probe_skips_an_unreachable_end() -> None:

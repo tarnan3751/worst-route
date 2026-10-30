@@ -7,7 +7,8 @@ the distance mode, the detour strategies, the worsen loop, the validator, route 
 `docs/PLAN.md` §3.1–3.6, §3.9, §3.11 and §8.1; the conventions are `CLAUDE.md`. Everything
 runs on a build's `GraphData` through `GraphBackend` and `SpatialIndex`
 (`docs/reference/graph.md`): `CsrBackend` by default, `PythonBackend` when asked, with the same
-routes either way.
+routes either way; on a build with transition tables only `PythonBackend` can search yet
+(**Searches**), and the default takes it there.
 
 | Module | What it holds |
 |---|---|
@@ -15,6 +16,7 @@ routes either way.
 | `validator.py` | `validate_route`, `ValidationReport`, `Check`, `ValidationFailed`, `RouteLike` |
 | `request.py` | `RouteRequest`, `RequestMasks`, `request_masks`, `auto_tier`, `auto_leash_m` |
 | `snap.py` | `snap_stops`, `resnap`, `apart_from`, `role_of`, `is_round_trip`, `StopUnreachable` |
+| `search.py` | `shortest_path`, `simple_paths`: which backend search builds a path |
 | `seed_route.py` | `resolve_stops`, `baseline_route` / `Baseline`, `seed_route` / `SeedRoute` |
 | `objectives/` | `base.py` (`Objective`, `BaseObjective`), `distance.py` (`Distance`), `OBJECTIVES`, `make_objective` |
 | `detour.py` | `find_detour`, `pick_strategy`, `waypoint_path`, `random_weight_path`, `local_exhaustive_paths` |
@@ -106,11 +108,31 @@ stop, the stop the API's `STOP_UNREACHABLE_WITHOUT_REPEAT` error names. Its mess
 ends and the stops that were moved: "no route from stop 1 to stop 2 without repeating a road,
 after moving stop 1 and stop 2 up to 10 times each".
 
+## Searches
+
+Every path the engine builds (a baseline leg, a seed leg, a detour) comes from `search.py`.
+On a build with transition rows, `shortest_path` is the transition-aware
+`GraphBackend.dijkstra_edges` and `simple_paths` the DFS with its turn checks
+(`docs/reference/graph.md`, **The transition-aware search**): a path turns only where the
+tables allow, at the junctions inside it and, given the edge it continues (`entry_edge`) and
+the edge it hands over to (`exit_edge`), at its two ends. On a build without rows no turn can
+be forbidden, so they are the node-state `dijkstra` and the plain DFS, and the turn edges are
+ignored: every backend gives the same paths there, byte for byte, and the routes on such builds
+(the test lattices, the golden route) are what they were before the tables were searched. A
+backend that cannot search a table yet raises `NotImplementedError` on a build with rows.
+
+The transition-aware search answers None when the cheapest legal path passes a node twice (a
+table can make the cheapest legal way a loop round a block); such a path is illegal for a route
+anyway, so the caller's fallback applies as for no path at all.
+
 ## Seed and baseline
 
 **The baseline** (`baseline_route`) is what a sane GPS would drive: the shortest path on length
 between consecutive stops, within the request's masks and nothing else, concatenated. Its legs
-may share nodes. It is the denominator of the ratio.
+may share nodes. It is the denominator of the ratio. Each leg turns only where the tables allow,
+independently of the leg before it (no entry edge at a via), so the baseline is never longer
+than the seed; a leg whose cheapest legal path would pass a node twice is the turn-blind
+shortest path instead, a lower bound, so the baseline exists whenever the seed does.
 
 **Settling the stops** (`resolve_stops(data, spatial, backend, request, masks)`) comes first:
 the stops are snapped, and when the seed cannot be built they fall back (step 4 below). It is
@@ -120,14 +142,17 @@ saved route with it; the cost is a few seed builds.
 **The seed** (`seed_route`, on the resolved stops) is the route the loop starts from:
 
 1. **Legs.** The legs are built in order on length. Each forbids the nodes of the other legs
-   built so far and every other stop's node, and bans their edges' twins.
+   built so far and every other stop's node, and bans their edges' twins. Each continues the
+   leg before it (`entry_edge`, its last edge) and hands over to the leg after it when that one
+   is built (`exit_edge`, its first edge, which matters when the penalty re-solve rebuilds an
+   earlier leg), so the turn at every via is one the tables allow.
 2. **Penalty re-solve.** When a leg fails, up to 4 rounds (`docs/PLAN.md` §3.3): the leg's
-   unconstrained path names the nodes other legs hold; those legs are rebuilt with 8× the
+   unconstrained path (turning legally, from the same entry edge) names the nodes other legs hold; those legs are rebuilt with 8× the
    weight on every edge touching those nodes, keeping their old path when they have no other;
    then the leg is tried again.
 3. **Failed legs.** A leg that still fails, a leg that would not move (two stops on one node),
-   or a seed `check_route` refuses names the leg. `check_route` refuses, for example, a turn a
-   transition table forbids, which the plain Dijkstra cannot see.
+   or a seed `check_route` refuses names the leg. `check_route` refuses, for example, a leg that
+   drives an edge and its twin, which the search cannot see.
 4. **Fallback** (`resolve_stops`; `docs/PLAN.md` §3.2): the leg's earlier stop, if it is a
    via, is re-snapped to its next-nearest candidate (never another stop's node), up to 10
    times, and the whole seed is rebuilt each time.
@@ -184,11 +209,15 @@ constraints (`docs/PLAN.md` §3.7) arrives with M3.
 ## Detours
 
 `find_detour(backend, spatial, data, route, i, j, *, forbid, banned, node_mask, radius,
-objective, rng, entry_edge, exit_edge, strategy=None)` returns a path from a = `nodes[i]` to
-b = `nodes[j]`, or None. It returns a path only if the path differs from the removed run and
-`route.check_splice` accepts it. `forbid` and `banned` are the loop's search masks. `banned`
-includes the request's and the objective's bans, and is passed to the splice check as
-`extra_banned`.
+objective, rng, entry_edge, exit_edge, strategy=None, refused=None)` returns a path from a =
+`nodes[i]` to b = `nodes[j]`, or None. It returns a path only if the path differs from the
+removed run and `route.check_splice` accepts it; each candidate the splice refuses is tallied
+by its refusal class in `refused`, a `Counter`, when one is passed. `forbid` and `banned` are the
+loop's search masks. `banned` includes the request's and the objective's bans, and is passed to
+the splice check as `extra_banned`. `entry_edge` is `edges[i − 1]` and `exit_edge` is
+`edges[j]` (−1 at the route's ends): every strategy searches through `search.py` from the one
+to the other, so on a build with transition rows the detour's turns, the window's two boundary
+junctions included, are ones the tables allow.
 
 **Choosing a strategy.** It is drawn from `rng` with weights 0.6 waypoint, 0.3 random weight,
 0.1 local exhaustive. Local exhaustive is allowed only when a and b lie less than 800 m apart;
@@ -199,14 +228,19 @@ round-trip seed).
   the midpoint of a and b. The pool is the objective's when it has one; a and b are never
   drawn. The probability is ∝ exp(−distance / radius). Then a → w, never through b, and
   w → b, avoiding the first leg's nodes and its edges' twins. Each search is on
-  `search_weights` and bounded by `search_budget(radius)`.
+  `search_weights` and bounded by `search_budget(radius)`. The first search continues
+  `entry_edge`; the second continues the first's last edge (the turn at the waypoint) and hands
+  over to `exit_edge`.
 - **Random weight.** a → b on a copy of `search_weights` in which every edge leaving a node
   within 4 × radius of the midpoint is multiplied by U(0.2, 5), drawn from `rng` in ascending
   edge id; the edges farther out keep their weight, so the draws do not grow with the graph.
-  Bounded by the same budget in scaled cost.
+  Bounded by the same budget in scaled cost, from `entry_edge` to `exit_edge`.
 - **Local exhaustive.** The simple paths a → b of at most 25 edges, up to 5000 of them. They
-  are searched in a ball around the midpoint of radius 3 × dist(a, b), capped at 400 m. A
-  Dijkstra probe skips the enumeration when b is unreachable. The paths are ranked by
+  are searched in a ball around the midpoint of radius 3 × dist(a, b), capped at 400 m, from
+  `entry_edge` to `exit_edge`. A Dijkstra probe skips the enumeration when b is unreachable;
+  it ignores turns, since a legal path exists only where a turn-blind one does, and the
+  transition-aware search could answer None where a legal path exists (when its cheapest walk
+  passes a node twice). The paths are ranked by
   `objective.delta` (stable, so ties keep the DFS order), and the first the splice accepts is
   returned.
 
@@ -225,12 +259,10 @@ The cap is `LOCAL_EXHAUSTIVE_BALL_MAX_M`, for the M2 kernels to revisit.
 see:
 
 - two twins inside one detour;
-- a turn a transition table forbids (until the turn-aware kernel, M3);
 - a two-edge round trip on one road.
 
-`entry_edge` and `exit_edge` are for that kernel and unused until then. On a one- or two-edge
-window, the randomly weighted direct edge usually wins, so random weight seldom finds a new
-path there; the waypoint is the workhorse.
+On a one- or two-edge window, the randomly weighted direct edge usually wins, so random weight
+seldom finds a new path there; the waypoint is the workhorse.
 
 ## The loop
 
@@ -238,7 +270,10 @@ path there; the waypoint is the workhorse.
 banned_edges=None, check_delta=False)` is a generator of `ProgressEvent(iteration, elapsed_s,
 score, metrics, splice)`, one per accepted splice. The `Splice(i, j, nodes, edges)` replays it
 on a copy of the route. The generator returns `WorsenResult(best, events, attempts, accepted,
-stopped_because, elapsed_s)`, and `run_worsen(..., on_event=None)` drives it. Each attempt:
+stopped_because, elapsed_s, refused_transitions)`, and `run_worsen(..., on_event=None)` drives
+it. `refused_transitions` counts the candidates the splice refused with `TransitionForbidden`:
+the searches see the tables, so a nonzero count means a search returned a turn it should not
+have. Each attempt:
 
 1. **Window** (`pick_segment`). One edge (j = i + 1) with probability 0.8, else a run of 2 to 4
    edges starting at a uniform edge, cut short at the next stop, so no stop is ever inside it.
@@ -384,9 +419,14 @@ worst-route validate route.json [--region R] [--build-id ID] [--backend auto|csr
 ```
 
 `--backend` picks the graph backend (`docs/reference/graph.md`, **Choosing a backend**). The
-default is `auto`, which is `csr` when numba imports. The choice changes the speed and nothing
-else. An unknown name is exit 2. Asking for `csr` when numba does not import prints one line on
-stderr ("the csr backend needs numba, which did not import: …") and exits 1.
+default is `auto`, which is `csr` when numba imports and the build has no transition tables,
+which `csr` cannot search yet (**Searches**); on a build with tables, Portland's among them,
+`auto` is `python` and the `backend:` line says why (`backend: python (csr cannot search turn
+tables yet)`). Where both can search, the choice changes the speed and nothing else. An unknown
+name is exit 2. Asking for `csr` when numba does not import prints one line on stderr ("the csr
+backend needs numba, which did not import: …") and exits 1; asking for it on a build with
+tables, `plan` prints `cannot plan: the csr backend cannot search turn tables yet; use --backend
+python`, `validate` the same after `cannot validate:`, one line and exit 1.
 
 **`plan`** reads `<WORST_ROUTE_DATA>/graphs/<region>/<build_id>/`, by default the build named in
 `graphs/<region>/latest`. A missing `latest` or `meta.json` is one line on stderr ("... run
@@ -411,7 +451,9 @@ exit 1. A route that fails the validator is reported as an engine bug, exit
 
 **`validate`** reads a `route.json` and loads the build it names (or `--region` /
 `--build-id`). A file it cannot read (a missing field, an id beyond int32) is `cannot read …`
-and exit 1. It refuses a build whose `graph_version` differs, recomputes the request's masks
+and exit 1, and so is a file made by another engine version (`… was made by engine version 1;
+this is version 2: re-plan`): its stops are re-derived with this engine's search, which could
+put them elsewhere. It refuses a build whose `graph_version` differs, recomputes the request's masks
 from the file's request, and re-derives the stops with `resolve_stops` on the backend
 `--backend` names. It prints the file's line, the backend's (`backend: csr`), one line per
 check, then `valid`, or exits 1.
@@ -449,12 +491,10 @@ before or after it.
 
 ## Limitations
 
-- **Transitions.** The searches do not know transition tables, so on a build with rows the
-  seed and the detours can fail where a turn-aware search would succeed. Portland's build has
-  11,378 rows at 657 super-junctions, 180 of which forbid some turns. A seed leg whose shortest
-  path takes a forbidden turn is refused by `check_route`, and re-snapping the stop rarely helps:
-  4 of the M1 acceptance's 20 pairs and PDX → Beaverton end in `StopUnreachable`, and all five
-  resolve on the same build with its rows removed.
+- **Transitions.** The searches see the transition tables (**Searches**), but a leg or a part
+  of a detour whose cheapest legal path passes a node twice is no path: the search does not
+  look for the cheapest node-simple legal path, which a turn table can make longer than the
+  cheapest walk. The seed then falls back as for an unreachable leg.
 - **Twins within a leg.** A seed leg is a plain shortest path; when it drives an edge and its
   twin (both carriageways of one road, as in a U-turn on E Burnside St, or a cleanup false twin
   on an OR 224 hairpin), the leg is refused and not rebuilt around it: 2 of the 20 pairs.
@@ -490,25 +530,29 @@ bytes).
 | `test_validator.py` | each violation caught by the right check, including a cluster entered twice through its members, a shared shape point and non-finite metrics |
 | `test_request.py` | the request model and its bounds, tier and leash auto, the masks and the tier's edge bans |
 | `test_snap.py` | roles, cul-de-sacs, stops kept apart, round trips only for identical points, an end near the start moved on, re-snapping |
-| `test_seed_route.py` | `resolve_stops` deterministic, node-disjoint legs, legs avoiding later stops, the penalty re-solve on a corridor, the baseline, the re-snap walk out of a one-entrance ring, the start never moving, a point-to-point trip never collapsing onto the start, a leg between two stops on one node, unreachable legs named by both ends, round-trip loops |
+| `test_seed_route.py` | `resolve_stops` deterministic, node-disjoint legs, legs avoiding later stops, the penalty re-solve on a corridor, the baseline, the re-snap walk out of a one-entrance ring, the start never moving, a point-to-point trip never collapsing onto the start, a leg between two stops on one node, unreachable legs named by both ends, a leg going round a junction that allows only straight on, the turn at a via, the baseline's legal legs and its turn-blind fallback, round-trip loops |
 | `test_objectives.py` | `Distance`, the radius, and `delta` against a full re-score for every kind of term |
-| `test_detour.py` | each strategy's legal detours and None when none exists, the strategy weights, random weight drawing only near the window, the local-exhaustive ranking and the refused-candidate skip |
-| `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable`; the same-seed test on both backends, and both backends planning the same route, splice for splice, on the grid and on one-way towns |
+| `test_detour.py` | each strategy's legal detours and None when none exists, the strategy weights, random weight drawing only near the window, the local-exhaustive ranking and the refused-candidate skip, no turn refused on a lattice of straight-only junctions (and many when the searches are made turn-blind) |
+| `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, and so do those with turn tables (no turn refused), a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable`; the same-seed test on both backends, and both backends planning the same route, splice for splice, on the grid and on one-way towns |
 | `test_io.py` | the route files |
-| `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32, `--backend` on both commands (the same route.json on both backends but the backend and the time) |
+| `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32, `--backend` on both commands (the same route.json on both backends but the backend and the time), `auto` taking `python` on a build with turn tables and saying so, `csr` there one line on both commands, a file from another engine version refused |
 
 **The acceptance run**, `tools/acceptance.py`, plans random stop pairs on a saved build, so it
 needs `WORST_ROUTE_DATA` and is not part of the gate:
 
 ```
 uv run python tools/acceptance.py --region portland [--build-id ID] [--pairs 20] [--seed 1]
-    [--budget 30] [--backend python|csr] [--min-km 3] [--max-km 15] [--jaccard 5]
+    [--budget 30] [--backend auto|csr|python] [--min-km 3] [--max-km 15] [--jaccard 5]
     [--pair-seed 2026] [--near-m 250] [--out tools/out/acceptance.json]
 ```
 
-Its `--backend` defaults to `python`, the backend M1's numbers were measured on: a run bounded by
-time goes further on a faster backend, so `csr` can give different routes where the reference
-runs out of time.
+Its `--backend` is `make_backend`'s, `auto` by default: the reference on a build with
+transition tables such as Portland's (M1's numbers were measured on it), `csr` on one without;
+the report records which backend ran. A run bounded by time goes further on a faster backend,
+so `csr` can give different routes where the reference runs out of time. On a build with
+transition tables it first checks that the backend can run the transition-aware search; `csr`
+asked for there cannot yet, and the tool prints `cannot plan: the csr backend cannot search
+turn tables yet; use --backend python`, one line on stderr, and exits 1.
 
 The pairs are uniform points in the region's bbox with a node within `--near-m`, the end at a
 straight-line distance within the bounds, drawn from `PCG64(--pair-seed)`; each is planned with

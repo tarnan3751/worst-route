@@ -343,9 +343,9 @@ def seed_route(G, stops, mask):
     return concat(legs)
 ```
 
-As built (`docs/reference/engine.md`, **Seed and baseline**): each leg also avoids every other stop's node and bans the twins of the other legs' edges; a leg that still fails, or a seed refused by `check_route` (a turn the transition table forbids), re-snaps the leg's earlier stop up to 10 times if it is a via, then its later stop (a via or the end; never the start), then names the leg (`stop_index` stays its later stop, for the API's error). A round trip with no stop between its ends has no legs: its seed is a loop through a waypoint at least 500 m from the start.
+As built (`docs/reference/engine.md`, **Seed and baseline**): each leg also avoids every other stop's node and bans the twins of the other legs' edges, and on a build with transition rows is searched with the edge-state search, continuing the leg before it and handing over to the leg after it, so every turn, at the vias too, is allowed; a leg that still fails, or a seed refused by `check_route` (two twins inside one leg), re-snaps the leg's earlier stop up to 10 times if it is a via, then its later stop (a via or the end; never the start), then names the leg (`stop_index` stays its later stop, for the API's error). A round trip with no stop between its ends has no legs: its seed is a loop through a waypoint at least 500 m from the start.
 
-The baseline for the inefficiency ratio is the **unconstrained** shortest route through the stops in order (sum of plain Dijkstra legs, within the request's masks), which is what a sane GPS would do.
+The baseline for the inefficiency ratio is the **unconstrained** shortest route through the stops in order (sum of plain Dijkstra legs, within the request's masks), which is what a sane GPS would do. As built, each leg turns only where the transition tables allow (independently of the leg before it, so the baseline is never longer than the seed), and falls back to the turn-blind path when the cheapest legal one would pass a node twice.
 
 ### 3.4 The worsen loop (splice heuristic)
 
@@ -398,11 +398,11 @@ All three run on the active mask with `forbid`/`banned` masks passed to the kern
 2. **Random-weight Dijkstra** (30%). `dijkstra(a → b)` with per-edge weights `length × U(0.2, 5.0)` drawn from the seeded rng for the edges leaving the nodes within `4 × radius` of the midpoint (the others keep their length, so the draws do not grow with the graph), bounded by the same `max_cost` in scaled cost. Produces plausible wiggles and usually succeeds when waypoint search fails; on a one- or two-edge window the scaled direct edge usually wins, which is no detour.
 3. **Local exhaustive** (10%, only when `dist(a,b) < 800 m`; for farther ends the draw is waypoint 2/3, random weight 1/3). Bounded DFS enumerating simple paths `a → b` within a ball of radius `3 × dist(a,b)` capped at 400 m, depth ≤ 25 edges, cap 5,000 paths, after a Dijkstra probe that skips the enumeration when `b` is unreachable; pick the best by `objective.delta`. This is the exact local optimiser and the same code path the certified mode generalises. The cap exists because the reference backend's DFS grows exponentially with the ball (a 4-edge window: 7–13 s uncapped, 0.3 s capped, `docs/reference/engine.md`); the M2 kernels may relax it.
 
-A candidate equal to the removed run is not a detour, and a candidate `Route.splice` would refuse (two twins inside it, a turn a transition table forbids) is a failed attempt.
+A candidate equal to the removed run is not a detour, and a candidate `Route.splice` would refuse (two twins inside it; a turn a transition table forbids, which the transition-aware search no longer proposes) is a failed attempt.
 
 Search weights come from `objective.search_weights(G)` so e.g. the slowest-time mode runs Dijkstra on `length × speed` (prefers slow roads on the way to the waypoint).
 
-When the objective has pair constraints (turn modes) or a transition table matters, strategies 1–2 use the **edge-state Dijkstra kernel** (state = edge, relax only to successor edges with an allowed pair), seeded from `entry_edge` and accepted only on an edge whose pair with `exit_edge` is allowed. Otherwise the cheaper node-state kernel is used.
+When the objective has pair constraints (turn modes) or a transition table matters, strategies 1–2 use the **edge-state Dijkstra kernel** (state = edge, relax only to successor edges with an allowed pair), seeded from `entry_edge` and accepted only on an edge whose pair with `exit_edge` is allowed. Otherwise the cheaper node-state kernel is used. As built in M1 (`docs/reference/engine.md`, **Searches**): on a build with transition rows every path the engine builds is searched transition-aware (`GraphBackend.dijkstra_edges` for the seed, the baseline and strategies 1–2, the DFS with its turn checks for strategy 3), with the reference backend's Python implementation; two searches stay turn-blind by design, the local-exhaustive reachability probe (a legal path exists only where a turn-blind one does) and the baseline's fallback when the cheapest legal path would pass a node twice. On a build without rows the node-state search. Turn modes' `feasible_pair` joins in M3.
 
 ### 3.6 Objective interface
 
@@ -500,14 +500,14 @@ class GraphBackend(Protocol):
     def in_edges(self, v) -> ndarray[int]
     def head(self, e) -> int; def tail(self, e) -> int
     def dijkstra(self, src, dst, weights, forbid_nodes, banned_edges, mask, max_cost) -> Path | None
-    def dijkstra_edge_state(self, entry_edge, dst, exit_edge, weights, forbid_nodes, banned_edges, mask, max_cost, pair_ok) -> Path | None
+    def dijkstra_edges(self, src, dst, weights, entry_edge, exit_edge, forbid_nodes, banned_edges, mask, max_cost) -> Path | None   # transition-aware; M3 adds pair_ok
     def multi_target(self, src, targets_mask, weights, forbid_nodes, banned_edges, mask, max_cost) -> list[Path]
     def simple_paths_dfs(self, src, dst, forbid_nodes, banned_edges, mask, max_depth, max_paths) -> list[Path]
     def scc_mask(self, edge_mask) -> node_mask
 ```
 
-- `PythonBackend` (M1): pure Python + `heapq` over the build's CSR arrays; the reference implementation, which networkx checks in the tests. M1's surface is `dijkstra`, `simple_paths_dfs` and `largest_scc_mask` (this block's `scc_mask`); the other calls arrive with their users. ~0.3 µs per relaxed edge measured on the dev machine (`docs/reference/graph.md`).
-- `CsrBackend` (M2): NumPy arrays + Numba kernels (`dijkstra_masked`, `simple_paths_dfs`), byte-identical to the reference for arguments of the declared types; 0.01–0.025 µs per relaxed edge measured, 8–13× the reference on large searches (`docs/reference/graph.md`, **The CSR backend**). Kernels take the masks as zero-copy `uint8` views, use a binary heap written as arrays, support `max_cost` early exit, and return the path arrays (the DFS's paths packed with offsets). It is the default (`make_backend`, `auto`); igraph/rustworkx would be strictly worse for masked search.
+- `PythonBackend` (M1): pure Python + `heapq` over the build's CSR arrays; the reference implementation, which networkx checks in the tests. M1's surface is `dijkstra`, `dijkstra_edges` (the transition-aware search, `docs/reference/graph.md`), `simple_paths_dfs` (with entry and exit edges and turn checks) and `largest_scc_mask` (this block's `scc_mask`); the other calls arrive with their users. ~0.3 µs per relaxed edge measured on the dev machine (`docs/reference/graph.md`).
+- `CsrBackend` (M2): NumPy arrays + Numba kernels (`dijkstra_masked`, `simple_paths_dfs`), byte-identical to the reference for arguments of the declared types; 0.01–0.025 µs per relaxed edge measured, 8–13× the reference on large searches (`docs/reference/graph.md`, **The CSR backend**). Kernels take the masks as zero-copy `uint8` views, use a binary heap written as arrays, support `max_cost` early exit, and return the path arrays (the DFS's paths packed with offsets). It is the default (`make_backend`, `auto`); igraph/rustworkx would be strictly worse for masked search. The transition-aware search has no kernel yet: on a build with transition rows `CsrBackend` raises `NotImplementedError` for it, and `make_backend`'s `auto` takes the reference on such builds.
 
 ### 3.11 Determinism and reproducibility
 
@@ -751,7 +751,7 @@ Deliverable: `worst-route plan --region portland --from 45.5231,-122.6765 --to 4
 
 1. Repo bootstrap: `uv init`, src layout, ruff/mypy/pytest, `justfile`, `.gitignore` for `data/`, CI running tests on fixtures only (no downloads).
 2. Pipeline `download → filter → build` for `portland` (bbox clip from Oregon).
-3. Cleanup: simplify, consolidate stage A, stage B with its transition tables (enforced by `Route.splice`, ignored by the search until M3), twin detection, SCC + report.
+3. Cleanup: simplify, consolidate stage A, stage B with its transition tables (enforced by `Route.splice`, and searched by the engine's transition-aware search on the reference backend from M1), twin detection, SCC + report.
 4. Enrich: length, speed defaults (needed for time stats later anyway), identities, `pass_through`; also road units, flags, bearings, toll booths, level crossings and node delays.
 5. Save/load in the §2.7 format; `qa` report with GeoJSON layers. Built: Portland's pipeline runs from the Oregon extract in under a minute and a half and passes QA (`docs/reference/pipeline.md`).
 6. `GraphBackend` protocol + `PythonBackend` (pure Python over the arrays; networkx as the tests' oracle).
@@ -769,11 +769,11 @@ Deliverable: `worst-route plan --region portland --from 45.5231,-122.6765 --to 4
 
 ### M3 — Objective modes and constraints
 
-1. Edge-state Dijkstra kernel (turn-aware); `feasible_pair`; never-left / never-right constraints; infeasibility reporting.
+1. Edge-state Dijkstra kernel (turn-aware; the reference backend's Python search and the engine's use of it moved to M1, the Numba kernel is the CSR backend's follow-up); `feasible_pair`; never-left / never-right constraints; infeasibility reporting.
 2. Slowest-time objective with node delays.
 3. Collectibles pipeline (toll booths, crossings, bridges, roundabout super-nodes) + collect objectives with waypoint pools.
 4. Brand index + pilgrimage objective + `/brands`.
-5. Hard mode (identity bans + window stretch check). The search starts honouring the stage B transition tables (ramp reachability, built at M1) here too, since hard mode and turn modes make junction realism visible.
+5. Hard mode (identity bans + window stretch check). (The search honouring the stage B transition tables moved to M1.)
 6. Alphabet mode via constructive search.
 7. Acceptance: each mode has a fixture test proving its invariant (no left turns in the result, each identity in ≤ 1 stretch, letters strictly increasing, every counted item lies on a route edge).
 

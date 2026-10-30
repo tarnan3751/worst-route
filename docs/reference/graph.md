@@ -230,8 +230,9 @@ and so does `simple_paths_dfs` on a build with transition rows; on a build witho
 turn is allowed, so the DFS's turn edges (checked as the reference checks them) change nothing
 and the plain kernel answers, byte for byte. The engine calls the transition-aware search only
 on builds with rows (`docs/reference/engine.md`, **Searches**), so on those builds, Portland's
-among them, plan with `--backend python` until the edge-state kernel lands; on builds without
-rows both backends plan the same routes.
+among them, `make_backend("auto")` takes the reference until the edge-state kernel lands, and
+`csr` asked for by name fails at the first search; on builds without rows both backends plan
+the same routes.
 
 - `dijkstra_masked(out_indptr, out_edges, edge_u, edge_v, weights, enter_u8, banned_u8, src,
   dst, max_cost) -> (found, nodes, edges)`: the tie rule exactly, with a binary heap of
@@ -294,8 +295,11 @@ numpy < 2.6, so a numpy upgrade past 2.5 waits for numba.
 
 `make_backend(data, name=DEFAULT_BACKEND)` (`backends.py`) makes the backend `name` asks for:
 `"csr"`, `"python"`, or `"auto"`, which is `CsrBackend` when numba imports and `PythonBackend`
-otherwise (`csr_backend` is imported only when asked for). `config.DEFAULT_BACKEND` is `"auto"`;
-`config.BackendName` lists the names. The choice changes only the speed. `plan_route` uses
+otherwise (`csr_backend` is imported only when asked for), and `PythonBackend` on a build with
+transition rows, which `CsrBackend` cannot search yet (**The CSR backend**); `auto_note(data,
+name)` gives the reason, " (csr cannot search turn tables yet)", which the CLI appends to its
+`backend:` line. `config.DEFAULT_BACKEND` is `"auto"`; `config.BackendName` lists the names.
+Where both backends can search, the choice changes only the speed. `plan_route` uses
 `make_backend`'s default when it is given no backend, and `worst-route plan` and `validate`
 take `--backend` (`docs/reference/engine.md`).
 
@@ -381,7 +385,8 @@ Then its parity tests compare the two backends byte for byte:
 - a float32 `max_cost` against a 0.1000000015 edge, limits of 2**63, 2.5 and `inf` (the same
   results or the same `TypeError`), and the weights scanned once per array.
 
-It also tests `make_backend`'s choices.
+It also tests `make_backend`'s choices, `auto` taking the reference on a build with turn
+tables among them.
 
 `test_edge_search.py` tests `dijkstra_edges` and the DFS's turns on the reference: on random
 graphs with random transition tables, the exact path against a heap-free implementation of the

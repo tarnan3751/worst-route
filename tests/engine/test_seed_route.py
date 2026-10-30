@@ -241,14 +241,45 @@ def test_a_leg_nothing_covers_names_both_ends() -> None:
     )
 
 
-def test_a_leg_that_turns_where_a_table_forbids_falls_back() -> None:
-    straight = [((3, 4), (4, 5)), ((5, 4), (4, 3)), ((1, 4), (4, 7)), ((7, 4), (4, 1))]
-    g = lattice(3, 3, transitions=straight)
-    # 3 → 4 → 7 is shortest but turns at 4; the search does not know turns yet, so the leg
-    # fails and the end moves to a node next to 7 (plan_seed checks the result is legal)
+STRAIGHT_AT_4 = [((3, 4), (4, 5)), ((5, 4), (4, 3)), ((1, 4), (4, 7)), ((7, 4), (4, 1))]
+
+
+def test_a_leg_turns_only_where_the_table_allows() -> None:
+    g = lattice(3, 3, transitions=STRAIGHT_AT_4)
+    # 3 → 4 → 7 is shortest but turns at 4, which goes only straight on: the leg goes round
+    # by 6, and the end stays (plan_seed checks the result is legal)
     seed = plan_seed(g, [at_node(g, 3), at_node(g, 7)])
-    assert seed.snaps[1].node != 7
-    assert seed.snaps[1].note == "moved 100 m: nearer nodes cannot be reached without repeating one"
+    assert seed.nodes.tolist() == [3, 6, 7]
+    assert [(s.node, s.note) for s in seed.snaps] == [(3, None), (7, None)]
+
+
+def test_the_turn_at_a_via_is_one_the_table_allows() -> None:
+    # arriving at the via 4 from 3, the next leg must leave straight on, to 5, not up to 7
+    g = lattice(3, 3, transitions=STRAIGHT_AT_4)
+    seed = plan_seed(g, [at_node(g, 3), at_node(g, 4), at_node(g, 7)])
+    assert seed.nodes.tolist() == [3, 4, 5, 8, 7]
+    assert seed.stop_idx == (0, 1, 4)
+    assert all(s.note is None for s in seed.snaps)
+
+
+def test_a_baseline_leg_turns_legally_and_falls_back_to_the_blind_path() -> None:
+    g = lattice(3, 3, transitions=STRAIGHT_AT_4)
+    everywhere, nothing = np.ones(g.n, dtype=bool), np.zeros(g.m, dtype=bool)
+    baseline = baseline_route(PythonBackend(g), g, [3, 4, 7], everywhere, nothing)
+    assert baseline.nodes.tolist() == [3, 4, 7]  # independent legs: a lower bound at the via
+    assert baseline_route(PythonBackend(g), g, [3, 7], everywhere, nothing).length_m == 200.0
+    # S (0) → A (1) → D (2) turns at A only towards B (3); the legal way, S A B C A D, passes
+    # A twice: the baseline takes the turn-blind path
+    xy = [(X0, Y0), (X0 + 100, Y0), (X0 + 200, Y0), (X0 + 150, Y0 + 100), (X0 + 50, Y0 + 100)]
+    loop = make_graph(
+        xy,
+        [(0, 1, 100.0), (1, 2, 100.0), (1, 3, 100.0), (3, 4, 100.0), (4, 1, 100.0)],
+        transitions=[((0, 1), (1, 3)), ((4, 1), (1, 2))],
+    )
+    blind = baseline_route(
+        PythonBackend(loop), loop, [0, 2], np.ones(loop.n, bool), np.zeros(loop.m, bool)
+    )
+    assert blind.nodes.tolist() == [0, 1, 2]
 
 
 @pytest.mark.parametrize("seed", range(5))

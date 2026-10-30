@@ -17,7 +17,8 @@ A section named in bold is a heading of this file or of a doc.
 ## Status
 
 **The bootstrap is built**: the uv project, the gate wired to ruff, mypy and pytest, and the
-CLI skeleton with the pipeline steps as stubs; no part of the app exists yet. The plan
+CLI. Of the pipeline steps, `download`, `filter` and `build` are real
+(`docs/reference/pipeline.md`) and the rest are stubs; no other part of the app exists yet. The plan
 (`docs/PLAN.md`, 2026-10-30) is written and its open questions answered as far as
 `docs/project_overview.md` §3 records. The next step is the rest of **M1**: the
 Portland build, the distance objective, a CLI that prints a route and its inefficiency ratio,
@@ -57,7 +58,7 @@ with the milestone that adds it, *(M1)* or *(M2)*.
 | Tests that need a built graph (skipped by the gate) | `uv run pytest -m data` |
 | Lint and format check | `uv run ruff check . && uv run ruff format --check .` |
 | Types | `uv run mypy src` |
-| Pipeline, one step (a skeleton for now: each step exits 2, not implemented yet) | `uv run worst-route pipeline <download\|filter\|build\|cleanup\|enrich\|tiers\|save\|qa> --region portland` |
+| Pipeline, one step (`download`, `filter`, `build` are real, `filter` and `build` also take `--source PATH`; `cleanup` to `qa` are stubs that exit 2) | `uv run worst-route pipeline <download\|filter\|build\|cleanup\|enrich\|tiers\|save\|qa> --region portland` |
 | Plan a route from the CLI, validated | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30` *(M1)* |
 | Validate a saved route | `uv run worst-route validate route.json` *(M1)* |
 | API server (the coordinator only; agents use ports of their own) | `uv run worst-route serve` *(M2)* |
@@ -78,7 +79,7 @@ first built and listed here when it exists.
 
 | Area | Code | Plan | Reference |
 |---|---|---|---|
-| Pipeline: download, filter, build, exclusions, simplify, consolidate (stages A and B), carriageway twins, connectivity, enrich, tiers, store, qa | `src/worst_route/pipeline/` | §2 | *(when built)* `docs/reference/pipeline.md` |
+| Pipeline: download, filter, build, exclusions, simplify, consolidate (stages A and B), carriageway twins, connectivity, enrich, tiers, store, qa | `src/worst_route/pipeline/` | §2 | `docs/reference/pipeline.md` |
 | Graph: the backend protocol, networkx and CSR backends, Numba kernels, spatial (snapping, leash, bubbles), loader | `src/worst_route/graph/` | §3.5, §3.9, §3.10 | *(when built)* `docs/reference/graph.md` |
 | Engine: `Route`, snapping, the seed route, detours, the worsen loop, the validator, exact mode | `src/worst_route/engine/` | §3.1–3.4, §3.11–3.13 | *(when built)* `docs/reference/engine.md` |
 | Objectives and constraints: the interface, each mode, the alphabet search | `src/worst_route/engine/objectives/`, `alphabet_search.py` | §3.6–3.8 | *(when built)* `docs/reference/objectives.md` |
@@ -161,7 +162,7 @@ data/            gitignored: raw/, filtered/, aux/, graphs/<region>/<build_id>/
 src/worst_route/ config, cli; pipeline/, graph/, engine/ (objectives/), presentation/, geocode/, api/
 frontend/        Vite + TS app: src/{main,state,api,map,stops,settings,run,toasts,directions,share}
 tests/           fixtures/osm/*.osm, unit/, pipeline/, engine/, api/, property/, golden/, bench/
-tools/           gates.sh, land_series.sh; later: fetch_census.sh, make_fixture_pbfs.py, bench
+tools/           gates.sh, land_series.sh; later: fetch_census.sh, bench
 .claude/agents/  scout, researcher, developer, reviewer
 .github/         workflows/gate.yml: the gate on every push and pull request
 ```

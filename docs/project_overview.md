@@ -31,7 +31,7 @@ Claude: Python for the pipeline, engine, API and rendering; TypeScript + MapLibr
 
 ### 1.1 Scope
 
-- **Data pipeline** (Planned): Geofabrik state extracts → filtered roads → graph → cleanup
+- **Data pipeline** (In progress): Geofabrik state extracts → filtered roads → graph → cleanup
   (simplify, consolidate junctions and interchanges, pair divided carriageways, keep the largest
   strongly connected component) → enrichment → tiers → an on-disk build. `docs/PLAN.md` §2.
 - **Engine** (Planned): a shortest route through the stops, then a seeded detour-splice
@@ -68,11 +68,16 @@ Out of scope for now: social features, accounts, mobile apps.
 
 ### 2.1 Built
 
-No part of the app yet. The workflow scaffolding exists: `CLAUDE.md`, the four agents,
+The pipeline's first three steps are built (`docs/reference/pipeline.md`): `pipeline download`
+fetches and md5-verifies a Geofabrik state extract, `filter` keeps the drivable roads, clipped
+to the region's bbox, and a POI table, and `build` makes the raw directed graph with the one-way
+rules applied, saved as an intermediate stage.
+The workflow scaffolding exists: `CLAUDE.md`, the four agents,
 `tools/gates.sh`, `tools/land_series.sh`, this overview, `docs/PLAN.md`. The M1 bootstrap is
 built: the uv project (Python 3.12, `src` layout, the M1 dependencies), the gate running ruff,
-mypy and pytest for real, locally and in GitHub Actions, and the `worst-route` CLI skeleton
-(`version`, and `pipeline <step>` stubs that exit as not implemented yet).
+mypy and pytest for real, locally and in GitHub Actions, and the `worst-route` CLI (`version`,
+and `pipeline <step>`: `download`, `filter` and `build` real, the other steps stubs that exit as
+not implemented yet).
 
 ### 2.2 Roadmap
 
@@ -80,7 +85,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 
 | Milestone | Status | Summary |
 |---|---|---|
-| M1 — Portland, distance mode, CLI | In progress | bootstrap built; remaining: the Portland pipeline, the graph package (networkx backend), the engine (snapping, seed route, splice loop, distance objective), the validator, `worst-route plan` printing a validated route and its ratio |
+| M1 — Portland, distance mode, CLI | In progress | bootstrap and the pipeline's first three steps (download, filter, build) built; remaining: the rest of the Portland pipeline (cleanup to qa), the graph package (networkx backend), the engine (snapping, seed route, splice loop, distance objective), the validator, `worst-route plan` printing a validated route and its ratio |
 | M2 — API + map, live growth | Planned | CSR + Numba backend; FastAPI jobs + SSE; MapLibre frontend; targets by ratio and duration; reroll, make it worse |
 | M3 — Modes and constraints | Planned | turn-aware kernel, never/only-left; slowest time; collectibles; brands; hard mode; stage B transition tables; alphabet search |
 | M4 — Presentation | Planned | directions, stats, toasts, comparisons, share image, geocoding proxy, share links |

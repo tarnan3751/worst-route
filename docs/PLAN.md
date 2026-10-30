@@ -67,7 +67,7 @@ worst-route/
 │   └── adr/                    # short decision records as decisions get revisited
 ├── data/                       # gitignored
 │   ├── raw/<state>-latest.osm.pbf
-│   ├── filtered/<state>.roads.osm.pbf, <state>.pois.parquet
+│   ├── filtered/<region>.roads.osm.pbf, <region>.pois.parquet
 │   ├── aux/                    # Census state boundaries, Gazetteer places, maxspeed defaults
 │   └── graphs/<region>/<build_id>/   # see §2.7
 ├── src/worst_route/
@@ -116,7 +116,7 @@ worst-route/
 │   ├── fixtures/osm/*.osm      # hand-written OSM XML: grid, divided highway, cloverleaf, roundabout, cul-de-sac, private roads
 │   ├── unit/  pipeline/  engine/  api/  property/
 │   └── bench/
-└── scripts/                    # one-off helpers (fetch Census files, make fixture pbfs)
+└── scripts/                    # one-off helpers (fetch Census files)
 ```
 
 ### 1.3 Python dependencies
@@ -152,8 +152,8 @@ with osmium.BackReferenceWriter(dst, ref_src=src) as w:
 ```
 
 - **Kept classes:** `motorway, motorway_link, trunk, trunk_link, primary, primary_link, secondary, secondary_link, tertiary, tertiary_link, unclassified, residential, living_street`. Also `service` **only** when `service=alley` (named alleys are real streets in Portland); every other `service` way is dropped.
-- **Dropped at filter time** (cheap, before anything touches memory): `footway, path, track, cycleway, steps, pedestrian, bridleway, corridor, busway, bus_guideway, raceway, escape, construction, proposed, abandoned, platform, rest_area, services, road`; `area=yes`; `access in {private, no}` unless `motor_vehicle=yes` or `motorcar=yes`; `motor_vehicle=no`; `motorcar=no`; `service in {driveway, parking_aisle, drive-through, emergency_access}`. Ferries are `route=ferry`, never `highway=*`, so they never enter.
-- **Second pass for POIs and collectible nodes** (same `FileProcessor`, `NODE|WAY`, `TagFilter`): `barrier=toll_booth`, `railway=level_crossing`, `highway in {stop, traffic_signals}` (for the slowest-time mode), and any object with `brand` or `brand:wikidata`. Written to `data/filtered/<state>.pois.parquet` with lon/lat (ways: centroid via `osmium.geom`/area assembler, or first node).
+- **Dropped at filter time** (cheap, before anything touches memory): `footway, path, track, cycleway, steps, pedestrian, bridleway, corridor, busway, bus_guideway, raceway, escape, construction, proposed, abandoned, platform, rest_area, services, road`; `area=yes`; access for cars `private` or `no`, by OSM's hierarchy (`motorcar` if present, else `motor_vehicle`, else `access`); `service in {driveway, parking_aisle, drive-through, emergency_access}`. Ferries are `route=ferry`, never `highway=*`, so they never enter.
+- **Second pass for POIs and collectible nodes** (same `FileProcessor`, `NODE|WAY`, `KeyFilter`): `barrier=toll_booth`, `railway=level_crossing`, `highway in {stop, traffic_signals}` (for the slowest-time mode), and any object with `brand` or `brand:wikidata`. Written to `data/filtered/<region>.pois.parquet` with lon/lat (ways: the mean of their node locations).
 - **Portland:** clip the Oregon roads pbf to the metro bbox (`45.25..45.72 N, -123.05..-122.35 W`) with a pyosmium `GeoInterfaceFilter`/bbox check on node coordinates before `BackReferenceWriter`. Keep complete ways that touch the bbox so the clip edge has no dangling half-ways.
 - Cross-state ways appear in two state files; `build` dedupes by way id.
 - Expected sizes: Oregon roads pbf ~40–60 MB; all states combined ~2.5–3 GB (all drivable), ~0.7 GB at tertiary and up.
@@ -799,7 +799,7 @@ Checks:
 
 ### 8.2 Test layers
 
-- **Fixtures** (`tests/fixtures/osm/*.osm`, converted to pbf by a script with `osmium.SimpleWriter`): 10×10 grid with some one-ways; divided highway with mismatched side junctions; cloverleaf; diamond interchange; roundabout with 4 arms; cul-de-sac neighbourhood with one entrance; private road + driveway + parking aisle; overpass with no ramps; a road whose `ref` changes mid-way. Each fixture has expected counts after each pipeline step.
+- **Fixtures** (`tests/fixtures/osm/*.osm`, hand-written OSM XML that pyosmium reads directly): 10×10 grid with some one-ways; divided highway with mismatched side junctions; cloverleaf; diamond interchange; roundabout with 4 arms; cul-de-sac neighbourhood with one entrance; private road + driveway + parking aisle; overpass with no ramps; a road whose `ref` changes mid-way. Each fixture has expected counts after each pipeline step.
 - **Pipeline unit tests:** one-way rules, exclusions, implied oneway on motorways, maxspeed parsing, ref/name normalisation, twin detection on the divided-highway fixture (exact expected pairs), stage B cluster membership on the cloverleaf fixture, SCC report.
 - **Engine unit tests:** splice bookkeeping, snapping fallbacks, seed route disjointness and the penalty re-solve, each detour strategy returns only legal paths, objective `delta` equals full re-score (checked on every accepted splice in test mode).
 - **Property tests** (hypothesis): random strongly-connected digraphs with random twins → `worsen()` output always passes the validator; score never decreases in max modes; target modes land within tolerance or report why.

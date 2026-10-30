@@ -2,14 +2,24 @@
 
 Raw extracts are `raw/<state>-latest.osm.pbf`, each with the `.md5` file Geofabrik publishes
 beside it; a region's filtered roads and POIs are `filtered/<region>.roads.osm.pbf` and
-`filtered/<region>.pois.parquet`. Paths are computed on every call, so a test that points
-`WORST_ROUTE_DATA` elsewhere and clears the settings cache sees its own tree.
+`filtered/<region>.pois.parquet`. A build is `graphs/<region>/<build_id>/`, its intermediate
+stages under `stages/`, and `graphs/<region>/latest` holds the id of the region's current build.
+Paths are computed on every call, so a test that points `WORST_ROUTE_DATA` elsewhere and clears
+the settings cache sees its own tree.
+
+A build id is the first 12 hex digits of a sha256 over the filtered roads' md5, the region's
+name, bbox and projected CRS, and `PIPELINE_VERSION`. A step that wrote `<output>` records its
+inputs' md5s and its parameters in the sidecar `<output>.inputs.json`; the step is skipped while
+its output exists and the sidecar matches what it would record now.
 """
 
 import hashlib
+import json
 from pathlib import Path
+from typing import Any
 
-from worst_route.config import settings
+from worst_route.config import Region, settings
+from worst_route.pipeline import PIPELINE_VERSION
 
 
 def raw_pbf(state: str) -> Path:
@@ -37,3 +47,42 @@ def roads_pbf(region: str) -> Path:
 def pois_parquet(region: str) -> Path:
     """The region's POI table."""
     return settings().data_dir / "filtered" / f"{region}.pois.parquet"
+
+
+def build_dir(region: str, build_id: str) -> Path:
+    """One build of the region."""
+    return settings().data_dir / "graphs" / region / build_id
+
+
+def stage_file(build: Path, name: str) -> Path:
+    """An intermediate stage file of a build, e.g. `build.pkl`."""
+    return build / "stages" / name
+
+
+def latest_file(region: str) -> Path:
+    """The file naming the region's current build."""
+    return settings().data_dir / "graphs" / region / "latest"
+
+
+def build_id_for(roads_md5: str, region: Region) -> str:
+    """The id of the build of `region` from filtered roads with md5 `roads_md5`."""
+    key = json.dumps([roads_md5, region.name, region.bbox, region.crs_epsg, PIPELINE_VERSION])
+    return hashlib.sha256(key.encode()).hexdigest()[:12]
+
+
+def sidecar(output: Path) -> Path:
+    """The file recording what `output` was made from."""
+    return output.with_name(f"{output.name}.inputs.json")
+
+
+def sidecar_matches(output: Path, record: dict[str, Any]) -> bool:
+    """Whether `output` exists and its sidecar holds `record`."""
+    side = sidecar(output)
+    if not (output.exists() and side.exists()):
+        return False
+    return bool(json.loads(side.read_text()) == json.loads(json.dumps(record)))
+
+
+def write_sidecar(output: Path, record: dict[str, Any]) -> None:
+    """Record what `output` was made from."""
+    sidecar(output).write_text(json.dumps(record, indent=2) + "\n")

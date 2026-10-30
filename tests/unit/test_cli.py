@@ -6,7 +6,8 @@ from worst_route.cli import app
 
 runner = CliRunner()
 
-STEPS = ["download", "filter", "build", "cleanup", "enrich", "tiers", "save", "qa"]
+# The steps still to be built; download, filter and build are tested in tests/pipeline/.
+STUB_STEPS = ["cleanup", "enrich", "tiers", "save", "qa"]
 
 
 def test_version_prints_version() -> None:
@@ -15,14 +16,14 @@ def test_version_prints_version() -> None:
     assert result.stdout.strip() == __version__ == "0.1.0"
 
 
-def test_pipeline_download_not_implemented() -> None:
-    result = runner.invoke(app, ["pipeline", "download", "--region", "portland"])
+def test_pipeline_cleanup_not_implemented() -> None:
+    result = runner.invoke(app, ["pipeline", "cleanup", "--region", "portland"])
     assert result.exit_code == 2
-    assert result.stderr.strip() == "not implemented yet: pipeline download"
+    assert result.stderr.strip() == "not implemented yet: pipeline cleanup"
     assert result.stdout == ""
 
 
-@pytest.mark.parametrize("step", STEPS)
+@pytest.mark.parametrize("step", STUB_STEPS)
 def test_every_step_takes_the_shared_options(step: str) -> None:
     args = ["pipeline", step, "--region", "oregon", "--build-id", "b1", "--force"]
     result = runner.invoke(app, args)

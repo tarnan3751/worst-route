@@ -4,11 +4,13 @@
 named region (`docs/PLAN.md` §2): download, filter, build, cleanup, enrich, tiers, save, qa.
 Every step takes `--region` (a key of `config.REGIONS`), `--build-id` and `--force`; `filter`
 and `build` also take `--source`, a file read instead of the step's usual input (fixtures,
-tests). `download`, `filter` and `build` are real (`docs/reference/pipeline.md`): each prints
-what it wrote and its counts, or that its output is up to date and was skipped; a failed
-download prints one line and exits 1. Each imports its step module when it runs, so `version`
-and the other commands do not load the geo stack. The other steps are a skeleton for now: each
-exits with code 2 and says it is not implemented yet.
+tests); `cleanup` also takes `--allow-fragmented`. `download`, `filter`, `build` and `cleanup`
+are real (`docs/reference/pipeline.md`): each prints what it wrote and its counts, or that its
+output is up to date and was skipped; a failed download, or a cleanup whose graph is too
+fragmented, prints one line and exits 1. `cleanup` reads the build named by `--build-id`, else
+the region's latest. Each imports its step module when it runs, so `version` and the other
+commands do not load the geo stack. The other steps are a skeleton for now: each exits with
+code 2 and says it is not implemented yet.
 
 `plan` plans a route on a saved build (`docs/reference/engine.md`, **The CLI**): it prints the
 snapped stops, the baseline, the worst route, the ratio, the search and the validator's report,
@@ -192,10 +194,86 @@ def build(
 
 @pipeline_app.command()
 def cleanup(
-    region: RegionOption, build_id: BuildIdOption = None, force: ForceOption = False
+    region: RegionOption,
+    build_id: BuildIdOption = None,
+    force: ForceOption = False,
+    allow_fragmented: Annotated[
+        bool,
+        typer.Option(
+            "--allow-fragmented",
+            help="Keep the largest strongly connected component even when it holds fewer "
+            "than SCC_MIN_RETAINED of the nodes.",
+        ),
+    ] = False,
 ) -> None:
-    """Exclusions, simplification, consolidation, carriageway twins, connectivity."""
-    _not_implemented("cleanup")
+    """Simplification, consolidation, carriageway twins, connectivity."""
+    import pickle
+
+    from worst_route.pipeline import cleanup as step
+
+    hint = f"run `worst-route pipeline build --region {region}` first"
+    if build_id is None:
+        _require(layout.latest_file(region), hint)
+        build_id = layout.latest_file(region).read_text().strip()
+    directory = layout.build_dir(region, build_id)
+    source = layout.stage_file(directory, "build.pkl")
+    _require(source, hint)
+    output = layout.stage_file(directory, "cleanup.pkl")
+    record: dict[str, Any] = {
+        "step": "cleanup",
+        "inputs": _inputs(source),
+        "params": {
+            "allow_fragmented": allow_fragmented,
+            "config": step.parameters(),
+            "pipeline_version": PIPELINE_VERSION,
+        },
+    }
+    if not force and layout.sidecar_matches(output, record):
+        typer.echo(
+            f"skipped: cleanup of build {build_id} is up to date at {output} (--force to redo)"
+        )
+        return
+    layout.sidecar(output).unlink(missing_ok=True)
+    output.unlink(missing_ok=True)
+    layout.stage_file(directory, "cleanup.json").unlink(missing_ok=True)
+    with source.open("rb") as f:
+        raw = pickle.load(f)
+    try:
+        graph, report = step.run_cleanup(raw, allow_fragmented=allow_fragmented)
+    except step.FragmentedGraphError as error:
+        typer.echo(f"cleanup failed: {error}", err=True)
+        raise typer.Exit(code=1) from None
+    step.save_stage(graph, report, directory)
+    layout.write_sidecar(output, record)
+    simplified, a, b, twins, scc = (
+        report.simplify,
+        report.stage_a,
+        report.stage_b,
+        report.twins,
+        report.connectivity,
+    )
+    coverage = "n/a" if twins.coverage is None else f"{twins.coverage:.3f}"
+    typer.echo(f"cleanup {build_id}: wrote {output} ({_size(output)})")
+    typer.echo(
+        f"simplify: dropped {simplified.self_loops_dropped} self-loops, "
+        f"removed {simplified.nodes_removed} nodes"
+    )
+    typer.echo(f"stage A: {a.clusters} clusters from {a.nodes_merged} nodes")
+    typer.echo(
+        f"twins: {twins.paired} of {twins.candidates} candidate edges paired; "
+        f"motorway and trunk coverage {coverage}"
+    )
+    kinds = ", ".join(f"{kind} {n}" for kind, n in b.superjunctions.items())
+    typer.echo(
+        f"stage B: {sum(b.superjunctions.values())} super-junctions ({kinds}), "
+        f"{b.internal_edges} internal edges, {b.twin_pairs} twin pairs carried"
+    )
+    typer.echo(
+        f"connectivity: kept {scc.nodes_after} of {scc.nodes_before} nodes; dropped "
+        f"{scc.dropped_nodes} nodes and {scc.dropped_length_m / 1000:.1f} km "
+        f"in {scc.dropped_components} components"
+    )
+    typer.echo(f"nodes {graph.number_of_nodes()}, edges {graph.number_of_edges()}")
 
 
 @pipeline_app.command()

@@ -53,6 +53,10 @@ lists the arrays in a fixed order, the order of the fields, the files and the ha
 | transitions | `trans_node`, `trans_in`, `trans_out` | i32[k] each | allowed (in, out) pairs at a node, sorted by (node, in, out), no duplicates; a node with no rows allows every pair |
 | tiers | `tier_node_mask`, `tier_edge_mask` | bool[T, n], bool[T, m] | tier membership (the pipeline's after per-tier SCC) |
 
+A node with no transition rows allows every pair, so an empty table cannot be written: cleanup
+keeps a super-junction whose table is empty (no pair allowed), and `save` refuses a build that has
+one (`docs/reference/pipeline.md`, **cleanup**).
+
 **Edge ids are sorted by (u, v, original order).** Each node's out-edges are therefore one
 contiguous run of ascending ids (`out_edges` is `0..m-1`), which the backends' tie rule relies
 on.

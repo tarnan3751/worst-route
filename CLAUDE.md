@@ -17,7 +17,7 @@ A section named in bold is a heading of this file or of a doc.
 ## Status
 
 **The bootstrap is built**: the uv project, the gate wired to ruff, mypy and pytest, and the
-CLI. Of the pipeline steps, `download`, `filter` and `build` are real
+CLI. Of the pipeline steps, `download`, `filter`, `build` and `cleanup` are real
 (`docs/reference/pipeline.md`) and the rest are stubs. The graph package is built too
 (`docs/reference/graph.md`): a build's arrays and on-disk format, the backend protocol and its
 pure-Python reference backend, snapping and masks. So is the engine (`docs/reference/engine.md`):
@@ -25,7 +25,7 @@ the route and its splice, the seed route, the detours, the worsen loop, the dist
 the validator, and `worst-route plan` / `validate` on a saved build. No other part of the app
 exists yet. The plan (`docs/PLAN.md`, 2026-10-30) is written and its open questions answered as
 far as `docs/project_overview.md` §3 records. The next step is the rest of **M1**: the Portland
-build (the pipeline's cleanup to qa steps, `save` among them) and the acceptance run of
+build (the pipeline's enrich to qa steps, `save` among them) and the acceptance run of
 `worst-route plan` on it. `docs/project_overview.md` holds the roadmap (§2.2) and the decisions
 (§3).
 
@@ -33,8 +33,9 @@ build (the pipeline's cleanup to qa steps, `save` among them) and the acceptance
 
 - **Python 3.12**, managed by **uv** (`.python-version`, `uv.lock`). Not 3.14: the geo stack's
   wheels are uneven there.
-- **pyosmium 4** for reading `.osm.pbf`; **OSMnx 2.1** for `simplify_graph` and
-  `consolidate_intersections` at city/state scale (it never loads data; it cannot read PBF);
+- **pyosmium 4** for reading `.osm.pbf`; **OSMnx 2.1** for `consolidate_intersections`
+  (cleanup's stage A) at city/state scale (it never loads data; it cannot read PBF;
+  simplification is our own, since its `simplify_graph` would lose the shape points);
   **NumPy** CSR arrays as the graph, searched by a pure-Python reference backend (M1) and
   **Numba** kernels in production (M2), with **networkx** as the tests' oracle;
   **shapely 2**, **scipy**, **pyarrow**; **FastAPI** + **uvicorn** with SSE for progress;
@@ -64,7 +65,7 @@ with the milestone that adds it, *(M1)* or *(M2)*.
 | Tests that need a built graph (skipped by the gate) | `uv run pytest -m data` |
 | Lint and format check | `uv run ruff check . && uv run ruff format --check .` |
 | Types | `uv run mypy src` |
-| Pipeline, one step (`download`, `filter`, `build` are real, `filter` and `build` also take `--source PATH`; `cleanup` to `qa` are stubs that exit 2) | `uv run worst-route pipeline <download\|filter\|build\|cleanup\|enrich\|tiers\|save\|qa> --region portland` |
+| Pipeline, one step (`download` to `cleanup` are real; `filter` and `build` also take `--source PATH`, `cleanup` takes `--allow-fragmented`; `enrich` to `qa` are stubs that exit 2) | `uv run worst-route pipeline <download\|filter\|build\|cleanup\|enrich\|tiers\|save\|qa> --region portland` |
 | Plan a route from the CLI, validated | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
 | Validate a saved route | `uv run worst-route validate route.json` |
 | API server (the coordinator only; agents use ports of their own) | `uv run worst-route serve` *(M2)* |

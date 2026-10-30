@@ -227,3 +227,80 @@ def test_importing_the_cli_does_not_load_the_geo_stack() -> None:
         [sys.executable, "-c", probe], capture_output=True, text=True, check=True
     )
     assert result.stdout.strip() == "[]"
+
+
+def test_cleanup_after_build(data_dir: Path) -> None:
+    source = str(FIXTURES / "divided.osm")
+    assert pipeline("build", "--region", "portland", "--source", source, "--build-id", "b1")[0] == 0
+    code, output = pipeline("cleanup", "--region", "portland")  # the latest build: b1
+    assert code == 0, output
+    stages = data_dir / "graphs" / "portland" / "b1" / "stages"
+    assert output.splitlines() == [
+        f"cleanup b1: wrote {stages / 'cleanup.pkl'} "
+        f"({(stages / 'cleanup.pkl').stat().st_size / 1e6:.1f} MB)",
+        "simplify: dropped 0 self-loops, removed 1 nodes",
+        "stage A: 1 clusters from 4 nodes",
+        "twins: 7 of 7 candidate edges paired; motorway and trunk coverage n/a",
+        "stage B: 0 super-junctions (interchange 0, roundabout 0), 0 internal edges, "
+        "5 twin pairs carried",
+        "connectivity: kept 15 of 15 nodes; dropped 0 nodes and 0.0 km in 0 components",
+        "nodes 15, edges 25",
+    ]
+    assert {p.name for p in stages.iterdir()} >= {
+        "cleanup.pkl",
+        "cleanup.json",
+        "cleanup.pkl.inputs.json",
+    }
+    with (stages / "cleanup.pkl").open("rb") as f:
+        assert pickle.load(f).number_of_nodes() == 15
+    assert json.loads((stages / "cleanup.json").read_text())["stage_a"]["clusters"] == 1
+    sidecar = json.loads((stages / "cleanup.pkl.inputs.json").read_text())
+    assert sidecar["inputs"] == [
+        {"file": "build.pkl", "md5": layout.file_md5(stages / "build.pkl")}
+    ]
+    assert sidecar["params"]["allow_fragmented"] is False
+    assert sidecar["params"]["config"]["STAGE_B_JOIN_M"] == 500.0
+
+
+def test_cleanup_skips_unless_forced(data_dir: Path) -> None:
+    source = str(FIXTURES / "diamond.osm")
+    assert pipeline("build", "--region", "portland", "--source", source, "--build-id", "b2")[0] == 0
+    assert pipeline("cleanup", "--region", "portland", "--build-id", "b2")[0] == 0
+    pkl = data_dir / "graphs" / "portland" / "b2" / "stages" / "cleanup.pkl"
+    written = pkl.stat().st_mtime_ns
+    code, output = pipeline("cleanup", "--region", "portland", "--build-id", "b2")
+    assert code == 0 and output.startswith("skipped: cleanup of build b2 is up to date")
+    assert pkl.stat().st_mtime_ns == written
+    code, output = pipeline("cleanup", "--region", "portland", "--build-id", "b2", "--force")
+    assert code == 0 and output.startswith("cleanup b2: wrote ")
+    assert (
+        "stage B: 1 super-junctions (interchange 1, roundabout 0), 8 internal edges, "
+        "2 twin pairs carried" in output
+    )
+    assert "motorway and trunk coverage 1.000" in output
+
+
+def test_cleanup_of_a_fragmented_graph(data_dir: Path) -> None:
+    source = str(FIXTURES / "oneway.osm")
+    assert pipeline("build", "--region", "portland", "--source", source, "--build-id", "b3")[0] == 0
+    stages = data_dir / "graphs" / "portland" / "b3" / "stages"
+    result = runner.invoke(app, ["pipeline", "cleanup", "--region", "portland"])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.startswith(
+        "cleanup failed: the largest strongly connected component keeps 3 of 13 nodes (23.08%)"
+    )
+    assert result.stderr.count("\n") == 1 and "Traceback" not in result.stderr
+    assert not (stages / "cleanup.pkl").exists() and not (stages / "cleanup.json").exists()
+    code, output = pipeline("cleanup", "--region", "portland", "--allow-fragmented")
+    assert code == 0, output
+    assert "connectivity: kept 3 of 13 nodes; dropped 10 nodes" in output
+    assert (stages / "cleanup.pkl").exists()
+
+
+def test_cleanup_needs_a_build(data_dir: Path) -> None:
+    code, output = pipeline("cleanup", "--region", "portland")
+    assert code == 1
+    assert "missing input" in output and "pipeline build --region portland" in output
+    code, output = pipeline("cleanup", "--region", "portland", "--build-id", "nope")
+    assert code == 1 and "nope" in output and "build.pkl" in output

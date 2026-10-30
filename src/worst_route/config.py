@@ -213,3 +213,6 @@ TWIN_LATERAL_M = {
     "tertiary": 35.0,
 }
 TWIN_BEARING_TOL = 30.0
+# Connectivity (`pipeline/connectivity.py`): cleanup fails when the largest strongly connected
+# component keeps fewer than this fraction of the nodes, unless --allow-fragmented.
+SCC_MIN_RETAINED = 0.99

@@ -1,8 +1,9 @@
 # Worst Route — project overview
 
-Last updated: 2026-10-30. Snapshot taken after the engine landed: the plan is written; the
-project scaffolding, the pipeline's first three steps, the graph package and the engine are
-built; the rest of the pipeline does not exist yet, so there is no Portland build to plan on.
+Last updated: 2026-10-30. Snapshot taken after the cleanup step landed: the plan is
+written; the project scaffolding, the pipeline's first four steps, the graph package and
+the engine are built; the rest of the pipeline (enrich to qa) does not exist yet, so there
+is no saved Portland build to plan on.
 
 This file answers three questions: what the project is meant to become, how far along it is, and
 what has been decided. It is written for a human reader and for an AI agent picking up the
@@ -70,10 +71,14 @@ Out of scope for now: social features, accounts, mobile apps.
 
 ### 2.1 Built
 
-The pipeline's first three steps are built (`docs/reference/pipeline.md`): `pipeline download`
+The pipeline's first four steps are built (`docs/reference/pipeline.md`): `pipeline download`
 fetches and md5-verifies a Geofabrik state extract, `filter` keeps the drivable roads, clipped
 to the region's bbox, and a POI table, and `build` makes the raw directed graph with the one-way
-rules applied, saved as an intermediate stage.
+rules applied, saved as an intermediate stage. `cleanup` turns that graph into the one the
+no-repeat rule rests on: degree-2 chains collapsed, signal clusters and divided crossings merged
+(OSMnx, stage A), interchanges and roundabouts made super-junctions with their allowed
+transitions (stage B), divided carriageways paired as twins, and the largest strongly connected
+component kept, with a report of what was dropped.
 The graph package is built (`docs/reference/graph.md`): a build's arrays and their
 memory-mapped on-disk format with its `graph_version`, the `GraphBackend` protocol and its
 pure-Python reference backend, snapping with the leash and bubble masks, and the builders tests
@@ -90,8 +95,8 @@ The workflow scaffolding exists: `CLAUDE.md`, the four agents,
 `tools/gates.sh`, `tools/land_series.sh`, this overview, `docs/PLAN.md`. The M1 bootstrap is
 built: the uv project (Python 3.12, `src` layout, the M1 dependencies), the gate running ruff,
 mypy and pytest for real, locally and in GitHub Actions, and the `worst-route` CLI (`version`,
-and `pipeline <step>`: `download`, `filter` and `build` real, the other steps stubs that exit as
-not implemented yet).
+and `pipeline <step>`: `download`, `filter`, `build` and `cleanup` real, the other steps stubs
+that exit as not implemented yet).
 
 ### 2.2 Roadmap
 
@@ -99,9 +104,9 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 
 | Milestone | Status | Summary |
 |---|---|---|
-| M1 — Portland, distance mode, CLI | In progress | bootstrap, the pipeline's first three steps (download, filter, build), the graph package and the engine (snapping, seed route, splice loop, distance objective, validator, `worst-route plan` / `validate`) built; remaining: the rest of the Portland pipeline (cleanup to qa) and the acceptance run of `worst-route plan` on the Portland build |
+| M1 — Portland, distance mode, CLI | In progress | bootstrap, the pipeline's first four steps (download, filter, build, cleanup), the graph package and the engine (snapping, seed route, splice loop, distance objective, validator, `worst-route plan` / `validate`) built; remaining: the rest of the Portland pipeline (enrich to qa) and the acceptance run of `worst-route plan` on the Portland build |
 | M2 — API + map, live growth | Planned | CSR + Numba backend; FastAPI jobs + SSE; MapLibre frontend; targets by ratio and duration; reroll, make it worse |
-| M3 — Modes and constraints | Planned | turn-aware kernel, never/only-left; slowest time; collectibles; brands; hard mode; stage B transition tables; alphabet search |
+| M3 — Modes and constraints | Planned | turn-aware kernel, never/only-left; slowest time; collectibles; brands; hard mode; the search honouring stage B transitions (built at M1); alphabet search |
 | M4 — Presentation | Planned | directions, stats, toasts, comparisons, share image, geocoding proxy, share links |
 | M5 — Scaling up | Planned | Oregon; array-based simplify/consolidate; US at T1; the national decision gate; public-hosting prep |
 | M6 — Stretch | Planned | certified worst (CP-SAT), turn restrictions, stop reordering, portfolio runs |
@@ -137,16 +142,28 @@ brief):
   backend in M1, Numba kernels in production from M2, networkx only as the tests' oracle.
   igraph/rustworkx are not expected to be needed: the hot loop is masked, bounded Dijkstra,
   which they do not offer without copying.
-- **OSMnx for its cleanup algorithms, not for loading**; array-based replacements for
-  `simplify_graph` and `consolidate_intersections` at national scale (M5).
+- **OSMnx for stage A consolidation, not for loading or simplification**: its
+  `simplify_graph` would lose the shape points, so simplification is our own; array-based
+  replacements for simplification and `consolidate_intersections` at national scale (M5).
 - **State extracts, never the full US file**; cross-border ways deduplicated by id.
 - **On-disk format: one `.npy` per array + `strings.json` + `meta.json`, memory-mapped**; not
   GraphML or pickle, and not NPZ (whose members NumPy cannot map) or Parquet for the graph.
-- **Consolidation in two stages**: OSMnx stage A with per-node tolerances (15 m on arterial
-  crossings, 8 m elsewhere, `max_length=60`, dead ends kept) and a custom stage B that turns
-  interchanges and roundabouts into super-junctions with allowed-transition tables.
-- **Divided carriageways are linked as twins** detected on raw way segments (same ref/name,
-  opposite bearing, lateral distance by class) and banned conservatively, not merged.
+- **Consolidation in two stages**: OSMnx stage A with per-node tolerances (1 m on roundabout
+  rings, which stage B owns; 15 m on arterial crossings; 8 m elsewhere; `max_length=60`, dead
+  ends kept) and a custom stage B that turns interchanges and roundabouts into super-junctions
+  with allowed-transition tables, computed from M1 because `Route.splice` enforces them.
+  Stage B joins the ramp components of one interchange when their attachment roads share two
+  identities within 500 m, a slip-lane cluster takes in the at-grade crossing it bypasses
+  (reached along two different roads), and every cluster takes in its pockets, a stretch of one
+  road of at most 600 m that leaves it and comes back (2026-10-30, at the cleanup plan and its
+  review).
+- **Divided carriageways are linked as twins** detected on the stage A graph's edge segments
+  (same ref/name and, motorways aside, the same name less directional words when both have
+  one, so couplets are not twins; opposite bearing; side by side within a lateral distance by
+  class; never two pieces of one OSM way), carried through stage B to the super-junctions'
+  boundary edges along the same carriageway and to the transitions that must drive a twinned
+  stretch inside them, a passage that must drive both carriageways inside a junction banned, and
+  banned conservatively, not merged.
 - **Tiers T0–T4 as masks on one master graph**, auto-selected by trip length, with local
   all-roads bubbles around stops and a leash along the stop polyline.
 - **Three detour strategies** (waypoint, random-weight Dijkstra, local exhaustive) mixed by the

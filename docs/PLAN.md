@@ -21,7 +21,7 @@ Plan written 2026-10-30, before any code existed.
 Stack push-backs (details in §1.3):
 
 1. **networkx is the tests' oracle, not a backend.** The engine's hot loop is "bounded Dijkstra with forbidden node/edge masks". Neither igraph nor rustworkx offers masked search without copying the graph, so the graph is **CSR arrays**, searched behind a `GraphBackend` protocol from day one: a pure-Python reference backend over the arrays in M1, **Numba kernels** in production from M2. igraph/rustworkx stay possible implementations of the protocol but are not expected to be needed.
-2. **OSMnx is used for its cleanup algorithms, not for loading.** It cannot read `.osm.pbf`. We parse with pyosmium, build a `MultiDiGraph` in OSMnx's attribute conventions, then call `simplify_graph` and `consolidate_intersections`. At national scale networkx memory is prohibitive, so those two steps get array-based reimplementations in the scaling milestone.
+2. **OSMnx is used for its cleanup algorithms, not for loading.** It cannot read `.osm.pbf`. We parse with pyosmium, build a `MultiDiGraph` in OSMnx's attribute conventions, then call `consolidate_intersections` (simplification is our own: OSMnx's `simplify_graph` would lose the shape points). At national scale networkx memory is prohibitive, so simplification and consolidation get array-based reimplementations in the scaling milestone.
 3. **Never download `us-latest.osm.pbf` (11.4 GB).** Download the 50 state extracts instead. Same bytes in total, but each state is filtered independently, cached, resumable, and parallelizable. Ways that cross state lines appear in both extracts and are deduplicated by OSM id when merged.
 
 ---
@@ -78,7 +78,7 @@ worst-route/
 │   │   ├── filter.py           # pyosmium tag filters → roads pbf + POI parquet
 │   │   ├── build.py            # pbf → nodes/ways tables → raw MultiDiGraph (OSMnx conventions)
 │   │   ├── exclusions.py       # highway allowlist, access/service rules, implied oneway
-│   │   ├── simplify.py         # degree-2 contraction (OSMnx now, arrays later)
+│   │   ├── simplify.py         # degree-2 contraction (ours on networkx now, arrays later)
 │   │   ├── consolidate.py      # stage A: OSMnx consolidate; stage B: interchange + roundabout super-junctions
 │   │   ├── carriageways.py     # divided-highway twin detection
 │   │   ├── connectivity.py     # SCC per tier, fragmentation report
@@ -171,45 +171,46 @@ with osmium.BackReferenceWriter(dst, ref_src=src) as w:
 
 ### 2.4 `cleanup`
 
-Order matters: exclusions → simplify → consolidate (A then B) → carriageway twins → connectivity.
+Order matters: simplify → consolidate A → carriageway twins → consolidate B (which carries the twins across) → connectivity. Built; how each step works, its constants and the stage it writes are `docs/reference/pipeline.md`, **cleanup**.
 
-**a. Exclusions** (`exclusions.py`): anything the filter could not decide at way level, e.g. drop edges inside `access=private` areas later if needed. Mostly a no-op after §2.2 but kept as a separate step so rules are testable.
+**a. Exclusions** (`exclusions.py`): applied way by way in `filter` and again in `build` (§2.2); cleanup has no exclusions pass of its own. Anything the filter cannot decide at way level (e.g. edges inside `access=private` areas) would join here later if needed.
 
-**b. Simplify** (`simplify.py`): `osmnx.simplification.simplify_graph(G, edge_attrs_differ=["name", "ref", "highway", "oneway", "bridge", "tunnel", "junction"], track_merged=True, remove_rings=False)`.
-Keeping endpoints where name/ref/class change keeps every edge **homogeneous**: one name, one ref set, one class. The alphabet mode, hard mode, directions and the twin detector all rely on that. The cost is more nodes than a pure topological simplification (roughly +30%), which is fine.
-Each simplified edge keeps: summed `length`, the full coordinate list, the list of original way ids, and the list of original OSM node ids (needed by the validator, §8).
+**b. Simplify** (`simplify.py`, ours): OSMnx's `simplify_graph` rebuilds a merged edge's geometry from its nodes' coordinates and would lose the shape points the raw graph keeps inside each edge, so the contraction is our own. Self-loops are dropped first (no simple route can use one). A degree-2 node is contracted only when the two edges of each through pair carry the same class, `oneway`, `reversed` and every stored tag, and never when the merge would repeat an OSM node id (a chain closing on itself).
+Keeping endpoints wherever the tags change keeps every edge **homogeneous**: one name, one ref set, one class, one speed limit. The alphabet mode, hard mode, directions and the twin detector all rely on that. OSM ways are often split end to end, so this still removes many nodes (15% of Portland's), but fewer than a purely topological contraction would.
+Each simplified edge keeps: summed `length`, the full coordinate list, the tuple of original way ids (`osmids`), and the original OSM node ids (`osm_nodes`, needed by the validator, §8).
 
 **c. Consolidate, stage A — signal clusters and divided-arterial crossings** (`consolidate.py`):
 `osmnx.simplification.consolidate_intersections(G, tolerance=tol_by_node, rebuild_graph=True, max_length=60, dead_ends=True, reconnect_edges=True)`.
-- `tolerance` is a per-node dict (OSMnx 2.1 supports this): 15 m for nodes touching `primary`/`secondary`/`trunk` at-grade (medians 20–30 m wide create 4-node crossings), 8 m for everything else. Buffers overlap at 2× tolerance, so Portland's 61 m downtown blocks never merge.
+- `tolerance` is a per-node dict (OSMnx 2.1 supports this), the first rule that matches: 1 m for nodes on a roundabout edge (stage B owns roundabouts; at 8–15 m stage A would swallow most small rings), 15 m for nodes touching `primary`/`secondary`/`trunk` at-grade (medians 20–30 m wide create 4-node crossings), 8 m for everything else. Buffers overlap at the sum of two tolerances, so Portland's 61 m downtown blocks never merge.
 - `max_length=60` means nodes only merge when they are also connected by edges ≤ 60 m. This is what prevents a cloverleaf's 300 m loop ramps from fusing endpoints. It also prevents merging the two ends of a short overpass (no connecting edge).
 - `dead_ends=True`: OSMnx's default *removes* dead-end nodes; we need them (stops at cul-de-sacs).
-- Original node ids of merged nodes land in `osmid_original`; we keep them as `cluster_members`.
+- Original node ids of merged nodes land in `osmid_original`; OSMnx drops an edge whose two ends merged without record, so our post-pass adds its interior OSM node ids too, and keeps the lot as the node's `members`.
 
 **d. Consolidate, stage B — interchanges and roundabouts become super-junctions** (`consolidate.py`):
 This is the piece the no-repeat rule actually depends on, and OSMnx does not do it.
 1. Build the undirected graph of **ramp edges** (`*_link`) plus **roundabout edges** (`junction=roundabout|circular`).
-2. Each connected component of that subgraph, together with the mainline/cross-road nodes where its ramps attach, is a candidate cluster.
-3. Guard: if a cluster's bounding diameter exceeds 1.5 km (collector-distributor lanes can chain interchanges), split it with DBSCAN (`eps=300 m`) on the attachment nodes. Roundabout clusters are never split.
-4. Replace the cluster's nodes with **one super-node** at the centroid. Edges entirely inside the cluster (ramps, the mainline through the interchange, the roundabout ring) leave the routing graph but their geometry is retained in an `internal_paths` table.
-5. **Allowed transitions:** for each (in-edge, out-edge) pair of the super-node, compute whether an internal directed path exists in the original cluster. Store the pair set and the internal path (for drawing and for "take the ramp toward …" directions). M1 may skip this and allow all pairs; it is the same table that OSM turn restrictions will use later.
+2. Each connected component of that subgraph, together with the mainline/cross-road nodes where its ramps attach, is a candidate cluster. The ramps of one interchange rarely share a node (a diamond's two sides, a cloverleaf's eight ramps; Portland's I-84/181st diamond is six components), so two components are **joined** when the roads at their attachment nodes share at least two identities (normalised ref set, else normalised name) and some of their attachment nodes lie within 500 m of each other: an interchange joins two roads, while consecutive interchanges share only the freeway. A cluster whose links are all minor (`primary_link`, `secondary_link`, `tertiary_link`: slip lanes) also takes in the at-grade node it bypasses, any node that two of its attachment nodes reach through roads of two different identities of at most 150 m; a slip lane and the crossing it bypasses are one junction, while a node reached along one road only is no crossing. Each cluster then takes in its **pockets**: the interior nodes of a path of at most 600 m along one road from one of its attachment nodes to another, outside it (a bridge between two ramp terminals); otherwise the road would leave the super-junction and come back to it, and no route could go straight through. Each super-junction records how many roundabout rings it holds, for the roundabout collectible.
+3. Guard: if a cluster's bounding-box diagonal exceeds 1.5 km (collector-distributor lanes can chain interchanges), split it by single linkage (`eps=300 m`) of the attachment nodes, the other nodes joining the nearest group. Roundabout clusters are never split.
+4. Replace the cluster's nodes with **one super-node** at the centroid. Edges entirely inside the cluster (ramps, the mainline through the interchange, the roundabout ring) leave the routing graph but are kept with the super-node (`internal`), for drawing and directions.
+5. **Allowed transitions:** for each (in-edge, out-edge) pair of the super-node, an internal directed path from the in-edge's end to the out-edge's start makes the pair allowed. Computed from M1, since `Route.splice` enforces them even while the search ignores them; it is the same table that OSM turn restrictions will use later.
 Result: passing under an interchange on the mainline and later looping through its ramps both touch the super-node, so the second is impossible. Two mainlines crossing on a plain overpass with no ramps share no node and stay independent, matching the overpass decision.
 A roundabout is one junction: the route can enter it once. This also makes "most roundabouts" a per-node collectible.
 
 **e. Divided-highway twins** (`carriageways.py`):
 OSM maps each direction of a divided road as a separate one-way way. Going north on I-5 and later south on the same stretch would otherwise be legal.
-Detection, per state, on the **original way segments** (between consecutive shape points, before simplification) because the two carriageways' junctions never line up 1:1:
-1. Candidates: segments of one-way, non-`_link` ways with class ≥ `tertiary`.
-2. Signature: normalized ref set (see §3.6 for normalization) if any ref, else normalized name. Segments with neither are candidates only if class ∈ {motorway, trunk}.
+Detection, per build, on the stage A graph (before stage B makes stretches of road internal to its super-junctions), on the **segments of the edges' geometry** (between consecutive shape points, so the original way segments, less the stub stage A adds to reach a merged node) because the two carriageways' junctions never line up 1:1:
+1. Candidates: one-way, non-`_link` edges with class ≥ `tertiary`, roundabout rings aside.
+2. Signature: normalized ref set (see §3.6 for normalization) if any ref, else normalized name. Edges with neither are candidates only if class ∈ {motorway, trunk}.
 3. Spatial index: `shapely.STRtree` on candidate segments. For each segment `s`, query within `D` (motorway 100 m, trunk 80 m, primary 50 m, others 35 m).
-4. Pair `s` with `t` when: same signature; mean bearings differ by 180° ± 30°; the midpoint of each projects onto the other within `D` (symmetric lateral test); `s` and `t` are not on the same way.
-5. Propagate to simplified edges: `twins(E) = { F : some segment of E pairs with some segment of F }`. Stored as a CSR adjacency, symmetric.
+4. Pair `s` with `t` when: same signature, and the same name less directional words when both have one and neither is a motorway (a one-way couplet a block apart shares a ref, not a name; freeway carriageways carry alias names); bearings differ by 180° ± 30°; the midpoint of each is within `D` of the other's line, and the foot of at least one perpendicular falls on the other segment (they run side by side, not end to end); `s` and `t` are on different edges that share no OSM way (a way curling back beside itself is one road).
+5. `twins(E) = { F : some segment of E pairs with some segment of F }`, symmetric; stored per edge with the graph (a CSR adjacency in the build format).
+6. Stage B carries the table across: an edge that became internal to a super-junction maps to its boundary edges on the same road along its own carriageway, so going through the interchange on one carriageway bans the other carriageway's stretch beside it, inside or outside the interchange; and a transition that must drive such an edge bans its twin on the transition's in-edge and out-edge (a per-transition ban table is the exact form, planned with M3's transition-aware search). A passage through a super-junction that must drive both edges of a twin pair inside it (a U-turn at a median's end within the junction) is banned.
 Semantics: **using edge E bans every edge in twins(E).** This is conservative (a 1 km edge twinned with a 600 m and a 400 m edge bans both entirely), which is the right direction for a "never" rule. QA emits a GeoJSON of pairs for eyeballing; the unit test uses a synthetic divided highway with mismatched junctions.
 `dual_carriageway=yes` is rare and unreliable; it is a hint, not the detector.
 
 **f. Connectivity** (`connectivity.py`):
-- Strongly connected components with `scipy.sparse.csgraph.connected_components(connection="strong")` on the CSR arrays. Keep the largest. Report dropped node count, total dropped length, and the 20 largest dropped components as GeoJSON — a large dropped component means a filtering bug (e.g. a town whose only access got excluded), not noise.
-- Thresholds that fail the build: all-roads graph must retain ≥ 99% of nodes; each tier ≥ 95% of its own nodes.
+- Strongly connected components (networkx at cleanup; `scipy.sparse.csgraph.connected_components(connection="strong")` on the CSR arrays for the per-tier pass). Keep the largest. Report dropped node count, total dropped length, and the 20 largest dropped components (size, length, centroid) — a large dropped component means a filtering bug (e.g. a town whose only access got excluded), not noise.
+- Thresholds that fail the build: all-roads graph must retain ≥ 99% of nodes (`pipeline cleanup` fails unless `--allow-fragmented`); each tier ≥ 95% of its own nodes.
 - Fragmentation test for tiers: a fixture list of city pairs per region (Portland–Salem, Portland–Bend, …) must be mutually reachable at every tier that is supposed to cover that trip length.
 
 ### 2.5 `enrich`
@@ -710,9 +711,9 @@ Pipeline wall-clock on the M5 (single process unless noted):
 |---|---|---|---|---|
 | download | — | 1 min | ~20 min (parallel) | same |
 | filter (pyosmium, C++ filters) | 1 min | 1–2 min | ~30 min total across states | ~40 min |
-| build + simplify (OSMnx) | 1–3 min | 20–40 min | not viable | not viable |
-| consolidate A (OSMnx) | 1–2 min | 20–60 min | not viable | not viable |
-| consolidate B + twins + SCC + enrich (ours, arrays) | 1 min | 5–10 min | 30–60 min | 2–4 h |
+| build + simplify (networkx) | 10 s (measured) | 20–40 min | not viable | not viable |
+| consolidate A (OSMnx) | 30–80 s (measured, by machine load) | 20–60 min | not viable | not viable |
+| consolidate B + twins + SCC + enrich (ours) | ~10 s (measured, without enrich) | 5–10 min | 30–60 min | 2–4 h |
 | array-based simplify/consolidate (M5 rewrite) | — | ~5 min | ~30 min | 1–2 h |
 
 Engine throughput:
@@ -745,7 +746,7 @@ Deliverable: `worst-route plan --region portland --from 45.5231,-122.6765 --to 4
 
 1. Repo bootstrap: `uv init`, src layout, ruff/mypy/pytest, `justfile`, `.gitignore` for `data/`, CI running tests on fixtures only (no downloads).
 2. Pipeline `download → filter → build` for `portland` (bbox clip from Oregon).
-3. Cleanup: exclusions, OSMnx simplify, consolidate stage A, **stage B as plain merge (all transitions allowed)**, twin detection, SCC + report.
+3. Cleanup: simplify, consolidate stage A, stage B with its transition tables (enforced by `Route.splice`, ignored by the search until M3), twin detection, SCC + report.
 4. Enrich: length, speed defaults (needed for time stats later anyway), identities, `pass_through`.
 5. Save/load in the §2.7 format; `qa` report with GeoJSON layers.
 6. `GraphBackend` protocol + `PythonBackend` (pure Python over the arrays; networkx as the tests' oracle).
@@ -767,7 +768,7 @@ Deliverable: `worst-route plan --region portland --from 45.5231,-122.6765 --to 4
 2. Slowest-time objective with node delays.
 3. Collectibles pipeline (toll booths, crossings, bridges, roundabout super-nodes) + collect objectives with waypoint pools.
 4. Brand index + pilgrimage objective + `/brands`.
-5. Hard mode (identity bans + window stretch check). Stage B transition tables (ramp reachability) land here too, since hard mode and turn modes make junction realism visible.
+5. Hard mode (identity bans + window stretch check). The search starts honouring the stage B transition tables (ramp reachability, built at M1) here too, since hard mode and turn modes make junction realism visible.
 6. Alphabet mode via constructive search.
 7. Acceptance: each mode has a fixture test proving its invariant (no left turns in the result, each identity in ≤ 1 stretch, letters strictly increasing, every counted item lies on a route edge).
 
@@ -804,7 +805,7 @@ Checks:
 1. **Edge chain:** `tail(edges[k]) == nodes[k]` and `head(edges[k]) == nodes[k+1]` for all k; every edge exists in the active mask; one-way direction is therefore enforced by construction.
 2. **Vertex-simple:** `len(set(nodes)) == len(nodes)` (round trips: allow `nodes[0] == nodes[-1]` only).
 3. **Edge-simple and no twin reuse:** for every pair of route edges `(e, f)`, `f ∉ twins(e)` and `e ≠ f`, and no road unit twice. Implemented as: mark `e ∪ twins(e)` while walking; any edge already marked fails.
-4. **Consolidated junctions (the proof at the raw-data level):** expand the route to original OSM node ids via each edge's `osmnode_ids` plus the super-junction internal paths; assert no original OSM node id appears twice, and assert every `cluster_members` group appears in at most one contiguous run. This proves that neither a merged carriageway crossing nor a consolidated interchange/roundabout is entered twice, independently of the engine's own bookkeeping.
+4. **Consolidated junctions (the proof at the raw-data level):** expand the route to original OSM node ids via each edge's `osmnode_ids` plus the super-junction internal paths; assert no original OSM node id appears twice, and assert every `members` group appears in at most one contiguous run. This proves that neither a merged carriageway crossing nor a consolidated interchange/roundabout is entered twice, independently of the engine's own bookkeeping.
 5. **Transitions:** every `(edges[k], edges[k+1])` pair at a super-node is in its allowed set.
 6. **Stops:** `nodes[stop_idx[s]]` equals the snapped stop node, in order; no stop is interior to a removed run (checked by construction in `splice`, re-checked here). For a saved route the stop nodes are re-derived from its request, never read from the file.
 7. **Constraints:** turn classes against `no_left`/`no_right`; hard-mode stretches (`identity → number of maximal runs ≤ 1`); leash (every node within `L` of the stop polyline); tier/bubble membership of every node, and no edge the tier bans outside the bubbles.

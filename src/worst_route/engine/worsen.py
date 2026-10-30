@@ -11,7 +11,12 @@ turn a transition table forbids (the searches see the tables, so this should sta
 `run_worsen` drives it to the end.
 
 - The window is one edge (j = i + 1) with probability `SINGLE_EDGE_PROBABILITY`, else a run
-  of 2 to 4 edges, cut short at the next stop so no stop is ever inside it.
+  of 1 + a geometric number of edges (`RUN_EDGES_MEAN` on average, at most `SEGMENT_RUN_MAX`),
+  cut short at the next stop so no stop is ever inside it. With `SEGMENT_BIAS_PROBABILITY` it
+  starts at one of the `SEGMENT_BIAS_TOP` route edges with the most unused active nodes near
+  their midpoint (`UnusedNodes`: a grid of counts, its summed-area table rebuilt on every
+  accepted splice, read in a square of half-side `WAYPOINT_BALL_FACTOR` × the radius), else
+  at a uniform edge.
 - The search masks are the route's own once the window is released (`Route.release`), with
   the request's `banned_edges` and the objective's bans for the window; those two are also
   what the splice is told to refuse.
@@ -19,10 +24,10 @@ turn a transition table forbids (the searches see the tables, so this should sta
   up to `r_max`, and halves after every 20 failures in a row down to `RADIUS_MIN_M` (or r_max
   when that is smaller). A failure is no detour, a gain of zero or less, or an infeasible window.
 - The run goes in cycles. A cycle ends after more than `CONVERGED_FAILS` (400) failures in a
-  row at the smallest radius; if it accepted a splice, the radius goes back to
-  `objective.initial_radius` and a new cycle starts.
+  row at the smallest radius; the radius goes back to `objective.initial_radius` and a new
+  cycle starts.
 - The run stops when `budget.max_iterations` attempts are made or `budget.seconds` have passed
-  ("budget"), or when a whole cycle accepts nothing ("converged").
+  ("budget"), or when `CONVERGED_EMPTY_CYCLES` cycles in a row accept nothing ("converged").
 
 Every random choice is `rng`'s, in a fixed order, and candidate lists are sorted arrays, so a
 seed gives the same sequence of splices on any machine. The clock decides only when to stop: a
@@ -43,12 +48,19 @@ import numpy as np
 from numpy.typing import NDArray
 
 from worst_route.config import (
+    CONVERGED_EMPTY_CYCLES,
     CONVERGED_FAILS,
     RADIUS_GROWTH,
     RADIUS_HALVE_EVERY,
     RADIUS_MIN_M,
-    RUN_EDGES,
+    RUN_EDGES_MEAN,
+    SEGMENT_BIAS_CELL_M,
+    SEGMENT_BIAS_PROBABILITY,
+    SEGMENT_BIAS_TOP,
+    SEGMENT_RUN_MAX,
     SINGLE_EDGE_PROBABILITY,
+    UNUSED_GRID_MAX_CELLS,
+    WAYPOINT_BALL_FACTOR,
 )
 from worst_route.engine.detour import find_detour
 from worst_route.engine.objectives.base import Objective
@@ -100,17 +112,70 @@ class WorsenResult:
     refused_transitions: int
 
 
-def pick_segment(route: Route, rng: np.random.Generator) -> tuple[int, int]:
-    """A window (i, j) of the route: one edge mostly, sometimes a short run, no stop inside."""
+def pick_segment(
+    route: Route, rng: np.random.Generator, anchors: NDArray[np.intp] | None = None
+) -> tuple[int, int]:
+    """A window (i, j) of the route: one edge mostly, sometimes a short run, no stop inside;
+    starting, with `SEGMENT_BIAS_PROBABILITY`, at one of the `anchors` (route edge positions)."""
     count = len(route.edges)
+    biased = anchors is not None and rng.random() < SEGMENT_BIAS_PROBABILITY
+
+    def first() -> int:
+        if biased and anchors is not None:
+            return int(anchors[rng.integers(len(anchors))])
+        return int(rng.integers(count))
+
     if rng.random() < SINGLE_EDGE_PROBABILITY:
-        i = int(rng.integers(count))
+        i = first()
         return i, i + 1
-    low, high = RUN_EDGES
-    k = int(rng.integers(low, high + 1))
-    i = int(rng.integers(count))
+    k = min(1 + int(rng.geometric(1 / (RUN_EDGES_MEAN - 1))), SEGMENT_RUN_MAX)
+    i = first()
     next_stop = route.stop_idx[bisect_right(route.stop_idx, i)]
     return i, min(i + k, next_stop)
+
+
+class UnusedNodes:
+    """The active nodes a route does not use, counted on a grid of square cells, and the route
+    edges with the most of them near their midpoint. A cell is `SEGMENT_BIAS_CELL_M` wide, or
+    wider when the active area needs it to keep the grid within `UNUSED_GRID_MAX_CELLS`."""
+
+    def __init__(self, data: GraphData, node_mask: BoolArray) -> None:
+        self.data = data
+        self.nodes = np.flatnonzero(node_mask)
+        x, y = data.node_x[self.nodes], data.node_y[self.nodes]
+        self.x0, self.y0 = float(x.min()), float(y.min())
+        width, height = float(x.max()) - self.x0, float(y.max()) - self.y0
+        cell = max(SEGMENT_BIAS_CELL_M, math.sqrt(width * height / UNUSED_GRID_MAX_CELLS))
+        while (width // cell + 1) * (height // cell + 1) > UNUSED_GRID_MAX_CELLS:
+            cell *= 1.01
+        self.cell_m = cell
+        col = ((x - self.x0) // cell).astype(np.intp)
+        row = ((y - self.y0) // cell).astype(np.intp)
+        self.cols, self.rows = int(col.max()) + 1, int(row.max()) + 1
+        self.cell = row * self.cols + col
+
+    def table(self, route: Route) -> NDArray[np.int64]:
+        """The summed-area table of the unused nodes per cell: [r, c] counts rows < r, cols < c."""
+        free = self.cell[~route.used_nodes[self.nodes]]
+        counts = np.bincount(free, minlength=self.rows * self.cols)
+        table = np.zeros((self.rows + 1, self.cols + 1), dtype=np.int64)
+        table[1:, 1:] = counts.reshape(self.rows, self.cols).cumsum(0).cumsum(1)
+        return table
+
+    def anchors(self, route: Route, table: NDArray[np.int64], radius: float) -> NDArray[np.intp]:
+        """The `SEGMENT_BIAS_TOP` route edges whose midpoint's square of half-side
+        `WAYPOINT_BALL_FACTOR` × radius holds the most unused nodes, ties to the earlier edge."""
+        d = self.data
+        mx = (d.node_x[route.nodes[:-1]] + d.node_x[route.nodes[1:]]) / 2
+        my = (d.node_y[route.nodes[:-1]] + d.node_y[route.nodes[1:]]) / 2
+        half = WAYPOINT_BALL_FACTOR * radius
+        c0 = np.clip((mx - half - self.x0) // self.cell_m, 0, self.cols).astype(np.intp)
+        c1 = np.clip((mx + half - self.x0) // self.cell_m + 1, 0, self.cols).astype(np.intp)
+        r0 = np.clip((my - half - self.y0) // self.cell_m, 0, self.rows).astype(np.intp)
+        r1 = np.clip((my + half - self.y0) // self.cell_m + 1, 0, self.rows).astype(np.intp)
+        near = table[r1, c1] - table[r0, c1] - table[r1, c0] + table[r0, c0]
+        top: NDArray[np.intp] = np.argsort(-near, kind="stable")[:SEGMENT_BIAS_TOP]
+        return top
 
 
 def worsen(
@@ -134,6 +199,11 @@ def worsen(
     best = route
     attempts = accepted = fails = 0
     cycle_accepted = False
+    empty_cycles = 0
+    unused = UnusedNodes(data, node_mask)
+    table = unused.table(route)
+    anchors_for: tuple[int, float] | None = None
+    anchors = np.zeros(0, dtype=np.intp)
     events: list[ProgressEvent] = []
     refused: Counter[type[IllegalSplice]] = Counter()
     while True:
@@ -141,12 +211,15 @@ def worsen(
             stopped: StopReason = "budget"
             break
         if fails > CONVERGED_FAILS and radius == r_min:
-            if not cycle_accepted:
+            empty_cycles = 0 if cycle_accepted else empty_cycles + 1
+            if empty_cycles == CONVERGED_EMPTY_CYCLES:
                 stopped = "converged"
                 break
             radius, fails, cycle_accepted = objective.initial_radius(route), 0, False
         attempts += 1
-        i, j = pick_segment(route, rng)
+        if anchors_for != (accepted, radius):
+            anchors, anchors_for = unused.anchors(route, table, radius), (accepted, radius)
+        i, j = pick_segment(route, rng, anchors)
         forbid, banned = route.release(data, i, j)
         extra = _either(banned_edges, objective.banned_edges(data, route, i, j))
         if extra is not None:
@@ -179,6 +252,7 @@ def worsen(
         if check_delta and not math.isclose(gain, score - route.score, rel_tol=1e-9, abs_tol=1e-6):
             raise AssertionError(f"delta {gain} != re-score {score - route.score} at ({i}, {j})")
         route = route.splice(data, i, j, *found, score=score, metrics=metrics, extra_banned=extra)
+        table = unused.table(route)
         accepted += 1
         fails = 0
         cycle_accepted = True

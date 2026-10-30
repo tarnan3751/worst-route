@@ -68,7 +68,7 @@ def test_distance_hooks_are_neutral() -> None:
     assert objective.waypoint_pool(GRID, route) is None
     nodes, edges = route.nodes, route.edges
     assert objective.feasible_window(GRID, route, 0, 1, nodes[:2], edges[:1])
-    assert objective.search_budget(1000.0) == 4000.0
+    assert objective.search_budget(1000.0) == 8000.0
 
 
 @pytest.mark.parametrize(

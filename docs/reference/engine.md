@@ -20,7 +20,7 @@ routes either way; on a build with transition tables only `PythonBackend` can se
 | `seed_route.py` | `resolve_stops`, `baseline_route` / `Baseline`, `seed_route` / `SeedRoute` |
 | `objectives/` | `base.py` (`Objective`, `BaseObjective`), `distance.py` (`Distance`), `OBJECTIVES`, `make_objective` |
 | `detour.py` | `find_detour`, `pick_strategy`, `waypoint_path`, `random_weight_path`, `local_exhaustive_paths` |
-| `worsen.py` | `worsen`, `run_worsen`, `pick_segment`, `Budget`, `ProgressEvent`, `WorsenResult` |
+| `worsen.py` | `worsen`, `run_worsen`, `pick_segment`, `UnusedNodes`, `Budget`, `ProgressEvent`, `WorsenResult` |
 | `plan.py` | `plan_route`, `PlanResult` |
 | `io.py` | `route_document`, `read_route` / `SavedRoute`, `route_geojson` |
 
@@ -191,7 +191,7 @@ only this interface:
   a candidate can be scored before it is spliced.
 - **Hooks.** `feasible_pair` and `feasible_window` (constraints), `banned_edges(G, route, i, j)`
   (bans per window), `search_weights` and `waypoint_pool` (search guidance), and
-  `initial_radius` and `search_budget(radius)` (default 4 × radius).
+  `initial_radius` and `search_budget(radius)` (default 8 × radius, `SEARCH_BUDGET_FACTOR`).
 - **The rest.** `better(a, b)` (default: a higher score), `target_value` (what target modes
   compare), and `describe` (mode numbers for the presentation).
 
@@ -240,7 +240,9 @@ round-trip seed).
   the midpoint of a and b (`SpatialIndex.nodes_within`, a scan of the request's nodes: a
   KD-tree query over the whole build cost a millisecond per attempt once the ball covered the
   area). The pool is the objective's when it has one; a and b are never
-  drawn. The probability is ∝ exp(−distance / radius). Then a → w, never through b, and
+  drawn. Half the draws (`WAYPOINT_UNIFORM_PROBABILITY`) are uniform over those nodes, the
+  others ∝ exp(−distance / radius), so a waypoint often lands far out in the ball. Then a → w,
+  never through b, and
   w → b, avoiding the first leg's nodes and its edges' twins. Each search is on
   `search_weights` and bounded by `search_budget(radius)`. The first search continues
   `entry_edge`; the second continues the first's last edge (the turn at the waypoint) and hands
@@ -293,8 +295,18 @@ it. `refused_transitions` counts the candidates the splice refused with `Transit
 the searches see the tables, so a nonzero count means a search returned a turn it should not
 have. Each attempt:
 
-1. **Window** (`pick_segment`). One edge (j = i + 1) with probability 0.8, else a run of 2 to 4
-   edges starting at a uniform edge, cut short at the next stop, so no stop is ever inside it.
+1. **Window** (`pick_segment`). One edge (j = i + 1) with probability 0.8, else a run of
+   1 + a geometric number of edges, 3 on average (`RUN_EDGES_MEAN`) and at most 12
+   (`SEGMENT_RUN_MAX`), cut short at the next stop, so no stop is ever inside it. With
+   probability 0.3 (`SEGMENT_BIAS_PROBABILITY`) the window starts at one of the 5 route edges
+   (`SEGMENT_BIAS_TOP`) with the most unused nodes of the request's mask near their midpoint,
+   else at a uniform edge. The counts (`UnusedNodes`) are kept on a 100 m grid
+   (`SEGMENT_BIAS_CELL_M`), coarser where the active area is so wide that the grid would hold
+   more than 2,000,000 cells (`UNUSED_GRID_MAX_CELLS`; a 300 km square gets cells of about
+   214 m), and its summed-area table is rebuilt on every accepted splice; an
+   edge's count is read in the square of half-side 4 × radius around its midpoint (a square
+   standing for the waypoint's ball), and the 5 are recomputed when the route or the radius
+   changes, ties to the earlier edge.
 2. **Masks.** `route.release(i, j)`, then OR in the request's `banned_edges` and the
    objective's bans for the window.
 3. **Detour.** `find_detour` at the current radius.
@@ -309,13 +321,14 @@ splice, up to `r_max`, and halves after every 20 failures in a row, down to
 `min(300 m, r_max)`. A failure is no detour, a gain of zero or less, or an infeasible window.
 
 **Cycles.** The run goes in cycles, so it keeps searching while searching still pays. A cycle
-ends after more than 400 failures in a row (`CONVERGED_FAILS`) at the smallest radius. If it
-accepted a splice, the radius goes back to `objective.initial_radius` and a new cycle starts,
-giving every radius its 20 tries again around the longer route.
+ends after more than 400 failures in a row (`CONVERGED_FAILS`) at the smallest radius; the
+radius goes back to `objective.initial_radius` and a new cycle starts, giving every radius its
+20 tries again around the longer route.
 
 **Stopping**: `"budget"` when `max_iterations` attempts are made or `budget.seconds` have
-passed; `"converged"` when a whole cycle accepts nothing, so a run ends 802 attempts after its
-last splice at the latest: the rest of that splice's cycle, then an empty one. Target modes
+passed; `"converged"` when 3 cycles in a row (`CONVERGED_EMPTY_CYCLES`) accept nothing, so a
+run ends 1,604 attempts after its last splice: the rest of that splice's cycle, then three
+empty ones. Target modes
 (ratio, duration) are M2; their hooks (`target_value`, `better`) are in the interface.
 
 **Determinism.** Every random choice is drawn from one `numpy.random.Generator(PCG64(seed))`, in
@@ -332,10 +345,10 @@ sequence of splices on any machine. The clock only decides when to stop:
 
 | Graph | Result |
 |---|---|
-| 20 × 20 grid, corner to corner | converges in 0.3–0.4 s (1,900–2,700 attempts) at a ratio of about 10, using 373–393 of 400 nodes (seeds 0–3) |
-| 30 × 30 grid, start, centre via and end | converges in 1.0–1.3 s at about 15× |
+| 20 × 20 grid, corner to corner | converges in 0.2–0.4 s (3,800–6,800 attempts) at 10.3×, using 391–393 of 400 nodes (seeds 0–3) |
+| 30 × 30 grid, start, centre via and end | converges in 0.5–0.6 s at 14.9–15.1× |
 | `grid_graph(100, 100, 100)` corner to corner, 20 s budget | about 490 attempts/s (the review's run), so the default `max_iterations` of 5000 stops it at about 10 s, at 33×; after random weight was limited to the window's ball, about 680 attempts/s, the 5000 attempts in about 7.4 s, at 33–34× |
-| the same, 5000 attempts, both backends in one session (seeds 1 and 2) | reference 1007–1072 attempts/s, `CsrBackend` 1101–1164 attempts/s; identical routes, at 34.00× and 33.44×; with the release by ban counts and the balls scanning the request's nodes, reference 3,240–3,700 attempts/s, `CsrBackend` 5,120–5,400 attempts/s, the same routes |
+| the same, 5000 attempts, both backends in one session (seeds 1 and 2) | reference 1007–1072 attempts/s, `CsrBackend` 1101–1164 attempts/s; identical routes, at 34.00× and 33.44×; with the release by ban counts and the balls scanning the request's nodes, reference 3,240–3,700 attempts/s, `CsrBackend` 5,120–5,400 attempts/s, the same routes; with the loop tuned for the M1 acceptance (8 × radius searches, longer windows, the segment bias, waypoints drawn half uniformly), reference 1,775–2,134 attempts/s, `CsrBackend` 3,363–3,715 attempts/s, identical routes at 33.14× and 31.63× |
 
 On that grid the backend was not what a run waited on. In a profile of a `CsrBackend` run, the
 searches took about 3% of its time; most of the rest was the loop's own NumPy work, now gone:
@@ -560,7 +573,7 @@ bytes).
 | `test_seed_route.py` | `resolve_stops` deterministic, node-disjoint legs, legs avoiding later stops, the penalty re-solve on a corridor, the baseline, the re-snap walk out of a one-entrance ring, the start never moving, a point-to-point trip never collapsing onto the start, a leg between two stops on one node, unreachable legs named by both ends, a leg going round a junction that allows only straight on, the turn at a via, the baseline's legal legs and its turn-blind fallback, a leg driving both carriageways going round, a round trip to a neighbour not one road out and back, round-trip loops (never back along the way out) |
 | `test_objectives.py` | `Distance`, the radius, and `delta` against a full re-score for every kind of term |
 | `test_detour.py` | each strategy's legal detours and None when none exists, the strategy weights, random weight drawing only near the window, the local-exhaustive ranking and the refused-candidate skip, no turn refused on a lattice of straight-only junctions (and many when the searches are made turn-blind) |
-| `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, a later cycle accepting after the first one runs out and the run stopping only after an empty cycle, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, and so do those with turn tables (no turn refused), a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable`; the same-seed test on both backends, and both backends planning the same route, splice for splice, on the grid and on one-way towns |
+| `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, a splice after two empty cycles and the run stopping only after three, the segment bias's rate and its anchors (the edges with the most unused nodes near), the unused-node grid's cap, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, and so do those with turn tables (no turn refused), a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable`; the same-seed test on both backends, and both backends planning the same route, splice for splice, on the grid and on one-way towns |
 | `test_io.py` | the route files |
 | `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32, `--backend` on both commands (the same route.json on both backends but the backend and the time), `auto` taking `python` on a build with turn tables and saying so, `csr` there one line on both commands, a file from another engine version refused |
 

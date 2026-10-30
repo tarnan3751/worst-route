@@ -11,9 +11,10 @@ weight 1/3); `strategy` forces one (tests, the round-trip seed).
 
 - `waypoint_path`: a waypoint w drawn from the nodes the search may enter within
   `WAYPOINT_BALL_FACTOR × radius` of the midpoint of a and b (the objective's pool when it has
-  one; never a or b; at least `min_dist_m` from the midpoint), with probability ∝
-  exp(−distance / radius); then a → w (not through b), continuing `entry_edge`, and w → b
-  (not through a → w, nor any twin of its edges, nor, when a = b, back along one of its roads),
+  one; never a or b; at least `min_dist_m` from the midpoint), uniformly with
+  `WAYPOINT_UNIFORM_PROBABILITY`, else with probability ∝ exp(−distance / radius); then a → w
+  (not through b), continuing `entry_edge`, and w → b (not through a → w, nor any twin of its
+  edges, nor, when a = b, back along one of its roads),
   continuing a → w's last edge and handing over to `exit_edge`, each bounded by `max_cost` and
   searched again without a twin it drives (`search.shortest_path`, `avoid_twins`).
 - `random_weight_path`: a → b on a copy of the search weights in which every edge leaving a
@@ -54,6 +55,7 @@ from worst_route.config import (
     RANDOM_WEIGHT_RANGE,
     STRATEGY_WEIGHTS,
     WAYPOINT_BALL_FACTOR,
+    WAYPOINT_UNIFORM_PROBABILITY,
 )
 from worst_route.engine.objectives.base import Objective
 from worst_route.engine.route import IllegalSplice, IntArray, Route, twins_of
@@ -202,8 +204,11 @@ def waypoint_path(
     candidates, distance = candidates[far], distance[far]
     if len(candidates) == 0:
         return None
-    odds = np.exp(-distance / radius)
-    w = int(rng.choice(candidates, p=odds / odds.sum()))
+    if rng.random() < WAYPOINT_UNIFORM_PROBABILITY:
+        w = int(rng.choice(candidates))
+    else:
+        odds = np.exp(-distance / radius)
+        w = int(rng.choice(candidates, p=odds / odds.sum()))
 
     first_forbid = forbid.copy()
     if a != b:

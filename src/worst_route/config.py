@@ -168,23 +168,36 @@ LOCAL_EXHAUSTIVE_BALL_MAX_M = 400.0
 LOCAL_EXHAUSTIVE_MAX_DEPTH = 25
 LOCAL_EXHAUSTIVE_MAX_PATHS = 5000
 WAYPOINT_BALL_FACTOR = 4.0
-SEARCH_BUDGET_FACTOR = 4.0
+WAYPOINT_UNIFORM_PROBABILITY = 0.5  # else ∝ exp(−distance / radius)
+SEARCH_BUDGET_FACTOR = 8.0
 RADIUS_INITIAL_FRACTION = 0.25
 RADIUS_INITIAL_MIN_M = 1000.0
 ROUND_TRIP_MIN_M = 500.0
 ROUND_TRIP_SEED_TRIES = 20
 
 # The worsen loop (`docs/PLAN.md` §3.4). A window is one edge with SINGLE_EDGE_PROBABILITY, else
-# a run of RUN_EDGES edges. The radius grows RADIUS_GROWTH × on every accepted splice (up to the
-# leash or the active area's extent) and halves after every RADIUS_HALVE_EVERY failures in a row
+# a run of 1 + a geometric number of edges, RUN_EDGES_MEAN on average, at most SEGMENT_RUN_MAX.
+# The radius grows RADIUS_GROWTH × on every accepted splice (up to the leash or the active
+# area's extent) and halves after every RADIUS_HALVE_EVERY failures in a row
 # (down to RADIUS_MIN_M); more than CONVERGED_FAILS failures in a row at the floor end a cycle,
-# which starts the radius again, and a cycle that accepted nothing ends the run.
+# which starts the radius again, and CONVERGED_EMPTY_CYCLES cycles in a row that accepted
+# nothing end the run.
 SINGLE_EDGE_PROBABILITY = 0.8
-RUN_EDGES = (2, 4)
+RUN_EDGES_MEAN = 3.0
+SEGMENT_RUN_MAX = 12
+# With SEGMENT_BIAS_PROBABILITY a window starts at one of the SEGMENT_BIAS_TOP route edges with
+# the most unused active nodes within WAYPOINT_BALL_FACTOR × the radius of their midpoint, counted
+# on a grid of SEGMENT_BIAS_CELL_M cells (a square window approximates the ball), or of the
+# larger cells that keep the grid within UNUSED_GRID_MAX_CELLS over a wide active area.
+SEGMENT_BIAS_PROBABILITY = 0.3
+SEGMENT_BIAS_TOP = 5
+SEGMENT_BIAS_CELL_M = 100.0
+UNUSED_GRID_MAX_CELLS = 2_000_000
 RADIUS_GROWTH = 1.5
 RADIUS_HALVE_EVERY = 20
 RADIUS_MIN_M = 300.0
 CONVERGED_FAILS = 400
+CONVERGED_EMPTY_CYCLES = 3
 
 # Cleanup (`docs/PLAN.md` §2.4; `docs/reference/pipeline.md`, cleanup).
 # Stage A (`pipeline/consolidate.py`): the radius OSMnx buffers each node by; two nodes merge

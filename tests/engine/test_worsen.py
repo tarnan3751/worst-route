@@ -5,7 +5,13 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from worst_route.config import CONVERGED_FAILS, HighwayClass
+from worst_route.config import (
+    CONVERGED_EMPTY_CYCLES,
+    CONVERGED_FAILS,
+    SEGMENT_RUN_MAX,
+    UNUSED_GRID_MAX_CELLS,
+    HighwayClass,
+)
 from worst_route.engine.objectives import make_objective
 from worst_route.engine.objectives.base import Objective
 from worst_route.engine.plan import plan_route
@@ -14,7 +20,14 @@ from worst_route.engine.route import IllegalSplice, Route
 from worst_route.engine.seed_route import baseline_route, resolve_stops, seed_route
 from worst_route.engine.snap import StopUnreachable
 from worst_route.engine.validator import validate_route
-from worst_route.engine.worsen import Budget, ProgressEvent, pick_segment, run_worsen, worsen
+from worst_route.engine.worsen import (
+    Budget,
+    ProgressEvent,
+    UnusedNodes,
+    pick_segment,
+    run_worsen,
+    worsen,
+)
 from worst_route.graph.backend import GraphBackend
 from worst_route.graph.csr_backend import CsrBackend
 from worst_route.graph.data import GraphData
@@ -133,20 +146,21 @@ def test_a_small_town_converges() -> None:
     assert result.attempts > 400 and result.accepted > 0
 
 
-def test_a_new_cycle_starts_until_one_accepts_nothing() -> None:
+def test_new_cycles_start_until_enough_in_a_row_accept_nothing() -> None:
     # a cycle ends after more than CONVERGED_FAILS failures in a row at the smallest radius;
-    # here a later cycle still finds a splice, so the run goes on past the first cycle's end
-    g = lattice(15, 15)
+    # here a splice comes after the rest of one cycle and two empty ones, so the run went on
+    # past empty cycles
+    g = lattice(12, 12)
     result = run(
-        start(g, [at_node(g, 0), at_node(g, 224)], 1), Budget(seconds=600, max_iterations=10**6)
+        start(g, [at_node(g, 0), at_node(g, 143)], 2), Budget(seconds=600, max_iterations=10**6)
     )
     iterations = [0] + [e.iteration for e in result.events]
     gaps = [b - a for a, b in zip(iterations, iterations[1:], strict=False)]
-    assert max(gaps) > CONVERGED_FAILS + 1
-    # it stops when a whole cycle accepts nothing: the one the last splice was in runs out, then
-    # the next one
+    assert max(gaps) > 2 * (CONVERGED_FAILS + 1)
+    # it stops after CONVERGED_EMPTY_CYCLES empty cycles in a row, which follow the rest of the
+    # cycle the last splice was in
     assert result.stopped_because == "converged"
-    assert result.attempts - iterations[-1] == 2 * (CONVERGED_FAILS + 1)
+    assert result.attempts - iterations[-1] == (1 + CONVERGED_EMPTY_CYCLES) * (CONVERGED_FAILS + 1)
 
 
 def test_the_generator_yields_events_and_returns_the_result() -> None:
@@ -251,8 +265,46 @@ def test_pick_segment_never_spans_a_stop() -> None:
         assert 0 <= i < j <= len(route.edges)
         assert not any(i < s < j for s in route.stop_idx)
         sizes[j - i] += 1
-    assert sizes[1] / 3000 == pytest.approx(0.8 + 0.2 * 0.1, abs=0.04)  # runs cut at a stop shrink
-    assert set(sizes) <= {1, 2, 3, 4}
+    # 4 of the 22 edges start right before a stop, where a run is cut to one edge
+    assert sizes[1] / 3000 == pytest.approx(0.8 + 0.2 * 4 / 22, abs=0.03)
+    assert set(sizes) <= set(range(1, SEGMENT_RUN_MAX + 1)) and max(sizes) > 4
+
+
+def test_pick_segment_starts_at_an_anchor_at_the_bias_rate() -> None:
+    route = route_on(GRID, list(range(20)) + [39, 38, 37], stop_idx=(0, 5, 6, 19, 22))
+    anchors = np.array([2, 7, 15], dtype=np.intp)
+    rng = np.random.Generator(np.random.PCG64(1))
+    starts = Counter()
+    for _ in range(4000):
+        i, j = pick_segment(route, rng, anchors)
+        assert 0 <= i < j <= len(route.edges)
+        assert not any(i < s < j for s in route.stop_idx)
+        starts[i] += 1
+    at_anchors = sum(starts[a] for a in anchors.tolist()) / 4000
+    assert at_anchors == pytest.approx(0.3 + 0.7 * 3 / 22, abs=0.03)
+
+
+def test_the_anchors_are_the_edges_with_the_most_unused_nodes_near() -> None:
+    # a route along the bottom row of the 20 × 20 grid, the west half of the grid inactive:
+    # the edges near the east end see the most unused nodes
+    route = route_on(GRID, list(range(20)))
+    mask = np.zeros(GRID.n, dtype=bool)
+    mask[[r * 20 + c for r in range(20) for c in range(10, 20)]] = True
+    unused = UnusedNodes(GRID, mask)
+    anchors = unused.anchors(route, unused.table(route), radius=100.0)
+    assert len(anchors) == 5 and (anchors >= 11).all()
+    assert unused.table(route)[-1, -1] == mask.sum() - 10  # the route uses 10 active nodes
+
+
+def test_the_unused_node_grid_stays_within_its_cap() -> None:
+    # 100 m cells on a city; over 300 km × 300 km they would be 9 million, so they grow
+    assert UnusedNodes(GRID, np.ones(GRID.n, dtype=bool)).cell_m == 100.0
+    xy = [(X0, Y0), (X0 + 300_000.0, Y0 + 300_000.0)]
+    wide = make_graph(xy, [(0, 1, 424_264.0), (1, 0, 424_264.0)])
+    unused = UnusedNodes(wide, np.ones(wide.n, dtype=bool))
+    assert unused.cell_m > 200.0
+    assert unused.rows * unused.cols <= UNUSED_GRID_MAX_CELLS
+    assert unused.table(route_on(wide, [0, 1]))[-1, -1] == 0  # both nodes on the route
 
 
 def random_town(seed: int, *, turns: bool = False) -> GraphData:

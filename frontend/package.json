@@ -1,0 +1,25 @@
+{
+  "name": "worst-route-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && npm run --silent format:check",
+    "test": "vitest run",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "maplibre-gl": "^5.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "prettier": "^3.9.10",
+    "typescript": "~5.9.3",
+    "vite": "^6.4.5",
+    "vitest": "^4.1.12"
+  }
+}

@@ -332,6 +332,16 @@ time, so one tree serves every request.
   outside the stops' bounding box grown by `leash_m` are skipped before shapely measures the
   rest against one geometry.
 - `bubble_mask(stops_xy, radius_m) -> bool[n]`: the nodes within `radius_m` of any stop.
+- `nodes_within(center, radius_m, node_mask) -> intp[]` and `edges_from_within(center,
+  radius_m, node_mask) -> intp[]`: the detours' balls, the nodes of the mask within `radius_m`
+  of a point and the edges leaving them, ascending. A node is within when dx² + dy² ≤ r², the
+  same rule as `bubble_mask` up to floating point at the exact boundary, so the nodes are
+  `bubble_mask`'s within the mask (equal on every radius the tests try, lattice nodes on the
+  boundary included). They scan the mask's nodes and out-edges, kept for the last mask seen
+  (compared by content, after the mask's dtype and length are checked), instead of querying the
+  whole build: on Portland a request holds about 7,600 of 65,810 nodes, and the scan costs
+  0.04 ms where a KD-tree query covering the area cost 1.4 ms (it returns its hits as a Python
+  list). A mask of the wrong dtype or length is a `ValueError`.
 - `active_mask(tier_mask, leash, bubbles) = leash & (tier_mask | bubbles)`: a request's node
   mask (`docs/PLAN.md` §2.6).
 
@@ -368,7 +378,7 @@ hand; nothing outside tests uses it.
 `tests/graph/`: `test_data.py` (every malformation `validate` rejects), `test_testing.py` (the
 builders), `test_store.py` (round trips, the version and its pin, refusals), `test_backends.py`,
 `test_edge_search.py` and `test_spatial.py` (snapping roles, masks, `exclude` and notes; leash
-and bubble masks).
+and bubble masks; the masked balls against `bubble_mask`, radii on lattice nodes included).
 
 `test_backends.py` runs the reference's tests on both backends through the `backend_type`
 fixture:

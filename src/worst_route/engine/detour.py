@@ -17,10 +17,12 @@ weight 1/3); `strategy` forces one (tests, the round-trip seed).
   continuing a → w's last edge and handing over to `exit_edge`, each bounded by `max_cost` and
   searched again without a twin it drives (`search.shortest_path`, `avoid_twins`).
 - `random_weight_path`: a → b on a copy of the search weights in which every edge leaving a
-  node within `WAYPOINT_BALL_FACTOR × radius` of the midpoint is multiplied by a factor drawn
-  from `RANDOM_WEIGHT_RANGE` (in ascending edge id; the edges farther out keep their weight,
-  so the draws do not grow with the graph), bounded by the same budget in scaled cost, from
-  `entry_edge` to `exit_edge`, and searched again without a twin it drives.
+  node of `node_mask` within `WAYPOINT_BALL_FACTOR × radius` of the midpoint is multiplied by a
+  factor drawn from `RANDOM_WEIGHT_RANGE` (in ascending edge id; the edges farther out, or
+  leaving a node outside `node_mask`, keep their weight, so the draws do not grow with the
+  graph; edges leaving the route's own nodes inside the mask are scaled too, unused), bounded
+  by the same budget in scaled cost, from `entry_edge` to `exit_edge`, and searched again
+  without a twin it drives.
 - `local_exhaustive_paths`: the simple paths a → b of at most `LOCAL_EXHAUSTIVE_MAX_DEPTH`
   edges, up to `LOCAL_EXHAUSTIVE_MAX_PATHS`, inside a ball around the midpoint of radius
   `LOCAL_EXHAUSTIVE_BALL_FACTOR × dist(a, b)` capped at `LOCAL_EXHAUSTIVE_BALL_MAX_M`, from
@@ -190,14 +192,11 @@ def waypoint_path(
 ) -> Path | None:
     """a → w → b through a waypoint w drawn near the midpoint of a and b, or None."""
     middle = (_xy(data, a) + _xy(data, b)) / 2
-    take = spatial.bubble_mask(middle[None, :], WAYPOINT_BALL_FACTOR * radius)
-    take &= node_mask & ~forbid
+    candidates = spatial.nodes_within(middle, WAYPOINT_BALL_FACTOR * radius, node_mask)
+    keep = ~forbid[candidates] & (candidates != a) & (candidates != b)
     if pool is not None:
-        listed = np.zeros(data.n, dtype=np.bool_)
-        listed[pool] = True
-        take &= listed
-    take[[a, b]] = False
-    candidates = np.flatnonzero(take)
+        keep &= np.isin(candidates, pool)
+    candidates = candidates[keep]
     distance = np.hypot(data.node_x[candidates] - middle[0], data.node_y[candidates] - middle[1])
     far = distance >= min_dist_m
     candidates, distance = candidates[far], distance[far]
@@ -267,8 +266,7 @@ def random_weight_path(
 ) -> Path | None:
     """a → b with the weights near the window scaled at random, or None."""
     middle = (_xy(data, a) + _xy(data, b)) / 2
-    near = spatial.bubble_mask(middle[None, :], WAYPOINT_BALL_FACTOR * radius)
-    drawn = np.flatnonzero(near[data.edge_u])
+    drawn = spatial.edges_from_within(middle, WAYPOINT_BALL_FACTOR * radius, node_mask)
     low, high = RANDOM_WEIGHT_RANGE
     scaled = weights.copy()
     scaled[drawn] *= rng.uniform(low, high, size=len(drawn))

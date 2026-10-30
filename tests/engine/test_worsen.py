@@ -111,7 +111,9 @@ def test_a_budget_of_iterations_is_kept() -> None:
     assert (nothing.attempts, nothing.accepted, nothing.events) == (0, 0, ())
 
 
-def test_a_budget_of_seconds_is_kept() -> None:
+def test_a_budget_of_seconds_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    # no cycle ever ends, so only the clock can stop the run, however fast the machine
+    monkeypatch.setattr("worst_route.engine.worsen.CONVERGED_FAILS", 10**9)
     g = lattice(30, 30)
     result = run(
         start(g, [at_node(g, 0), at_node(g, 899)], 0),

@@ -207,3 +207,25 @@ def test_active_mask_is_leash_and_tier_or_bubble() -> None:
     leash = np.array([True, True, True, True, False, False])
     bubbles = np.array([True, False, True, False, True, True])
     assert active_mask(tier, leash, bubbles).tolist() == [True, True, True, False, False, False]
+
+
+def test_the_masked_balls_are_the_bubbles_within_the_mask() -> None:
+    # centres on nodes, mid-block and off the grid, radii landing exactly on lattice nodes:
+    # the scan measures as the KD-tree does
+    rng = np.random.default_rng(0)
+    masks = [np.ones(GRID.n, dtype=bool), rng.random(GRID.n) < 0.6]
+    for mask in masks * 2:  # each mask twice in a row, then again after the other: the cache
+        for cx, cy in [(200.0, 200.0), (150.0, 250.0), (-120.0, 430.0), (37.5, 81.25)]:
+            centre = np.array([X0 + cx, Y0 + cy])
+            for radius in (0.0, 50.0, 100.0, 141.4213562373095, 200.0, 250.0, 600.0):
+                bubble = GRID_INDEX.bubble_mask(centre[None, :], radius) & mask
+                nodes = GRID_INDEX.nodes_within(centre, radius, mask)
+                assert nodes.tolist() == np.flatnonzero(bubble).tolist()
+                edges = GRID_INDEX.edges_from_within(centre, radius, mask)
+                assert edges.tolist() == np.flatnonzero(bubble[GRID.edge_u]).tolist()
+    with pytest.raises(ValueError, match="node_mask"):
+        GRID_INDEX.nodes_within(np.array([X0, Y0]), 100.0, np.ones(3, dtype=bool))
+    cached = masks[0]
+    GRID_INDEX.nodes_within(np.array([X0, Y0]), 100.0, cached)
+    with pytest.raises(ValueError, match="node_mask"):  # checked before the cache is consulted
+        GRID_INDEX.nodes_within(np.array([X0, Y0]), 100.0, cached.astype(np.uint8))

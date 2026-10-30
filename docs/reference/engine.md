@@ -237,7 +237,9 @@ otherwise the draw is 2/3 waypoint, 1/3 random weight. `strategy` forces one (te
 round-trip seed).
 
 - **Waypoint.** A waypoint w is drawn from the nodes the search may enter within 4 × radius of
-  the midpoint of a and b. The pool is the objective's when it has one; a and b are never
+  the midpoint of a and b (`SpatialIndex.nodes_within`, a scan of the request's nodes: a
+  KD-tree query over the whole build cost a millisecond per attempt once the ball covered the
+  area). The pool is the objective's when it has one; a and b are never
   drawn. The probability is ∝ exp(−distance / radius). Then a → w, never through b, and
   w → b, avoiding the first leg's nodes and its edges' twins. Each search is on
   `search_weights` and bounded by `search_budget(radius)`. The first search continues
@@ -246,8 +248,11 @@ round-trip seed).
   the second also avoids the roads (`edge_unit`) of the first, so a loop is never one road out
   and back.
 - **Random weight.** a → b on a copy of `search_weights` in which every edge leaving a node
-  within 4 × radius of the midpoint is multiplied by U(0.2, 5), drawn from `rng` in ascending
-  edge id; the edges farther out keep their weight, so the draws do not grow with the graph.
+  of the request's mask within 4 × radius of the midpoint (`SpatialIndex.edges_from_within`)
+  is multiplied by U(0.2, 5), drawn from `rng` in ascending edge id; the edges farther out, or
+  leaving a node outside the request's mask, keep their weight, so the draws do not grow with
+  the graph. Edges leaving the route's own nodes inside the mask are drawn for too, though the
+  search, which forbids those nodes, never uses them.
   Bounded by the same budget in scaled cost, from `entry_edge` to `exit_edge`, and searched
   again without a twin it drives.
 - **Local exhaustive.** The simple paths a → b of at most 25 edges, up to 5000 of them. They
@@ -330,12 +335,14 @@ sequence of splices on any machine. The clock only decides when to stop:
 | 20 × 20 grid, corner to corner | converges in 0.3–0.4 s (1,900–2,700 attempts) at a ratio of about 10, using 373–393 of 400 nodes (seeds 0–3) |
 | 30 × 30 grid, start, centre via and end | converges in 1.0–1.3 s at about 15× |
 | `grid_graph(100, 100, 100)` corner to corner, 20 s budget | about 490 attempts/s (the review's run), so the default `max_iterations` of 5000 stops it at about 10 s, at 33×; after random weight was limited to the window's ball, about 680 attempts/s, the 5000 attempts in about 7.4 s, at 33–34× |
-| the same, 5000 attempts, both backends in one session (seeds 1 and 2) | reference 1007–1072 attempts/s, `CsrBackend` 1101–1164 attempts/s; identical routes, at 34.00× and 33.44× |
+| the same, 5000 attempts, both backends in one session (seeds 1 and 2) | reference 1007–1072 attempts/s, `CsrBackend` 1101–1164 attempts/s; identical routes, at 34.00× and 33.44×; with the release by ban counts and the balls scanning the request's nodes, reference 3,240–3,700 attempts/s, `CsrBackend` 5,120–5,400 attempts/s, the same routes |
 
-On that grid the backend is no longer what a run waits on. In a profile of a `CsrBackend` run,
-the searches take about 3% of its time; most of the rest is the loop's own NumPy work:
-- `np.isin` in `Route.release` (the bans its window keeps), about 45%;
-- `SpatialIndex.bubble_mask`, about 30%.
+On that grid the backend was not what a run waited on. In a profile of a `CsrBackend` run, the
+searches took about 3% of its time; most of the rest was the loop's own NumPy work, now gone:
+- `np.isin` in `Route.release` (the bans its window keeps), about 45%, before the route kept
+  its ban counts (**Routes**);
+- `SpatialIndex.bubble_mask`, about 30%, before the balls scanned the request's nodes
+  (**Detours**).
 
 On that grid a 20 s budget is never reached: `max_iterations` (default 5000) caps the run
 first, so a longer search needs `--max-iterations` raised as well as `--budget`.

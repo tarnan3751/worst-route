@@ -23,6 +23,16 @@ kernels' internal business.
 `leash_mask(stops_xy, leash_m)`: the nodes within `leash_m` of the polyline through the stops
 (a point for a single stop). `bubble_mask(stops_xy, radius_m)`: the nodes within `radius_m` of
 any stop. `active_mask(tier, leash, bubbles)` = leash & (tier | bubbles), a request's node mask.
+
+`nodes_within(center, radius_m, node_mask)` and `edges_from_within(...)` are the detours'
+balls: the nodes of a mask within `radius_m` of a point, and the edges leaving them, ascending.
+A node is within when dx² + dy² ≤ r², the same rule as `bubble_mask` up to floating point at
+the exact boundary (the KD-tree computes its own distances), so the nodes are `bubble_mask`'s
+within the mask. They scan the mask's nodes and their out-edges, kept for the last mask seen
+(compared by content, after the mask's dtype and length are checked), instead of querying the
+whole build: a request's mask holds a few thousand nodes at city scale where the build holds
+tens of thousands, and a KD-tree query returns its hits as a Python list, which a ball
+covering the area makes cost a millisecond.
 """
 
 from dataclasses import dataclass
@@ -67,6 +77,7 @@ class SpatialIndex:
         self.data = data
         self._xy = np.column_stack([data.node_x, data.node_y])
         self._tree = cKDTree(self._xy)
+        self._masked: _Masked | None = None
         crs = f"EPSG:{data.meta['crs_epsg']}"
         self._to_xy = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
 
@@ -130,6 +141,41 @@ class SpatialIndex:
             mask[hits] = True
         return mask
 
+    def nodes_within(
+        self, center: NDArray[np.float64], radius_m: float, node_mask: NDArray[np.bool_]
+    ) -> NDArray[np.intp]:
+        """The nodes of `node_mask` within `radius_m` of `center` (x, y), ascending."""
+        m = self._masked_by(node_mask)
+        d2 = (m.node_x - center[0]) ** 2 + (m.node_y - center[1]) ** 2
+        within: NDArray[np.intp] = m.nodes[d2 <= radius_m * radius_m]
+        return within
+
+    def edges_from_within(
+        self, center: NDArray[np.float64], radius_m: float, node_mask: NDArray[np.bool_]
+    ) -> NDArray[np.intp]:
+        """The edges leaving the nodes `nodes_within` gives, ascending."""
+        m = self._masked_by(node_mask)
+        d2 = (m.tail_x - center[0]) ** 2 + (m.tail_y - center[1]) ** 2
+        leaving: NDArray[np.intp] = m.edges[d2 <= radius_m * radius_m]
+        return leaving
+
+    def _masked_by(self, node_mask: NDArray[np.bool_]) -> "_Masked":
+        d = self.data
+        if node_mask.dtype != np.bool_ or node_mask.shape != (d.n,):
+            raise ValueError(f"node_mask: need bool of shape ({d.n},)")
+        cached = self._masked
+        if cached is not None and np.array_equal(cached.mask, node_mask):
+            return cached
+        nodes = np.flatnonzero(node_mask)
+        edges = np.flatnonzero(node_mask[d.edge_u])
+        tails = d.edge_u[edges]
+        made = _Masked(
+            node_mask.copy(), nodes, d.node_x[nodes], d.node_y[nodes], edges,
+            d.node_x[tails], d.node_y[tails],
+        )  # fmt: skip
+        self._masked = made  # one assignment: a reader sees the old cache or the new
+        return made
+
     def _plays(self, v: int, role: Role, node_mask: NDArray[np.bool_] | None) -> bool:
         d = self.data
         heads = d.edge_v[d.out_edges[d.out_indptr[v] : d.out_indptr[v + 1]]]
@@ -142,6 +188,19 @@ class SpatialIndex:
         if role == "end":
             return bool(tails.size)
         return bool(heads.size and tails.size and np.union1d(heads, tails).size >= 2)
+
+
+@dataclass(frozen=True, eq=False)
+class _Masked:
+    """A node mask's nodes and the edges leaving them, with their positions."""
+
+    mask: NDArray[np.bool_]
+    nodes: NDArray[np.intp]
+    node_x: NDArray[np.float64]
+    node_y: NDArray[np.float64]
+    edges: NDArray[np.intp]
+    tail_x: NDArray[np.float64]
+    tail_y: NDArray[np.float64]
 
 
 def active_mask(

@@ -2,21 +2,26 @@
 
 The routing graph of one build: its arrays (`GraphData`), the on-disk build format and its
 `graph_version`, the `GraphBackend` protocol the engine searches through, the pure-Python
-reference backend, the spatial helpers (projection, snapping, leash and bubble masks), and the
-builders tests use to make small graphs by hand. Code: `src/worst_route/graph/`. The design it
-implements is `docs/PLAN.md` §2.6–2.7, §3.2, §3.9–3.10; the conventions are `CLAUDE.md`.
+reference backend and the CSR + Numba production backend, the spatial helpers (projection,
+snapping, leash and bubble masks), and the builders tests use to make small graphs by hand.
+Code: `src/worst_route/graph/`. The design it implements is `docs/PLAN.md` §2.6–2.7, §3.2,
+§3.9–3.10; the conventions are `CLAUDE.md`.
 
 | Module | What it holds |
 |---|---|
 | `data.py` | `GraphData`, `Strings`, `ARRAY_SPECS` (the format), `NodeKind`, `EdgeFlag`, `validate()` |
 | `store.py` | `write_build`, `read_build`, `graph_version` |
-| `backend.py` | the `GraphBackend` protocol and the `Path` type |
+| `backend.py` | the `GraphBackend` protocol, the `Path` type, and what every backend shares: `check_ends`, `WeightCheck`, `as_cost`, `as_limits`, `enterable`, `banned_mask`, `largest_scc_mask` |
 | `python_backend.py` | `PythonBackend`, the reference implementation |
+| `csr_backend.py` | `CsrBackend`, the production implementation, over `kernels.py` |
+| `kernels.py` | the Numba kernels `dijkstra_masked` and `simple_paths_dfs` |
+| `backends.py` | `make_backend` |
 | `spatial.py` | `SpatialIndex` (`project`, `snap`, `leash_mask`, `bubble_mask`), `Snap`, `SnapError`, `active_mask` |
 | `testing.py` | `make_graph`, `grid_graph`, `Edge`, `edge_id`, `GRID_ORIGIN` |
 
-`config.py` holds `HighwayClass` (the road classes, 0–13) and `TIERS` (the classes of T0–T4,
-each tier containing the one before it, T4 every class).
+`config.py` holds `HighwayClass` (the road classes, 0–13), `TIERS` (the classes of T0–T4,
+each tier containing the one before it, T4 every class), and `BackendName` and
+`DEFAULT_BACKEND` (**Choosing a backend**).
 
 ## The arrays
 
@@ -125,20 +130,28 @@ on x/y and lengths), but a golden test should record the version of the build it
 
 ## Backends
 
-`GraphBackend` (`backend.py`) is what the engine programs against; M1's surface is three calls.
-Every backend must give identical results on identical inputs; `PythonBackend` is the
-reference, the CSR + Numba backend (M2) the production one, and networkx the oracle the tests
-check the reference against.
+`GraphBackend` (`backend.py`) is what the engine programs against; M1's surface is three calls
+and a `name` (`"python"`, `"csr"`), which a planned route records. Every backend must give
+identical results on identical inputs; `PythonBackend` is the reference, `CsrBackend` the
+production one (**The CSR backend**), and networkx the oracle the tests check both against.
 
 **Masks.** A node may be entered iff `node_mask[v]` (default: every node) and not
 `forbid_nodes[v]`. `src` and `dst` obey the same rule, so a caller that forbids the route's used
 nodes clears the endpoints of the search from `forbid_nodes`. An edge may be used iff not
 `banned_edges[e]` and both its endpoints may be entered. Masks are `bool` arrays of length n or
-m; `weights` are float64, one per edge, non-negative and not NaN. The Python API takes bool
-masks; uint8 masks are the M2 kernels' internal business. `PythonBackend` raises `ValueError`
-for a node id outside [0, n) (no negative-index wraparound), a mask or weights of the wrong
-dtype or length, and NaN or negative weights; the M2 kernels may leave the weight scan to their
-callers.
+m; `weights` are float64, one per edge, non-negative and not NaN. The API takes bool masks;
+the kernels' uint8 views of them are `CsrBackend`'s internal business. Every backend raises
+`ValueError` for a node id outside [0, n) (no negative-index wraparound), a mask or weights of
+the wrong dtype or length, and NaN or negative weights, through the checks `backend.py` shares
+(the backend's `WeightCheck`, `check_ends`, `enterable`, `banned_mask`, in that order), so the
+same bad argument raises the same error on either backend. Each backend's `WeightCheck` checks
+the dtype and shape on every call but scans the values, O(m), only for a weights array object
+other than the last one that passed (held by a weak reference). A caller that changes a checked
+array in place is not checked again; the engine never does, and the random-weight strategy makes
+a new array. The scalars are converted the same way on every backend too: `as_cost` makes
+`max_cost` a Python float before it is compared, so a NumPy float32 budget compares in float64;
+`as_limits` passes `max_depth` and `max_paths` through `operator.index` (a float, `inf`
+included, raises `TypeError`) and clamps them to the int64 range (a huge limit is no limit).
 
 - `dijkstra(src, dst, weights, *, node_mask, forbid_nodes, banned_edges, max_cost=inf) -> Path | None`:
   a cheapest path, or None when `dst` cannot be reached at a cost of at most `max_cost`. The
@@ -164,8 +177,84 @@ edges, the lower id.
 scale), combines the node masks into one array per search with a NumPy operation, and reads
 masks and weights only for the edges a search touches, so a small bounded search does not pay
 for the whole graph. Measured on the dev machine: a search across a 200 × 200 `grid_graph`
-(40,000 nodes, 159,200 edges, every node settled) takes about 50 ms of CPU, roughly 0.3 µs per
-relaxed edge; a search ten blocks from the centre of the same grid takes under 1 ms.
+(40,000 nodes, 159,200 edges, every node settled) takes 20–50 ms of CPU by the machine's load,
+0.13–0.3 µs per relaxed edge; a search ten blocks from the centre of the same grid takes under
+1 ms (the side-by-side measurement is under **The CSR backend**).
+
+## The CSR backend
+
+**`CsrBackend(data)`** (`csr_backend.py`) runs the Numba kernels of `kernels.py` over the
+build's CSR arrays (`out_indptr`, `out_edges`, `edge_u`, `edge_v`); it copies and precomputes
+nothing. Each call runs the shared checks in the reference's order, answers the trivial cases as
+the reference does (a negative `max_cost`, an end that may not be entered, `max_paths <= 0`,
+`src == dst` for the DFS), then hands the kernel the arrays, the weights, and the masks as
+zero-copy uint8 views (`mask.view(np.uint8)`). `largest_scc_mask` is the shared scipy call.
+
+- `dijkstra_masked(out_indptr, out_edges, edge_u, edge_v, weights, enter_u8, banned_u8, src,
+  dst, max_cost) -> (found, nodes, edges)`: the tie rule exactly, with a binary heap of
+  (cost, node) entries written as two arrays and their sift loops, stale entries skipped when
+  popped. Each edge is relaxed at most once, so the heap holds at most m + 1 entries.
+- `simple_paths_dfs(out_indptr, out_edges, edge_v, enter_u8, banned_u8, src, dst, max_depth,
+  max_paths) -> (offsets, nodes, edges)`: the reference's enumeration on an explicit stack (the
+  path's nodes, its edges, and per depth the next out-edge to try), sized by
+  min(max_depth, n). The paths come back packed: path p is `edges[offsets[p]:offsets[p + 1]]`
+  and `nodes[offsets[p] + p : offsets[p + 1] + p + 1]`, in buffers that double when full.
+  `CsrBackend` unpacks them into the list of `Path`s.
+
+**The parity contract.** For arguments of the declared types (int node ids and limits, a real
+`max_cost`, float64 weights, bool masks), `CsrBackend` returns `PythonBackend`'s results byte
+for byte: the same paths in the same int32 arrays, the same ties, the same Nones, the same
+paths in the same order, the same errors. The semantics in `backend.py` are the specification; a case where the
+two legitimately differ is a bug in one of them, never a choice. Floats are added one at a time
+in the same order as the reference (no `fastmath`, no `parallel`), so equal inputs give equal
+costs. The tests (**Tests**) hold this, and so do the golden route and the engine's same-seed
+tests, which run on both backends.
+
+**Compilation.** Each kernel is compiled once, eagerly, when `kernels.py` is imported, for one
+signature whose arrays are read-only and of any layout. Memory-mapped builds, read-only cached
+weights and fresh writeable masks therefore share one specialization. `cache=True` keeps it in
+`src/worst_route/graph/__pycache__/` (gitignored). The first import after a change to
+`kernels.py`, or in a fresh clone or CI run, compiles both kernels: about 1.2 s on the dev
+machine. Every later process loads them from the cache in about 0.15 s.
+`NUMBA_DISABLE_JIT=1` runs the kernels as plain Python for debugging: slow on a real build, but
+the whole test suite passes that way. `NUMBA_BOUNDSCHECK=1` turns an out-of-range index into an
+`IndexError`, but only with a `NUMBA_CACHE_DIR` of its own: the cache index does not key on
+the flag, so with the default cache the unchecked kernels are loaded and the flag does
+nothing. Without it, the kernels trust the build: `write_build` validates it deeply, and
+the backend checks every id and mask it is given.
+
+**Per-call cost.** Each search allocates its own work arrays (distances, predecessors, settled
+flags, heap; the DFS's on-path flags and stack), O(n) per call, as the mask combination
+already is: the kernel's allocations and dispatch take 5–8 µs. With the weights array already
+checked, a one-edge search costs 10 µs on the reference and 14 µs on `CsrBackend` on Portland
+(5.5 and 10 µs on `grid_graph(200, 200, 100)`). Before the weight check was cached, its O(m) scan
+took 30–32 µs of every call on both backends.
+
+**Dependency.** `numba>=0.68`, locked at 0.68.1 with llvmlite 0.50.0. Both have CPython 3.12
+wheels for macOS arm64, manylinux x86_64 and aarch64, and Windows, but none for macOS x86_64:
+on an Intel Mac, `uv sync` would have to build them from source. numba 0.68 requires
+numpy < 2.6, so a numpy upgrade past 2.5 waits for numba.
+
+**Measured** on the dev machine (CPU time, median of 7):
+
+| On `grid_graph(200, 200, 100)` | `PythonBackend` | `CsrBackend` | |
+|---|---|---|---|
+| `dijkstra` corner to corner (every node settled) | 21 ms (0.13 µs per edge) | 1.7 ms (0.010 µs per edge) | 12.6× |
+| `dijkstra` ten blocks from the centre, `max_cost` 1 km | 0.14 ms | 0.04 ms | 3.4× |
+| `dijkstra` to a neighbour (fixed cost; the weights already checked) | 5.5 µs | 10 µs | — |
+| `simple_paths_dfs`, a 4-edge window in a 400 m ball, depth 25, 5000 paths | 33 ms | 2.7 ms | 12.1× |
+| **On Portland** (build e4b3b4ad90db: 65,810 nodes, 168,167 edges) | | | |
+| `dijkstra` south-west to north-east corner (every node settled) | 34 ms (0.20 µs per edge) | 4.1 ms (0.025 µs per edge) | 8.3× |
+| `dijkstra` to a neighbour (fixed cost; the weights already checked) | 10 µs | 14 µs | — |
+
+## Choosing a backend
+
+`make_backend(data, name=DEFAULT_BACKEND)` (`backends.py`) makes the backend `name` asks for:
+`"csr"`, `"python"`, or `"auto"`, which is `CsrBackend` when numba imports and `PythonBackend`
+otherwise (`csr_backend` is imported only when asked for). `config.DEFAULT_BACKEND` is `"auto"`;
+`config.BackendName` lists the names. The choice changes only the speed. `plan_route` uses
+`make_backend`'s default when it is given no backend, and `worst-route plan` and `validate`
+take `--backend` (`docs/reference/engine.md`).
 
 ## Spatial
 
@@ -230,10 +319,22 @@ hand; nothing outside tests uses it.
 ## Tests
 
 `tests/graph/`: `test_data.py` (every malformation `validate` rejects), `test_testing.py` (the
-builders), `test_store.py` (round trips, the version and its pin, refusals),
-`test_python_backend.py` (hypothesis parity with networkx for all three calls, and the exact
-path against a heap-free implementation of the tie rule on graphs where equal costs are
-common, 200 examples each; the tie rule, masks, `max_cost`, bad arguments, depth and count
-limits on crafted graphs), `test_spatial.py` (snapping roles, masks, `exclude` and notes; leash
-and bubble masks). Run them with
-`uv run pytest tests/graph`.
+builders), `test_store.py` (round trips, the version and its pin, refusals), `test_backends.py`,
+and `test_spatial.py` (snapping roles, masks, `exclude` and notes; leash and bubble masks).
+
+`test_backends.py` runs the reference's tests on both backends through the `backend_type`
+fixture:
+- hypothesis parity with networkx for all three calls, 200 examples each;
+- the exact path against a heap-free implementation of the tie rule, on graphs where equal
+  costs are common, also 200 examples;
+- the tie rule, masks, `max_cost`, bad arguments, and depth and count limits on crafted graphs.
+
+Then its parity tests compare the two backends byte for byte:
+- 300 hypothesis graphs with weights in {0, 0.5, 1, 2, inf}, masks, budgets, and depth and
+  count limits, both searches compared;
+- 300 random searches on a 30 × 30 grid with one-way streets and tied weights;
+- the 8512 simple paths across a 5 × 5 grid, with and without masks and limits;
+- a float32 `max_cost` against a 0.1000000015 edge, limits of 2**63, 2.5 and `inf` (the same
+  results or the same `TypeError`), and the weights scanned once per array.
+
+It also tests `make_backend`'s choices. Run them with `uv run pytest tests/graph`.

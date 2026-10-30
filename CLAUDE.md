@@ -19,8 +19,9 @@ A section named in bold is a heading of this file or of a doc.
 **The bootstrap is built**: the uv project, the gate wired to ruff, mypy and pytest, and the
 CLI. Every pipeline step is real (`docs/reference/pipeline.md`), from `download` to `save`, which
 writes the build, and `qa`; Portland's build passes QA. The graph package is built too
-(`docs/reference/graph.md`): a build's arrays and on-disk format, the backend protocol and its
-pure-Python reference backend, snapping and masks. So is the engine (`docs/reference/engine.md`):
+(`docs/reference/graph.md`): a build's arrays and on-disk format, the backend protocol, its
+pure-Python reference backend and the CSR + Numba production backend (the default, M2's first
+step), snapping and masks. So is the engine (`docs/reference/engine.md`):
 the route and its splice, the seed route, the detours, the worsen loop, the distance objective,
 the validator, and `worst-route plan` / `validate` on a saved build. No other part of the app
 exists yet. The plan (`docs/PLAN.md`, 2026-10-30) is written and its open questions answered as

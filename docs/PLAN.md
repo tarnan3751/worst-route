@@ -92,6 +92,7 @@ worst-route/
 │   │   ├── backend.py          # GraphBackend protocol + Route-independent primitives
 │   │   ├── python_backend.py   # pure-Python reference implementation over the arrays (M1; networkx is the tests' oracle)
 │   │   ├── csr_backend.py      # NumPy CSR + Numba kernels (M2+)
+│   │   ├── backends.py         # make_backend: csr, python, or auto (csr when numba imports)
 │   │   ├── kernels.py          # numba: masked bounded dijkstra (node-based), edge-state dijkstra (turn-aware), bounded DFS
 │   │   ├── spatial.py          # cKDTree snapping, leash mask, bubble mask
 │   │   ├── testing.py          # hand-built graphs for tests (make_graph, grid_graph)
@@ -506,7 +507,7 @@ class GraphBackend(Protocol):
 ```
 
 - `PythonBackend` (M1): pure Python + `heapq` over the build's CSR arrays; the reference implementation, which networkx checks in the tests. M1's surface is `dijkstra`, `simple_paths_dfs` and `largest_scc_mask` (this block's `scc_mask`); the other calls arrive with their users. ~0.3 µs per relaxed edge measured on the dev machine (`docs/reference/graph.md`).
-- `CSRBackend` (M2+): NumPy arrays + Numba kernels; ~0.1–0.5 µs per relaxed edge. Kernels take the masks as `uint8` arrays, use a binary heap, support `max_cost` early exit, and return parent arrays for path reconstruction. This is the production backend; igraph/rustworkx would be strictly worse for masked search.
+- `CsrBackend` (M2): NumPy arrays + Numba kernels (`dijkstra_masked`, `simple_paths_dfs`), byte-identical to the reference for arguments of the declared types; 0.01–0.025 µs per relaxed edge measured, 8–13× the reference on large searches (`docs/reference/graph.md`, **The CSR backend**). Kernels take the masks as zero-copy `uint8` views, use a binary heap written as arrays, support `max_cost` early exit, and return the path arrays (the DFS's paths packed with offsets). It is the default (`make_backend`, `auto`); igraph/rustworkx would be strictly worse for masked search.
 
 ### 3.11 Determinism and reproducibility
 
@@ -722,8 +723,8 @@ Pipeline wall-clock on the M5 (single process unless noted):
 
 Engine throughput:
 
-- One bounded masked Dijkstra over a ~50k-node ball: ~20–50 ms with Numba, ~1–2 s with networkx. The pure-Python reference backend (M1) measures ~50 ms of CPU for a search across a 40k-node grid (~0.3 µs per relaxed edge, `docs/reference/graph.md`).
-- Waypoint attempt = 2 searches; expect **10–20 attempts/s/core** with CSR at city scale, **~0.5/s** with networkx. Success rate ~50%.
+- One masked Dijkstra across a 40k-node grid (every node settled), measured: **1.7 ms** of CPU with the Numba kernels (~0.01 µs per relaxed edge), 21–50 ms with the pure-Python reference by the machine's load; ~1–2 s estimated with networkx. A small search costs 10–14 µs on Portland, once its weights array has been checked (`docs/reference/graph.md`, **The CSR backend**).
+- Whole runs, measured on a 10k-node grid corner to corner: **1100–1160 attempts/s** with CSR against 1000–1070 with the reference, the same routes. The searches are now ~3% of a run; the loop's own NumPy work (`Route.release`, `bubble_mask`) is the rest (`docs/reference/engine.md`, **The loop**). On Portland, Powell's → Reed converges at **~1,700 attempts/s** with CSR against ~1,560 with the reference, the same route, the searches ~7% of the run once each weights array is checked only once.
 - 20 s budget → CSR: 100–200 accepted splices, ratios of 20–100× for a cross-town trip. networkx: ~5–10 splices, enough to prove the approach, not enough for a satisfying demo, which is why the CSR backend is the first task of M2.
 - At state/national leashes the search ball grows (100 km on T2 ≈ 300k nodes ≈ 0.3 s/search). The ambition radius bounds searches, not the leash, so attempts stay ~50–100 ms; the number of splices needed for a "9 hour" route is only a few hundred.
 - Leash mask: ~0.5 s for 5M nodes (shapely 2 vectorised). Snapping: µs after the KD-tree exists; tree build ~2 s for 5M nodes, cached.

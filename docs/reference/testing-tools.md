@@ -10,9 +10,9 @@ config and CLI tests (typer's `CliRunner`); `tests/pipeline/`, with the pipeline
 `conftest.py` whose autouse fixture fails any test that would reach the network and whose
 `data_dir` fixture points `WORST_ROUTE_DATA` at a temporary directory; `tests/graph/`, the graph
 package's tests, which build their graphs with `worst_route.graph.testing`
-(`docs/reference/graph.md`, **Test builders**) and check the reference backend against networkx
-with hypothesis; `tests/engine/`, the engine's tests, with shared graph builders in
-`tests/engine/graphs.py` and a `data_dir` fixture for the `plan` / `validate` CLI tests
+(`docs/reference/graph.md`, **Test builders**) and check both backends against networkx and
+against each other with hypothesis; `tests/engine/`, the engine's tests, with shared graph
+builders in `tests/engine/graphs.py` and a `data_dir` fixture for the `plan` / `validate` CLI tests
 (`docs/reference/engine.md`, **Tests**); `tests/golden/`, the golden routes, frozen per build and
 `graph_version` and rewritten only under a tier A brief; and `tests/fixtures/osm/`, hand-written
 OSM XML that pyosmium reads directly, with no conversion (`docs/reference/pipeline.md`,

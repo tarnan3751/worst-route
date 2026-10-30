@@ -6,7 +6,8 @@ the distance mode, the detour strategies, the worsen loop, the validator, route 
 `plan` / `validate` commands. Code: `src/worst_route/engine/`. The design it implements is
 `docs/PLAN.md` §3.1–3.6, §3.9, §3.11 and §8.1; the conventions are `CLAUDE.md`. Everything
 runs on a build's `GraphData` through `GraphBackend` and `SpatialIndex`
-(`docs/reference/graph.md`); only `PythonBackend` exists so far.
+(`docs/reference/graph.md`): `CsrBackend` by default, `PythonBackend` when asked, with the same
+routes either way.
 
 | Module | What it holds |
 |---|---|
@@ -268,13 +269,19 @@ sequence of splices on any machine. The clock only decides when to stop:
   again with `max_iterations` set to its `run.attempts` and a budget in seconds at least as
   large as the first run's (or the clock may cut it shorter).
 
-**Measured** with the reference backend on the dev machine:
+**Measured** on the dev machine, with the reference backend unless the row says otherwise:
 
 | Graph | Result |
 |---|---|
 | 20 × 20 grid, corner to corner | converges in about 1 s at a ratio of about 10, using 383–391 of 400 nodes |
 | 30 × 30 grid, start, centre via and end | converges in 1–3 s at about 15× |
 | `grid_graph(100, 100, 100)` corner to corner, 20 s budget | about 490 attempts/s (the review's run), so the default `max_iterations` of 5000 stops it at about 10 s, at 33×; after random weight was limited to the window's ball, about 680 attempts/s, the 5000 attempts in about 7.4 s, at 33–34× |
+| the same, 5000 attempts, both backends in one session (seeds 1 and 2) | reference 1007–1072 attempts/s, `CsrBackend` 1101–1164 attempts/s; identical routes, at 34.00× and 33.44× |
+
+On that grid the backend is no longer what a run waits on. In a profile of a `CsrBackend` run,
+the searches take about 3% of its time; most of the rest is the loop's own NumPy work:
+- `np.isin` in `Route.release` (the bans its window keeps), about 45%;
+- `SpatialIndex.bubble_mask`, about 30%.
 
 On that grid a 20 s budget is never reached: `max_iterations` (default 5000) caps the run
 first, so a longer search needs `--max-iterations` raised as well as `--budget`.
@@ -282,8 +289,10 @@ first, so a longer search needs `--max-iterations` raised as well as `--budget`.
 ## Planning
 
 `plan_route(data, request, *, backend=None, spatial=None, on_progress=None, check_delta=False)
--> PlanResult(request, masks, snaps, baseline, route, run, report)` runs a request end to end,
-in this order:
+-> PlanResult(request, masks, snaps, baseline, route, run, report, backend)` runs a request end
+to end. It searches with `backend`, else `make_backend(data)` (`config.DEFAULT_BACKEND`, `auto`:
+`CsrBackend` when numba imports); `PlanResult.backend` is the name of the one that searched. The
+steps run in this order:
 
 1. the masks;
 2. one `Generator(PCG64(request.seed))`;
@@ -347,7 +356,8 @@ check reports `ok`, the first offending index and a detail. `report.ok` is their
 - `nodes`, `edges`, `stop_idx`;
 - `metrics`: `{length_m, time_s, baseline_length_m, baseline_time_s, ratio}` (`ratio` is null
   for a round trip), plus the objective's counters;
-- `run`: `{attempts, accepted, stopped_because, elapsed_s}`.
+- `run`: `{attempts, accepted, stopped_because, elapsed_s, backend}` (`backend` is `"csr"` or
+  `"python"`; every backend gives the same route).
 
 `read_route(path)` returns a `SavedRoute`, which the validator reads like a `Route`. A file
 that is not one raises `KeyError`, `TypeError`, `ValueError`, `OverflowError` (an id beyond
@@ -369,8 +379,14 @@ has a null geometry.
 worst-route plan --region R [--build-id ID] --from LAT,LON --to LAT,LON [--via LAT,LON]...
                  [--seed N] [--budget SECONDS] [--max-iterations N] [--leash-km X|auto]
                  [--tier auto|T0..T4] [--out route.json] [--geojson route.geojson]
-worst-route validate route.json [--region R] [--build-id ID]
+                 [--backend auto|csr|python]
+worst-route validate route.json [--region R] [--build-id ID] [--backend auto|csr|python]
 ```
+
+`--backend` picks the graph backend (`docs/reference/graph.md`, **Choosing a backend**). The
+default is `auto`, which is `csr` when numba imports. The choice changes the speed and nothing
+else. An unknown name is exit 2. Asking for `csr` when numba does not import prints one line on
+stderr ("the csr backend needs numba, which did not import: …") and exits 1.
 
 **`plan`** reads `<WORST_ROUTE_DATA>/graphs/<region>/<build_id>/`, by default the build named in
 `graphs/<region>/latest`. A missing `latest` or `meta.json` is one line on stderr ("... run
@@ -385,6 +401,7 @@ to stderr on an accepted splice, at most one line every 2 s. On stdout it prints
 - the ratio;
 - the node and edge counts;
 - the attempts, accepted splices, elapsed time and why the search stopped;
+- the backend it searched with (`backend: csr`);
 - the validator's checks.
 
 It writes the files it is asked for. A stop that cannot be snapped or reached is one line,
@@ -395,7 +412,8 @@ exit 1. A route that fails the validator is reported as an engine bug, exit
 **`validate`** reads a `route.json` and loads the build it names (or `--region` /
 `--build-id`). A file it cannot read (a missing field, an id beyond int32) is `cannot read …`
 and exit 1. It refuses a build whose `graph_version` differs, recomputes the request's masks
-from the file's request, and re-derives the stops with `resolve_stops`. It prints one line per
+from the file's request, and re-derives the stops with `resolve_stops` on the backend
+`--backend` names. It prints the file's line, the backend's (`backend: csr`), one line per
 check, then `valid`, or exits 1.
 
 **On Portland** (the M1 acceptance, `docs/PLAN.md` §7 M1 step 9: `uv run python tools/acceptance.py
@@ -410,6 +428,25 @@ share 12–23% of their edges (Jaccard, 5 pairs). A cul-de-sac via moves 86 m to
 street with its note; a round trip from Pioneer Courthouse Square makes a 100.7 km loop. The other
 6 pairs end in `StopUnreachable`, below.
 
+**On Portland with `CsrBackend`** (the same build). The machine was busy with other work (load
+average about 20 during the acceptance runs), so a rate compares only with the run made just
+before or after it.
+- **Powell's → Reed, seed 1, `--budget 30 --max-iterations 1000000`.** The reference's 49.74×
+  with the same route bytes, converging after 18,708 attempts in 11.0 s (1,700 attempts/s); the
+  reference took 12.0 s (1,560/s).
+- **The same trip at the default 5,000 attempts.** 32.63× on both backends, 4.4 s against 5.3 s.
+- **The acceptance run with `--backend csr`.** It gives every result above (14 of 20 planned,
+  the validator passing all 14, a median of 6.4× from 2.4× to 31.1×, the same 6 failures),
+  every run converging. Run back to back with the reference, the two agree pair for pair, except
+  where the busy machine let the reference's 30 s run out before it converged: pair 05, and the
+  seed-2 re-plans of pairs 05 and 06. Those are the prefix property at work: `CsrBackend` with `max_iterations` set to the reference's
+  17,517 attempts gives pair 05's 432.0 km route exactly.
+- **A profile of the CSR Powell's → Reed run.** `Route.release` takes 44% of the time and
+  `bubble_mask` 18%. The searches take about 7%, now that the weight check scans each weights
+  array once (`docs/reference/graph.md`, **Backends**); before that, the searches took 9%.
+  After that change, on a busier machine (load average about 12), the same 18,708 attempts took
+  19.8–24.0 s on `CsrBackend` against 25.2–28.0 s on the reference.
+
 ## Limitations
 
 - **Transitions.** The searches do not know transition tables, so on a build with rows the
@@ -421,7 +458,9 @@ street with its note; a round trip from Pioneer Courthouse Square makes a 100.7 
 - **Twins within a leg.** A seed leg is a plain shortest path; when it drives an edge and its
   twin (both carriageways of one road, as in a U-turn on E Burnside St, or a cleanup false twin
   on an OR 224 hairpin), the leg is refused and not rebuilt around it: 2 of the 20 pairs.
-- **Speed.** The reference backend is pure Python; the CSR + Numba backend is M2.
+- **Speed.** `CsrBackend`'s searches are 8–13× the reference's on large searches, but a run on
+  a city-sized grid or on Portland is now bound by the loop's own NumPy work (**The loop**,
+  Measured; **On Portland with `CsrBackend`**), so a whole run gains only 10–20%.
 - **Time budgets.** A run that stops on time is reproducible only through its recorded attempt
   count.
 - **The strategy mix.** Random weight found a path other than the removed run in 3 of 64
@@ -454,18 +493,22 @@ bytes).
 | `test_seed_route.py` | `resolve_stops` deterministic, node-disjoint legs, legs avoiding later stops, the penalty re-solve on a corridor, the baseline, the re-snap walk out of a one-entrance ring, the start never moving, a point-to-point trip never collapsing onto the start, a leg between two stops on one node, unreachable legs named by both ends, round-trip loops |
 | `test_objectives.py` | `Distance`, the radius, and `delta` against a full re-score for every kind of term |
 | `test_detour.py` | each strategy's legal detours and None when none exists, the strategy weights, random weight drawing only near the window, the local-exhaustive ranking and the refused-candidate skip |
-| `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable` |
+| `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable`; the same-seed test on both backends, and both backends planning the same route, splice for splice, on the grid and on one-way towns |
 | `test_io.py` | the route files |
-| `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32 |
+| `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32, `--backend` on both commands (the same route.json on both backends but the backend and the time) |
 
 **The acceptance run**, `tools/acceptance.py`, plans random stop pairs on a saved build, so it
 needs `WORST_ROUTE_DATA` and is not part of the gate:
 
 ```
 uv run python tools/acceptance.py --region portland [--build-id ID] [--pairs 20] [--seed 1]
-    [--budget 30] [--backend python] [--min-km 3] [--max-km 15] [--jaccard 5]
+    [--budget 30] [--backend python|csr] [--min-km 3] [--max-km 15] [--jaccard 5]
     [--pair-seed 2026] [--near-m 250] [--out tools/out/acceptance.json]
 ```
+
+Its `--backend` defaults to `python`, the backend M1's numbers were measured on: a run bounded by
+time goes further on a faster backend, so `csr` can give different routes where the reference
+runs out of time.
 
 The pairs are uniform points in the region's bbox with a node within `--near-m`, the end at a
 straight-line distance within the bounds, drawn from `PCG64(--pair-seed)`; each is planned with
@@ -478,6 +521,6 @@ per second, the failures the transitions caused, the Jaccards), writes the JSON 
 exits 1 only when a planned route fails the validator. On Portland it takes under two minutes.
 
 `tests/golden/` freezes one route (seed 7, three stops) on a 20 × 20 lattice whose lon/lat are
-rounded to 1e-7°, so its bytes and pinned `graph_version` do not depend on PROJ's last bits.
-It changes only under a tier A brief; `WORST_ROUTE_REGEN_GOLDEN=1 uv run pytest tests/golden`
-rewrites it.
+rounded to 1e-7°, so its bytes and pinned `graph_version` do not depend on PROJ's last bits;
+both backends must reproduce it. It changes only under a tier A brief;
+`WORST_ROUTE_REGEN_GOLDEN=1 uv run pytest tests/golden` rewrites it.

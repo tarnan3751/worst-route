@@ -378,3 +378,57 @@ def test_enrich_needs_its_inputs(data_dir: Path) -> None:
     assert pipeline("cleanup", "--region", "portland")[0] == 0
     code, output = pipeline("enrich", "--region", "portland")
     assert code == 1 and "pois.parquet" in output and "pipeline filter --region" in output
+
+
+def test_tiers_after_enrich(data_dir: Path) -> None:
+    stages = cleaned_build(str(FIXTURES / "divided.osm"))
+    assert pipeline("enrich", "--region", "portland")[0] == 0
+    code, output = pipeline("tiers", "--region", "portland")
+    assert code == 0, output
+    tiers_json = stages / "tiers.json"
+    assert output.splitlines() == [
+        f"tiers b1: wrote {tiers_json} ({tiers_json.stat().st_size / 1e6:.1f} MB)",
+        "T0: kept 0 of 0 nodes (100.00%) and 0 of 0 edges; 0 components",
+        "T1: kept 8 of 8 nodes (100.00%) and 11 of 11 edges; 1 components",
+        "T2: kept 8 of 8 nodes (100.00%) and 11 of 11 edges; 1 components",
+        "T3: kept 8 of 8 nodes (100.00%) and 11 of 11 edges; 1 components",
+        "T4: kept 15 of 15 nodes (100.00%) and 25 of 25 edges; 1 components",
+    ]
+    sidecar = json.loads((stages / "tiers.json.inputs.json").read_text())
+    assert sidecar["inputs"][0]["file"] == "enrich.pkl"
+    assert sidecar["params"]["allow_fragmented"] is False
+    code, output = pipeline("tiers", "--region", "portland")
+    assert code == 0 and output.startswith("skipped: tiers of build b1 are up to date")
+    code, output = pipeline("tiers", "--region", "portland", "--force")
+    assert code == 0 and output.startswith("tiers b1: wrote ")
+
+
+def test_tiers_of_a_fragmented_build(data_dir: Path) -> None:
+    stages = cleaned_build(str(FIXTURES / "diamond.osm"))
+    assert pipeline("enrich", "--region", "portland")[0] == 0
+    result = runner.invoke(app, ["pipeline", "tiers", "--region", "portland"])
+    assert result.exit_code == 1 and result.stdout == ""
+    assert result.stderr.startswith("tiers failed: T0 keeps 1 of 5 nodes (20.00%); ")
+    assert result.stderr.count("\n") == 1 and "Traceback" not in result.stderr
+    assert not (stages / "tiers.json").exists()
+    code, output = pipeline("tiers", "--region", "portland", "--allow-fragmented")
+    assert code == 0 and "T0: kept 1 of 5 nodes (20.00%)" in output
+    assert (stages / "tiers.json").exists()
+
+
+def test_tiers_refuse_a_stale_enrich(data_dir: Path) -> None:
+    cleaned_build(str(FIXTURES / "divided.osm"))
+    assert pipeline("enrich", "--region", "portland")[0] == 0
+    # Cleanup made again from another build under the same id; enrich is not rerun.
+    source = str(FIXTURES / "culdesac.osm")
+    assert pipeline("build", "--region", "portland", "--source", source, "--build-id", "b1")[0] == 0
+    assert pipeline("cleanup", "--region", "portland")[0] == 0
+    result = runner.invoke(app, ["pipeline", "tiers", "--region", "portland"])
+    assert result.exit_code == 1
+    assert result.stderr.startswith("stage enrich is stale: rerun `worst-route pipeline enrich")
+
+
+def test_tiers_need_enrich(data_dir: Path) -> None:
+    cleaned_build(str(FIXTURES / "culdesac.osm"))
+    code, output = pipeline("tiers", "--region", "portland")
+    assert code == 1 and "enrich.pkl" in output and "pipeline enrich --region" in output

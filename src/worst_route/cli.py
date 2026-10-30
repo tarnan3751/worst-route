@@ -4,14 +4,14 @@
 named region (`docs/PLAN.md` §2): download, filter, build, cleanup, enrich, tiers, save, qa.
 Every step takes `--region` (a key of `config.REGIONS`), `--build-id` and `--force`; `filter`
 and `build` also take `--source`, a file read instead of the step's usual input (fixtures,
-tests); `cleanup` also takes `--allow-fragmented`. `download`, `filter`, `build`, `cleanup` and
-`enrich` are real (`docs/reference/pipeline.md`): each prints what it wrote and its counts, or
-that its output is up to date and was skipped; a failed download, a cleanup whose graph is too
-fragmented, or a step whose earlier stages are stale (`layout.stale_stages`) prints one line and
-exits 1. `cleanup` and `enrich` read the build named by `--build-id`, else the region's latest.
-Each imports its step module when it runs, so `version` and the other commands do not load the
-geo stack. The other steps are a skeleton for now: each exits with code 2 and says it is not
-implemented yet.
+tests); `cleanup` and `tiers` also take `--allow-fragmented`. `download`, `filter`, `build`,
+`cleanup`, `enrich` and `tiers` are real (`docs/reference/pipeline.md`): each prints what it
+wrote and its counts, or that its output is up to date and was skipped; a failed download, a
+cleanup or tiers step whose graph is too fragmented, or a step whose earlier stages are stale
+(`layout.stale_stages`) prints one line and exits 1. The steps from `cleanup` on read the build
+named by `--build-id`, else the region's latest. Each imports its step module when it runs, so
+`version` and the other commands do not load the geo stack. The other steps are a skeleton for
+now: each exits with code 2 and says it is not implemented yet.
 
 `plan` plans a route on a saved build (`docs/reference/engine.md`, **The CLI**): it prints the
 snapped stops, the baseline, the worst route, the ratio, the search and the validator's report,
@@ -360,9 +360,60 @@ def enrich(
 
 
 @pipeline_app.command()
-def tiers(region: RegionOption, build_id: BuildIdOption = None, force: ForceOption = False) -> None:
-    """Compute the tier masks."""
-    _not_implemented("tiers")
+def tiers(
+    region: RegionOption,
+    build_id: BuildIdOption = None,
+    force: ForceOption = False,
+    allow_fragmented: Annotated[
+        bool,
+        typer.Option(
+            "--allow-fragmented",
+            help="Keep each tier's largest strongly connected component even when it holds "
+            "fewer than TIER_MIN_RETAINED of the tier's nodes.",
+        ),
+    ] = False,
+) -> None:
+    """Each tier's nodes: the largest strongly connected component of its roads."""
+    import pickle
+
+    from worst_route.pipeline import tiers as step
+
+    build_id, directory = _build_of(region, build_id)
+    source = layout.stage_file(directory, "enrich.pkl")
+    _require(source, f"run `worst-route pipeline enrich --region {region}` first")
+    _require_fresh(region, directory, "tiers")
+    output = layout.stage_file(directory, "tiers.json")
+    record: dict[str, Any] = {
+        "step": "tiers",
+        "inputs": _inputs(source),
+        "params": {
+            "allow_fragmented": allow_fragmented,
+            "config": step.parameters(),
+            "pipeline_version": PIPELINE_VERSION,
+        },
+    }
+    if not force and layout.sidecar_matches(output, record):
+        typer.echo(
+            f"skipped: tiers of build {build_id} are up to date at {output} (--force to redo)"
+        )
+        return
+    layout.sidecar(output).unlink(missing_ok=True)
+    output.unlink(missing_ok=True)
+    with source.open("rb") as f:
+        graph = pickle.load(f)
+    try:
+        report = step.run_tiers(graph, allow_fragmented=allow_fragmented)
+    except step.FragmentedTierError as error:
+        typer.echo(f"tiers failed: {error}", err=True)
+        raise typer.Exit(code=1) from None
+    step.save_stage(report, directory)
+    layout.write_sidecar(output, record)
+    typer.echo(f"tiers {build_id}: wrote {output} ({_size(output)})")
+    for t in report.tiers:
+        typer.echo(
+            f"{t.name}: kept {t.kept_nodes} of {t.nodes} nodes ({t.retained:.2%}) and "
+            f"{t.kept_edges} of {t.edges} edges; {t.components} components"
+        )
 
 
 @pipeline_app.command()

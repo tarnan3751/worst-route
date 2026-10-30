@@ -6,8 +6,8 @@ from worst_route.cli import app
 
 runner = CliRunner()
 
-# The steps still to be built; download to enrich are tested in tests/pipeline/.
-STUB_STEPS = ["tiers", "save", "qa"]
+# The steps still to be built; download to tiers are tested in tests/pipeline/.
+STUB_STEPS = ["save", "qa"]
 
 
 def test_version_prints_version() -> None:
@@ -16,10 +16,10 @@ def test_version_prints_version() -> None:
     assert result.stdout.strip() == __version__ == "0.1.0"
 
 
-def test_pipeline_tiers_not_implemented() -> None:
-    result = runner.invoke(app, ["pipeline", "tiers", "--region", "portland"])
+def test_pipeline_save_not_implemented() -> None:
+    result = runner.invoke(app, ["pipeline", "save", "--region", "portland"])
     assert result.exit_code == 2
-    assert result.stderr.strip() == "not implemented yet: pipeline tiers"
+    assert result.stderr.strip() == "not implemented yet: pipeline save"
     assert result.stdout == ""
 
 

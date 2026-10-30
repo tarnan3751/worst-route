@@ -239,3 +239,8 @@ SPEED_DEFAULT_MPH: dict[HighwayClass, float] = {
 }
 NODE_DELAY_S = {"stop": 10.0, "traffic_signals": 30.0}
 BEARING_SAMPLE_M = 20.0
+
+# Tiers (`docs/PLAN.md` §2.6; `pipeline/tiers.py`): each tier keeps the largest strongly
+# connected component of its own roads; the step fails when a tier keeps fewer than this
+# fraction of the nodes its roads touch, unless --allow-fragmented.
+TIER_MIN_RETAINED = 0.95

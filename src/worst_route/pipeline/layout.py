@@ -82,6 +82,7 @@ def sidecar(output: Path) -> Path:
 STAGE_CHAIN: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("cleanup", "cleanup.pkl", ("build.pkl",)),
     ("enrich", "enrich.pkl", ("cleanup.pkl",)),
+    ("tiers", "tiers.json", ("enrich.pkl",)),
 )
 
 

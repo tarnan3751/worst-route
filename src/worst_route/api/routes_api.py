@@ -84,6 +84,7 @@ from worst_route.engine.seed_route import resolve_stops
 from worst_route.engine.snap import StopUnreachable, is_round_trip, role_of
 from worst_route.engine.turns import count_turns
 from worst_route.engine.validator import validate_route
+from worst_route.graph.data import GraphData
 from worst_route.graph.loader import BuildNotFound, Loaded, load_build
 from worst_route.graph.spatial import SnapError
 
@@ -142,14 +143,15 @@ def _job(api: "Api", job_id: str) -> Job:
     return job
 
 
-def _stored(api: "Api", route_id: str) -> StoredRoute:
+def stored_route(api: "Api", route_id: str) -> StoredRoute:
+    """The route stored as `route_id`, else NOT_FOUND."""
     stored = api.store.get(route_id)
     if stored is None:
         raise ApiError(404, "NOT_FOUND", f"no route {route_id}")
     return stored
 
 
-def _build_of(api: "Api", stored: StoredRoute) -> Loaded:
+def build_of(api: "Api", stored: StoredRoute) -> Loaded:
     """The build a stored route was planned on, at its graph_version."""
     try:
         loaded = load_build(
@@ -165,6 +167,15 @@ def _build_of(api: "Api", stored: StoredRoute) -> Loaded:
         )
         raise ApiError(409, "BUILD_UNAVAILABLE", message)
     return loaded
+
+
+def stored_delays(data: GraphData, stored: StoredRoute) -> tuple[float, float]:
+    """The delays (signals, stop signs) the route and its baseline meet, from the build: the
+    baseline's along its stored edges, so a route stored before the documents carried them has
+    them too."""
+    first = np.array([stored.stops[0].node], dtype=np.int32)
+    baseline_nodes = np.concatenate((first, data.edge_v[stored.baseline_edges]))
+    return route_delay_s(data, stored.nodes), route_delay_s(data, baseline_nodes)
 
 
 @router.get("/health")
@@ -392,18 +403,13 @@ async def cancel_job(job_id: str, request: Request) -> JobStatus:
 def route(route_id: str, request: Request) -> RouteDocument:
     """A stored route's document (the presentation's fields arrive with M4)."""
     api = api_of(request)
-    stored = _stored(api, route_id)
-    data = _build_of(api, stored).data
+    stored = stored_route(api, route_id)
+    data = build_of(api, stored).data
     asked = RouteRequestIn.model_validate(stored.input)
     labels = [s.label for s in asked.stops or []]
     m = stored.metrics_json
     time_s, baseline_time_s = float(m["time_s"]), float(m["baseline_time_s"])
-    # the delays from the build, the baseline's along its stored edges (a route stored before
-    # the documents carried them has them too)
-    delay_s = route_delay_s(data, stored.nodes)
-    first = np.array([stored.stops[0].node], dtype=np.int32)
-    baseline_nodes = np.concatenate((first, data.edge_v[stored.baseline_edges]))
-    baseline_delay_s = route_delay_s(data, baseline_nodes)
+    delay_s, baseline_delay_s = stored_delays(data, stored)
     departure = asked.departure
     arrival = departure + timedelta(seconds=time_s + delay_s) if departure else None
     return RouteDocument(
@@ -456,10 +462,10 @@ def route(route_id: str, request: Request) -> RouteDocument:
 def route_geojson(route_id: str, request: Request) -> dict[str, Any]:
     """The route, its baseline and its stops as a GeoJSON FeatureCollection."""
     api = api_of(request)
-    stored = _stored(api, route_id)
+    stored = stored_route(api, route_id)
     m = stored.metrics_json
     return feature_collection(
-        _build_of(api, stored).data,
+        build_of(api, stored).data,
         edges=stored.edges,
         length_m=m["length_m"],
         time_s=m["time_s"],
@@ -474,9 +480,9 @@ def route_geojson(route_id: str, request: Request) -> dict[str, Any]:
 def validate(route_id: str, request: Request) -> ValidationOut:
     """The validator's report on a stored route, its stops re-derived from its request."""
     api = api_of(request)
-    stored = _stored(api, route_id)
+    stored = stored_route(api, route_id)
     _check_engine(stored)
-    loaded = _build_of(api, stored)
+    loaded = build_of(api, stored)
     masks = request_masks(loaded.spatial, loaded.data, stored.request)
     try:
         stops = resolve_stops(loaded.data, loaded.spatial, loaded.backend, stored.request, masks)

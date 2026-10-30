@@ -2,7 +2,9 @@
 
 `data` holds `GraphData` (every array of one build) and its validation; `store` writes and
 memory-maps the on-disk build and computes `graph_version`; `backend` is the `GraphBackend`
-protocol the engine programs against; `python_backend` is its pure-Python reference
-implementation; `spatial` projects and snaps stops and builds the leash and bubble masks;
-`testing` builds small graphs by hand for tests. How they work: `docs/reference/graph.md`.
+protocol the engine programs against, with the argument checks every backend shares;
+`python_backend` is its pure-Python reference implementation and `csr_backend` the production
+one, over the Numba kernels in `kernels`; `spatial` projects and snaps stops and builds the
+leash and bubble masks; `testing` builds small graphs by hand for tests. How they work:
+`docs/reference/graph.md`.
 """

@@ -1,17 +1,20 @@
 """The `GraphBackend` protocol: the graph searches the engine programs against.
 
 `docs/reference/graph.md`, **Backends**; `docs/PLAN.md` §3.10. M1's surface is three calls.
-`PythonBackend` is the reference implementation; the CSR + Numba backend (M2) is the
-production one and must return the same results on the same inputs.
+`PythonBackend` is the reference implementation; `CsrBackend`, over Numba kernels, is the
+production one and returns the same results on the same inputs of the declared types, byte for
+byte.
 
 Masks, exactly. A node may be entered iff `node_mask[v]` (default: every node) and not
 `forbid_nodes[v]`; `src` and `dst` obey the same rule, so a caller that forbids the route's
 used nodes clears the endpoints of the search from `forbid_nodes`. An edge may be used iff not
 `banned_edges[e]` and both its endpoints may be entered. Masks are bool arrays of length n
-(nodes) or m (edges); uint8 masks are the M2 kernels' internal business. `weights` are
-float64, one per edge, non-negative and not NaN. `PythonBackend` raises `ValueError` for a node
-id outside [0, n), a mask or weights of the wrong dtype or length, and NaN or negative weights;
-the M2 kernels may leave the weight scan to their callers.
+(nodes) or m (edges); the kernels' uint8 views of them are `CsrBackend`'s internal business.
+`weights` are float64, one per edge, non-negative and not NaN. Every backend raises
+`ValueError` for a node id outside [0, n), a mask or weights of the wrong dtype or length, and
+NaN or negative weights (the shared checks below). The weights' values are scanned once per
+array object and backend: a caller that changes a checked array in place is not checked again
+(the engine never does; a reweighted search makes a new array).
 
 `dijkstra` returns a cheapest path from `src` to `dst`, or None when `dst` cannot be reached
 at a cost of at most `max_cost`; the search never visits a node whose tentative cost exceeds
@@ -29,12 +32,15 @@ restricted to `edge_mask` (default: every edge); ties go to the component scipy 
 A `Path` is `(nodes, edges)`, `edges[k]` going from `nodes[k]` to `nodes[k + 1]`; from a node
 to itself it is that one node and no edge.
 
-The functions below are what every backend shares, so their errors and the SCC mask are the
-same whichever backend runs: `check_ends`, `check_weights`, `enterable` (the combined "may
-enter" mask, checking `node_mask` and `forbid_nodes`), `banned_mask` and `largest_scc_mask`.
+What follows the protocol is what every backend shares, so their errors, their scalars and
+the SCC mask are the same whichever backend runs: `check_ends`; `WeightCheck`, one per
+backend, which remembers the last weights array it passed; `as_cost`, which makes `max_cost`
+a Python float, so it compares in float64 on every backend; `enterable` (the combined "may
+enter" mask, checking `node_mask` and `forbid_nodes`); `banned_mask`; `largest_scc_mask`.
 """
 
 import math
+import weakref
 from typing import Protocol
 
 import numpy as np
@@ -91,12 +97,31 @@ def check_ends(data: GraphData, src: int, dst: int) -> None:
         raise ValueError(f"src, dst: node ids must lie in [0, {data.n})")
 
 
-def check_weights(data: GraphData, weights: NDArray[np.float64]) -> None:
-    """Raise `ValueError` unless `weights` are float64, one per edge, non-negative, not NaN."""
-    if weights.dtype != np.float64 or weights.shape != (data.m,):
-        raise ValueError(f"weights: need float64 of shape ({data.m},)")
-    if not (weights >= 0).all():
-        raise ValueError("weights: must be non-negative and not NaN")
+class WeightCheck:
+    """Raises `ValueError` unless `weights` are float64, one per edge, non-negative, not NaN.
+
+    The dtype and shape are checked on every call; the O(m) scan of the values only for an array
+    object other than the last one that passed (held by a weak reference, so a new array that
+    reuses a freed one's address is scanned too).
+    """
+
+    def __init__(self, data: GraphData) -> None:
+        self.m = data.m
+        self._passed: weakref.ref[NDArray[np.float64]] | None = None
+
+    def __call__(self, weights: NDArray[np.float64]) -> None:
+        if weights.dtype != np.float64 or weights.shape != (self.m,):
+            raise ValueError(f"weights: need float64 of shape ({self.m},)")
+        if self._passed is not None and self._passed() is weights:
+            return
+        if not (weights >= 0).all():
+            raise ValueError("weights: must be non-negative and not NaN")
+        self._passed = weakref.ref(weights)
+
+
+def as_cost(max_cost: float) -> float:
+    """`max_cost` as a Python float: a NumPy float32 would otherwise compare in float32."""
+    return float(max_cost)
 
 
 def enterable(

@@ -1,4 +1,8 @@
-"""PythonBackend against networkx (the oracle) and against the semantics in graph/backend.py."""
+"""The backends against networkx (the oracle), the semantics in graph/backend.py and each other.
+
+Every test of the reference's semantics runs on each backend (`backend_type`); the parity tests
+then ask `CsrBackend` for the reference's exact bytes, ties and Nones included.
+"""
 
 import math
 from dataclasses import dataclass
@@ -10,11 +14,19 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from worst_route.graph.backend import GraphBackend, Path
+from worst_route.graph.csr_backend import CsrBackend
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
 from worst_route.graph.testing import edge_id, grid_graph, make_graph
 
 EXAMPLES = settings(max_examples=200, deadline=None)
+BACKENDS = {"python": PythonBackend, "csr": CsrBackend}
+
+
+@pytest.fixture(scope="module", params=list(BACKENDS), ids=list(BACKENDS))
+def backend_type(request: pytest.FixtureRequest) -> type[PythonBackend] | type[CsrBackend]:
+    """Each backend in turn (module scope: hypothesis runs many examples per test)."""
+    return BACKENDS[request.param]
 
 
 @dataclass
@@ -142,8 +154,8 @@ def unique_cheapest_edges(case: Case, graph: nx.MultiDiGraph) -> list[int] | Non
 
 @EXAMPLES
 @given(cases(max_nodes=10, max_edges=30))
-def test_dijkstra_matches_networkx(case: Case) -> None:
-    backend = PythonBackend(case.g)
+def test_dijkstra_matches_networkx(backend_type, case: Case) -> None:
+    backend = backend_type(case.g)
     path = backend.dijkstra(case.src, case.dst, case.weights, **case.masks())
     graph = case.oracle()
     reachable = case.src in graph and case.dst in graph and nx.has_path(graph, case.src, case.dst)
@@ -213,8 +225,8 @@ def tie_rule_dijkstra(case: Case, max_cost: float) -> list[int] | None:
     ),
     st.sampled_from([0.0, 1.0, 1.5, 2.0, 3.0, math.inf]),
 )
-def test_dijkstra_follows_the_tie_rule(case: Case, max_cost: float) -> None:
-    path = PythonBackend(case.g).dijkstra(
+def test_dijkstra_follows_the_tie_rule(backend_type, case: Case, max_cost: float) -> None:
+    path = backend_type(case.g).dijkstra(
         case.src, case.dst, case.weights, max_cost=max_cost, **case.masks()
     )
     expected = tie_rule_dijkstra(case, max_cost)
@@ -254,9 +266,9 @@ def test_simple_paths_match_networkx(case: Case, max_depth: int, max_paths: int)
 
 @EXAMPLES
 @given(cases(max_nodes=12, max_edges=36))
-def test_largest_scc_matches_networkx(case: Case) -> None:
+def test_largest_scc_matches_networkx(backend_type, case: Case) -> None:
     edge_mask = None if case.banned is None else ~case.banned  # keep most edges
-    mask = PythonBackend(case.g).largest_scc_mask(edge_mask)
+    mask = backend_type(case.g).largest_scc_mask(edge_mask)
     graph = nx.DiGraph()
     graph.add_nodes_from(range(case.g.n))
     keep = np.ones(case.g.m, dtype=bool) if edge_mask is None else edge_mask
@@ -276,28 +288,28 @@ def test_python_backend_is_a_graph_backend() -> None:
     assert backend.data.n == 4
 
 
-def test_ties_go_to_the_first_node_settled_then_the_lowest_edge() -> None:
+def test_ties_go_to_the_first_node_settled_then_the_lowest_edge(backend_type) -> None:
     # A diamond 0 → {1, 2} → 3 with equal costs: node 1 settles before node 2, so 1 → 3 wins.
     nodes = [(0.0, 0.0), (100.0, 100.0), (100.0, -100.0), (200.0, 0.0)]
     g = make_graph(nodes, [(0, 1, 1.0), (0, 2, 1.0), (1, 3, 1.0), (2, 3, 1.0)])
-    path = PythonBackend(g).dijkstra(0, 3, g.edge_length_m.astype(np.float64))
+    path = backend_type(g).dijkstra(0, 3, g.edge_length_m.astype(np.float64))
     assert path is not None
     assert path[0].tolist() == [0, 1, 3]
     assert path[1].tolist() == [edge_id(g, 0, 1), edge_id(g, 1, 3)]
 
 
-def test_equal_parallel_edges_take_the_lower_id() -> None:
+def test_equal_parallel_edges_take_the_lower_id(backend_type) -> None:
     g = make_graph([(0.0, 0.0), (100.0, 0.0)], [(0, 1, 5.0), (0, 1, 5.0)])
-    path = PythonBackend(g).dijkstra(0, 1, g.edge_length_m.astype(np.float64))
+    path = backend_type(g).dijkstra(0, 1, g.edge_length_m.astype(np.float64))
     assert path is not None and path[1].tolist() == [0]
 
 
-def test_a_later_equal_cost_never_replaces_a_predecessor() -> None:
+def test_a_later_equal_cost_never_replaces_a_predecessor(backend_type) -> None:
     # 0 → 2 directly (2) and 0 → 1 → 2 (1 + 1): 2 is first reached by the direct edge.
     g = make_graph(
         [(0.0, 0.0), (50.0, 50.0), (100.0, 0.0)], [(0, 1, 1.0), (0, 2, 2.0), (1, 2, 1.0)]
     )
-    path = PythonBackend(g).dijkstra(0, 2, g.edge_length_m.astype(np.float64))
+    path = backend_type(g).dijkstra(0, 2, g.edge_length_m.astype(np.float64))
     assert path is not None
     assert path[0].tolist() == [0, 2] and path[1].tolist() == [edge_id(g, 0, 2)]
 
@@ -310,8 +322,8 @@ def nodes_of(path: Path | None) -> list[int] | None:
     return None if path is None else path[0].tolist()
 
 
-def test_forbidden_nodes_and_banned_edges_are_avoided() -> None:
-    b = PythonBackend(GRID)
+def test_forbidden_nodes_and_banned_edges_are_avoided(backend_type) -> None:
+    b = backend_type(GRID)
     forbid = np.zeros(9, dtype=bool)
     forbid[[1, 4]] = True
     assert nodes_of(b.dijkstra(0, 2, LENGTHS, forbid_nodes=forbid)) == [0, 3, 6, 7, 8, 5, 2]
@@ -356,16 +368,16 @@ def test_source_equals_destination() -> None:
     assert [(p[0].tolist(), p[1].tolist()) for p in paths] == [([4], [])]
 
 
-def test_max_cost_cuts_the_search() -> None:
-    b = PythonBackend(GRID)
+def test_max_cost_cuts_the_search(backend_type) -> None:
+    b = backend_type(GRID)
     assert nodes_of(b.dijkstra(0, 8, LENGTHS, max_cost=400.0)) is not None
     assert b.dijkstra(0, 8, LENGTHS, max_cost=399.9) is None
     assert nodes_of(b.dijkstra(0, 1, LENGTHS, max_cost=100.0)) == [0, 1]
 
 
-def test_one_way_streets_are_respected() -> None:
+def test_one_way_streets_are_respected(backend_type) -> None:
     g = grid_graph(2, 3, 100.0, oneway_rows="+-", oneway_cols="...")
-    b = PythonBackend(g)
+    b = backend_type(g)
     lengths = g.edge_length_m.astype(np.float64)
     assert nodes_of(b.dijkstra(0, 2, lengths)) == [0, 1, 2]
     assert nodes_of(b.dijkstra(2, 0, lengths)) == [2, 5, 4, 3, 0]
@@ -420,14 +432,105 @@ def test_simple_paths_depth_and_count_limits() -> None:
     assert b.simple_paths_dfs(0, 8, max_depth=100, max_paths=0) == []
 
 
-def test_largest_scc_drops_one_way_stubs_and_masked_edges() -> None:
+def test_largest_scc_drops_one_way_stubs_and_masked_edges(backend_type) -> None:
     # The 2 × 2 square 0-1-3-2 two-way, a one-way stub 4 → 0 and a dead end 1 → 5.
     nodes = [(0.0, 0.0), (100.0, 0.0), (0.0, 100.0), (100.0, 100.0), (-100.0, 0.0), (200.0, 0.0)]
     two_way = [(0, 1), (1, 3), (3, 2), (2, 0)]
     edges = [(a, b, 100.0) for a, b in two_way] + [(b, a, 100.0) for a, b in two_way]
     g = make_graph(nodes, [*edges, (4, 0, 100.0), (1, 5, 100.0)])
-    b = PythonBackend(g)
+    b = backend_type(g)
     assert b.largest_scc_mask().tolist() == [True, True, True, True, False, False]
     keep = np.ones(g.m, dtype=bool)
     keep[[edge_id(g, 0, 1), edge_id(g, 0, 2)]] = False  # node 0 can no longer be left
     assert b.largest_scc_mask(keep).tolist() == [False, True, True, True, False, False]
+
+
+def assert_same(paths: list[Path | None]) -> None:
+    """Every backend's answer is the reference's, byte for byte (None for None)."""
+    reference, *others = paths
+    for path in others:
+        if reference is None:
+            assert path is None
+            continue
+        assert path is not None
+        for ours, theirs in zip(path, reference, strict=True):
+            assert ours.dtype == theirs.dtype == np.int32
+            assert ours.tobytes() == theirs.tobytes()
+
+
+@settings(max_examples=300, deadline=None)
+@given(
+    # dense graphs and weights in {0, 0.5, 1, 2, inf}: equal costs everywhere, zero and
+    # unreachable-by-weight edges included; src == dst included
+    cases(
+        max_nodes=10,
+        max_edges=40,
+        edges_per_node=2,
+        weight=st.sampled_from([0.0, 0.5, 1.0, 2.0, math.inf]),
+    ),
+    st.sampled_from([-1.0, 0.0, 1.0, 1.5, 2.0, 3.0, math.inf]),
+)
+def test_the_backends_agree(case: Case, max_cost: float) -> None:
+    assert_same(
+        [
+            make(case.g).dijkstra(
+                case.src, case.dst, case.weights, max_cost=max_cost, **case.masks()
+            )
+            for make in BACKENDS.values()
+        ]
+    )
+
+
+def test_the_backends_agree_on_a_town() -> None:
+    # A 30 × 30 grid with one-way rows and columns, weights of 1, 2 or 3 (ties everywhere),
+    # random masks and budgets: larger heaps and longer paths than the hypothesis graphs.
+    g = grid_graph(30, 30, 100.0, oneway_rows="+.-." * 7 + "..", oneway_cols=".+-" * 10)
+    rng = np.random.default_rng(0)
+    weights = rng.integers(1, 4, size=g.m).astype(np.float64)
+    backends = [make(g) for make in BACKENDS.values()]
+    found = 0
+    for _ in range(300):
+        src, dst = (int(v) for v in rng.integers(g.n, size=2))
+        node_mask = rng.random(g.n) < 0.95
+        forbid = rng.random(g.n) < 0.05
+        forbid[[src, dst]] = False
+        banned = rng.random(g.m) < 0.05
+        max_cost = float(rng.choice([math.inf, 30.0, 60.0]))
+        paths = [
+            b.dijkstra(
+                src,
+                dst,
+                weights,
+                node_mask=node_mask,
+                forbid_nodes=forbid,
+                banned_edges=banned,
+                max_cost=max_cost,
+            )
+            for b in backends
+        ]
+        assert_same(paths)
+        found += paths[0] is not None
+    assert 100 < found < 300  # both kinds of answer were compared
+
+
+def test_a_float32_budget_compares_in_float64(backend_type) -> None:
+    # 0.1000000015 > float32(0.1) = 0.10000000149011612 in float64, but not in float32
+    g = make_graph([(0.0, 0.0), (100.0, 0.0)], [(0, 1, 1.0)])
+    weights = np.array([0.1000000015])
+    b = backend_type(g)
+    assert b.dijkstra(0, 1, weights, max_cost=np.float32(0.1)) is None
+    assert nodes_of(b.dijkstra(0, 1, weights, max_cost=np.float32(0.25))) == [0, 1]
+    assert nodes_of(b.dijkstra(0, 1, weights, max_cost=0.1000000015)) == [0, 1]
+    assert b.dijkstra(0, 0, weights, max_cost=np.float32(-0.5)) is None
+
+
+def test_weights_are_scanned_once_per_array(backend_type) -> None:
+    b = backend_type(GRID)
+    weights = LENGTHS.copy()
+    assert b.dijkstra(0, 8, weights) is not None
+    weights[3] = np.nan  # changed in place after it passed: not scanned again, by design
+    assert b.dijkstra(0, 8, weights) is not None
+    with pytest.raises(ValueError, match="weights: must be non-negative and not NaN"):
+        b.dijkstra(0, 8, weights.copy())  # a new array is
+    with pytest.raises(ValueError, match="weights: must be non-negative and not NaN"):
+        backend_type(GRID).dijkstra(0, 8, weights)  # and so is the array on another backend

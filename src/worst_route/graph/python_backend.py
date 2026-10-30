@@ -18,9 +18,10 @@ from numpy.typing import NDArray
 
 from worst_route.graph.backend import (
     Path,
+    WeightCheck,
+    as_cost,
     banned_mask,
     check_ends,
-    check_weights,
     enterable,
     largest_scc_mask,
 )
@@ -32,6 +33,7 @@ class PythonBackend:
 
     def __init__(self, data: GraphData) -> None:
         self.data = data
+        self._check_weights = WeightCheck(data)
         self._out_indptr: list[int] = data.out_indptr.tolist()
         self._out_edges: list[int] = data.out_edges.tolist()
         self._tail: list[int] = data.edge_u.tolist()
@@ -49,10 +51,11 @@ class PythonBackend:
         max_cost: float = math.inf,
     ) -> Path | None:
         """A cheapest path src → dst within the masks and `max_cost`, or None."""
-        check_weights(self.data, weights)
+        self._check_weights(weights)
         check_ends(self.data, src, dst)
         enter = enterable(self.data, node_mask, forbid_nodes)
         banned = banned_mask(self.data, banned_edges)
+        max_cost = as_cost(max_cost)
         if max_cost < 0 or not (enter[src] and enter[dst]):
             return None
         may_enter, is_banned, weight = enter.item, banned.item, weights.item

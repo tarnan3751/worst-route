@@ -105,7 +105,8 @@ class SpatialIndex:
                 lat_v, lon_v = float(self.data.node_lat[v]), float(self.data.node_lon[v])
                 return Snap(node=v, moved_m=moved, lat=lat_v, lon=lon_v, note=note)
         raise SnapError(
-            f"no node within {max_radius_m:.0f} m of ({lat}, {lon}) can be a {role} stop"
+            f"no node within {max_radius_m:.0f} m of ({lat}, {lon}) can be "
+            f"{'an' if role == 'end' else 'a'} {role} stop"
         )
 
     def leash_mask(self, stops_xy: NDArray[np.float64], leash_m: float) -> NDArray[np.bool_]:

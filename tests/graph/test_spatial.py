@@ -161,6 +161,13 @@ def test_nothing_qualifying_raises(kwargs: dict, where: tuple[float, float]) -> 
         INDEX.snap(*at(*where), "via", **kwargs)
 
 
+def test_the_error_names_the_role() -> None:
+    with pytest.raises(SnapError, match="can be an end stop$"):
+        INDEX.snap(*at(100.0, 6000.0), "end")
+    with pytest.raises(SnapError, match="can be a start stop$"):
+        INDEX.snap(*at(100.0, 6000.0), "start")
+
+
 GRID = grid_graph(5, 5, 100.0)  # node r * 5 + c at (100 c, 100 r) from GRID_ORIGIN
 GRID_INDEX = SpatialIndex(GRID)
 

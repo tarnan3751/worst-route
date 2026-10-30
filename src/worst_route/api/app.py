@@ -3,8 +3,10 @@
 `create_app(settings)` loads the region's build (memory-mapped, `graph.loader`) when it is
 called, so `worst-route serve` fails before it listens when the build is missing; it opens the
 route store, builds the geocoding service (Nominatim, with its cache `geocode.sqlite` beside
-the route store; none when the geocoder is `none`; a test passes its own) and mounts the
-endpoints (`routes_api`, `geocode_api`). Its lifespan starts and stops the job manager, and
+the route store; none when the geocoder is `none`; a test passes its own), loads the region's
+places index (`presentation.places`; none when `worst-route aux places` has not written it) and
+mounts the endpoints (`routes_api`, `geocode_api`, `share_api`, whose images are cached in
+`share/` beside the route store). Its lifespan starts and stops the job manager, and
 closes the geocoder's client. `ApiSettings` says which build, which backend, where the store
 is, the job limits, and the geocoder: which, at what URL, with what contact in its User-Agent
 (`geocoder_user_agent`).
@@ -16,6 +18,7 @@ Every error answers an `ErrorBody` (`{code, message, ...}`): an endpoint refuses
 an unknown path or method is `NOT_FOUND` / `METHOD_NOT_ALLOWED`.
 """
 
+import asyncio
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -29,7 +32,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from worst_route import __version__, config
-from worst_route.api import geocode_api, routes_api
+from worst_route.api import geocode_api, routes_api, share_api
 from worst_route.api.jobs import JobManager, JobSettings
 from worst_route.api.routes_api import ApiError
 from worst_route.api.schemas import ErrorBody
@@ -40,6 +43,7 @@ from worst_route.geocode.limiter import RateLimiter
 from worst_route.geocode.nominatim import NominatimGeocoder, user_agent
 from worst_route.geocode.service import GeocodeService
 from worst_route.graph.loader import Loaded, load_build
+from worst_route.presentation.places import PlaceIndex
 
 
 @dataclass(frozen=True)
@@ -66,6 +70,9 @@ class Api:
     store: RouteStore
     jobs: JobManager
     geocode: GeocodeService | None  # None when the geocoder is "none"
+    places: PlaceIndex | None  # None when the region has no places index
+    share_dir: Path  # the share images' cache
+    share_locks: dict[str, asyncio.Lock] = field(default_factory=dict)  # by route, while rendering
 
 
 def geocoder_user_agent(settings: ApiSettings) -> str:
@@ -102,9 +109,13 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
                 await service.aclose()
 
     app = FastAPI(title="worst-route", version=__version__, lifespan=lifespan)
-    app.state.api = Api(settings, {settings.region: loaded}, store, jobs, service)
+    places = PlaceIndex.load(settings.region, settings.data_dir)
+    share_dir = store_path.parent / "share"
+    builds = {settings.region: loaded}
+    app.state.api = Api(settings, builds, store, jobs, service, places, share_dir)
     app.include_router(routes_api.router)
     app.include_router(geocode_api.router)
+    app.include_router(share_api.router)
 
     @app.exception_handler(ApiError)
     async def refused(request: Request, error: ApiError) -> JSONResponse:

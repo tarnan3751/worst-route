@@ -38,14 +38,15 @@ Claude: Python for the pipeline, engine, API and rendering; TypeScript + MapLibr
 - **Engine** (In progress): a shortest route through the stops, then a seeded detour-splice
   heuristic that makes it worse under a pluggable objective, with a validator that proves the
   result legal. `docs/PLAN.md` §3. Built for M1 with the distance mode, and searched with the
-  CSR + Numba backend since M2's first step; target modes and the other modes are later
-  milestones.
+  CSR + Numba backend since M2's first step; targets by ratio or duration since M2's fourth;
+  the other modes are later milestones.
 - **API and frontend** (In progress): FastAPI jobs with Server-Sent Events progress, a MapLibre map
   that shows the route getting worse live, settings, reroll, make it worse. `docs/PLAN.md` §4–5.
-  The API is built for the distance mode (`docs/reference/api.md`); the frontend is next.
+  The API is built for the distance mode and its targets (`docs/reference/api.md`); the
+  frontend is next.
 - **Modes** (Planned): longest distance, slowest time, never/only turn left, collect toll booths /
-  rail crossings / roundabouts / bridges, brand pilgrimage, alphabet route, hard mode; targets
-  by ratio or duration.
+  rail crossings / roundabouts / bridges, brand pilgrimage, alphabet route, hard mode (targets
+  by ratio or duration are built, for the distance mode).
 - **Presentation** (Planned): directions, stat toasts, comparisons, states and towns, share image.
 - **Scale** (Planned): Portland → Oregon → national at a tier to be decided at M5.
 
@@ -100,14 +101,19 @@ bans lower-class roads away from the stops), snapping with the re-snap fallback,
 and the seed route with node-disjoint legs (and loops for round trips), searches that see the
 transition tables and avoid driving both carriageways of a road, the three detour strategies, the worsen loop with its ambition radius and budget, the objective interface with
 the distance mode, the validator that proves a route from the original OSM ids, route files,
-and `worst-route plan` / `validate`, which run on any saved build. A golden route freezes the
-engine's output on a test lattice.
+and `worst-route plan` / `validate`, which run on any saved build. Inefficiency targets are built
+too (M2 step 4): a ratio to the baseline or a duration, reached within ±2 % by growing, or by
+shrinking a route already past it, through `plan --target` (and `--base` to continue a saved
+route) and the API's `target`; on Portland, Powell's → Reed reaches 20× or 3 h in under half a
+second and 9 h in about a second, and a 62.43× route shrinks to 30.58× in 5 s. Golden routes
+freeze the engine's output on a test lattice, a max run and a run to each kind of target.
 The API is built (`docs/reference/api.md`, M2 step 2): `worst-route serve` runs a FastAPI app
 that plans each request as a job in a worker process of its own, streams the route as it grows
 over Server-Sent Events (splices, periodic snapshots, resumable with `Last-Event-ID`), stores
 finished routes in sqlite, continues a stored route ("make it worse"), and on a cancel, a time
-limit or a closed stream stores the route so far once the validator passes it. On Portland,
-Powell's → Reed streams to 62.4× in 11.8 s through it, the engine's own result for that seed.
+limit or a closed stream stores the best route so far once the validator passes it. On
+Portland, Powell's → Reed streams to 62.4× in 11.8 s through it, the engine's own result for
+that seed; a 9 h target from the same 13-minute drive ends within ±2 % in 1.8 s.
 The workflow scaffolding exists: `CLAUDE.md`, the four agents,
 `tools/gates.sh`, `tools/land_series.sh`, this overview, `docs/PLAN.md`. The M1 bootstrap is
 built: the uv project (Python 3.12, `src` layout, the M1 dependencies), the gate running ruff,
@@ -121,7 +127,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 | Milestone | Status | Summary |
 |---|---|---|
 | M1 — Portland, distance mode, CLI | Built | bootstrap, every pipeline step (download to qa; Portland's build passes QA), the graph package and the engine (snapping, seed route, transition-aware searches, splice loop, distance objective, validator, `worst-route plan` / `validate`). The acceptance run (`docs/PLAN.md` §7 M1 step 9; `uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` on build e4b3b4ad90db, `graph_version` 45f650e868fa, the reference backend: 20 random Portland pairs 3–15 km apart): all 20 plan and the validator passes all 20; the median ratio is 21.5× (3.3–45.2×); seeds 1 and 2 share 10–16% of their edges (Jaccard on 5 pairs, all < 0.3); the cul-de-sac via moves 86 m to the nearest through street with its note. Powell's → Reed gives 58–62×, PDX → Beaverton 7.3× (`docs/reference/engine.md`, **On Portland**) |
-| M2 — API + map, live growth | In progress | CSR + Numba backend built, its transition-aware kernels included (the default on every build; byte-identical to the reference: on Portland the acceptance's 20 routes and Powell's → Reed reproduce exactly, at 7,200–8,200 attempts/s); the API built (jobs in worker processes, SSE progress, the route store, make it worse, `worst-route serve`); remaining: MapLibre frontend; targets by ratio and duration |
+| M2 — API + map, live growth | In progress | CSR + Numba backend built, its transition-aware kernels included (the default on every build; byte-identical to the reference: on Portland the acceptance's 20 routes and Powell's → Reed reproduce exactly, at 7,200–8,200 attempts/s); the API built (jobs in worker processes, SSE progress, the route store, make it worse, `worst-route serve`); targets by ratio and duration built (engine, CLI `--target`/`--base`, API), a 13-minute Portland drive to 9 h within ±2 % in 1.8 s over the API; remaining: MapLibre frontend, the acceptance |
 | M3 — Modes and constraints | Planned | turn-aware kernel, never/only-left; slowest time; collectibles; brands; hard mode; the search honouring stage B transitions (built at M1); alphabet search |
 | M4 — Presentation | Planned | directions, stats, toasts, comparisons, share image, geocoding proxy, share links |
 | M5 — Scaling up | Planned | Oregon; array-based simplify/consolidate; US at T1; the national decision gate; public-hosting prep |
@@ -219,6 +225,25 @@ brief):
   attempts, so the 30 s budget is the limit.
 - **Three detour strategies** (waypoint, random-weight Dijkstra, local exhaustive) mixed by the
   objective; strict improvement for max modes; a stopping rule for target modes.
+- **Targets as built for M2** (2026-10-30, at the targets plan): `Target(kind, value)` with
+  `max`, `ratio` (length over the baseline's, more than 1; not for a round trip) and `duration`
+  (`time_s`, at most 7 days), reached within ±2 % (`TARGET_TOLERANCE`); a `Goal` replaces
+  `Objective.better` and owns "better" and "done" by values, so the API's follower applies it
+  too. Growing, a detour is taken when it gains and its value rises to at most the band's top;
+  shrinking, when it loses and its value falls to at least the band's bottom, with the radius at
+  its floor; for a duration both the gain's sign and the value's direction are required. The
+  smallest overshooting detour since the last splice is taken at the end of a cycle that
+  accepted nothing, as an attempt; the run then shrinks; "converged" is 3 empty cycles in every
+  phase; the best route is the closest (the later on a tie), and the API stores it, with a
+  snapshot before `done` when the client drew another. `metrics.target` only for ratio and
+  duration; no engine-version bump; `Objective.target_value` kept; `plan --base` takes the
+  stops, tier, leash and objective from its file. Unfrozen at the plan's approval and kept for
+  the Portland 62× → 30× shrink (34.59× converged without them, 30.58× with): while shrinking,
+  runs of 6 edges on average (at most 24) and the local-exhaustive paths that lose ranked by
+  closeness to the band; max and growing runs are byte for byte unchanged. At the review (same
+  day): the API compares the drawn and stored routes by edges (parallel edges), types `done`'s
+  target, refuses a ratio target for a round trip first (`field: "target"`), and answers a body
+  with `Infinity` or `NaN` with a 422.
 - **The engine's searches and loop as built for M1** (2026-10-30, at the engine-fixes plan and
   its review): on a build with transition rows every path is searched over edge states
   (`dijkstra_edges`, the DFS with turn checks), on one without by the node-state search, so the

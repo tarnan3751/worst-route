@@ -11,10 +11,11 @@
     GET    /routes/{id}/geojson        its FeatureCollection
     POST   /routes/{id}/validate       the validator's report on it
 
-`POST /jobs` refuses before a job exists: the objective, the target and the budget are checked,
-then the job limit, then for "make it worse" (`base_route_id`) the base route (its build,
-engine and stops, tier and leash, which the request may leave out), then each stop against the
-region's bbox (`meta.params.bbox`, else the nodes' extent), then the pre-flight
+`POST /jobs` refuses before a job exists: a ratio target for a round trip first, then the
+objective and the budget (the target's bounds are the body's), then the job limit, then for
+"make it worse" (`base_route_id`) the base route (its build, engine and stops, tier and leash,
+which the request may leave out; a ratio target for a base round trip too), then each stop
+against the region's bbox (`meta.params.bbox`, else the nodes' extent), then the pre-flight
 (`jobs.prepare`: snapping and the re-snap fallback, in a worker thread), and for a base route
 `plan.check_base` on the pre-flight's stops and masks (`BASE_ROUTE_MISMATCH`). The errors are
 `ApiError`s, answered as `ErrorBody`: 422 `INVALID_REQUEST`, `UNKNOWN_REGION`,
@@ -74,7 +75,7 @@ from worst_route.engine.objectives import OBJECTIVES
 from worst_route.engine.plan import BaseRouteMismatch, check_base
 from worst_route.engine.request import RouteRequest, request_masks
 from worst_route.engine.seed_route import resolve_stops
-from worst_route.engine.snap import StopUnreachable, role_of
+from worst_route.engine.snap import StopUnreachable, is_round_trip, role_of
 from worst_route.engine.validator import validate_route
 from worst_route.graph.loader import BuildNotFound, Loaded, load_build
 from worst_route.graph.spatial import SnapError
@@ -219,6 +220,8 @@ def snap(body: SnapIn, request: Request) -> SnapOut:
 async def create_job(body: RouteRequestIn, request: Request) -> JobCreated:
     """Start planning a route; its events are at `events_url`."""
     api = _api(request)
+    if body.stops is not None:
+        _check_round_trip(body, [(s.lat, s.lon) for s in body.stops])
     loaded = _region(api, body.region)
     if body.objective in PLANNED_OBJECTIVES:
         message = f"the {body.objective} objective is not built yet; distance is"
@@ -226,9 +229,6 @@ async def create_job(body: RouteRequestIn, request: Request) -> JobCreated:
     if body.objective not in OBJECTIVES:
         message = f"unknown objective {body.objective!r}; known: {', '.join(OBJECTIVES)}"
         raise ApiError(422, "INVALID_REQUEST", message)
-    if body.target.kind != "max":
-        message = f"a {body.target.kind} target is not built yet; max is"
-        raise ApiError(422, "NOT_YET", message, field="target")
     if body.budget_s > BUDGET_MAX_S:
         message = f"a budget of {body.budget_s:g} s is over the {BUDGET_MAX_S:g} s allowed"
         raise ApiError(422, "BUDGET_TOO_LARGE", message, max_s=BUDGET_MAX_S)
@@ -277,6 +277,7 @@ def _continuing(
         )
         raise ApiError(422, "BUILD_MISMATCH", message)
     _check_engine(base)
+    _check_round_trip(body, base.request.stops)
     given = body.model_fields_set
     if body.stops is not None and [(s.lat, s.lon) for s in body.stops] != base.request.stops:
         raise ApiError(422, "BASE_ROUTE_MISMATCH", "the stops differ", field="stops")
@@ -291,6 +292,13 @@ def _continuing(
         seed=seed,
     )
     return RouteRequestIn.model_validate(values)
+
+
+def _check_round_trip(body: RouteRequestIn, stops: list[tuple[float, float]]) -> None:
+    """Refuse a ratio target for a round trip, whose baseline is 0 m."""
+    if body.target.kind == "ratio" and is_round_trip(stops):
+        message = "a round trip has no ratio target: its baseline is 0 m"
+        raise ApiError(422, "INVALID_REQUEST", message, field="target")
 
 
 def _check_engine(stored: StoredRoute) -> None:
@@ -409,6 +417,7 @@ def route(route_id: str, request: Request) -> RouteDocument:
             time_ratio=m["time_s"] / baseline_time_s if baseline_time_s > 0 else None,
             departure=departure,
             arrival=arrival,
+            target=m.get("target"),
         ),
         run=Run(**stored.run),
         validation=Validation(ok=True, checked_at=stored.created),

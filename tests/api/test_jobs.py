@@ -14,9 +14,22 @@ from worst_route.api.sse import Event, path_points
 from worst_route.api.worker import JobSpec, RouteArrays
 from worst_route.engine.plan import plan_route
 from worst_route.engine.request import request_masks
+from worst_route.engine.target import Target
 from worst_route.engine.validator import validate_route
 
-from .support import BIG, GRID, collect, loaded, manager, request, slow_splices, submit, until
+from ..engine.graphs import lattice
+from .support import (
+    BIG,
+    GRID,
+    collect,
+    loaded,
+    manager,
+    request,
+    save_build,
+    slow_splices,
+    submit,
+    until,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -164,6 +177,73 @@ async def test_cancel_stores_the_route_so_far_which_its_attempts_reproduce(
         assert replayed.route.nodes.tobytes() == saved.nodes.tobytes()
         await m.cancel(job)  # a second cancel changes nothing
         assert job.stopped_because == "cancelled"
+
+
+# Every corner-to-corner path of a 5 × 5 town is 800 m + a multiple of 200 m, and a 2.1 ×
+# target (1,646-1,714 m) holds none: a run grows to 1,600 m, overshoots to 1,800 m after a cycle
+# with nothing smaller, cannot shrink back into the band, and keeps 1,600 m as its best.
+TOWN = lattice(5, 5, rounded_lonlat=True)
+OVERSHOOT = Target(kind="ratio", value=2.1)
+
+
+async def test_a_best_route_the_client_did_not_draw_last_comes_as_a_snapshot(data: Path) -> None:
+    save_build(data, TOWN, "town", latest=False)
+    async with manager(data) as m:
+        build = loaded(data, "town")
+        job = submit(m, build, request(TOWN, [0, 24], max_iterations=10**6, target=OVERSHOOT))
+        events = await collect(m.subscribe(job))
+        done = json.loads(events[-1].data)
+        assert done["stopped_because"] == "converged"
+        assert names(events)[-3:] == ["progress", "snapshot", "done"]
+        assert json.loads(events[-3].data)["metrics"]["length_m"] == 1800.0
+        assert json.loads(events[-2].data)["metrics"]["length_m"] == 1600.0
+        assert done["metrics"]["length_m"] == 1600.0
+        assert done["metrics"]["target"]["achieved"] == 2.0
+        client = Client()
+        for event in events:
+            client.apply(event)
+        saved = validated(m, data, done["route_id"], "town")
+        assert (client.coords, client.index) == path_points(build.data, saved.edges)
+        assert job.route is not None and job.route.nodes.tobytes() == saved.nodes.tobytes()
+        late = await collect(m.subscribe(job))  # a late subscriber draws the stored route too
+        assert names(late)[-2:] == ["snapshot", "done"]
+        assert json.loads(late[-2].data)["metrics"]["length_m"] == 1600.0
+
+
+async def test_cancel_stores_the_closest_route_so_far(
+    data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    save_build(data, TOWN, "town", latest=False)
+    real = worker_module.plan_route
+
+    def held(*args: Any, on_progress: Any = None, **kwargs: Any) -> Any:
+        def progress(event: Any, baseline: Any) -> None:
+            on_progress(event, baseline)
+            if event.metrics.length_m == 1800.0:
+                time.sleep(3)  # hold the job just after its overshoot, for the cancel
+
+        return real(*args, on_progress=progress, **kwargs)
+
+    monkeypatch.setattr(worker_module, "plan_route", held)
+    async with manager(data) as m:
+        build = loaded(data, "town")
+        req = request(TOWN, [0, 24], max_iterations=10**6, target=OVERSHOOT)
+        job = submit(m, build, req)
+        subscription = m.subscribe(job)
+        await until(lambda: job.route is not None and job.route.metrics.length_m == 1800.0)
+        await m.cancel(job)
+        events = await collect(subscription)
+        assert names(events)[-2:] == ["snapshot", "done"]
+        done = json.loads(events[-1].data)
+        assert done["stopped_because"] == "cancelled" and done["metrics"]["length_m"] == 1600.0
+        assert done["metrics"]["target"]["within_tolerance"] is False
+        saved = validated(m, data, done["route_id"], "town")
+        assert saved.metrics.length_m == 1600.0 and saved.metrics_json["target"]["achieved"] == 2.0
+        # its attempts end at the overshoot, and planning that many returns the same best
+        again = req.model_copy(update={"max_iterations": saved.run["attempts"]})
+        replayed = real(build.data, again, backend=build.backend, spatial=build.spatial)
+        assert replayed.run.events[-1].metrics.length_m == 1800.0
+        assert replayed.route.nodes.tobytes() == saved.nodes.tobytes()
 
 
 async def test_jobs_wait_in_the_queue_and_too_many_are_refused(

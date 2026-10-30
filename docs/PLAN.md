@@ -384,10 +384,10 @@ def worsen(G, route, objective, budget, rng, mask) -> Iterator[ProgressEvent]:
 `accept()`:
 
 - **maximise** modes: strict improvement `delta > 0`.
-- **target** modes (ratio or duration): accept if the new value does not overshoot `target × 1.02`; when it would, shrink `radius` and retry; when within `[0.98, 1.02] × target`, stop. If the route is above target (after "make it worse" with a new, smaller target) run-replacement with a *shorter* detour (`delta < 0`) is accepted until under target.
+- **target** modes (ratio or duration): accept if the new value does not overshoot `target × 1.02`; when it would, shrink `radius` and retry; when within `[0.98, 1.02] × target`, stop. If the route is above target (after "make it worse" with a new, smaller target) run-replacement with a *shorter* detour (`delta < 0`) is accepted until under target. As built (M2 step 4; `docs/reference/engine.md`, **Targets**): a `Goal` owns "better" and "done" in place of `objective.better`, by the route's value (the ratio, or `time_s`); growing, a detour is taken when it gains and its value rises to at most the band's top (an overshoot is a failure, so the radius halves as after any 20 failures); shrinking, when it loses and its value falls to at least the band's bottom, with the radius at its floor, runs of 6 edges on average (at most 24) and the local-exhaustive paths that lose ranked by closeness to the band; the smallest overshooting detour is taken when a whole cycle accepts nothing, then the run shrinks; the run stops with `"target"` within the band, and the best route is the one closest to the target.
 - Optional later: simulated-annealing acceptance for run replacements to escape local optima. Not in M1.
 
-`budget`: wall-clock seconds (default 20, max 120), max iterations, and a no-improvement cutoff; the run reports `stopped_because` = `budget` (seconds or iterations) or `converged`. As built, the run goes in cycles: `fail_streak > 400 and radius == r_min` ends a cycle, which resets the radius to `objective.initial_radius`, and the run is `converged` only when 3 cycles in a row accept nothing. Tuned on the M1 acceptance (`docs/reference/engine.md`, **The loop**): a run of edges is 1 + geometric (mean 3, at most 12), not up to K=4, and with probability 0.3 a window starts at one of the 5 route edges with the most unused active nodes near. Always returns the best route so far. `ProgressEvent` carries the splice so the client can apply it to its own copy; every 50th event carries a full snapshot for resync.
+`budget`: wall-clock seconds (default 20, max 120), max iterations, and a no-improvement cutoff; the run reports `stopped_because` = `budget` (seconds or iterations), `converged`, or `target` (a target run within its band). As built, the run goes in cycles: `fail_streak > 400 and radius == r_min` ends a cycle, which resets the radius to `objective.initial_radius`, and the run is `converged` only when 3 cycles in a row accept nothing. Tuned on the M1 acceptance (`docs/reference/engine.md`, **The loop**): a run of edges is 1 + geometric (mean 3, at most 12), not up to K=4, and with probability 0.3 a window starts at one of the 5 route edges with the most unused active nodes near. Always returns the best route so far. `ProgressEvent` carries the splice so the client can apply it to its own copy; every 50th event carries a full snapshot for resync.
 
 **Why routes do not converge to "the same giant snake":** the leash and tier bound the arena, the ambition radius bounds each detour, and both the segment pick and the waypoint sample are seeded. Two seeds on the same request should give edge sets with Jaccard similarity < 0.3; this is a test (§8).
 
@@ -576,7 +576,7 @@ The engine's `RouteRequest` field for field, under the engine's names (the stops
 ```
 
 - `objective` ∈ `distance | time | collect | brand | alphabet`; only `distance` is built (the others are `NOT_YET`). M3 adds the collect item, the brand key and the turn constraints.
-- `target.kind` ∈ `max | ratio | duration` with `"value": 50` (×) or `"seconds": 32400`; only `max` is built until M2 step 4.
+- `target.kind` ∈ `max | ratio | duration` with `"value": 50` (×) or `"seconds": 32400`, reached within ±2 %; built in M2 step 4 (`docs/reference/api.md`).
 - `tier` ∈ `auto | T0..T4`; `leash_km` ∈ `auto | number` (at most 150); `budget_s` at most 120; `max_iterations` defaults to 1,000,000 here, so the seconds budget ends a run (the CLI keeps 5,000).
 - `base_route_id` set → "Make it worse": the job starts from that route (its stops, tier and leash, which the request may leave out; the objective, target, budget and seed may differ). `seed` omitted → random, returned in the response.
 
@@ -602,7 +602,7 @@ data: {"iteration":412,"elapsed_s":2.8,"score":38210,"metrics":{"length_m":38210
        "splices":[{"i":17,"j":18,"node_count":9,"coords":[[lon,lat],...],"node_index":[0,4,...]}, ...]}
 
 event: done
-data: {"route_id":"…","stopped_because":"budget|converged|cancelled|timeout","metrics":{...}}
+data: {"route_id":"…","stopped_because":"target|budget|converged|cancelled|timeout","metrics":{...}}
 
 event: error
 data: {"code":"STOP_UNREACHABLE_WITHOUT_REPEAT","leg":[0,1],"stop_index":1,"message":"..."}
@@ -770,7 +770,7 @@ Deliverable: `worst-route plan --region portland --from 45.5231,-122.6765 --to 4
 1. `CSRBackend` + Numba kernels (node-state Dijkstra, bounded DFS, and the transition-aware edge-state Dijkstra and turn-checking DFS); parity tests against the reference backend on fixtures; benchmark ≥ 10 attempts/s at Portland scale. Built: byte-identical to the reference and the default on every build; on Portland it plans the reference's routes at 7,200–8,200 attempts/s (`docs/reference/engine.md`, **On Portland with `CsrBackend`**).
 2. FastAPI app: `/regions`, `/snap`, `/jobs` + SSE, `/routes/{id}`, `/routes/{id}/geojson`, sqlite route store, worker pool. Built (`docs/reference/api.md`): a process per job, "make it worse" from a stored route, cancel storing the route so far, `worst-route serve`.
 3. Frontend: map, stop picker, run controls, route layer with splice application, ratio counter; settings panel with inefficiency target (max / ratio / duration), tier override, leash; Reroll; Make it worse.
-4. Target modes (ratio and duration) in the engine, including run replacement for trimming.
+4. Target modes (ratio and duration) in the engine, including run replacement for trimming. Built (`docs/reference/engine.md`, **Targets**): `plan --target ratio:<x>|duration:<time>`, `plan --base`, and the API's `target`; on Portland, Powell's → Reed reaches 20× and 3 h within ±2 % in under half a second, 9 h in 1.1 s, and a 62.43× route shrinks to 30.58× in 5 s.
 5. Acceptance: a 15-minute Portland drive becomes a 9-hour route within ±2% of target in < 20 s; the map shows it growing; closing the tab cancels the job.
 
 ### M3 — Objective modes and constraints

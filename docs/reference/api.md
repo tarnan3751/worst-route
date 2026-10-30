@@ -66,7 +66,13 @@ what the API and the presentation need:
 - `max_iterations`: default 1,000,000, so the seconds budget ends a run. The CLI keeps the
   engine's 5,000.
 - `seed`: in [0, 2⁶³ − 1]; left out, a random one below 2³¹, returned in the 202.
-- `target.kind`: `max`; `ratio` and `duration` are `NOT_YET`.
+- `target`: `{kind: "max"}` (the default: as bad as the budget allows), `{kind: "ratio",
+  value}` (the route's length as `value` × the baseline's, more than 1; not for a round trip)
+  or `{kind: "duration", seconds}` (at most 7 days); reached within ±2 %
+  (`docs/reference/engine.md`, **Targets**). Each kind takes only its own number. A target out
+  of these bounds is `INVALID_REQUEST`, and so is a ratio target for a round trip (its stops',
+  or for "make it worse" its base route's): `{code: "INVALID_REQUEST", message: "a round trip
+  has no ratio target: its baseline is 0 m", field: "target"}`, before any other check.
 - `vehicle` and `departure` are kept with the route; `departure` gives the document's `arrival`.
 - `base_route_id`: "make it worse" (**Make it worse**).
 - An unknown field is refused, so `constraints` is `INVALID_REQUEST` until M3.
@@ -76,13 +82,13 @@ FastAPI's `detail`):
 
 | Status | Code | When |
 |---|---|---|
-| 422 | `INVALID_REQUEST` (+ `errors`, pydantic's) | a body or field that does not parse (a seed beyond 2⁶³ − 1 included), an unknown objective |
+| 422 | `INVALID_REQUEST` (+ `errors`, pydantic's without their `input`; or + `field`) | a body or field that does not parse (a seed beyond 2⁶³ − 1 included, `Infinity` or `NaN` for a number), an unknown objective, a target out of bounds, a ratio target for a round trip (`field: "target"`) |
 | 422 | `UNKNOWN_REGION` | a region this server does not serve |
 | 422 | `STOP_OUTSIDE_REGION` (+ `stop_index`) | outside the region's bbox: the build's `params.bbox`, else its nodes' extent |
 | 422 | `NO_NODE_NEAR` (+ `stop_index`, null when no single stop is to blame) | no node within 5 km can play the stop's role |
 | 422 | `STOP_UNREACHABLE_WITHOUT_REPEAT` (+ `leg`, `stop_index`) | no route covers the leg without repeating a road, after the re-snap fallback (`stop_index` is the leg's later stop) |
 | 422 | `BUDGET_TOO_LARGE` (+ `max_s`) | `budget_s` over 120 |
-| 422 | `NOT_YET` (+ `field`) | an objective or target the engine does not have yet |
+| 422 | `NOT_YET` (+ `field`) | an objective the engine does not have yet |
 | 422 | `UNKNOWN_ROUTE` (+ `base_route_id`) | a base route that is not stored |
 | 422 | `BUILD_MISMATCH` | a base route planned on another region, `graph_version` or engine version; `/validate` on a route another engine version made (its stops could be re-derived differently: re-plan it), as `worst-route validate` refuses one |
 | 422 | `BASE_ROUTE_MISMATCH` (+ `field`) | stops, tier or leash given that differ from the base route's; or a base route `plan.check_base` refuses under its request's resolved stops and masks (`field` `stops`: its stops are not where they resolve now; `route`: a node outside the area or an edge the request bans) |
@@ -98,8 +104,9 @@ the validator refused: an engine bug, never stored), `WORKER_FAILED` (an excepti
 that did not start, or one that died without a result, partway through a message included) and
 `WORKER_TIMEOUT` (still running `API_KILL_GRACE_S` after its budget, with no route yet).
 
-`POST /jobs` refuses before a job exists, in this order: the region, the objective, the target,
-the budget, the job limit (429), the base route, each stop against the bbox, then the
+`POST /jobs` refuses before a job exists, in this order: the body (the target's bounds
+included), a ratio target for a round trip, the region, the objective, the budget, the job
+limit (429), the base route, each stop against the bbox, then the
 **pre-flight** (`jobs.prepare`): the request's masks and `resolve_stops` (snapping and the
 re-snap fallback), in a worker thread, and for a base route `plan.check_base`. The worker repeats
 them, deterministically, so a request that passes the pre-flight is not refused for its stops
@@ -140,14 +147,16 @@ of the last splice applied; `elapsed_s` the wall time since it started.
  geometry:   LineString along every edge,
  legs:       [{from_stop, to_stop, node_range: [a, b]}],
  metrics:    {length_m, baseline_length_m, ratio, time_s, baseline_time_s, time_ratio,
-              departure, arrival},
+              departure, arrival, target},
  run:        {attempts, accepted, stopped_because, elapsed_s, backend},
  validation: {ok: true, checked_at}}
 ```
 
 `ratio` and `time_ratio` are null for a round trip (its baseline is 0 m); `arrival` is
-`departure` plus `time_s`, null without one; `stopped_because` is `budget`, `converged`,
-`cancelled` or `timeout`. The presentation's fields (directions, toasts, comparisons, fuel,
+`departure` plus `time_s`, null without one; `target` is `{kind, value, achieved,
+within_tolerance}` for a ratio or duration target (the target, the route's ratio or seconds, and
+whether that is within ±2 %), null for `max`; `stopped_because` is `target` (within it),
+`budget`, `converged`, `cancelled` or `timeout`. The presentation's fields (directions, toasts, comparisons, fuel,
 states, towns) arrive with M4.
 
 ## Events
@@ -159,9 +168,9 @@ Each event has an `id`, counting up per job, an `event` name and a JSON `data`:
 |---|---|---|
 | `snapped` | at the job's creation (from the pre-flight) | `{stops: [{input: {lat, lon}, label, node, lat, lon, moved_m, note}], tier, leash_km, active_nodes}` |
 | `baseline` | when the worker has built the route the loop starts from | `{length_m, time_s, geometry}` (null for a round trip) |
-| `snapshot` | right after `baseline` (iteration 0: the seed, or the base route), after every 50th `progress`, and first on every (re)connect once the route exists | `{iteration, elapsed_s, node_count, stop_idx, geometry, node_index, metrics}` |
+| `snapshot` | right after `baseline` (iteration 0: the seed, or the base route), after every 50th `progress`, just before `done` when the stored route is not the one the splices drew (**Jobs**), and first on every (re)connect once the route exists | `{iteration, elapsed_s, node_count, stop_idx, geometry, node_index, metrics}` |
 | `progress` | at most every 0.1 s while splices are accepted | `{iteration, elapsed_s, score, metrics: {length_m, time_s, ratio}, splices: [{i, j, node_count, coords, node_index}]}` |
-| `done` | the route is stored (or was already: its existing id, **The store**) | `{route_id, stopped_because, metrics}` |
+| `done` | the route is stored (or was already: its existing id, **The store**) | `{route_id, stopped_because, metrics}`: the stored route's `{length_m, time_s, ratio, target}`, `target` as in the document (null for `max`) |
 | `error` | the job ended without a route | `{code, message, ...}` |
 
 The stream ends after `done` or `error`. A browser's `EventSource` reconnects when a stream
@@ -227,20 +236,26 @@ numba and the cached kernels adds about 0.3 s.
 
 **The follower**, an asyncio task per running job, reads that pipe in a thread (`poll` for at
 most `API_READ_GRACE_S`, 0.1 s, then `recv`) and keeps the job's own copy of the route: the
-starting route, then each splice applied in order, as a client would. In a max mode every
-accepted splice raises the score, so this copy is the best route so far; the target modes, which
-may accept shorter detours, will need the best kept apart. It coalesces splices into `progress`
-events (`API_COALESCE_S`, 0.1 s) with a `snapshot` every `API_SNAPSHOT_EVERY` (50). On
-`Finished` the route is stored and `done` sent; on `Failed`, `error`.
+starting route, then each splice applied in order, as a client would. It keeps the best route
+so far apart, by the request's goal (`engine.target.Goal`, on each splice's score and metrics):
+in a max mode every accepted splice raises the score, so the best is the copy; a target run's
+best is the route closest to its target, which after an overshoot that shrinking could not
+bring back is an earlier one (`docs/reference/engine.md`, **Targets**). It coalesces splices into
+`progress` events (`API_COALESCE_S`, 0.1 s) with a `snapshot` every `API_SNAPSHOT_EVERY` (50).
+On `Finished` the route (the engine's best) is stored and `done` sent; on `Failed`, `error`.
+Whenever the stored route is not the one the splices drew (by its edges: two routes through the
+same nodes may differ by a parallel edge), a `snapshot` of it comes just before `done`, and the
+job's route becomes it, so every client, a late one too, and `GET /jobs/{id}` end on the stored
+route.
 
 **Ending early.**
 
 - **Cancel** (`DELETE`): a queued job, or one whose route does not exist yet, ends in `error`
   `CANCELLED`. A running one has its worker terminated and its pipe never read again (a
-  process killed while writing may leave half a message). The manager's copy is validated against
-  the pre-flight's stops and masks (`validate_route`), stored with `stopped_because:
-  "cancelled"` and reported in `done`, or ends in `VALIDATION_FAILED`. Its `run.attempts` is
-  the attempt of the last splice applied, so planning the same request with that many attempts
+  process killed while writing may leave half a message). The manager's best route so far is
+  validated against the pre-flight's stops and masks (`validate_route`), stored with
+  `stopped_because: "cancelled"` and reported in `done`, or ends in `VALIDATION_FAILED`. Its
+  `run.attempts` is the attempt of the last splice applied, so planning the same request with that many attempts
   gives it back byte for byte (the prefix property, `docs/reference/engine.md`, **The loop**).
 - **Time limit**: a job still running `API_KILL_GRACE_S` (30 s) after its budget is ended the
   same way, as `"timeout"` (`WORKER_TIMEOUT` before its route exists).
@@ -271,8 +286,9 @@ are testable without spawning.
 
 `POST /jobs` with `base_route_id` continues a stored route: the worker passes it to
 `plan_route(base=...)`, which starts the loop from it instead of the seed, with the new
-request's seed and budget. The stops, tier and leash come from the base route's request; given
-ones must match (`BASE_ROUTE_MISMATCH`), the stops by their lat/lon. The base route must have
+request's seed, budget and target: with a target below the base route's value the run shrinks
+toward it, above it grows, and within it ends at once with the base route (`"target"`). The
+stops, tier and leash come from the base route's request; given ones must match (`BASE_ROUTE_MISMATCH`), the stops by their lat/lon. The base route must have
 been planned on this region's build at its `graph_version` and by this engine version
 (`BUILD_MISMATCH`), and `plan.check_base` must accept it under the request's resolved stops and
 masks: its stop nodes where the stops resolve now, every node in the active area, no edge the
@@ -337,6 +353,13 @@ machine, with curl:
 - **With the pipe** (after the review): Powell's → Reed, seed 1, gives the same route
   (`5ea844bffd40`), the client replay again exact; a cancel answers in 21 ms; a continuation of
   it with `max_iterations: 0` reports `5ea844bffd40` in its `done`.
+- **Targets** (`serve --port 0`, the default backend, csr, 2026-10-30; Powell's → Reed): a 20×
+  ratio, seed 1, `done` after 1.0 s with `stopped_because: "target"` at 19.60× (the route
+  `worst-route plan --target ratio:20 --seed 1` gives); a 9 h duration (`seconds: 32400`), seed
+  2, `done` after 1.8 s at 8 h 49 min (37.9×); a max run, seed 1, still `5ea844bffd40`; "make it
+  worse" from it with a 30× ratio, seed 1, `done` after 5.7 s at 30.58×, every `progress` lower
+  than the one before, its `/validate` ok. Each target job's `done` and document carry its
+  `target`.
 
 ## Tests
 
@@ -345,12 +368,12 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 
 | Test file | What it covers |
 |---|---|
-| `test_schemas.py` | the request mirrors the engine's, its defaults, the seed's bounds, stops left out only with a base, malformed requests refused |
+| `test_schemas.py` | the request mirrors the engine's, its defaults, the seed's bounds, stops left out only with a base, malformed requests refused; the target as the engine's, each kind with its own number and within its bounds; `done`'s target typed |
 | `test_store.py` | the round trip (the stored route validates), unknown ids, the first record kept, what the id covers |
 | `test_sse.py` | path points and node indices, the per-edge simplification keeping nodes and original values, splices, metrics, the event encoding |
-| `test_jobs.py` | the manager with inline workers: event order and ids, a client replay equal to the stored route, late subscribers (after a worker that died with splices waiting too: they come before its `error`, ids rising strictly), `Last-Event-ID` resync, cancel (validated, stored, reproduced by its attempts), the queue and its limit, cancel before the route exists, continuations, the time limit, orphans running and queued, a worker that raises, a store failure while cancelling (by hand and by the sweep, which goes on), a worker that does not start (the queue moves on), the TTL |
+| `test_jobs.py` | the manager with inline workers: event order and ids, a client replay equal to the stored route, late subscribers (after a worker that died with splices waiting too: they come before its `error`, ids rising strictly), `Last-Event-ID` resync, cancel (validated, stored, reproduced by its attempts), the queue and its limit, cancel before the route exists, continuations, the time limit, orphans running and queued, a worker that raises, a store failure while cancelling (by hand and by the sweep, which goes on), a worker that does not start (the queue moves on), the TTL; a target run whose best is not its last route (an overshoot on a 5 × 5 lattice): a snapshot of the stored route before `done`, for live and late clients, and a cancel after the overshoot storing the closest route, reproduced by its attempts |
 | `test_worker_process.py` (`slow`) | real spawned workers: a run to `done`, a cancel mid-run, a worker killed from outside (`WORKER_FAILED`), a fake worker that dies 60 kB into a 2 MB message (`WORKER_FAILED`, then a clean `stop()`), and a worker whose API process (a probe) is killed exiting within 3 s; about 4 s |
-| `test_routes_api.py` | every endpoint over `httpx.AsyncClient` in-process, every refusal code, cancel over HTTP, a closed stream cancelling its job, a stream that subscribes only once it runs, make it worse and its mismatches (a base outside its request's masks included), a continuation that changes nothing reporting the stored route |
+| `test_routes_api.py` | every endpoint over `httpx.AsyncClient` in-process, every refusal code, cancel over HTTP, a closed stream cancelling its job, a stream that subscribes only once it runs, make it worse and its mismatches (a base outside its request's masks included), a continuation that changes nothing reporting the stored route; ratio and duration jobs ending `target` with the target in `done` and the document (none for max), a target out of bounds or a ratio for a round trip refused, make it worse with a smaller target shrinking; a stored route differing from the drawn one by a parallel edge sent as a snapshot before `done`, with `GET /jobs/{id}` agreeing; a ratio target for a round trip refused before anything else, for a base route too; `Infinity` and `NaN` in a body refused |
 
 `tests/engine/test_plan.py` covers `plan_route`'s hooks, `tests/graph/test_loader.py` the loader,
 and `tests/unit/test_cli.py` `serve`'s errors, options and its taking `csr` on a build with
@@ -365,7 +388,5 @@ over a real socket by hand (**Measured**).
 - **No public limits** beyond the job cap and queue: no per-client limits, no authentication,
   no CORS (the frontend's dev server proxies). `docs/PLAN.md` §4.5 lists what public hosting
   adds.
-- **Max mode only**: the manager's copy of the route is the best one because every accepted
-  splice raises the score.
 - **Spawn cost**: a job's first events after `snapped` wait for a fresh process (0.26–1.4 s
   measured).

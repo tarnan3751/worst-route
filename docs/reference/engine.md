@@ -2,19 +2,19 @@
 
 How a route is planned, made worse and proven legal: the route model and its one mutation, the
 request and its masks, snapping, the seed route and the baseline, the objective interface and
-the distance mode, the detour strategies, the worsen loop, the validator, route files and the
-`plan` / `validate` commands. Code: `src/worst_route/engine/`. The design it implements is
-`docs/PLAN.md` §3.1–3.6, §3.9, §3.11 and §8.1; the conventions are `CLAUDE.md`. Everything
-runs on a build's `GraphData` through `GraphBackend` and `SpatialIndex`
+the distance mode, the detour strategies, the worsen loop and its targets, the validator, route
+files and the `plan` / `validate` commands. Code: `src/worst_route/engine/`. The design it
+implements is `docs/PLAN.md` §3.1–3.6, §3.9, §3.11 and §8.1; the conventions are `CLAUDE.md`.
+Everything runs on a build's `GraphData` through `GraphBackend` and `SpatialIndex`
 (`docs/reference/graph.md`): `CsrBackend` by default, `PythonBackend` when asked, with the same
-routes either way; on a build with transition tables only `PythonBackend` can search yet
-(**Searches**), and the default takes it there.
+routes either way, on every build, transition tables included (**Searches**).
 
 | Module | What it holds |
 |---|---|
 | `route.py` | `Route`, `Splice`, `Metrics`, the `IllegalSplice` refusals, `check_route`, `splice_arrays`, `twins_of` |
 | `validator.py` | `validate_route`, `ValidationReport`, `Check`, `ValidationFailed`, `RouteLike` |
 | `request.py` | `RouteRequest`, `RequestMasks`, `request_masks`, `auto_tier`, `auto_leash_m` |
+| `target.py` | `Target` (a request's target), `Goal` (what a run is after: better, done, its phases) |
 | `snap.py` | `snap_stops`, `resnap`, `apart_from`, `role_of`, `is_round_trip`, `StopUnreachable` |
 | `search.py` | `shortest_path`, `simple_paths`: which backend search builds a path |
 | `seed_route.py` | `resolve_stops`, `baseline_route` / `Baseline`, `seed_route` / `SeedRoute` |
@@ -75,8 +75,9 @@ already a repeated node.
 two (identical first and last points make a round trip); `objective` (a key of `OBJECTIVES`,
 default `"distance"`); `tier` (`"auto"` or `"T0"`..`"T4"`); `leash_km` (`"auto"` or in
 (0, 150]); `budget_s` (in (0, 120], default 20) and `max_iterations` (default 5000); `seed`
-(≥ 0). Every number must be finite, so a request (and `route.json`) never holds `Infinity` or
-`NaN`.
+(≥ 0); and `target` (**Targets**: `max`, the default, `ratio` or `duration`; a ratio target is
+refused for a round trip, whose baseline is 0 m). Every number must be finite, so a request
+(and `route.json`) never holds `Infinity` or `NaN`.
 
 `request_masks(spatial, data, request)` derives everything from the request alone, so a saved
 route can be checked against the same masks later. The trip length is the straight-line length
@@ -191,8 +192,10 @@ only this interface:
 - **Hooks.** `feasible_pair` and `feasible_window` (constraints), `banned_edges(G, route, i, j)`
   (bans per window), `search_weights` and `waypoint_pool` (search guidance), and
   `initial_radius` and `search_budget(radius)` (default 8 × radius, `SEARCH_BUDGET_FACTOR`).
-- **The rest.** `better(a, b)` (default: a higher score), `target_value` (what target modes
-  compare), and `describe` (mode numbers for the presentation).
+- **The rest.** `target_value` (the mode's own quantity, which no target reads yet: a ratio
+  target reads the length, a duration target the time, from the route's metrics) and
+  `describe` (mode numbers for the presentation). Which route is better, and when a run is
+  done, belongs to the run's goal (**Targets**), not to the objective.
 
 `BaseObjective(data, *, baseline_length_m, r_max)` gives every hook a neutral default and
 caches its term vectors for the build. It implements, once for every mode:
@@ -263,7 +266,10 @@ round-trip seed).
   transition-aware search could answer None where a legal path exists (when its cheapest walk
   passes a node twice). The paths are ranked by
   `objective.delta` (stable, so ties keep the DFS order), and the first the splice accepts is
-  returned.
+  returned. A run shrinking toward a target (`shrink`, its goal) keeps only the paths that lose
+  (`delta` < 0, the only ones it can take, so a longer path that is faster never shadows a
+  shorter one for a duration) and ranks them by how close each would bring the route to the
+  target's band (`Goal.shrink_rank`: 0 inside it, the distance above it, last below it).
 
 **Why the local-exhaustive cap.** With the reference backend, the DFS grows exponentially with
 the ball. Measured on a 100 m grid with depth 25 and 5000 paths:
@@ -296,7 +302,9 @@ have. Each attempt:
 
 1. **Window** (`pick_segment`). One edge (j = i + 1) with probability 0.8, else a run of
    1 + a geometric number of edges, 3 on average (`RUN_EDGES_MEAN`) and at most 12
-   (`SEGMENT_RUN_MAX`), cut short at the next stop, so no stop is ever inside it. With
+   (`SEGMENT_RUN_MAX`), cut short at the next stop, so no stop is ever inside it (shrinking
+   toward a target, 6 on average and at most 24: `SHRINK_RUN_EDGES_MEAN`,
+   `SHRINK_SEGMENT_RUN_MAX`). With
    probability 0.3 (`SEGMENT_BIAS_PROBABILITY`) the window starts at one of the 5 route edges
    (`SEGMENT_BIAS_TOP`) with the most unused nodes of the request's mask near their midpoint,
    else at a uniform edge. The counts (`UnusedNodes`) are kept on a 100 m grid
@@ -309,26 +317,74 @@ have. Each attempt:
 2. **Masks.** `route.release(i, j)`, then OR in the request's `banned_edges` and the
    objective's bans for the window.
 3. **Detour.** `find_detour` at the current radius.
-4. **Accept** when the detour's `objective.delta` is strictly positive and `feasible_window`
-   agrees. The new score and metrics are a full `objective.evaluate` of the spliced arrays.
+4. **Accept** when the goal accepts the detour (`Goal.accepts`; for `max`, the default, when
+   its `objective.delta` is strictly positive; **Targets**) and `feasible_window` agrees. The
+   new score and metrics are a full `objective.evaluate` of the spliced arrays.
    With `check_delta` (tests), the loop asserts that this equals the current score plus
    `delta`. The splice is told the request's and objective's bans as `extra_banned`. `best` is
-   tracked by `objective.better`.
+   tracked by `Goal.better`: for `max` the highest score.
 
 **The ambition radius** starts at `objective.initial_radius`. It grows 1.5× on every accepted
 splice, up to `r_max`, and halves after every 20 failures in a row, down to
-`min(300 m, r_max)`. A failure is no detour, a gain of zero or less, or an infeasible window.
+`min(300 m, r_max)`. A failure is no detour, one the goal does not accept (for `max`, a gain of
+zero or less), or an infeasible window. Shrinking toward a target, it stays at that floor.
 
 **Cycles.** The run goes in cycles, so it keeps searching while searching still pays. A cycle
 ends after more than 400 failures in a row (`CONVERGED_FAILS`) at the smallest radius; the
 radius goes back to `objective.initial_radius` and a new cycle starts, giving every radius its
 20 tries again around the longer route.
 
-**Stopping**: `"budget"` when `max_iterations` attempts are made or `budget.seconds` have
+**Stopping**: `"target"` when the route is within its target (**Targets**), before the first
+attempt too; `"budget"` when `max_iterations` attempts are made or `budget.seconds` have
 passed; `"converged"` when 3 cycles in a row (`CONVERGED_EMPTY_CYCLES`) accept nothing, so a
 run ends 1,604 attempts after its last splice: the rest of that splice's cycle, then three
-empty ones. Target modes
-(ratio, duration) are M2; their hooks (`target_value`, `better`) are in the interface.
+empty ones. The same rule holds in every phase of a target run.
+
+## Targets
+
+A request's `target` (`target.py`) says how much worse: `max` (as bad as the budget allows,
+the default), `ratio` (the route's length as `value` × the baseline's, more than 1) or
+`duration` (`value` seconds of driving, more than 0 and at most 7 days,
+`TARGET_MAX_DURATION_S`). A target is reached within ±2 % (`TARGET_TOLERANCE`): the band
+[T × 0.98, T × 1.02], ends included. The quantities are the distance objective's metrics,
+length over the baseline's length and `time_s`; a slowest-time objective is M3.
+
+`Goal(target, data, baseline_length_m=)` is what the loop asks, by a route's **value** (the
+score for `max`; the ratio; the time): `better`, `reached`, `phase`, `candidate` (a detour's
+value from its window, `math.fsum` of its edges' lengths or times less the removed ones'),
+`accepts`, `overshoots`, `shrink_rank` and `describe`. Its rules take values, not routes, so the
+API's follower applies them to the splices it is sent (`docs/reference/api.md`, **Jobs**).
+`plan_route` makes it once the baseline is known; `PlanResult.goal` holds it.
+
+**Phases.** A target run is in one by its value:
+
+- **grow**, below the band: a detour is taken when it gains (`delta > 0`) and its value rises
+  without passing the band's top. A detour that would pass it is a failure, so the radius
+  halves after 20 of them as after any 20 failures, and later detours are smaller.
+- **shrink**, above the band (a base route past a smaller target, or after an overshoot): a
+  replacement is taken when it loses (`delta < 0`) and its value falls without passing the
+  band's bottom. The radius stays at its floor (300 m), windows are longer, and the
+  local-exhaustive paths that lose are ranked by closeness to the band (**Detours**, **The
+  loop**).
+- **done**, inside the band: the run stops with `"target"`, also before its first attempt.
+
+For a ratio on the distance objective a gain and a rising value are the same thing; for a
+duration the second condition also refuses a longer but faster detour while growing (and a
+shorter but slower one while shrinking), so the value moves one way only: growing it never
+falls, shrinking it never rises.
+
+**The overshoot.** Growing, the loop keeps the smallest detour that would pass the band's top
+(ties to the earlier one), from the last accepted splice on. When a whole cycle accepts
+nothing, that detour is spliced in at the cycle's end, as one more attempt (so a run cut at that
+attempt is the prefix that ends with it), and the run goes on shrinking. It never undershoots
+from above, so there is at most one overshoot.
+
+**The best route** is the one closest to the target, the later on a tie. Growing and shrinking
+only approach it, so the best is the last route except after an overshoot that shrinking cannot
+bring back: on a 5 × 5 lattice, where every corner-to-corner path is 800 m plus a multiple of
+200 m, a 2.1× target (1,646–1,714 m) grows to 1,600 m, overshoots to 1,800 m, converges, and
+returns the 1,600 m route. For `max`, nothing changes: a gain is taken, the highest score is
+best, and the max loop draws and ranks exactly as before (the golden route).
 
 **Determinism.** Every random choice is drawn from one `numpy.random.Generator(PCG64(seed))`, in
 a fixed order: the round-trip seed, then the loop's windows, strategies, waypoints and weights.
@@ -363,7 +419,7 @@ first, so a longer search needs `--max-iterations` raised as well as `--budget`.
 
 `plan_route(data, request, *, backend=None, spatial=None, base=None, on_start=None,
 on_progress=None, check_delta=False) -> PlanResult(request, masks, snaps, baseline, route, run,
-report, backend)` runs a request end to end. It searches with `backend`, else
+report, backend, goal)` runs a request end to end. It searches with `backend`, else
 `make_backend(data)` (`config.DEFAULT_BACKEND`, `auto`: `CsrBackend` when numba imports);
 `PlanResult.backend` is the name of the one that searched. The steps run in this order:
 
@@ -373,10 +429,11 @@ report, backend)` runs a request end to end. It searches with `backend`, else
    ones);
 4. `seed_route` on them, or, given `base`, that route instead;
 5. `baseline_route` on those stops;
-6. `make_objective` with the baseline length and `r_max`;
+6. `make_objective` with the baseline length and `r_max`, and the request's `Goal`
+   (**Targets**) with the baseline length;
 7. `Route.new` of the seed (or the base), then `on_start(snaps, masks, baseline, route)`;
-8. `run_worsen` within the request's budget, calling `on_progress(event, baseline)` on every
-   accepted splice;
+8. `run_worsen` toward the goal within the request's budget, calling
+   `on_progress(event, baseline)` on every accepted splice;
 9. `validate_route` on the best route, against the request's masks and the resolved stops.
 
 The two hooks serve the API (`docs/reference/api.md`). `on_start` reports the route the loop
@@ -389,8 +446,9 @@ step 3 gives) or `"route"` (a node outside the request's active mask, or an edge
 bans); the API's pre-flight runs the same check. `Route.new` then checks the rest as for any
 route (repeats, twins, transitions; an `IllegalSplice` from it is raised as it is, not as
 `StopUnreachable`). Nothing is drawn from the rng before the loop, so a continuation is fixed
-by the base, the request and its seed, on either backend (`tests/engine/test_plan.py`).
-Without the hooks, planning is unchanged.
+by the base, the request and its seed, on either backend (`tests/engine/test_plan.py`). A base
+past the request's target shrinks toward it, one below it grows, and one within it is returned
+as it is, with no attempt (**Targets**). Without the hooks, planning is unchanged.
 
 A route that fails validation raises `ValidationFailed` and is never returned. The errors to
 expect are `SnapError` and `StopUnreachable`. The seed checks every leg itself, so a
@@ -441,7 +499,9 @@ check reports `ok`, the first offending index and a detail. `report.ok` is their
 - `stops`: `[{lat, lon, node, moved_m, note}]`, the snapped node's position;
 - `nodes`, `edges`, `stop_idx`;
 - `metrics`: `{length_m, time_s, baseline_length_m, baseline_time_s, ratio}` (`ratio` is null
-  for a round trip), plus the objective's counters;
+  for a round trip), plus the objective's counters, and for a ratio or duration target
+  `target: {kind, value, achieved, within_tolerance}` (`Goal.describe`: the target, the route's
+  ratio or seconds, and whether that is within ±2 %);
 - `run`: `{attempts, accepted, stopped_because, elapsed_s, backend}` (`backend` is `"csr"` or
   `"python"`; every backend gives the same route).
 
@@ -464,8 +524,10 @@ has a null geometry.
 ```
 worst-route plan --region R [--build-id ID] --from LAT,LON --to LAT,LON [--via LAT,LON]...
                  [--seed N] [--budget SECONDS] [--max-iterations N] [--leash-km X|auto]
-                 [--tier auto|T0..T4] [--out route.json] [--geojson route.geojson]
-                 [--backend auto|csr|python]
+                 [--tier auto|T0..T4] [--target max|ratio:X|duration:TIME]
+                 [--out route.json] [--geojson route.geojson] [--backend auto|csr|python]
+worst-route plan --region R --base route.json [--build-id ID] [--seed N] [--budget SECONDS]
+                 [--max-iterations N] [--target ...] [--out ...] [--geojson ...] [--backend ...]
 worst-route validate route.json [--region R] [--build-id ID] [--backend auto|csr|python]
 ```
 
@@ -484,8 +546,12 @@ to stderr on an accepted splice, at most one line every 2 s. On stdout it prints
 - the build;
 - the tier, leash, seed and budget;
 - each stop with its node, position, how far it moved, and the note;
-- the baseline and the worst route (length and time);
+- the baseline, the base route with `--base` (`base: FILE: 481.59 km, 14 h 42 min, 62.43x`)
+  and the worst route (length and time);
 - the ratio;
+- for a ratio or duration target, the target and what was achieved:
+  `target: ratio 20x → achieved 19.60x (within ±2 %)`,
+  `target: duration 9 h 0 min → achieved 8 h 50 min (within ±2 %)` (or `outside ±2 %`);
 - the node and edge counts;
 - the attempts, accepted splices, elapsed time and why the search stopped;
 - the backend it searched with (`backend: csr`);
@@ -495,6 +561,20 @@ It writes the files it is asked for. A stop that cannot be snapped or reached is
 `cannot plan: ` and the error (for an unreachable stop, the leg and the stops it moved), and
 exit 1. A route that fails the validator is reported as an engine bug, exit
 1, and never printed. A bad argument is exit 2.
+
+**`--target`** is `max` (the default), `ratio:<x>` (× the baseline, more than 1) or
+`duration:<time>`, where a time is `9h`, `90m`, `2h30m`, `45s` or a number of seconds (at most
+7 days). A target it cannot read or one out of those bounds is exit 2, and so is a ratio target
+for a round trip, which prints `invalid --target: a round trip has no ratio target`.
+
+**`--base route.json`** continues a saved route, as the API's `base_route_id` does ("make it
+worse", toward the new target, with the new seed and budget). The stops, tier, leash and
+objective come from the file; `--from`, `--to`, `--via`, `--tier` or `--leash-km` beside it is
+exit 2, and so is a `--base` path that does not exist. The build is the file's (`--build-id` names another); a file it cannot read, one made by
+another engine version, on another region or on another `graph_version`, is one line and exit
+1, and so is a base `check_base` refuses (`cannot plan: the base route's stops are not the ones
+the request resolves to`) or whose route is not legal. The route.json it writes records the new
+request; `validate` checks it like any other, and replaying it needs the base file.
 
 **`validate`** reads a `route.json` and loads the build it names (or `--region` /
 `--build-id`). A file it cannot read (a missing field, an id beyond int32) is `cannot read …`
@@ -528,6 +608,23 @@ another's stop 1,024 m; 219 in detours); with the cycles, the ban counts and the
 waypoints drawn uniformly 18.0×, three empty cycles to stop 20.2×. Runs before the tuning used
 2–23% of the road their request allows; the ratio was the search running out of moves, not the
 leash.
+
+**Targets on Portland** (the same build, engine version 2, `CsrBackend`, 2026-10-30; Powell's →
+Reed, `--max-iterations 1000000`; every route validates, `worst-route validate` too):
+
+| Request | Result |
+|---|---|
+| `--target ratio:20`, seeds 1–3 | 19.60×, 20.17×, 19.61× (151–156 km), `target` after 1,017–1,201 attempts, 0.3–0.4 s |
+| `--target duration:3h`, seeds 1–3 | 3 h 3 min, 2 h 57 min, 2 h 57 min (102–106 km, 13.3–13.7×), `target` after 362–616 attempts, 0.2 s |
+| `--target duration:9h`, seed 1 | 8 h 50 min (289.75 km, 37.56×), `target` after 5,287 attempts, 1.1 s |
+| max, seed 1 (`--budget 120`) | 62.43×, the same route.json as before targets but the request's `target` key |
+| `--base` of that route, `--target ratio:30`, seed 1 | 30.58× (235.89 km), `target` after 30,158 attempts and 728 shrinking splices, 5.0 s |
+| `--base` of that route, `--target duration:7h`, seed 1 | 7 h 8 min (241.38 km), `target` after 30,247 attempts and 686 shrinking splices, 4.2 s |
+
+A target run gives the same bytes on both backends and twice. Before the shrinking windows and
+ranking (**Targets**), the 62.43× → 30× shrink converged at 34.59× after 228,329 attempts
+(24.4 s); with the longer windows alone it reached 30.59× after 36,628, with the ranking alone
+it converged at 31.67×.
 
 **On Portland with `CsrBackend`** (the same build and engine version 2, 2026-10-30, once its
 transition-aware kernels landed; load average 3–5, about 11 during part of the CSR acceptance
@@ -579,6 +676,11 @@ run, so a rate compares only with the run made just before or after it):
 
   Local exhaustive, at 10% of the draws, made most of the gains. The weights stand for M1;
   M2's tuning has the numbers.
+- **Targets.** A shrinking run only replaces windows (at most 24 edges) by shorter paths, so a
+  base far past a small target can converge above the band, returning the closest route
+  (`"converged"`); a target beyond what the area holds converges below it. A duration target is
+  reached through the distance objective's detours, searched on length; a slowest-time
+  objective is M3.
 
 ## Tests
 
@@ -590,16 +692,17 @@ bytes).
 |---|---|
 | `test_route.py` | every refusal, round trips, and the release and the ban counts against a brute force on random twins |
 | `test_validator.py` | each violation caught by the right check, including a cluster entered twice through its members, a shared shape point and non-finite metrics |
-| `test_request.py` | the request model and its bounds, tier and leash auto, the masks and the tier's edge bans |
+| `test_request.py` | the request model and its bounds (its target's too, and no ratio target for a round trip), tier and leash auto, the masks and the tier's edge bans |
+| `test_target.py` | the target's bounds; the goal's rules on values (the band's edges, phases, the closer route better and a tie to the later, growing and shrinking acceptance at the band, a duration moving one way, a candidate's value equal to the re-scored route's); and on lattices with `check_delta`: ratio and duration targets reached while only growing, a base past a target shrinking into it, a route already within it stopping before an attempt, an unreachable target converging with the closest route, the overshoot after an empty cycle (the closest route returned, and a run cut at its attempt the prefix ending with it), the same bytes on both backends and twice |
 | `test_snap.py` | roles, cul-de-sacs, stops kept apart, round trips only for identical points, an end near the start moved on, re-snapping |
 | `test_search.py` | the turn edges counting only on a build with rows, a path driving both carriageways searched again, and the rounds' limit |
 | `test_seed_route.py` | `resolve_stops` deterministic, node-disjoint legs, legs avoiding later stops, the penalty re-solve on a corridor, the baseline, the re-snap walk out of a one-entrance ring, the start never moving, a point-to-point trip never collapsing onto the start, a leg between two stops on one node, unreachable legs named by both ends, a leg going round a junction that allows only straight on, the turn at a via, the baseline's legal legs and its turn-blind fallback, a leg driving both carriageways going round, a round trip to a neighbour not one road out and back, round-trip loops (never back along the way out) |
 | `test_objectives.py` | `Distance`, the radius, and `delta` against a full re-score for every kind of term |
-| `test_detour.py` | each strategy's legal detours and None when none exists, the strategy weights, random weight drawing only near the window, the local-exhaustive ranking and the refused-candidate skip, no turn refused on a lattice of straight-only junctions (and many when the searches are made turn-blind) |
-| `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, a splice after two empty cycles and the run stopping only after three, the segment bias's rate and its anchors (the edges with the most unused nodes near), the unused-node grid's cap, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, and so do those with turn tables (no turn refused), a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable`; the same-seed test on both backends, and both backends planning the same route, splice for splice, on the grid and on one-way towns with and without turn tables |
-| `test_io.py` | the route files |
+| `test_detour.py` | each strategy's legal detours and None when none exists, the strategy weights, random weight drawing only near the window, the local-exhaustive ranking and the refused-candidate skip, no turn refused on a lattice of straight-only junctions (and many when the searches are made turn-blind); shrinking toward a target, the local-exhaustive path closest to the band first, and never a longer one (a longer, faster path shadowed a shorter one for a duration) |
+| `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, a splice after two empty cycles and the run stopping only after three, the segment bias's rate and its anchors (the edges with the most unused nodes near), the unused-node grid's cap, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, and so do those with turn tables (no turn refused), a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable`; the same-seed test on both backends, and both backends planning the same route, splice for splice, on the grid and on one-way towns with and without turn tables; shrinking toward a target, runs of 6 edges on average and up to 24 |
+| `test_io.py` | the route files, the target in the request and, for a target run, in the metrics |
 | `test_plan.py` | `plan_route`'s hooks: `on_start` once before the loop with the route it starts from (every splice replays from it to the result), the same route without the hooks, a continuation from `base` that never scores less, is fixed by its seed on both backends, and refuses a base for other stops, one leaving the request's area (before the loop) and, in `check_base`, a node outside the mask or an edge the request bans |
-| `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32, `--backend` on both commands (the same route.json on both backends but the backend and the time), and the same on a build with turn tables, where `auto` is `csr` too, a file from another engine version refused |
+| `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32, `--backend` on both commands (the same route.json on both backends but the backend and the time), and the same on a build with turn tables, where `auto` is `csr` too, a file from another engine version refused; `--target` (its line, its parsing, its refusals) and `--base` (a continuation to a smaller target, the options it refuses, a file from another engine version, region or `graph_version`, a truncated or broken route, stops that do not resolve); a ratio target for a round trip, from the stops or the base, refused; an illegal route reported as the base file's fault only with `--base` |
 | `test_portland_data.py` | (`data`: Portland's latest build through `WORST_ROUTE_DATA`, skipped without one) Powell's → Reed, seed 1, 4,000 attempts: the same bytes on both backends, splice for splice, no turn refused |
 
 **The acceptance run**, `tools/acceptance.py`, plans random stop pairs on a saved build, so it
@@ -626,7 +729,9 @@ a table row per pair and a summary (planned, validator passes, median ratio and 
 per second, the failures the transitions caused, the Jaccards), writes the JSON report, and
 exits 1 only when a planned route fails the validator. On Portland it takes under two minutes.
 
-`tests/golden/` freezes one route (seed 7, three stops) on a 20 × 20 lattice whose lon/lat are
-rounded to 1e-7°, so its bytes and pinned `graph_version` do not depend on PROJ's last bits;
-both backends must reproduce it. It changes only under a tier A brief;
-`WORST_ROUTE_REGEN_GOLDEN=1 uv run pytest tests/golden` rewrites it.
+`tests/golden/` freezes three routes (seed 7, three stops) on a 20 × 20 lattice whose lon/lat
+are rounded to 1e-7°, so their bytes and pinned `graph_version` do not depend on PROJ's last
+bits: a max run of 400 attempts (`grid20_distance.json`), and runs to a 6× ratio and a 2,400 s
+duration target, each stopping within it (`grid20_ratio.json`, `grid20_duration.json`). Both
+backends must reproduce them. They change only under a tier A brief;
+`WORST_ROUTE_REGEN_GOLDEN=1 uv run pytest tests/golden` rewrites them.

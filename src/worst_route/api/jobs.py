@@ -10,10 +10,14 @@ raises `TooManyJobs` (the endpoint's 429).
 While a job runs, its follower task reads the worker's queue (in a thread, so the event loop
 never blocks) and keeps the job's own copy of the route: the route the loop started from
 (`Started`, which emits `baseline` and a `snapshot` of iteration 0), then every accepted splice
-applied in order, as a client would. In a max mode every accepted splice raises the score, so
-that copy is the best route so far. Splices are sent as `progress` events at most once per
+applied in order, as a client would. It also keeps the best route so far apart, by the
+request's goal (`engine.target.Goal`): in a max mode every accepted splice raises the score, so
+the best is the copy; a target run's best is the route closest to its target, which after an
+overshoot may be an earlier one. Splices are sent as `progress` events at most once per
 `coalesce_s`, every `snapshot_every`-th followed by a `snapshot`. `Finished` stores the
-worker's validated route and emits `done`; `Failed` emits `error`.
+worker's validated route (the engine's best) and emits `done`; `Failed` emits `error`. Whenever
+the route a job stores is not the copy its clients have drawn, a `snapshot` of it comes just
+before `done`.
 
 Event ids count up per job. A subscriber (`subscribe`, the SSE endpoint's) first gets the
 stored `snapped` and `baseline` events it has not seen (those after `Last-Event-ID`), then, once
@@ -24,7 +28,7 @@ the job has ended, then live events, so its ids rise strictly. A stream ends aft
 
 `cancel` ends a job early: a queued job, or one whose route does not exist yet, ends in `error`
 `CANCELLED`; a running one has its worker terminated (its queue is never read again: a process
-killed while writing may leave it corrupt), and the manager's copy of the route is validated
+killed while writing may leave it corrupt), and the manager's best route so far is validated
 against the pre-flight's stops and masks, stored with `stopped_because: "cancelled"` and
 reported in `done` (its `run.attempts` is the attempt of the last splice applied, so planning
 again with that many attempts gives it back), or `error` `VALIDATION_FAILED` if it fails. A
@@ -63,6 +67,7 @@ from pydantic import BaseModel
 from worst_route.api import sse
 from worst_route.api.schemas import (
     Done,
+    DoneMetrics,
     ErrorBody,
     JobState,
     JobStatus,
@@ -105,6 +110,7 @@ from worst_route.engine import ENGINE_VERSION
 from worst_route.engine.request import RequestMasks, RouteRequest, request_masks
 from worst_route.engine.route import IntArray, Metrics
 from worst_route.engine.seed_route import resolve_stops
+from worst_route.engine.target import Goal
 from worst_route.engine.validator import validate_route
 from worst_route.graph.loader import Loaded
 from worst_route.graph.spatial import Snap
@@ -238,6 +244,9 @@ class Job:
     orphaned_since: float | None = None
     route: RouteArrays | None = None
     score: float = 0.0
+    goal: Goal | None = None
+    best: RouteArrays | None = None  # the best route so far, by the goal: often `route` itself
+    best_value: float = 0.0
     iteration: int = 0
     accepted: int = 0
     elapsed_s: float = 0.0
@@ -465,6 +474,8 @@ class JobManager:
         job.baseline_length_m, job.baseline_time_s = m.baseline_length_m, m.baseline_time_s
         job.baseline_edges = m.baseline_edges
         data = job.loaded.data
+        job.goal = Goal(job.request.target, data, baseline_length_m=m.baseline_length_m)
+        job.best, job.best_value = m.route, job.goal.value(m.score, m.route.metrics)
         self._emit(
             job,
             "baseline",
@@ -474,8 +485,8 @@ class JobManager:
         job.last_flush = time.monotonic()
 
     def _spliced(self, job: Job, m: Spliced) -> None:
-        route = job.route
-        if route is None:
+        route, goal = job.route, job.goal
+        if route is None or goal is None:
             raise RuntimeError("a splice before the start")
         nodes = np.concatenate((route.nodes[: m.i], m.nodes, route.nodes[m.j + 1 :]))
         edges = np.concatenate((route.edges[: m.i], m.edges, route.edges[m.j :]))
@@ -483,6 +494,9 @@ class JobManager:
         stop_idx = tuple(k if k <= m.i else k + shift for k in route.stop_idx)
         job.route = RouteArrays(nodes.astype(np.int32), edges.astype(np.int32), stop_idx, m.metrics)
         job.score, job.iteration, job.elapsed_s = m.score, m.iteration, m.elapsed_s
+        value = goal.value(m.score, m.metrics)
+        if goal.better(value, job.best_value):
+            job.best, job.best_value = job.route, value
         job.accepted += 1
         job.pending.append(sse.splice_out(job.loaded.data, m.i, m.j, m.nodes, m.edges))
 
@@ -509,8 +523,13 @@ class JobManager:
         rid = await asyncio.to_thread(
             self.store.put, m.document, input=job.input, baseline_edges=m.baseline_edges
         )
-        metrics = {k: v for k, v in m.document["metrics"].items() if not k.startswith("baseline_")}
-        await self._done(job, rid, m.document["run"]["stopped_because"], RouteMetrics(**metrics))
+        doc = m.document
+        metrics = Metrics(float(doc["metrics"]["length_m"]), float(doc["metrics"]["time_s"]))
+        nodes, edges = (np.array(doc[k], dtype=np.int32) for k in ("nodes", "edges"))
+        stored = RouteArrays(nodes, edges, tuple(doc["stop_idx"]), metrics)
+        if not _same_route(job.route, stored):
+            self._show(job, stored)
+        await self._done(job, rid, doc["run"]["stopped_because"], _done_metrics(doc))
 
     async def _failed(self, job: Job, m: Failed) -> None:
         job.closing = True
@@ -531,7 +550,7 @@ class JobManager:
         if job.worker is not None:
             job.worker.stop()
         self._flush(job)
-        route, masks = job.route, job.masks
+        route, masks = job.best, job.masks
         if route is None or masks is None:
             if reason == "timeout":
                 body = ErrorBody(code="WORKER_TIMEOUT", message="no route before the time limit")
@@ -557,7 +576,15 @@ class JobManager:
         rid = await asyncio.to_thread(
             self.store.put, document, input=job.input, baseline_edges=job.baseline_edges
         )
-        await self._done(job, rid, reason, self._metrics(job))
+        if not _same_route(job.route, route):
+            self._show(job, route)
+        await self._done(job, rid, reason, _done_metrics(document))
+
+    def _show(self, job: Job, route: RouteArrays) -> None:
+        """Make `route`, the one the job stores, its route, and send it as a snapshot."""
+        self._flush(job)
+        job.route = route
+        self._emit(job, "snapshot", self._snapshot(job))
 
     async def _fail_unended(self, job: Job, error: Exception) -> None:
         """End a job an unexpected error left without its `done` or `error`, so no stream hangs."""
@@ -567,7 +594,7 @@ class JobManager:
             body = ErrorBody(code="WORKER_FAILED", message=f"{type(error).__name__}: {error}")
             await self._error(job, body)
 
-    async def _done(self, job: Job, rid: str, reason: StopReason, metrics: RouteMetrics) -> None:
+    async def _done(self, job: Job, rid: str, reason: StopReason, metrics: DoneMetrics) -> None:
         self._flush(job)  # no splice is ever sent after the end
         job.route_id, job.stopped_because = rid, reason
         self._emit(job, "done", Done(route_id=rid, stopped_because=reason, metrics=metrics))
@@ -675,9 +702,10 @@ class JobManager:
         )
 
     def _document(self, job: Job, route: RouteArrays, reason: StopReason) -> dict[str, Any]:
-        """The `route.json` of the manager's copy of the route (`engine/io.py`'s layout)."""
+        """The `route.json` of the manager's best route (`engine/io.py`'s layout)."""
         meta = job.loaded.data.meta
-        ratio = self._metrics(job).ratio
+        ratio = sse.route_metrics(route.metrics, job.baseline_length_m).ratio
+        target = job.goal.describe(job.best_value) if job.goal is not None else None
         return {
             "graph_version": meta["graph_version"],
             "region": meta["region"],
@@ -699,6 +727,7 @@ class JobManager:
                 "baseline_time_s": job.baseline_time_s,
                 "ratio": ratio,
                 **route.metrics.counters,
+                **({"target": target} if target is not None else {}),
             },
             "run": {
                 "attempts": job.iteration,
@@ -708,6 +737,18 @@ class JobManager:
                 "backend": job.loaded.backend.name,
             },
         }
+
+
+def _done_metrics(document: dict[str, Any]) -> DoneMetrics:
+    """`done`'s metrics: a stored route's, but the baseline's (with its target, if any)."""
+    metrics = document["metrics"]
+    return DoneMetrics(**{k: v for k, v in metrics.items() if not k.startswith("baseline_")})
+
+
+def _same_route(drawn: RouteArrays | None, stored: RouteArrays) -> bool:
+    """Whether the route clients have drawn is the stored one: the same edges (two routes
+    through the same nodes may differ by a parallel edge)."""
+    return drawn is not None and drawn.edges.tobytes() == stored.edges.tobytes()
 
 
 def _drain(worker: _Worker, wait: float) -> tuple[list[Message], bool]:

@@ -8,8 +8,8 @@ the store is, and the job limits.
 
 Every error answers an `ErrorBody` (`{code, message, ...}`): an endpoint refuses with
 `routes_api.ApiError(status, code, message, **fields)`, a malformed request is 422
-`INVALID_REQUEST` with pydantic's `errors`, and an unknown path or method is `NOT_FOUND` /
-`METHOD_NOT_ALLOWED`.
+`INVALID_REQUEST` with pydantic's `errors` (without their `input`, which may be a body's
+`Infinity` or `NaN`), and an unknown path or method is `NOT_FOUND` / `METHOD_NOT_ALLOWED`.
 """
 
 from collections.abc import AsyncIterator
@@ -82,10 +82,10 @@ def create_app(settings: ApiSettings) -> FastAPI:
     @app.exception_handler(RequestValidationError)
     async def malformed(request: Request, error: RequestValidationError) -> JSONResponse:
         problems = [f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in error.errors()]
+        # without each error's `input`: a body's Infinity or NaN is not JSON to send back
+        errors = [{k: v for k, v in e.items() if k != "input"} for e in error.errors()]
         body = ErrorBody(
-            code="INVALID_REQUEST",
-            message="; ".join(problems),
-            errors=jsonable_encoder(error.errors()),
+            code="INVALID_REQUEST", message="; ".join(problems), errors=jsonable_encoder(errors)
         )
         return JSONResponse(body.model_dump(), status_code=422)
 

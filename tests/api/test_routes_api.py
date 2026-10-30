@@ -18,9 +18,10 @@ from worst_route.api.app import Api, ApiSettings, create_app
 from worst_route.api.jobs import JobSettings
 from worst_route.engine.io import feature_collection
 from worst_route.engine.snap import StopUnreachable
+from worst_route.graph.testing import Edge, make_graph
 
-from ..engine.graphs import at_node
-from .support import GRID, GRID_BBOX, slow_splices, until
+from ..engine.graphs import X0, Y0, at_node
+from .support import GRID, GRID_BBOX, save_build, slow_splices, until
 
 pytestmark = pytest.mark.anyio
 
@@ -179,6 +180,125 @@ async def test_a_job_streams_its_route_and_stores_it(data: Path) -> None:
         assert [e["event"] for e in resumed] == ["snapshot", "done"]
 
 
+async def test_a_target_job_stops_within_it_and_reports_it(data: Path) -> None:
+    async with serving(data) as (client, _):
+        body = job_body(
+            stops=[stop(0), stop(99)], target={"kind": "ratio", "value": 3}, max_iterations=10**6
+        )
+        _, events = await finished(client, body)
+        done = events[-1]["data"]
+        assert done["stopped_because"] == "target"
+        assert done["metrics"]["target"] == {
+            "kind": "ratio",
+            "value": 3.0,
+            "achieved": done["metrics"]["ratio"],
+            "within_tolerance": True,
+        }
+        doc = (await client.get(f"/routes/{done['route_id']}")).json()
+        assert doc["request"]["target"] == {"kind": "ratio", "value": 3.0, "seconds": None}
+        assert doc["metrics"]["target"] == done["metrics"]["target"]
+        assert doc["run"]["stopped_because"] == "target"
+
+        body = job_body(target={"kind": "duration", "seconds": 600}, max_iterations=10**6)
+        _, events = await finished(client, body)
+        done = events[-1]["data"]
+        assert done["stopped_because"] == "target"
+        assert done["metrics"]["target"]["kind"] == "duration"
+        assert abs(done["metrics"]["target"]["achieved"] / 600 - 1) <= 0.02
+
+        _, events = await finished(client, job_body())  # max: a null target
+        assert events[-1]["data"]["metrics"]["target"] is None
+        doc = (await client.get(f"/routes/{events[-1]['data']['route_id']}")).json()
+        assert doc["metrics"]["target"] is None
+
+
+async def test_a_stored_route_through_a_parallel_edge_comes_as_a_snapshot(tmp_path: Path) -> None:
+    # 0 -> 1 is two edges, 100 m and 300 m, then 1 -> 2 (100 m): the baseline is 200 m and a
+    # 1.45 × target (284-296 m) lies between the only two routes, 200 m and 400 m, which pass
+    # through the same nodes. The run overshoots to 400 m, cannot shrink back into the band and
+    # stores the closer 200 m route, which the client has not drawn last
+    data = tmp_path / "line"
+    xy = [(X0, Y0), (X0 + 100, Y0), (X0 + 200, Y0)]
+    line = make_graph(xy, [Edge(0, 1, 100.0), Edge(0, 1, 300.0), Edge(1, 2, 100.0)])
+    save_build(data, line, "line")
+    async with serving(data) as (client, _):
+        stops = [{"lat": lat, "lon": lon} for lat, lon in (at_node(line, 0), at_node(line, 2))]
+        body = {
+            "region": "portland",
+            "stops": stops,
+            "seed": 1,
+            "target": {"kind": "ratio", "value": 1.45},
+            "max_iterations": 10**6,
+        }
+        job_id, events = await finished(client, body)
+        assert [e["event"] for e in events][-3:] == ["progress", "snapshot", "done"]
+        assert events[-3]["data"]["metrics"]["length_m"] == 400.0
+        assert events[-2]["data"]["metrics"]["length_m"] == 200.0
+        done = events[-1]["data"]
+        assert done["stopped_because"] == "converged" and done["metrics"]["length_m"] == 200.0
+        status = (await client.get(f"/jobs/{job_id}")).json()
+        assert status["metrics"] == {k: done["metrics"][k] for k in status["metrics"]}
+        assert status["snapshot"]["metrics"]["length_m"] == 200.0
+        doc = (await client.get(f"/routes/{done['route_id']}")).json()
+        assert doc["metrics"]["length_m"] == 200.0 and doc["metrics"]["target"]["achieved"] == 1.0
+
+
+async def test_a_ratio_target_for_a_round_trip_is_refused_first(data: Path) -> None:
+    async with serving(data) as (client, _):
+        loop = [stop(45), stop(45)]
+        for body in (
+            job_body(stops=loop, target={"kind": "ratio", "value": 3}),
+            job_body(stops=loop, target={"kind": "ratio", "value": 3}, region="atlantis"),
+        ):
+            r = await client.post("/jobs", json=body)
+            assert r.status_code == 422 and r.json() == {
+                "code": "INVALID_REQUEST",
+                "message": "a round trip has no ratio target: its baseline is 0 m",
+                "field": "target",
+            }
+        _, events = await finished(client, job_body(stops=loop))
+        again = {
+            "region": "portland",
+            "base_route_id": events[-1]["data"]["route_id"],
+            "target": {"kind": "ratio", "value": 3},
+        }
+        r = await client.post("/jobs", json=again)
+        assert r.status_code == 422 and r.json()["field"] == "target"
+
+
+async def test_a_body_with_infinity_or_nan_is_refused(data: Path) -> None:
+    async with serving(data) as (client, _):
+        for number in ("Infinity", "-Infinity", "NaN"):
+            text = json.dumps(job_body()).replace('"budget_s": 60', f'"budget_s": {number}')
+            headers = {"content-type": "application/json"}
+            r = await client.post("/jobs", content=text, headers=headers)
+            assert r.status_code == 422 and r.json()["code"] == "INVALID_REQUEST", r.text
+            assert r.json()["message"].startswith("body.budget_s: ")
+            assert "input" not in r.json()["errors"][0]
+
+
+async def test_make_it_worse_with_a_smaller_target_shrinks_the_route(data: Path) -> None:
+    async with serving(data) as (client, _):
+        body = job_body(stops=[stop(0), stop(99)], max_iterations=10**6)
+        _, events = await finished(client, body)
+        worst = events[-1]["data"]
+        assert worst["stopped_because"] == "converged" and worst["metrics"]["ratio"] > 5
+        again = {
+            "region": "portland",
+            "base_route_id": worst["route_id"],
+            "seed": 2,
+            "target": {"kind": "ratio", "value": 4},
+            "max_iterations": 10**6,
+        }
+        _, events = await finished(client, again)
+        done = events[-1]["data"]
+        assert done["stopped_because"] == "target" and done["metrics"]["target"]["within_tolerance"]
+        lengths = [e["data"]["metrics"]["length_m"] for e in events if e["event"] == "progress"]
+        assert (
+            lengths == sorted(lengths, reverse=True) and lengths[0] < worst["metrics"]["length_m"]
+        )
+
+
 async def test_a_departure_gives_an_arrival(data: Path) -> None:
     async with serving(data) as (client, _):
         body = job_body(
@@ -199,7 +319,10 @@ async def test_a_departure_gives_an_arrival(data: Path) -> None:
         ({"objective": "nonsense"}, "INVALID_REQUEST"),
         ({"region": "atlantis"}, "UNKNOWN_REGION"),
         ({"objective": "time"}, "NOT_YET"),
-        ({"target": {"kind": "ratio", "value": 50}}, "NOT_YET"),
+        ({"target": {"kind": "ratio", "value": 1}}, "INVALID_REQUEST"),
+        ({"target": {"kind": "ratio", "seconds": 600}}, "INVALID_REQUEST"),
+        ({"target": {"kind": "duration", "seconds": 8 * 24 * 3600}}, "INVALID_REQUEST"),
+        ({"target": {"kind": "ratio", "value": 3}, "stops": [stop(0), stop(0)]}, "INVALID_REQUEST"),
         ({"budget_s": 121}, "BUDGET_TOO_LARGE"),
         ({"base_route_id": "000000000000"}, "UNKNOWN_ROUTE"),
         ({"seed": 2**64}, "INVALID_REQUEST"),

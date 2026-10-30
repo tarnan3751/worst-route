@@ -1,14 +1,17 @@
 """The API's request and response shapes (`docs/reference/api.md`; `docs/PLAN.md` §4).
 
 `RouteRequestIn`, the body of `POST /jobs`, mirrors `engine.request.RouteRequest` field for
-field under the engine's names, with the stops as `{lat, lon, label}` objects, plus `region`,
-`target` (only `max` is planned yet), `vehicle` and `departure` (kept with the route for the
-presentation) and `base_route_id` ("make it worse": the stops, tier and leash then come from
-that route, so `stops` may be left out). `engine_request(seed)` is the engine's request.
-`SnapIn` is the body of `POST /snap`.
+field under the engine's names, with the stops as `{lat, lon, label}` objects and the target as
+`{kind: "max"}`, `{kind: "ratio", value}` or `{kind: "duration", seconds}` (the engine's
+`Target`, whose bounds it checks), plus `region`, `vehicle` and `departure` (kept with the
+route for the presentation) and `base_route_id` ("make it worse": the stops, tier and leash then
+come from that route, so `stops` may be left out). `engine_request(seed)` is the engine's
+request. `SnapIn` is the body of `POST /snap`.
 
-The responses: `Health`, `RegionOut`, `SnapOut`, `JobCreated`, `JobStatus`, `RouteDocument`,
-`ValidationOut`, and `ErrorBody` (`{code, message}` and the error's own fields) for every error.
+The responses: `Health`, `RegionOut`, `SnapOut`, `JobCreated`, `JobStatus`, `RouteDocument`
+(its metrics with `TargetMetrics` for a ratio or duration target), `ValidationOut`, and
+`ErrorBody` (`{code, message}` and the error's own fields) for every error. `Done`'s metrics
+(`DoneMetrics`) carry the target too.
 The SSE events' payloads are `Snapped`, `BaselineOut`, `Progress` (with `SpliceOut`s),
 `Snapshot`, `Done` and `ErrorBody`. Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in
 requests; every number is metric.
@@ -21,10 +24,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from worst_route.config import API_DEFAULT_MAX_ITERATIONS, DEFAULT_BUDGET_S, LEASH_MAX_KM
 from worst_route.engine.request import RouteRequest, TierChoice
+from worst_route.engine.target import Target as EngineTarget
 
 # Modes the plan describes that the engine does not have yet: asked for, they are NOT_YET.
 PLANNED_OBJECTIVES = ("time", "collect", "brand", "alphabet")
-StopReason = Literal["budget", "converged", "cancelled", "timeout"]
+StopReason = Literal["budget", "converged", "target", "cancelled", "timeout"]
 JobState = Literal["queued", "running", "done", "error"]
 
 
@@ -45,11 +49,27 @@ class StopIn(_In):
 
 
 class Target(_In):
-    """How much worse: `max` (as bad as the budget allows); `ratio` and `duration` are NOT_YET."""
+    """How much worse: `max` (as bad as the budget allows), a `ratio` to the baseline (`value`,
+    ×, more than 1) or a `duration` (`seconds`, at most 7 days), within ±2 %."""
 
     kind: Literal["max", "ratio", "duration"] = "max"
     value: float | None = Field(default=None, gt=0)  # ratio, ×
     seconds: float | None = Field(default=None, gt=0)  # duration
+
+    @model_validator(mode="after")
+    def _one_number(self) -> "Target":
+        wanted = {"max": None, "ratio": "value", "duration": "seconds"}[self.kind]
+        for name in ("value", "seconds"):
+            if name != wanted and getattr(self, name) is not None:
+                raise ValueError(f"a {self.kind} target takes no {name}")
+        self.engine_target()  # its bounds
+        return self
+
+    def engine_target(self) -> EngineTarget:
+        """The engine's target."""
+        return EngineTarget(
+            kind=self.kind, value=self.value if self.seconds is None else self.seconds
+        )
 
 
 class Vehicle(_In):
@@ -93,6 +113,7 @@ class RouteRequestIn(_In):
             budget_s=self.budget_s,
             max_iterations=self.max_iterations,
             seed=seed,
+            target=self.target.engine_target(),
         )
 
 
@@ -170,6 +191,21 @@ class RouteMetrics(_Out):
     ratio: float | None
 
 
+class TargetMetrics(_Out):
+    """A ratio or duration target and what was achieved (× for a ratio, seconds for a duration)."""
+
+    kind: Literal["ratio", "duration"]
+    value: float
+    achieved: float
+    within_tolerance: bool
+
+
+class DoneMetrics(RouteMetrics):
+    """`done`'s metrics: the stored route's, with its target (null for max)."""
+
+    target: TargetMetrics | None = None
+
+
 class LatLon(_Out):
     lat: float
     lon: float
@@ -241,7 +277,7 @@ class Done(_Out):
 
     route_id: str
     stopped_because: StopReason
-    metrics: RouteMetrics
+    metrics: DoneMetrics
 
 
 class JobStatus(_Out):
@@ -290,6 +326,7 @@ class DocumentMetrics(_Out):
     time_ratio: float | None
     departure: datetime | None
     arrival: datetime | None
+    target: TargetMetrics | None
 
 
 class Run(_Out):

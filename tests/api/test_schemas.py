@@ -3,9 +3,10 @@ import math
 import pytest
 from pydantic import ValidationError
 
-from worst_route.api.schemas import RouteRequestIn
+from worst_route.api.schemas import Done, RouteRequestIn, TargetMetrics
 from worst_route.config import API_DEFAULT_MAX_ITERATIONS, DEFAULT_MAX_ITERATIONS
 from worst_route.engine.request import RouteRequest
+from worst_route.engine.target import Target
 
 STOPS = [
     {"lat": 45.5231, "lon": -122.6765, "label": "Powell's"},
@@ -42,6 +43,32 @@ def test_the_defaults_leave_the_seconds_budget_to_end_a_run() -> None:
     assert again == req
 
 
+@pytest.mark.parametrize(
+    ("target", "engine"),
+    [
+        ({"kind": "max"}, Target()),
+        ({"kind": "ratio", "value": 50}, Target(kind="ratio", value=50)),
+        ({"kind": "duration", "seconds": 32400}, Target(kind="duration", value=32400)),
+    ],
+)
+def test_the_target_is_the_engine_s(target: dict[str, object], engine: Target) -> None:
+    req = RouteRequestIn.model_validate({"region": "portland", "stops": STOPS, "target": target})
+    assert req.engine_request(1).target == engine
+
+
+def test_done_carries_a_typed_target() -> None:
+    metrics = {"length_m": 900.0, "time_s": 81.0, "ratio": 3.0}
+    target = {"kind": "ratio", "value": 3.0, "achieved": 3.0, "within_tolerance": True}
+    done = Done(route_id="r", stopped_because="target", metrics={**metrics, "target": target})
+    assert done.metrics.target == TargetMetrics(**target)
+    plain = Done(route_id="r", stopped_because="budget", metrics=metrics)
+    assert plain.metrics.target is None and plain.model_dump()["metrics"]["target"] is None
+    with pytest.raises(ValidationError):
+        Done(
+            route_id="r", stopped_because="target", metrics={**metrics, "target": {"kind": "ratio"}}
+        )
+
+
 def test_stops_may_be_left_out_only_to_continue_a_route() -> None:
     with pytest.raises(ValidationError, match="stops are needed"):
         RouteRequestIn.model_validate({"region": "portland"})
@@ -63,6 +90,12 @@ def test_stops_may_be_left_out_only_to_continue_a_route() -> None:
         {"seed": 2**64},
         {"tier": "T9"},
         {"target": {"kind": "slowly"}},
+        {"target": {"kind": "max", "value": 2}},
+        {"target": {"kind": "ratio"}},
+        {"target": {"kind": "ratio", "value": 1}},
+        {"target": {"kind": "ratio", "value": 5, "seconds": 60}},
+        {"target": {"kind": "duration", "value": 60}},
+        {"target": {"kind": "duration", "seconds": 7 * 24 * 3600 + 1}},
         {"vehicle": {"mpg": 0, "gas_price_usd": 3}},
         {"constraints": {"no_left": True}},
     ],

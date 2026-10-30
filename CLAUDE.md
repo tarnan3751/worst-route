@@ -25,9 +25,11 @@ step), snapping and masks. So is the engine (`docs/reference/engine.md`):
 the route and its splice, the seed route, the detours, the worsen loop, the distance objective,
 the validator, and `worst-route plan` / `validate` on a saved build. So is the API
 (`docs/reference/api.md`, M2's second step): `worst-route serve`, jobs in worker processes, the
-route streamed over Server-Sent Events, the route store and "make it worse". The frontend does
-not exist yet. The plan (`docs/PLAN.md`, 2026-10-30) is written and its open questions answered as
-far as `docs/project_overview.md` §3 records. **M1 is built**: in the acceptance run on the
+route streamed over Server-Sent Events, the route store and "make it worse". So are the
+inefficiency targets (M2's fourth step): a ratio or a duration, reached within ±2 %, from
+`plan --target` and the API. The frontend does not exist yet. The plan (`docs/PLAN.md`,
+2026-10-30) is written and its open questions answered as far as `docs/project_overview.md` §3
+records. **M1 is built**: in the acceptance run on the
 Portland build (`uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20
 --seed 1 --budget 30`) all 20 pairs plan, the validator passes all 20, and the median ratio is
 21.5× (`docs/project_overview.md` §2.2). The default backend (`auto`) is the CSR backend on
@@ -71,7 +73,7 @@ with the milestone that adds it, *(M1)* or *(M2)*.
 | Lint and format check | `uv run ruff check . && uv run ruff format --check .` |
 | Types | `uv run mypy src` |
 | Pipeline, one step (all eight are real, run in this order; `filter` and `build` also take `--source PATH`, `cleanup` and `tiers` take `--allow-fragmented`) | `uv run worst-route pipeline <download\|filter\|build\|cleanup\|enrich\|tiers\|save\|qa> --region portland` |
-| Plan a route from the CLI, validated | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
+| Plan a route from the CLI, validated (`--target ratio:20` or `duration:9h` aims for a target within ±2 %; `--base route.json` continues a saved route) | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
 | Validate a saved route | `uv run worst-route validate route.json` |
 | API server (the coordinator only; agents use `--port 0` or a port of their own, and `--store` in their own tree) | `uv run worst-route serve --region portland` |
 | Frontend dev server / build / typecheck | `cd frontend && npm run dev` / `npm run build` / `npm run typecheck` *(M2)* |

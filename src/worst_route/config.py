@@ -118,3 +118,25 @@ _T3 = _T2 | {HighwayClass.TERTIARY, HighwayClass.TERTIARY_LINK}
 
 # The classes of tiers T0..T4; each tier contains the one before it, T4 is every class.
 TIERS: tuple[frozenset[HighwayClass], ...] = (_T0, _T1, _T2, _T3, frozenset(HighwayClass))
+
+
+# The engine (`docs/reference/engine.md`). A request's defaults and the masks it implies: the
+# tier is chosen by the straight-line length of the polyline through the stops (T4 below the
+# first threshold, T0 beyond the last), the leash is LEASH_FACTOR × that length within
+# [LEASH_MIN_KM, LEASH_MAX_KM], and every road within BUBBLE_KM of a stop stays usable. A
+# request's own leash is at most LEASH_MAX_KM and its budget at most BUDGET_MAX_S.
+DEFAULT_BUDGET_S = 20.0
+BUDGET_MAX_S = 120.0
+DEFAULT_MAX_ITERATIONS = 5000
+TIER_AUTO_KM = (15.0, 60.0, 250.0, 800.0)
+LEASH_FACTOR = 0.6
+LEASH_MIN_KM = 3.0
+LEASH_MAX_KM = 150.0
+BUBBLE_KM = 3.0
+
+# The seed route (`docs/PLAN.md` §3.2-3.3): a leg that cannot be built re-snaps a stop up to
+# SNAP_FALLBACK_CANDIDATES times, after up to SEED_PENALTY_ROUNDS rounds of rebuilding the
+# earlier legs with SEED_PENALTY_FACTOR × the weight on the edges of the nodes they took.
+SNAP_FALLBACK_CANDIDATES = 10
+SEED_PENALTY_ROUNDS = 4
+SEED_PENALTY_FACTOR = 8.0

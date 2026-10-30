@@ -2,7 +2,9 @@
 
 `route` holds `Route`, whose `splice()` is the only way a route changes and refuses anything
 that would repeat a node, an edge, a twin, a banned transition or a stop; `validator` proves a
-finished route legal from the raw data, independently of `route`. How the engine works:
+finished route legal from the raw data, independently of `route`. `request` holds the request
+and the masks it implies; `snap` puts the stops on nodes; `seed_route` builds the baseline and
+the seed route the loop starts from. How the engine works:
 `docs/reference/engine.md`; the design: `docs/PLAN.md` §3.
 
 `ENGINE_VERSION` is recorded with every route: bump it when the same build, request and seed

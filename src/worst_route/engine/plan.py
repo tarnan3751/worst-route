@@ -14,6 +14,16 @@ node near a stop can play its role) and `StopUnreachable` (a leg no route covers
 repeating a road). The seed checks every leg itself, so a `ValueError` or `IllegalSplice` from
 seeding would be a bug; it is still reported as `StopUnreachable` for the leg at fault, one
 line from the CLI rather than a traceback.
+
+Two hooks serve the API (`docs/reference/api.md`). `on_start(snaps, masks, baseline, route)` is
+called once, after the route the loop starts from is made and before the loop. `base`, a route
+planned earlier on this build for the same stops, tier and leash, is what the loop starts from
+instead of the seed ("make it worse"). `check_base` refuses it with `BaseRouteMismatch` (a
+`ValueError` naming the field at fault) unless its stop nodes are the ones `resolve_stops`
+gives, every node lies in the request's active mask and none of its edges is one the request
+bans; `Route.new` then checks it as it checks any route (repeats, twins, transitions). Nothing
+is drawn from the rng before the loop then, so the run is fixed by the base, the request and
+its seed. Without them, planning is exactly as above.
 """
 
 from bisect import bisect_right
@@ -27,7 +37,12 @@ from worst_route.engine.request import RequestMasks, RouteRequest, request_masks
 from worst_route.engine.route import IllegalSplice, Route
 from worst_route.engine.seed_route import Baseline, baseline_route, resolve_stops, seed_route
 from worst_route.engine.snap import StopUnreachable
-from worst_route.engine.validator import ValidationFailed, ValidationReport, validate_route
+from worst_route.engine.validator import (
+    RouteLike,
+    ValidationFailed,
+    ValidationReport,
+    validate_route,
+)
 from worst_route.engine.worsen import Budget, ProgressEvent, WorsenResult, run_worsen
 from worst_route.graph.backend import GraphBackend
 from worst_route.graph.backends import make_backend
@@ -55,10 +70,13 @@ def plan_route(
     *,
     backend: GraphBackend | None = None,
     spatial: SpatialIndex | None = None,
+    base: RouteLike | None = None,
+    on_start: Callable[[tuple[Snap, ...], RequestMasks, Baseline, Route], None] | None = None,
     on_progress: Callable[[ProgressEvent, Baseline], None] | None = None,
     check_delta: bool = False,
 ) -> PlanResult:
-    """Plan, worsen and validate the route `request` asks for on this build."""
+    """Plan, worsen and validate the route `request` asks for on this build (from `base` if
+    given)."""
     backend = backend if backend is not None else make_backend(data)
     spatial = spatial if spatial is not None else SpatialIndex(data)
     masks = request_masks(spatial, data, request)
@@ -67,30 +85,39 @@ def plan_route(
 
     snaps = resolve_stops(data, spatial, backend, request, masks)
     stop_nodes = [s.node for s in snaps]
-    try:
-        seed = seed_route(
-            backend, spatial, data, snaps, masks.active, masks.banned, rng, r_max=r_max
-        )
-    except (ValueError, IllegalSplice) as error:
-        raise _refused(error, None) from error
+    if base is None:
+        try:
+            seed = seed_route(
+                backend, spatial, data, snaps, masks.active, masks.banned, rng, r_max=r_max
+            )
+        except (ValueError, IllegalSplice) as error:
+            raise _refused(error, None) from error
+        nodes, edges, stop_idx = seed.nodes, seed.edges, seed.stop_idx
+    else:
+        check_base(base, masks, stop_nodes)
+        nodes, edges, stop_idx = base.nodes, base.edges, base.stop_idx
     baseline = baseline_route(backend, data, stop_nodes, masks.active, masks.banned)
     objective = make_objective(
         request.objective, data, baseline_length_m=baseline.length_m, r_max=r_max
     )
-    score, metrics = objective.evaluate(seed.nodes, seed.edges)
+    score, metrics = objective.evaluate(nodes, edges)
     try:
         route = Route.new(
             data,
-            seed.nodes,
-            seed.edges,
-            seed.stop_idx,
+            nodes,
+            edges,
+            stop_idx,
             score=score,
             metrics=metrics,
             seed=request.seed,
             extra_banned=masks.banned,
         )
     except (ValueError, IllegalSplice) as error:
-        raise _refused(error, seed.stop_idx) from error
+        if base is not None:
+            raise
+        raise _refused(error, stop_idx) from error
+    if on_start is not None:
+        on_start(tuple(snaps), masks, baseline, route)
 
     def progress(event: ProgressEvent) -> None:
         if on_progress is not None:
@@ -120,6 +147,30 @@ def plan_route(
     if not report.ok:
         raise ValidationFailed(report)
     return PlanResult(request, masks, tuple(snaps), baseline, run.best, run, report, backend.name)
+
+
+class BaseRouteMismatch(ValueError):  # noqa: N818 (the API error it becomes)
+    """A base route the request cannot continue; `field` is `"stops"` or `"route"`."""
+
+    def __init__(self, field: str, message: str) -> None:
+        super().__init__(message)
+        self.field = field
+
+
+def check_base(base: RouteLike, masks: RequestMasks, stop_nodes: Sequence[int]) -> None:
+    """Raise `BaseRouteMismatch` unless `base` may be continued under these masks and stops."""
+    nodes, edges = np.asarray(base.nodes), np.asarray(base.edges)
+    if [int(nodes[k]) for k in base.stop_idx] != list(stop_nodes):
+        message = "the base route's stops are not the ones the request resolves to"
+        raise BaseRouteMismatch("stops", message)
+    outside = np.flatnonzero(~masks.active[nodes])
+    if len(outside):
+        message = f"the base route leaves the request's area at node {nodes[outside[0]]}"
+        raise BaseRouteMismatch("route", message)
+    banned = np.flatnonzero(masks.banned[edges])
+    if len(banned):
+        message = f"the base route drives edge {edges[banned[0]]}, which the request bans"
+        raise BaseRouteMismatch("route", message)
 
 
 def _refused(error: ValueError | IllegalSplice, stop_idx: Sequence[int] | None) -> StopUnreachable:

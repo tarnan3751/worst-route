@@ -28,6 +28,10 @@ restricted to `edge_mask` (default: every edge); ties go to the component scipy 
 
 A `Path` is `(nodes, edges)`, `edges[k]` going from `nodes[k]` to `nodes[k + 1]`; from a node
 to itself it is that one node and no edge.
+
+The functions below are what every backend shares, so their errors and the SCC mask are the
+same whichever backend runs: `check_ends`, `check_weights`, `enterable` (the combined "may
+enter" mask, checking `node_mask` and `forbid_nodes`), `banned_mask` and `largest_scc_mask`.
 """
 
 import math
@@ -35,6 +39,8 @@ from typing import Protocol
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.sparse import csr_array
+from scipy.sparse.csgraph import connected_components
 
 from worst_route.graph.data import GraphData
 
@@ -77,3 +83,57 @@ class GraphBackend(Protocol):
     def largest_scc_mask(self, edge_mask: NDArray[np.bool_] | None = None) -> NDArray[np.bool_]:
         """The nodes of the largest strongly connected component over `edge_mask`."""
         ...
+
+
+def check_ends(data: GraphData, src: int, dst: int) -> None:
+    """Raise `ValueError` unless both node ids lie in [0, n)."""
+    if not (0 <= src < data.n and 0 <= dst < data.n):
+        raise ValueError(f"src, dst: node ids must lie in [0, {data.n})")
+
+
+def check_weights(data: GraphData, weights: NDArray[np.float64]) -> None:
+    """Raise `ValueError` unless `weights` are float64, one per edge, non-negative, not NaN."""
+    if weights.dtype != np.float64 or weights.shape != (data.m,):
+        raise ValueError(f"weights: need float64 of shape ({data.m},)")
+    if not (weights >= 0).all():
+        raise ValueError("weights: must be non-negative and not NaN")
+
+
+def enterable(
+    data: GraphData, node_mask: NDArray[np.bool_] | None, forbid_nodes: NDArray[np.bool_] | None
+) -> NDArray[np.bool_]:
+    """The nodes a search may enter: `node_mask` (default every node) and not `forbid_nodes`."""
+    n = data.n
+    enter = np.ones(n, dtype=np.bool_) if node_mask is None else node_mask
+    _checked("node_mask", enter, n)
+    if forbid_nodes is not None:
+        enter = enter & ~_checked("forbid_nodes", forbid_nodes, n)
+    return enter
+
+
+def banned_mask(data: GraphData, banned_edges: NDArray[np.bool_] | None) -> NDArray[np.bool_]:
+    """`banned_edges` checked, or no edge banned."""
+    if banned_edges is None:
+        return np.zeros(data.m, dtype=np.bool_)
+    return _checked("banned_edges", banned_edges, data.m)
+
+
+def largest_scc_mask(
+    data: GraphData, edge_mask: NDArray[np.bool_] | None = None
+) -> NDArray[np.bool_]:
+    """The nodes of the largest strongly connected component over `edge_mask`."""
+    n, u, v = data.n, data.edge_u, data.edge_v
+    if edge_mask is not None:
+        keep = _checked("edge_mask", edge_mask, data.m)
+        u, v = u[keep], v[keep]
+    graph = csr_array((np.ones(len(u), dtype=np.int32), (u, v)), shape=(n, n))
+    _, labels = connected_components(graph, directed=True, connection="strong")
+    largest = np.argmax(np.bincount(labels))
+    mask: NDArray[np.bool_] = labels == largest
+    return mask
+
+
+def _checked(name: str, mask: NDArray[np.bool_], size: int) -> NDArray[np.bool_]:
+    if mask.dtype != np.bool_ or mask.shape != (size,):
+        raise ValueError(f"{name}: need bool of shape ({size},)")
+    return mask

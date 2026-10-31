@@ -8,9 +8,11 @@ from worst_route.config import (
     ALLEY_SERVICE,
     KEPT_HIGHWAY,
     REGIONS,
+    STATES,
     HighwayClass,
     Region,
     Settings,
+    display_name,
     settings,
 )
 
@@ -71,13 +73,29 @@ def test_the_all_roads_national_region_and_its_intermediate_scale() -> None:
     assert west.classes is None and west.bbox is None and west.crs_epsg == 5070
 
 
+def test_every_contiguous_state_and_dc_has_an_all_roads_region() -> None:
+    conus = [state for state in STATES if state not in ("alaska", "hawaii")]
+    assert len(conus) == 49 and "district-of-columbia" in conus
+    for state in conus:
+        region = REGIONS[state]
+        assert region.name == state and region.states == (state,)
+        assert region.bbox is None and region.classes is None
+        assert region.crs_epsg == (32610 if state == "oregon" else 5070)  # Oregon keeps its own
+        assert region.display == display_name(state) and region.fips == {STATES[state][1]}
+    assert "alaska" not in REGIONS and "hawaii" not in REGIONS
+    for name in ("portland", "us-t1", "us", "west-coast", "oregon-washington"):
+        assert name in REGIONS
+    assert REGIONS["oregon-washington-t1"].classes == "T1"
+
+
 def test_a_region_names_a_state() -> None:
     with pytest.raises(ValidationError):
         Region(name="nowhere", states=(), crs_epsg=32610)
 
 
 def test_a_region_s_display_name_and_states() -> None:
-    names = {name: region.display for name, region in REGIONS.items()}
+    generated = {name for name in STATES if name != "oregon"}  # the state regions, named by default
+    names = {name: region.display for name, region in REGIONS.items() if name not in generated}
     assert names == {
         "portland": "Portland",
         "oregon": "Oregon",

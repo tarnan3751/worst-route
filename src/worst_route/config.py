@@ -9,11 +9,11 @@ the API offers the frontend (`WORST_ROUTE_BASEMAP`, `raster` or `pmtiles`;
 `settings.cache_clear()`.
 
 `REGIONS` names the areas the pipeline builds (`docs/PLAN.md` §2): each is one or more Geofabrik
-state extracts, read in order and merged, optionally clipped to a bbox and limited to a tier's
-road classes, with the projected CRS its metric steps use (the regions of several states follow
-`STATES`) and the name the frontend shows (`display`); `PIPELINE_VERSION` is the version every
-build id and sidecar records. Speeds, tier definitions, class allowlists and defaults join this
-module as their steps are built.
+state extracts, read in order and merged, optionally clipped to a bbox and limited to a tier's road
+classes, with the projected CRS its metric steps use (the regions of several states follow `STATES`,
+and so does a region for each contiguous state) and the name the frontend shows (`display`);
+`PIPELINE_VERSION` is the version every build id and sidecar records. Speeds, tier definitions,
+class allowlists and defaults join this module as their steps are built.
 
 `HighwayClass` numbers the road classes a build keeps (stored per edge as `edge_highway`) and
 `TIERS` lists each tier's classes (`docs/PLAN.md` §2.6). `DEFAULT_BACKEND` names the graph
@@ -583,6 +583,11 @@ REGIONS["west-coast"] = Region(
     states=("california", "oregon", "washington"),
     crs_epsg=5070,
 )
+# One all-roads region for each contiguous state and DC, named by its slug: regions one may build
+# (`docs/reference/pipeline.md`, **The state builds**, where they measure the array pipeline at
+# state scale), projected to CONUS Albers as the national builds are, for one server to mix them.
+# Oregon keeps its own region, in its UTM zone, and its build.
+REGIONS.update({s: Region(name=s, states=(s,), crs_epsg=5070) for s in _CONUS if s not in REGIONS})
 
 # Presentation (`docs/reference/presentation.md`). Directions: a left or right turn is "slight"
 # when its change of bearing is at most DIRECTIONS_SLIGHT_DEG and "sharp" beyond

@@ -15,14 +15,21 @@
 `source_timestamp` reads an extract's data date from its header, for the step's sidecar.
 
 Sources (several for a multi-state build) are read in order; a way or POI already taken from an
-earlier source is skipped, though the way's nodes are still taken from each source that holds
-it, and the per-source road files are merged into one, sorted, each node once at its newest
-version: so when the extracts differ only in their shared nodes, the merge writes the roads one
-extract of their union would (a way or POI that differs keeps the first extract's version).
-Outputs are written to temporary files and renamed into place. Values are copied out of
-pyosmium's objects, which are views into its buffers.
+earlier source is skipped (the ways taken are kept in an `osmium.index.IdSet`, a bit set, not a
+Python set), though the way's nodes are still taken from each source that holds it, and the
+per-source road files are merged into one, sorted, each node once at its newest version: so
+when the extracts differ only in their shared nodes, the merge writes the roads one extract of
+their union would (a way or POI that differs keeps the first extract's version). The merge
+(`merge_parts`) streams: it reads the sorted part files in step, one object of each at a time,
+so its memory grows with the number of sources, not with their nodes, and it writes what
+`osmium.MergeInputReader`'s simplifying merge of them would, byte for byte, a negative id never
+reaching it (the `IdSet` and `BackReferenceWriter` refuse one). Outputs are written
+to temporary files and renamed into place. Values are copied out of pyosmium's objects, which
+are views into its buffers, but for the merge, which writes each object before its file reads
+on.
 """
 
+import heapq
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -95,19 +102,15 @@ def filter_roads(
     pois_out.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=roads_out.parent) as tmp:
         parts = [Path(tmp, f"roads.{i}.osm.pbf") for i in range(len(sources))]
-        taken: set[int] = set()
+        taken = osmium.index.IdSet()  # way ids
         on_kept_ways: set[int] = set()  # node ids, collected only when clipping
         for source, part in zip(sources, parts, strict=True):
             _write_roads(source, part, box, classes, taken, on_kept_ways, stats)
         if len(parts) == 1:
             parts[0].replace(roads_out)
         else:
-            merger = osmium.MergeInputReader()
-            for part in parts:
-                merger.add_file(str(part))
             merged = Path(tmp, "roads.osm.pbf")
-            with osmium.SimpleWriter(merged) as writer:
-                merger.apply(writer, simplify=True)
+            merge_parts(parts, merged)
             merged.replace(roads_out)
 
         table = _collect_pois(sources, box, on_kept_ways, stats)
@@ -122,7 +125,7 @@ def _write_roads(
     out: Path,
     box: osmium.osm.Box | None,
     classes: frozenset[RoadClass] | None,
-    taken: set[int],
+    taken: osmium.index.IdSet,
     on_kept_ways: set[int],
     stats: FilterStats,
 ) -> None:
@@ -147,11 +150,57 @@ def _write_roads(
                 stats.ways_duplicate += 1
                 writer.id_tracker.add_references(way)  # its nodes: the newest wins the merge
             else:
-                taken.add(way.id)
+                taken.set(way.id)
                 if box is not None:
                     on_kept_ways.update(n.ref for n in way.nodes)
                 writer.add_way(way)
                 stats.ways_kept += 1
+
+
+TYPE_ORDER = {"n": 0, "w": 1, "r": 2}  # an OSM file's order: nodes, then ways, then relations
+
+
+def merge_parts(parts: list[Path], out: Path) -> None:
+    """Write the sorted union of the sorted OSM files `parts` to `out`, each object once: its
+    newest version, of those the newest timestamp, of those the earliest part's, as
+    `osmium.MergeInputReader`'s simplifying merge chooses, but reading the parts in step instead
+    of holding them all. Its output is that merge's byte for byte for objects of non-negative ids,
+    the only ones a part holds (`osmium.index.IdSet` and `BackReferenceWriter` refuse others),
+    each at most once in a part, as `BackReferenceWriter` writes them; a further copy of an
+    object in one part is passed over (that merge keeps the part's newest, so the two agree when
+    a part's copies are the same).
+
+    A heap holds each part's next object, keyed by (type, id, newest version first, part). The
+    copies of one object come off it together, and the one chosen is written as it is (a
+    `FileProcessor`'s object stays valid until its own file reads on, which is only after it
+    has been written); the others are passed over."""
+    pool = osmium.io.ThreadPool()
+    files = [iter(osmium.FileProcessor(part, thread_pool=pool)) for part in parts]
+    current: list[Any] = [None] * len(files)
+    heap: list[tuple[int, int, int, int]] = []
+
+    def advance(k: int) -> None:
+        current[k] = obj = cast(osmium.osm.Node | osmium.osm.Way | None, next(files[k], None))
+        if obj is not None:
+            heapq.heappush(heap, (TYPE_ORDER[obj.type_str()], obj.id, -obj.version, k))
+
+    with osmium.SimpleWriter(out) as writer:
+        for k in range(len(files)):
+            advance(k)
+        while heap:
+            kind, oid, _, k = heapq.heappop(heap)
+            copies = [k]
+            while heap and heap[0][0] == kind and heap[0][1] == oid:
+                copies.append(heapq.heappop(heap)[3])
+            if len(copies) > 1:  # newest version, newest timestamp, earliest part
+                copies.sort(
+                    key=lambda j: (-current[j].version, -current[j].timestamp.timestamp(), j)
+                )
+            writer.add(current[copies[0]])
+            for j in copies:
+                advance(j)
+            while heap and heap[0][0] == kind and heap[0][1] == oid:  # a part's further copy
+                advance(heapq.heappop(heap)[3])
 
 
 def _collect_pois(

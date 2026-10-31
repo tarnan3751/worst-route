@@ -799,8 +799,8 @@ The plan's assumed defaults, each open until the owner confirms (`docs/PLAN.md` 
     s, their costs per raw edge bracketing it), and enrich, tiers, save and qa about 30–40 min
     (on networkx they took 345 s for the T1 build's 1.3 M edges, about 3 h scaled to 42 M, and
     tens of GB; the array pipeline's speed-up on Portland is about 8×): about 1.5–2.5 h in all,
-    now that enrich, tiers and save run on arrays too, once `filter` merges in a stream (the
-    in-memory merge would hold about 190 M nodes), the peak memory to be measured against the
+    now that enrich, tiers and save run on arrays too and `filter` merges in a stream (the
+    in-memory merge would have held about 190 M nodes), the peak memory to be measured against the
     machine's 24 GB (the T1 build's arrays cleanup peaked at 3.7 GB, most of it the handover to
     networkx, which the steps after cleanup on arrays no longer need). The engine at 17 M nodes
     would need the leash's distances in NumPy (0.16–0.3 µs a node measured: seconds for a
@@ -820,7 +820,7 @@ The plan's assumed defaults, each open until the owner confirms (`docs/PLAN.md` 
     differences of bearing, are unaffected. Geodesic lengths and bearings corrected for it would be
     a pipeline version of their own.
   - The plan's rule (`docs/PLAN.md` §7 M5.3) recommends (a) if the array pipeline makes it a few
-    hours, which its numbers point to, once a streaming merge exists and the memory is measured
+    hours, which its numbers point to, once the memory is measured (the streaming merge exists)
     (the rest of the array pipeline has landed since); the automatic tier for trips beyond a state (T0 and the 150
     km leash) needs retuning either way.
 - Alaska and Hawaii in national builds: left out of `us-t1` and of `us` for now (the coordinator,

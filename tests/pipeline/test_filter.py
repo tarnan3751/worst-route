@@ -9,6 +9,7 @@ from worst_route.pipeline.filter import (
     POI_SCHEMA,
     FilterStats,
     filter_roads,
+    merge_parts,
     poi_kinds,
     source_timestamp,
 )
@@ -208,6 +209,107 @@ def test_the_merge_keeps_each_node_s_newest_version_as_one_extract_would(tmp_pat
     assert versions[3] == (2, 45.5011, -122.6001)
     assert (merged / "r.osm.pbf").read_bytes() == (union / "r.osm.pbf").read_bytes()
     assert (merged / "p.parquet").read_bytes() == (union / "p.parquet").read_bytes()
+
+
+def test_the_streaming_merge_writes_what_merge_input_reader_writes(tmp_path: Path) -> None:
+    # Three sorted parts with interleaved ids, nodes in two or three of them, node 3 at three
+    # versions (the newest in the middle part) and node 6 at the same version twice.
+    def node(version: int, lat: float) -> tuple[int, float, float, dict[str, str]]:
+        return version, lat, -122.6, {}
+
+    parts = [
+        ({1: node(1, 45.50), 3: node(2, 45.51), 5: node(1, 45.52)}, {900: [1, 3, 5]}),
+        ({2: node(1, 45.53), 3: node(3, 45.54), 6: node(1, 45.55)}, {901: [2, 3, 6]}),
+        ({3: node(1, 45.56), 4: node(1, 45.57), 6: node(1, 45.55)}, {902: [3, 4, 6], 903: [4, 6]}),
+    ]
+    files = []
+    for k, (nodes, ways) in enumerate(parts):
+        files.append(tmp_path / f"part{k}.osm")
+        files[-1].write_text(osm_text(nodes, ways))
+    streamed, held = tmp_path / "streamed.osm.pbf", tmp_path / "held.osm.pbf"
+    merge_parts(files, streamed)
+    reader = osmium.MergeInputReader()
+    for file in files:
+        reader.add_file(str(file))
+    with osmium.SimpleWriter(held) as writer:
+        reader.apply(writer, simplify=True)
+    assert streamed.read_bytes() == held.read_bytes()
+    versions = {n.id: n.version for n in osmium.FileProcessor(streamed, osmium.osm.NODE)}
+    assert versions == {1: 1, 2: 1, 3: 3, 4: 1, 5: 1, 6: 1}
+    assert [w.id for w in osmium.FileProcessor(streamed, osmium.osm.WAY)] == [900, 901, 902, 903]
+
+
+def merged_both_ways(files: list[Path], tmp_path: Path) -> Path:
+    """`merge_parts` of `files`, checked byte for byte against `MergeInputReader`'s merge."""
+    streamed, held = tmp_path / "streamed.osm.pbf", tmp_path / "held.osm.pbf"
+    merge_parts(files, streamed)
+    reader = osmium.MergeInputReader()
+    for file in files:
+        reader.add_file(str(file))
+    with osmium.SimpleWriter(held) as writer:
+        reader.apply(writer, simplify=True)
+    assert streamed.read_bytes() == held.read_bytes()
+    return streamed
+
+
+def test_a_node_and_a_way_of_one_id_are_both_merged(tmp_path: Path) -> None:
+    # Node 900 tops the heap while way 900 is b's next object: passing over by id alone, not by
+    # type and id, would drop the way.
+    a, b = tmp_path / "a.osm", tmp_path / "b.osm"
+    a.write_text(osm_text({1: (1, 45.5, -122.6, {}), 900: (1, 45.51, -122.6, {})}, {}))
+    b.write_text(osm_text({1: (1, 45.5, -122.6, {})}, {900: [1]}))
+    merged = merged_both_ways([a, b], tmp_path)
+    objects = [(o.type_str(), o.id) for o in osmium.FileProcessor(merged)]
+    assert objects == [("n", 1), ("n", 900), ("w", 900)]
+
+
+def test_an_object_twice_in_one_part_is_written_once(tmp_path: Path) -> None:
+    # No part the filter writes holds one, but the merge passes over any further copy, as
+    # MergeInputReader keeps one.
+    doubled = tmp_path / "doubled.osm"
+    node = '<node id="5" version="1" lat="45.5" lon="-122.6"/>'
+    doubled.write_text(
+        f'<?xml version="1.0" encoding="UTF-8"?><osm version="0.6">{node}{node}'
+        '<node id="6" version="1" lat="45.6" lon="-122.6"/></osm>\n'
+    )
+    other = tmp_path / "other.osm"
+    other.write_text(osm_text({5: (1, 45.5, -122.6, {})}, {}))
+    merged = merged_both_ways([doubled, other], tmp_path)
+    assert [n.id for n in osmium.FileProcessor(merged)] == [5, 6]
+
+
+def test_an_object_held_across_another_whole_file_is_written_intact(tmp_path: Path) -> None:
+    # The merge holds a's only node while it reads all of b, block after block, then writes it.
+    a, b = tmp_path / "a.osm", tmp_path / "b.osm.pbf"
+    a.write_text(osm_text({10_000_000: (1, 45.6, -122.7, {"name": "held"})}, {}))
+    with osmium.SimpleWriter(b) as writer:
+        for node in range(1, 50_001):
+            writer.add_node(osmium.osm.mutable.Node(id=node, version=1, location=(-122.6, 45.5)))
+    merged = merged_both_ways([a, b], tmp_path)
+    last = None
+    for node in osmium.FileProcessor(merged, osmium.osm.NODE):
+        last = (node.id, node.location.lat, node.location.lon, dict(node.tags))
+    assert last == (10_000_000, 45.6, -122.7, {"name": "held"})
+
+
+def test_a_version_tie_goes_to_the_newer_timestamp(tmp_path: Path) -> None:
+    def extract(stamp: str, lat: float) -> str:
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?><osm version="0.6" generator="hand">'
+            f'<node id="3" version="2" timestamp="{stamp}" lat="{lat}" lon="-122.6"/></osm>\n'
+        )
+
+    files = [tmp_path / "older.osm", tmp_path / "newer.osm", tmp_path / "older_too.osm"]
+    files[0].write_text(extract("2026-10-28T21:21:02Z", 45.50))
+    files[1].write_text(extract("2026-10-29T21:21:26Z", 45.51))
+    files[2].write_text(extract("2026-10-28T21:21:02Z", 45.52))
+    merged = merged_both_ways(files, tmp_path)
+    kept = [(n.location.lat, n.timestamp.isoformat()) for n in osmium.FileProcessor(merged)]
+    assert kept == [(45.51, "2026-10-29T21:21:26+00:00")]
+    # with the versions and the timestamps tied, the earliest part's, as MergeInputReader keeps
+    (tmp_path / "tied").mkdir()
+    merged = merged_both_ways([files[0], files[2]], tmp_path / "tied")
+    assert [n.location.lat for n in osmium.FileProcessor(merged)] == [45.50]
 
 
 def test_the_ceiling_counts_only_the_ways_a_bbox_keeps(tmp_path: Path) -> None:

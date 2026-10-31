@@ -199,9 +199,20 @@ Relations are not read.
 **Several sources** (a region of several states, **Regions of several states**) are read in
 order: a way or POI already taken from an earlier source is skipped (`ways_duplicate`), though
 the way's nodes are still taken from each source that holds it, and the per-source road files are
-merged with `MergeInputReader` (sorted, each node once at its newest version): so when the
-extracts differ only in their shared nodes, the merge writes the bytes one extract of their union
-would (a way or POI that differs keeps the first extract's version). Outputs are written to
+merged (`filter.merge_parts`: sorted, each node once at its newest version, of those at the
+newest timestamp, of those the earliest source's): so when the extracts differ only in their shared nodes, the merge writes the
+bytes one extract of their union would (a way or POI that differs keeps the first extract's
+version). The merge streams: it reads the sorted parts in step, a heap holding each part's next
+object, and writes the top one through `SimpleWriter` as it is, passing over the other parts'
+copies, so it holds one object and one reader per source whatever their size; it writes the
+bytes `osmium.MergeInputReader`'s simplifying merge writes from the same parts, which held them
+all in memory, for any extract: a negative id never reaches the merge, since the `IdSet` of
+taken ways and `BackReferenceWriter` both refuse one, and a part holds each object once (a
+further copy in one part would be passed over) (`test_filter.py`; Oregon and Washington's roads, md5
+cfaf12c6d7e5fc61603df82cc8712e82 both ways, and the national T1 roads merged from 49 parts,
+0db8bb1f0be941cd5cbedda4b91306c3 both ways, with the same POI tables). The ways already taken are kept in an
+`osmium.index.IdSet`, a bit set by way id (at most about 0.2 GB for every way id there is,
+where a Python set of the country's 14 M ways would take about 1 GB). Outputs are written to
 temporary files and renamed into place. The CLI passes the region's state extracts in its order,
 or `--source` alone, and warns on stderr when the extracts' data dates differ ("warning: the
 extracts hold data of different dates: …").
@@ -1135,10 +1146,11 @@ continuation meets it at the shared node and the road is one road with one node 
 more states joins up (`docs/reference/testing-tools.md`; **Oregon and Washington** has the
 numbers).
 
-The merge holds every per-extract roads file in memory while it sorts them (`MergeInputReader`),
-which suits a region's chosen roads but not every road of the country: the national T1 filter,
-merging 49 files into a 196 MB roads file, peaks at 2.32 GB, while an all-roads national region
-(about 26 times Oregon and Washington's 74.9 MB roads file) would need a streaming merge.
+The merge streams (`filter.merge_parts`), so its memory grows with the number of extracts, not
+with their nodes: 49 readers held open at once take 0.5–0.7 GB. `osmium.MergeInputReader`, which
+merged them before, held every part in memory (the national T1 filter, merging 49 files into a
+196 MB roads file, peaked at 2.32 GB with it; the all-roads country's roads file is about 26
+times Oregon and Washington's 74.9 MB).
 
 Extracts of one day are cut from one snapshot. Extracts of different days still merge into a
 reference-complete file, since each per-extract file is complete, but a border way edited between

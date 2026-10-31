@@ -1475,6 +1475,23 @@ On Portland's version 6 build (3a4a3df6269f) the acceptance pairs plan as before
 median of 21.22×, the validator passing all; the second look changed four of their routes
 (**Limitations**, Transitions).
 
+**On Oregon and Washington** (M5.3; build 6fdd57c305fe at `graph_version` bc958387324a,
+pipeline version 5, engine version 3, `docs/reference/pipeline.md`, **Oregon and Washington**;
+`CsrBackend`;
+`worst-route plan --seed 1 --budget 30 --max-iterations 1000000`, each route validated by `plan`
+and again by `worst-route validate`; load average about 8). Trips across the Columbia, which a
+build of Oregon alone cuts off at the river:
+
+| Trip | Baseline | Worst | Ratio | Time ratio | Attempts | Peak memory |
+|---|---|---|---|---|---|---|
+| Pioneer Courthouse Square → Seattle (47.6062, −122.3321), T4, leash 140.1 km | 284.30 km | 3,107.67 km | 10.93× | 13.41× | 3,337 (162 accepted), budget | 0.73 GB |
+| Esther Short Park, Vancouver WA (45.6270, −122.6727) → Salem (44.9429, −123.0351), leash 48.7 km | 90.01 km | 1,187.42 km | 13.19× | 18.87× | 12,304 (515), budget | 0.56 GB |
+
+A request's masks on its 646,338 nodes (median of five): Vancouver → Salem 54 ms, Portland →
+Seattle 104 ms, Astoria → Spokane (514 km, T4, leash 150 km) 153 ms, Brookings → Spokane (825
+km, T0) 151 ms, nearly all of it the leash, about 0.3 µs a node inside the leash's bounding box;
+the spatial index builds in 0.14 s (+20 MB).
+
 ## Limitations
 
 - **Transitions.** The searches see the transition tables (**Searches**), and a leg or a part

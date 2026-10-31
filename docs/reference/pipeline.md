@@ -204,8 +204,9 @@ extracts hold data of different dates: …").
 
 `FilterStats`: `ways_read` (highway ways), `ways_excluded`, `ways_above_ceiling` (kept by the
 exclusions and inside the bbox, but of a class above the ceiling, so `ways_kept +
-ways_above_ceiling` is what the region would keep without one), `ways_outside` (no node in the bbox), `ways_duplicate`,
-`ways_kept`, and `pois` (rows per kind). The CLI adds "above T1 N" to its ways line for a region
+ways_above_ceiling` is what the region would keep without one, but for a border way above the
+ceiling, counted in each extract that holds it), `ways_outside` (no node in the bbox),
+`ways_duplicate`, `ways_kept`, and `pois` (rows per kind). The CLI adds "above T1 N" to its ways line for a region
 with a ceiling. The POIs are the region's whatever its ceiling.
 
 ## `build`
@@ -1125,12 +1126,10 @@ past the state line and keeps every way that touches it complete, with all its n
 extracts, whole and under the same ids; a road that continues it beyond the line is in the other
 extract only, and a single extract ends there, a dead end. The merge reads that way once (from
 the first extract, in the region's order) and every node once (its newest version), so the
-continuation meets it at
-the shared node and the road is one road with one node sequence. Oregon's extract alone has 395
-dead ends beyond Oregon's polygon (Idaho 125, Washington 118, California 95, Nevada 17, 39
-outside every state, in the water or Canada), out of 61,249; `tools/border_ends.py` counts them
-for a region's filtered roads and says which a merge of more states joins up
-(`docs/reference/testing-tools.md`).
+continuation meets it at the shared node and the road is one road with one node sequence;
+`tools/border_ends.py` counts a region's dead ends beyond its states and says which a merge of
+more states joins up (`docs/reference/testing-tools.md`; **Oregon and Washington** has the
+numbers).
 
 The merge holds every per-extract roads file in memory while it sorts them (`MergeInputReader`),
 which suits a region's chosen roads but not every road of the country: an all-roads national
@@ -1154,6 +1153,54 @@ after `build` are unchanged, and on such a build the tiers above the ceiling hol
 as it. `us` stays the name of an all-roads national region, for after the decision M5.3 informs.
 Alaska and Hawaii are left out of `us-t1`: no road reaches them, so connectivity would drop them,
 and CONUS Albers does not cover them; they would be regions of their own.
+
+**Oregon and Washington.** The two-state builds, M5.3's proof, from Geofabrik's extracts of
+2026-10-29 (both data of 2026-10-29T21:21:26Z: Oregon md5 3c9bc0db9a4830d004044865fbecd965,
+Washington 37c7424efddc9f4cbe0c77f28422929c), at pipeline version 5, measured with
+`tools/bench_build.py --allow-fragmented` on the dev machine at load averages of 7–20.
+
+- **Stitching.** Oregon's filtered roads alone have 61,248 dead ends, 394 of them beyond Oregon's
+  polygon: Idaho 125, Washington 118, California 95, Nevada 17, and 39 outside every state (the
+  water, Canada). Merged with Washington's, 66 of the 118 in Washington continue into its roads,
+  and the other 52 still end: they are dead ends of Washington's own network that Oregon's
+  extract held because its polygon reaches past the line; none is absent. The two-state roads
+  have 1,058 dead ends beyond the two states (677 outside every state, Idaho 269, California 95,
+  Nevada 17) and none at the line between them. The filter read 2,350,247 highway ways and kept
+  537,773, of which 626 were in both extracts and read once.
+- **All roads** (`oregon-washington`, build 6fdd57c305fe, `graph_version` bc958387324a):
+
+  | Step | Wall | Peak RSS | Writes |
+  |---|---|---|---|
+  | filter | 101 s | 1.78 GB | roads 74.9 MB, POIs 2.9 MB |
+  | build | 64 s | 2.95 GB | `build.pkl` 618 MB: 772,694 nodes, 1,834,596 edges |
+  | cleanup | 811 s (674 s on a quieter first pass) | 4.49–5.00 GB | simplify 41 s, stage A 413 s (425 s), twins 32 s, stage B 120 s, connectivity 162 s (17 s) |
+  | enrich | 62–86 s | 3.94–5.29 GB | |
+  | tiers | 27–30 s | 4.25 GB | |
+  | save | 28 s | 4.33 GB | the build, 441.8 MB (`arrays/` 416 MB) |
+  | qa | 17 s | 3.72 GB | |
+
+  The build has 646,338 nodes and 1,604,503 edges, 2.7 times Oregon's, and 269,706 km of road;
+  17,446 twin pairs (coverage 0.979) and 101,328 transitions at 6,262 super-junctions.
+  Connectivity keeps 98.13% of the nodes, dropping 2,854 components, and one super-junction with
+  no allowed turn: I-90 at State Line (47.6968, −117.0417), whose interior lies in Idaho; without
+  that rule (**cleanup**, step 5) `save` refused the build. Six dropped components hold more than
+  200 nodes, ferry-only islands and an exclave: San Juan Island 1,154, Vashon–Maury 830, Lopez 560,
+  Point Roberts 448 (reached only through Canada), Orcas 415, Anderson Island 406. So QA fails
+  "SCC largest dropped" alone (twin coverage 0.9794, SCC retained 0.9813, tiers 0.9656–1.0); the
+  200-node rule stays, measurement builds of several states run with `--allow-fragmented` and
+  list what they drop, and the thresholds are revisited at M5.3's decision gate. The rule's
+  second round of connectivity (a relabel and a component search of the whole networkx graph)
+  costs 162 s against the first round's 17 s, which the array pipeline's connectivity is to
+  remove. Brands: 797 of 2,202 kept, on 13,771 nodes.
+- **T1** (`oregon-washington-t1`, build 5bd8bf37c280), in 101 s at a peak of 1.63 GB: filter 35
+  s (1.63 GB), build 4.5 s, cleanup 50 s (stage A 24 s, 0.87 GB), enrich 6 s, tiers 2.5 s, save 2
+  s, qa 1.6 s. The filter keeps 59,252 ways and drops 478,860 above T1 (their sum counts a border
+  way above the ceiling once per extract, 339 more than run 1's kept ways here); the raw graph has
+  56,551 nodes and 87,170 edges, the build 24,158 nodes and 40,778 edges (3.7% of the all-roads
+  build's nodes), 25,132 km and 17.0 MB, about 417 B an edge: T1 roads are long, with many shape
+  points. Connectivity drops three super-junctions with no allowed turn, interchanges whose cross
+  road is above the ceiling, and QA passes every threshold (largest dropped component 33 nodes).
+  Brands: 432 of 2,202 kept, on 3,952 nodes.
 
 ## Fixtures
 

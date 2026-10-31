@@ -134,6 +134,31 @@ def test_the_network_is_one_line_per_road_unit_and_thins_when_too_many(
     monkeypatch.setattr(share_image, "MAX_NETWORK_EDGES", 100)
     # only T0-T2: no residential street
     assert share_image._network(GRID, STRAIGHT, everywhere) == []
+    # Never more than the cap, 10 here: T0-T2, then T0-T1, then T0, the first few enough, then
+    # the longest units of T0 (the earlier of two the same length), drawn in unit order.
+    monkeypatch.setattr(share_image, "MAX_NETWORK_EDGES", 10)
+    long = {350: 900, 7: 800, 120: 700, 64: 600, 300: 500, 201: 400, 15: 300, 99: 200}
+    longer = {**long, 33: 150, 250: 120, 260: 110, 5: 101}  # 12 longer than the rest
+    for tiers, lengths, drawn in [
+        ({2: range(0, 5), 1: range(5, 10)}, {}, range(10)),  # T0-T2 fits
+        ({2: range(0, 30), 1: range(30, 35), 0: range(35, 40)}, {}, range(30, 40)),  # T0-T1
+        ({2: range(0, 30), 1: range(30, 42), 0: range(42, 50)}, {}, range(42, 50)),  # T0
+        ({0: range(1, GRID.m)}, {}, range(1, 11)),  # 359 of T0, all 100 m: the first 10
+        ({0: range(GRID.m)}, long, [0, 1, 7, 15, 64, 99, 120, 201, 300, 350]),
+        ({0: range(GRID.m)}, longer, [7, 15, 33, 64, 99, 120, 201, 250, 300, 350]),
+        ({0: range(GRID.m), 1: [350]}, longer, [7, 15, 33, 64, 99, 120, 201, 250, 260, 300]),
+    ]:
+        tier = np.full(GRID.m, 4, dtype=np.uint8)
+        for t, edges in tiers.items():
+            tier[list(edges)] = t
+        length = GRID.edge_length_m.copy()
+        length[list(lengths)] = list(lengths.values())
+        thinned = replace(GRID, edge_tier=tier, edge_length_m=length)
+        lines = share_image._network(thinned, STRAIGHT, everywhere)
+        points, counts = edge_points(GRID, STRAIGHT, np.array(drawn))
+        assert len(lines) == len(drawn) <= 10
+        assert all(map(np.array_equal, lines, np.split(points, np.cumsum(counts)[:-1])))
+        assert all(map(np.array_equal, lines, share_image._network(thinned, STRAIGHT, everywhere)))
 
 
 def test_the_network_follows_the_build_s_geometry() -> None:

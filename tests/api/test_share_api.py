@@ -88,7 +88,7 @@ async def test_the_image_renders_once_then_comes_from_the_cache(
         assert first.content == second.content
         assert struct.unpack(">II", first.content[16:24]) == (1200, 630)
         assert renders == [route_id]  # two first requests, one render
-        cached = data / "share" / f"{route_id}-v1.png"
+        cached = data / "share" / f"{route_id}-v2.png"
         assert cached.read_bytes() == first.content
         assert sorted(p.name for p in cached.parent.iterdir()) == [cached.name]
         assert api.share_locks == {}
@@ -144,7 +144,7 @@ async def test_head_gives_the_headers_without_the_image(data: Path) -> None:
     async with serving(data) as (client, _):
         head = await client.head(url)  # first: it renders, to know the length
         assert head.status_code == 200 and head.content == b""
-        assert (data / "share" / f"{route_id}-v1.png").exists()
+        assert (data / "share" / f"{route_id}-v2.png").exists()
         got = await client.get(url)
         for name in ("content-type", "cache-control", "content-length"):
             assert head.headers[name] == got.headers[name], name
@@ -207,8 +207,8 @@ async def test_two_writers_of_one_image_leave_one_file_and_no_part(
         first, second = await asyncio.gather(one.get(url), two.get(url))
     assert first.status_code == second.status_code == 200
     share = data / "share"
-    assert [p.name for p in share.iterdir()] == [f"{route_id}-v1.png"]  # no part left
-    assert (share / f"{route_id}-v1.png").read_bytes() in (b"\x89PNG first", b"\x89PNG second")
+    assert [p.name for p in share.iterdir()] == [f"{route_id}-v2.png"]  # no part left
+    assert (share / f"{route_id}-v2.png").read_bytes() in (b"\x89PNG first", b"\x89PNG second")
 
 
 def test_the_app_imports_without_matplotlib() -> None:

@@ -9,12 +9,12 @@ it started"); and the comparison line at the bottom (wrapped, never between a nu
 unit). The map fills the rest, edge to edge, with no basemap: the build's roads as hairlines
 (one edge per road unit, along the build's geometry: those whose bounds meet the map's, in the
 build's CRS grown by `NETWORK_MARGIN_M` and then in lon/lat, decoded only where their ends and
-lengths cannot tell; only tiers T0-T2 when more than `MAX_NETWORK_EDGES` would show), the state
-outlines from the places index when there is one, the route in red on a white casing, the
-baseline dashed over it, a ring at the start and a smaller dot at the end (inside the ring, for
-a round trip). Its extent is the route's bbox with `MARGIN` on each side (at least `MIN_SPAN_M`
-across), widened to the map's shape with x scaled by cos(latitude). The attribution sits at the
-bottom right.
+lengths cannot tell; never more than `MAX_NETWORK_EDGES` of them, thinned to T0-T2, T0-T1 or T0
+and then to the longest units of T0 when more would show), the state outlines from the places
+index when there is one, the route in red on a white casing, the baseline dashed over it, a ring
+at the start and a smaller dot at the end (inside the ring, for a round trip). Its extent is the
+route's bbox with `MARGIN` on each side (at least `MIN_SPAN_M` across), widened to the map's
+shape with x scaled by cos(latitude). The attribution sits at the bottom right.
 
 It draws on a `Figure` with a `FigureCanvasAgg` of its own (never pyplot, nor any process-wide
 backend), with DejaVu Sans as matplotlib ships it, given by its file's path, and saves without
@@ -58,9 +58,9 @@ PAD_PX = 44.0  # around the text
 MARGIN = 0.15  # around the route, of its extent, on each side
 MIN_SPAN_M = 1000.0
 METRES_PER_DEGREE = 111_320.0  # of latitude
-MAX_NETWORK_EDGES = 50_000
+MAX_NETWORK_EDGES = 100_000
 NETWORK_MARGIN_M = 50.0  # around the map's extent projected, when finding the roads near it
-THIN_TIER = 2  # the highest tier drawn when the network is thinned
+THIN_TIER = 2  # the highest tier drawn when the network is thinned, then one lower at a time
 
 SURFACE = "#fcfcfb"
 INK = "#0b0b0b"
@@ -164,10 +164,10 @@ def _extent(points: Points, aspect: float) -> tuple[float, float, float, float]:
 def _network(
     data: GraphData, geometry: Geometry, bbox: tuple[float, float, float, float]
 ) -> list[Points]:
-    """The lines of the road units whose bounds meet `bbox`, thinned to T0-T2 when too many:
-    those whose bounds meet the map's in the build's CRS (`_outline_box`), then in lon/lat. A
-    unit with an end inside the box meets it, and one whose ends are both beyond its length
-    from it misses it: only the others are decoded to tell, then the units drawn."""
+    """The lines of the road units whose bounds meet `bbox`, at most `MAX_NETWORK_EDGES` of
+    them (`_thin`): those whose bounds meet the map's in the build's CRS (`_outline_box`), then
+    in lon/lat. A unit with an end inside the box meets it, and one whose ends are both beyond
+    its length from it misses it: only the others are decoded to tell, then the units drawn."""
     units = np.flatnonzero(data.edge_unit == np.arange(data.m))
     box, at = _outline_box(data, bbox), (data.node_x, data.node_y)
     # Every point of a line lies within its length of either end on each axis (a metre more
@@ -183,12 +183,28 @@ def _network(
     points, counts = edge_points(data, geometry, units[undecided])
     inside[undecided] = _meets(points, counts, bbox)
     units = units[inside]
-    if len(units) > MAX_NETWORK_EDGES:
-        units = units[data.edge_tier[units] <= THIN_TIER]
-    points, counts = edge_points(data, geometry, units)
+    drawn = units[_thin(data.edge_tier[units], data.edge_length_m[units])]
+    points, counts = edge_points(data, geometry, drawn)
     starts = np.cumsum(counts) - counts
     ends = zip(starts.tolist(), (starts + counts).tolist(), strict=True)
     return [points[a:b] for a, b in ends]
+
+
+def _thin(tiers: NDArray[np.uint8], lengths: NDArray[np.float32]) -> NDArray[np.bool_]:
+    """Which of the road units of `tiers` and `lengths`, in their order, to draw: all of them
+    when there are at most `MAX_NETWORK_EDGES`, else those of T0 to `THIN_TIER`, T0-T1 or T0,
+    the first few enough, else the `MAX_NETWORK_EDGES` longest of T0 (the earlier of two the
+    same length): the stretches between interchanges, the cities thinned."""
+    keep = np.ones(len(tiers), dtype=np.bool_)
+    for tier in range(THIN_TIER, -1, -1):
+        if keep.sum() > MAX_NETWORK_EDGES:
+            keep = tiers <= tier
+    if keep.sum() > MAX_NETWORK_EDGES:
+        at = np.flatnonzero(keep)
+        longest = at[np.argsort(-lengths[at], kind="stable")[:MAX_NETWORK_EDGES]]
+        keep[at] = False
+        keep[longest] = True
+    return keep
 
 
 def _outline_box(

@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 
 router = APIRouter()
 
-SHARE_IMAGE_VERSION = 1
+SHARE_IMAGE_VERSION = 2
 ROUTE_ID = re.compile(r"[0-9a-f]{12}")
 CACHE_CONTROL = "public, max-age=86400"
 

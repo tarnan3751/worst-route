@@ -15,6 +15,7 @@
 import type {
   Baseline,
   BrandList,
+  Daily,
   Done,
   ErrorBody,
   GeocodeResult,
@@ -134,6 +135,11 @@ export function getBrands(region: string): Promise<BrandList> {
 /** The places `q` may mean in `region`, from the server's geocoding proxy. */
 export function geocode(q: string, region: string): Promise<GeocodeResult> {
   return call(`/geocode?${new URLSearchParams({ q, region })}`);
+}
+
+/** Today's route: its trip, and how the server's plan of it stands. */
+export function getDaily(): Promise<Daily> {
+  return call("/daily");
 }
 
 /** What a job's stream calls, in the order the server sends. */

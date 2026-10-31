@@ -1,14 +1,17 @@
 // Bootstrap and wiring (docs/reference/frontend.md): the store, from the URL's state; the map
-// and the panel's parts (the directions, which highlight their steps on the route layer, among
-// them); the toasts under the map; the served regions from /regions, the map fitted to all their
-// bboxes, and the build each trip runs on picked from its stops (RegionPicker); a stored route
-// when the URL names one, the URL left alone until it has opened; clicks on the map and a place
-// search's picks add stops, the same way (placeStop); leaving the page cancels a running job.
+// and the panel's parts (today's route at the top, the directions, which highlight their steps
+// on the route layer, among them); the toasts under the map; the served regions from /regions,
+// the map fitted to all their bboxes, and the build each trip runs on picked from its stops
+// (RegionPicker); a stored route when the URL names one, or today's once it is done for
+// `?daily` (unless a run of the user's own has started first), the URL left alone until then;
+// clicks on the map and a place search's picks add stops, the same way (placeStop); leaving the
+// page cancels a running job.
 // The basemap the server names (GET /config) goes under the route's layers once the map has
 // loaded.
 import "./style.css";
 import { API_BASE, errorBody, getConfig, getRegions } from "./api/client";
 import { mountBanner } from "./banner";
+import { DailyRoute, mountDaily, openDailyAtStart } from "./daily/panel";
 import { DirectionsPanel, mountDirections } from "./directions/panel";
 import { addBasemap, basemapParts } from "./map/basemap";
 import { createMap, fitTo } from "./map/map";
@@ -43,6 +46,8 @@ const map = createMap(byId("map"));
 const config = getConfig();
 let routeLayer: RouteLayer | null = null;
 let runner: JobRunner | null = null;
+let ready: (runner: JobRunner) => void = () => undefined;
+const loaded = new Promise<JobRunner>((resolve) => (ready = resolve)); // the runner, on the map
 
 /** Change the stops; the route shown no longer goes through them. */
 function edit(stops: Stop[]): void {
@@ -66,7 +71,15 @@ new RegionPicker(store);
 const urlSync = new UrlSync(store, (query) => {
   if (query !== location.search) history.replaceState(null, "", location.pathname + query);
 });
-if (url.route === null) urlSync.start(false);
+const daily = new DailyRoute(store);
+const openDaily = async (id: string) => openRoute(id, store, await loaded);
+const header = document.querySelector("#panel header") as HTMLElement;
+mountDaily(byId("daily"), header, daily, store, (id) => void openDaily(id));
+void daily.load();
+if (url.route === null && url.daily === null) urlSync.start(false);
+if (url.route === null && url.daily !== null) {
+  void openDailyAtStart(daily, store, openDaily).then((opened) => urlSync.start(opened));
+}
 
 map.on("click", (event) => place(event.lngLat.lat, event.lngLat.lng));
 
@@ -80,6 +93,7 @@ map.once("load", () => {
     panTo: (at) => map.panTo(at),
   });
   mountDirections(byId("directions"), directions);
+  ready(runner);
   if (url.route !== null) {
     void openRoute(url.route, store, runner).then((opened) => urlSync.start(opened));
   }

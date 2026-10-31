@@ -2,8 +2,8 @@
 // holds to the type's (`object<T>` needs exactly T's keys); the specs are checked against the
 // shapes docs/reference/api.md writes down (its JSON request example, and the field lists of
 // the events, /regions, /regions/pick, the 202, the job status, the route document, its
-// directions, /geocode and /config) and against every payload of the streams recorded from the
-// server.
+// directions, /geocode, /config and /daily) and against every payload of the streams recorded from
+// the server.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { RECORDINGS, loadStream } from "../__fixtures__/stream";
@@ -15,6 +15,8 @@ import type {
   BrandList,
   BrandVisits,
   Constraints,
+  Daily,
+  DailyStop,
   DirectionStep,
   DirectionsResult,
   DocumentMetrics,
@@ -419,6 +421,21 @@ const brandList = object<BrandList>({
   ),
 });
 
+const daily = object<Daily>({
+  date: "string",
+  region: "string",
+  build_id: "string",
+  stops: array(object<DailyStop>({ lat: "number", lon: "number", label: "string" })),
+  seed: "integer",
+  max_iterations: "integer",
+  status: literal("planning", "done", "failed"),
+  route_id: nullable("string"),
+  events_url: nullable("string"),
+  ratio: nullable("number"),
+  stopped_because: nullable(stopReason),
+  attempts: nullable("integer"),
+});
+
 const EVENTS: Record<string, Spec> = {
   snapped,
   baseline,
@@ -600,6 +617,17 @@ describe("the types against docs/reference/api.md", () => {
     };
     expect(problems(example, serverConfig)).toEqual([]);
     expect(problems({ ...example, basemap: { kind: "vector" } }, serverConfig)).not.toEqual([]);
+  });
+
+  it("has the fields of /daily", () => {
+    expect(differences(documentedOn("| GET | `/daily` |"), daily, "daily")).toEqual([]);
+    const example = /\*\*`GET \/daily`\*\*[\s\S]*?```\n([\s\S]*?)```/.exec(reference)?.[1];
+    expect(example).toBeDefined();
+    const shown = JSON.parse(example!);
+    expect(problems(shown, daily)).toEqual([]);
+    const planning = { ...shown, status: "planning", route_id: null, events_url: "/jobs/a/events" };
+    expect(problems({ ...planning, ratio: null, stopped_because: null }, daily)).toEqual([]);
+    expect(problems({ ...shown, status: "queued" }, daily)).not.toEqual([]);
   });
 
   it("has the route document's fields", () => {

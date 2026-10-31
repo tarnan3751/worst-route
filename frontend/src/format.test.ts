@@ -6,6 +6,7 @@ import {
   formatDurationInput,
   formatElapsed,
   formatClock,
+  formatDay,
   formatFuel,
   formatItems,
   formatLatLon,
@@ -150,5 +151,10 @@ describe("times of day", () => {
     expect(formatClock("2026-10-31T17:42:59.9-07:00")).toBe("Sat 17:42");
     expect(formatClock("2026-10-31T23:05:00+05:30")).toBe("Sat 23:05");
     expect(formatClock("2026-11-02T00:00:00Z")).toBe("Mon 00:00");
+  });
+
+  it("names a UTC day as the daily route does", () => {
+    expect(formatDay("2026-10-31")).toBe("Saturday, October 31");
+    expect(formatDay("2026-01-01")).toBe("Thursday, January 1");
   });
 });

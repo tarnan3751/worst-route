@@ -10,9 +10,10 @@
 // (only when pinned: otherwise the server picks it from the stops, as it did), the stops as
 // `lat,lon;lat,lon;...` at 6 decimals, as they were clicked), so a link reproduces a request;
 // `?route=<id>` opens a stored route without running anything, its own request then giving the
-// stops and settings. `UrlSync` keeps the URL in step with what the app shows once it is
-// started, which is after a `?route=` link has been opened, or has failed to open (the parameter
-// then stays). The share section copies a link to the route shown, opens its share image
+// stops and settings, and `?daily` today's route (daily/panel.ts), once the server has planned
+// it. `UrlSync` keeps the URL in step with what the app shows once it is started, which is after
+// a `?route=` or `?daily` link has been opened, or has failed to open (the parameter then
+// stays). The share section copies a link to the route shown, opens its share image
 // (`GET /routes/{id}/share.png`) in a new tab, and downloads its GeoJSON
 // (`GET /routes/{id}/geojson`).
 import { API_BASE, errorBody, getRoute, getRouteGeojson } from "../api/client";
@@ -51,9 +52,10 @@ export type UrlMode =
 
 /** What a URL can carry; null where it says nothing (or nothing valid). `strict` only with a
  * side to avoid; no ratio target under collect or brand, none but max under the alphabet route;
- * the vehicle only within the panel's limits. */
+ * the vehicle only within the panel's limits; `daily`, today's route to open. */
 export interface UrlState {
   route: string | null;
+  daily: true | null;
   seed: number | null;
   budgetS: number | null;
   tier: Tier | null;
@@ -138,6 +140,7 @@ export function decodeUrlState(search: string): UrlState {
   const target = parseTarget(params.get("target"));
   return {
     route: route !== null && /^[0-9a-f]+$/.test(route) ? route : null,
+    daily: params.has("daily") ? true : null,
     seed: Number.isSafeInteger(seed) && seed >= 0 ? seed : null,
     budgetS: inRange(budget, 0, BUDGET_MAX_S) ? budget : null,
     tier: TIERS.find((tier) => tier === params.get("tier")) ?? null,
@@ -161,6 +164,7 @@ export function decodeUrlState(search: string): UrlState {
 export function encodeUrlState(state: UrlState): string {
   const params: string[] = [];
   if (state.route !== null) params.push(`route=${state.route}`);
+  if (state.daily !== null) params.push("daily");
   if (state.seed !== null) params.push(`seed=${state.seed}`);
   if (state.budgetS !== null) params.push(`budget=${state.budgetS}`);
   if (state.tier !== null) params.push(`tier=${state.tier}`);
@@ -210,6 +214,7 @@ export function urlStateOf(state: Readonly<AppState>): UrlState {
   const usual = mpg === DEFAULT_SETTINGS.mpg && gasPriceUsd === DEFAULT_SETTINGS.gasPriceUsd;
   return {
     route: state.route?.route_id ?? null,
+    daily: null, // once opened, today's route is a route like any other
     seed: settings.seed,
     budgetS: settings.budgetS,
     tier: settings.tier,

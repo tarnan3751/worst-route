@@ -2,7 +2,7 @@
 // default, kilometres the toggle. A drive time typed as a target reads `9h`, `90m`, `2h30m` or
 // a number of minutes. Fuel is in US gallons and dollars, as the vehicle's mpg and gas price.
 // Times of day are ISO 8601 with their offset in requests (a departure) and documents (an
-// arrival), and a clock where they were given in the panel.
+// arrival), and a clock where they were given in the panel; the daily route's day is its date.
 import type { CollectItem } from "./api/types";
 
 export type Units = "mi" | "km";
@@ -177,6 +177,18 @@ export function parseIsoTime(text: string): string | null {
 export function formatClock(iso: string): string {
   const clock = clockOf(iso);
   return `${DAYS[clock.getUTCDay()]} ${two(clock.getUTCHours())}:${two(clock.getUTCMinutes())}`;
+}
+
+const dayFormat = new Intl.DateTimeFormat("en-US", {
+  weekday: "long",
+  month: "long",
+  day: "numeric",
+  timeZone: "UTC",
+});
+
+/** A date (`2026-10-31`, a UTC day) as the daily route names it: `Saturday, October 31`. */
+export function formatDay(date: string): string {
+  return dayFormat.format(new Date(`${date}T00:00:00Z`));
 }
 
 /** A coordinate as the stop list shows it. */

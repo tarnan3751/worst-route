@@ -426,3 +426,33 @@ export interface ServerConfig {
   basemap: BasemapConfig;
   limits: ServerLimits;
 }
+
+// --- The daily route (GET /daily) ---------------------------------------------------------
+
+/** One of the day's two towns, labelled with its state's code ("Bend, OR"). */
+export interface DailyStop {
+  lat: number;
+  lon: number;
+  label: string;
+}
+
+export type DailyStatus = "planning" | "done" | "failed";
+
+/** `GET /daily`: the day's trip (the UTC date, YYYY-MM-DD; the region and build it runs on; its
+ * towns, seed and attempts) and how its plan stands: while it is planned its job's `events_url`;
+ * once done its `route_id`, `ratio`, and what ended the run after how many `attempts`; failed,
+ * the next call plans it again. */
+export interface Daily {
+  date: string;
+  region: string;
+  build_id: string;
+  stops: DailyStop[];
+  seed: number;
+  max_iterations: number;
+  status: DailyStatus;
+  route_id: string | null;
+  events_url: string | null;
+  ratio: number | null;
+  stopped_because: StopReason | null;
+  attempts: number | null;
+}

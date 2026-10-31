@@ -20,6 +20,7 @@ import {
 
 const full: UrlState = {
   route: "5ea844bffd40",
+  daily: null,
   seed: 12345,
   budgetS: 15,
   tier: "T2",
@@ -41,6 +42,7 @@ const full: UrlState = {
 
 const nothing: UrlState = {
   route: null,
+  daily: null,
   seed: null,
   budgetS: null,
   tier: null,
@@ -103,6 +105,25 @@ describe("the URL state", () => {
     };
     expect(urlStateOf(state).region).toBe("oregon");
     expect(urlStateOf({ ...state, settings: DEFAULT_SETTINGS }).region).toBeNull();
+  });
+
+  it("carries ?daily, today's route to open, which the app's own state never writes", () => {
+    expect(decodeUrlState("?daily")).toEqual({ ...nothing, daily: true });
+    expect(decodeUrlState("?daily=1&seed=2")).toEqual({ ...nothing, daily: true, seed: 2 });
+    expect(encodeUrlState({ ...nothing, daily: true })).toBe("?daily");
+    expect(decodeUrlState("?dailyx").daily).toBeNull();
+    const state: AppState = {
+      regions: null,
+      region: null,
+      pick: null,
+      stops: [],
+      settings: DEFAULT_SETTINGS,
+      run: IDLE_RUN,
+      route: null,
+      error: null,
+      brands: null,
+    };
+    expect(urlStateOf(state).daily).toBeNull(); // once opened, a route like any other
   });
 
   it("keeps clicked coordinates exactly", () => {

@@ -43,7 +43,8 @@ lines, the share image (`GET /routes/{id}/share.png`, matplotlib, cached per rou
 directions with deadpan jokes, the stats and the toasts in the route documents
 (`GET /routes/{id}`, `GET /routes/{id}/directions`, route.json, `worst-route directions`),
 which the frontend shows: a directions panel whose steps highlight on the map, rotating toasts,
-the extra stats and a vehicle setting.
+the extra stats with the arrival time, a vehicle and a departure setting, and the route's GeoJSON
+to download. M4 is built.
 The plan (`docs/PLAN.md`,
 2026-10-30) is written and its open questions answered as far as `docs/project_overview.md` §3
 records. **M1 is built**: in the acceptance run on the

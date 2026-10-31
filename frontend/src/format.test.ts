@@ -5,13 +5,16 @@ import {
   formatDuration,
   formatDurationInput,
   formatElapsed,
+  formatClock,
   formatFuel,
   formatItems,
   formatLatLon,
   formatPercent,
   formatRatio,
   formatStates,
+  isoWithOffset,
   parseDuration,
+  parseIsoTime,
 } from "./format";
 
 describe("formatDistance", () => {
@@ -112,5 +115,40 @@ describe("a stored route's numbers", () => {
     expect(formatStates(["Oregon", "Washington"])).toBe("OR, WA");
     expect(formatStates(["District of Columbia", "Puerto Rico"])).toBe("DC, PR");
     expect(formatStates(["Atlantis"])).toBe("Atlantis");
+  });
+});
+
+describe("times of day", () => {
+  it("writes a time at the browser's offset, to the second, and reads it back", () => {
+    for (const time of [
+      "2026-10-31T16:00:30.700Z",
+      "2026-07-04T05:59:59Z",
+      "2026-01-01T00:00:00Z",
+    ]) {
+      const date = new Date(time);
+      const iso = isoWithOffset(date);
+      expect(iso).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/);
+      expect(Date.parse(iso)).toBe(Math.floor(date.getTime() / 1000) * 1000);
+      expect(parseIsoTime(iso)).toBe(iso);
+    }
+  });
+
+  it("reads only ISO 8601 times with an offset", () => {
+    for (const ok of [
+      "2026-10-31T09:00-07:00",
+      "2026-10-31T09:00:00.123456+05:30",
+      "2026-10-31T16:00:00Z",
+    ]) {
+      expect(parseIsoTime(ok)).toBe(ok);
+    }
+    for (const bad of ["2026-10-31T09:00", "2026-10-31", "2026-02-30T09:00:00Z", "noon", ""]) {
+      expect(parseIsoTime(bad)).toBeNull();
+    }
+  });
+
+  it("shows a time as a clock at its own offset, the day and the minute", () => {
+    expect(formatClock("2026-10-31T17:42:59.9-07:00")).toBe("Sat 17:42");
+    expect(formatClock("2026-10-31T23:05:00+05:30")).toBe("Sat 23:05");
+    expect(formatClock("2026-11-02T00:00:00Z")).toBe("Mon 00:00");
   });
 });

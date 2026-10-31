@@ -4,11 +4,18 @@
 // the turns (any, or left or right turns avoided, `strict` for none at all), the inefficiency
 // target (as bad as possible, a ratio to the sensible route, or a drive time typed as `9h`,
 // `90m`, `2h30m` or minutes; typing a number picks its kind; no ratio under collect), the
-// vehicle (its mpg and the gas price, for the route's extra fuel and its cost), and the units the
-// panel shows. Locked while a job runs, except the units. The setting an error names (`field`:
-// the target, the item, the constraints or the vehicle) is highlighted.
+// vehicle (its mpg and the gas price, for the route's extra fuel and its cost), the departure
+// (empty: now; for the route's arrival), and the units the panel shows. Locked while a job runs,
+// except the units. The setting an error names (`field`: the target, the item, the constraints,
+// the vehicle or the departure) is highlighted.
 import type { CollectItem, TargetKind, Tier } from "../api/types";
-import { ITEM_NAMES, formatDurationInput, parseDuration, type Units } from "../format";
+import {
+  ITEM_NAMES,
+  formatDurationInput,
+  isoWithOffset,
+  parseDuration,
+  type Units,
+} from "../format";
 import {
   BUDGET_MAX_S,
   GAS_PRICE_MAX,
@@ -133,6 +140,9 @@ export function mountSettings(root: HTMLElement, store: Store): void {
   priceLabel.append("$ ", gasPrice, " a gallon");
   const vehicle = el("div", "vehicle");
   vehicle.append(mpgLabel, priceLabel);
+  const departure = el("input");
+  departure.type = "datetime-local";
+  const departureNote = el("span", "resolved", "empty: now");
   const units = radios(
     "units",
     UNITS.map(([u, text]): [Units, string, boolean] => [u, text, true]),
@@ -142,6 +152,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
   const turnsRow = field("Turns", turns.group, strictNote);
   const targetRow = field("How bad", target.group, targetNote);
   const vehicleRow = field("Vehicle", vehicle);
+  const departureRow = field("Departure", departure, departureNote);
 
   root.replaceChildren(
     el("h2", "", "Settings"),
@@ -153,6 +164,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     turnsRow,
     targetRow,
     vehicleRow,
+    departureRow,
     field("Units", units.group),
   );
 
@@ -173,6 +185,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     strict.checked = settings.strict;
     mpg.value = String(settings.mpg);
     gasPrice.value = String(settings.gasPriceUsd);
+    departure.value = settings.departure?.slice(0, 16) ?? ""; // its clock, at its own offset
     for (const input of units.inputs) input.checked = input.value === settings.units;
   };
 
@@ -231,6 +244,14 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     if (value === undefined || value === null) render();
     else set({ gasPriceUsd: value });
   });
+  // A time typed is the browser's local time; one that came with a link keeps its own offset
+  // until it is changed.
+  departure.addEventListener("change", () => {
+    const at = new Date(departure.value);
+    if (departure.value === "") set({ departure: null });
+    else if (Number.isNaN(at.getTime())) render();
+    else set({ departure: isoWithOffset(at) });
+  });
   for (const input of units.inputs) {
     input.addEventListener("change", () => set({ units: input.value as Units }));
   }
@@ -242,6 +263,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     ["constraints", turnsRow],
     ["target", targetRow],
     ["vehicle", vehicleRow],
+    ["departure", departureRow],
   ]);
   store.watch(["error"], ({ error }) => {
     const errored = fieldRows.get(error?.field);
@@ -255,7 +277,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     const key = [locked, resolved, state.settings.tier, state.settings.leashKm, objective, side];
     if (key.every((value, k) => value === shown[k])) return;
     shown = key;
-    for (const control of [seed, budget, tier, leash, duration, item, mpg, gasPrice]) {
+    for (const control of [seed, budget, tier, leash, duration, item, mpg, gasPrice, departure]) {
       control.disabled = locked;
     }
     for (const input of [...target.inputs, ...mode.inputs, ...turns.inputs]) {

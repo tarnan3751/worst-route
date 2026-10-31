@@ -693,11 +693,11 @@ frontend/
 │   ├── map/stopsLayer.ts     # draggable markers, numbered, snapped-position ghost + note tooltip
 │   ├── stops/stopList.ts     # ordered list: add by click, remove
 │   ├── stops/search.ts       # (M4, built) the place search: a field and a button, not type-ahead; a pick places a stop as a click
-│   ├── settings/panel.ts     # seed, budget, inefficiency target, scale (tier auto/override, leash), objective mode, units; constraints (M3), vehicle (M4, built), departure (M4)
+│   ├── settings/panel.ts     # seed, budget, inefficiency target, scale (tier auto/override, leash), objective mode, units; constraints (M3), vehicle and departure (M4, built)
 │   ├── run/controls.ts       # Go / Cancel / Reroll (new seed) / Make it worse; the live stat line with the ratio ticking up
-│   ├── share/share.ts        # URL state, ?route= links, copy link, open share.png (M4, built); download GeoJSON (M4)
+│   ├── share/share.ts        # URL state, ?route= links, copy link, open share.png and download GeoJSON (M4, built)
 │   ├── banner.ts             # API errors, non-modal
-│   ├── format.ts             # units (mi/km toggle), durations, numbers; money (M4, built), dates (M4)
+│   ├── format.ts             # units (mi/km toggle), durations, numbers; money and dates (M4, built)
 │   ├── util/                 # geo (rounding, bounds), dom
 │   ├── toasts.ts             # (M4, built) rotating toasts under the map: waiting lines and the live ratio during the run, the route's toasts after
 │   └── directions/panel.ts   # (M4, built) scrollable turn list, jokes among the steps; hovering a step highlights its edge range on the map
@@ -806,11 +806,11 @@ Deliverable: `worst-route plan --region portland --from 45.5231,-122.6765 --to 4
 ### M4 — Presentation
 
 1. Directions generator (merge same-identity runs, turn words, ramps via super-junction internal paths, roundabout exits), deadpan jokes injected deterministically from the seed. Built: the build keeps no internal paths, so ramps and roundabouts are described from the edges entering and leaving them ("Take the ramp toward X", "At the roundabout, take the exit onto X", no exit count); forty jokes about every eighth step, never one twice in a route, from the route's seed; in the document, at `GET /routes/{id}/directions` and by `worst-route directions route.json` (`docs/reference/presentation.md`, **Directions**, **Jokes**).
-2. Stats: ratio, arrival time, extra fuel/cost, states and towns (Census boundaries), network fraction, turn counts; rotating toasts in the UI during and after the run. Built: the places index the states and towns come from (`worst-route aux places`, the Census polygons, CDPs included; `tools/fetch_census.sh` for the files; `docs/reference/presentation.md`, **Places**); the extra fuel and cost from the request's vehicle, the states and towns a route passes through, its share of the roads within reach, and up to twelve toasts in a fixed order, the most striking first, in the document (`docs/reference/presentation.md`, **Stats and toasts**). The frontend shows them (`docs/reference/frontend.md`): a directions panel whose steps highlight their edges on the map, rotating toasts under the map, the extra stats under the stat line, and the vehicle in the settings; the arrival time not yet (no departure is set).
+2. Stats: ratio, arrival time, extra fuel/cost, states and towns (Census boundaries), network fraction, turn counts; rotating toasts in the UI during and after the run. Built: the places index the states and towns come from (`worst-route aux places`, the Census polygons, CDPs included; `tools/fetch_census.sh` for the files; `docs/reference/presentation.md`, **Places**); the extra fuel and cost from the request's vehicle, the states and towns a route passes through, its share of the roads within reach, and up to twelve toasts in a fixed order, the most striking first, in the document (`docs/reference/presentation.md`, **Stats and toasts**). The frontend shows them (`docs/reference/frontend.md`): a directions panel whose steps highlight their edges on the map, rotating toasts under the map, the extra stats and the arrival time under the stat line, and the vehicle and the departure in the settings.
 3. Curated comparison list (NYC–LA 2,790 mi; Route 66 2,448 mi; I-90 end to end 3,020 mi; Earth's circumference 24,901 mi; Earth–Moon 238,900 mi; …) with the funniest-fitting line chosen by length. Built: fifteen things from the Golden Gate Bridge to the Moon, the longest one the route exceeds, "N×" from twice its length (`docs/reference/presentation.md`, **Comparisons**).
 4. Share image: matplotlib Agg, our own data only (route over faint active-network lines and Census outlines, big ratio, one comparison line), cached per route. Built: `GET /routes/{id}/share.png`, 1200 × 630, in DejaVu Sans as matplotlib ships it (no bundled font), no basemap, a link in the share section (`docs/reference/presentation.md`, **Share image**).
 5. Geocoding proxy with cache and rate limit; search box in the UI.
-6. Units toggle, URL state, share link.
+6. Units toggle, URL state, share link. Built (`docs/reference/frontend.md`): miles or kilometres, the settings and stops in the URL (the vehicle and the departure among them), `?route=` links with a copy button, the share image and the route's GeoJSON to download.
 
 ### M5 — Scaling up
 

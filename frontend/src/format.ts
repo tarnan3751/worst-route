@@ -1,6 +1,8 @@
 // Numbers for people (docs/reference/frontend.md). The API's numbers are metric; miles are the
 // default, kilometres the toggle. A drive time typed as a target reads `9h`, `90m`, `2h30m` or
 // a number of minutes. Fuel is in US gallons and dollars, as the vehicle's mpg and gas price.
+// Times of day are ISO 8601 with their offset in requests (a departure) and documents (an
+// arrival), and a clock where they were given in the panel.
 import type { CollectItem } from "./api/types";
 
 export type Units = "mi" | "km";
@@ -138,6 +140,43 @@ export const STATE_CODES: Record<string, string> = {
 /** States by their codes: `OR, WA`; a name not known stays as it is. */
 export function formatStates(names: string[]): string {
   return names.map((name) => STATE_CODES[name] ?? name).join(", ");
+}
+
+const two = (n: number) => String(Math.abs(n)).padStart(2, "0");
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+// An ISO 8601 time with its offset (or Z): what a request's departure takes.
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
+
+/** `date` at the browser's offset, to the second: `2026-10-31T09:00:00-07:00`. */
+export function isoWithOffset(date: Date): string {
+  const offset = -date.getTimezoneOffset();
+  const day = `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}`;
+  const time = `${two(date.getHours())}:${two(date.getMinutes())}:${two(date.getSeconds())}`;
+  const zone = `${offset < 0 ? "-" : "+"}${two(Math.trunc(offset / 60))}:${two(offset % 60)}`;
+  return `${day}T${time}${zone}`;
+}
+
+/** The time `iso` with its clock at its own offset in its UTC fields. */
+function clockOf(iso: string): Date {
+  const zone = /([+-])(\d{2}):(\d{2})$/.exec(iso); // none for Z
+  const minutes = zone ? (zone[1] === "-" ? -1 : 1) * (Number(zone[2]) * 60 + Number(zone[3])) : 0;
+  return new Date(Date.parse(iso) + minutes * 60_000);
+}
+
+/** An ISO 8601 time with an offset, or null when `text` is none (a day the month lacks too). */
+export function parseIsoTime(text: string): string | null {
+  if (!ISO_TIME.test(text)) return null;
+  const clock = clockOf(text);
+  const real =
+    !Number.isNaN(clock.getTime()) && clock.toISOString().slice(0, 16) === text.slice(0, 16);
+  return real ? text : null;
+}
+
+/** An ISO 8601 time as a clock shows it at its own offset, the day and the minute:
+ * `Fri 17:42`. */
+export function formatClock(iso: string): string {
+  const clock = clockOf(iso);
+  return `${DAYS[clock.getUTCDay()]} ${two(clock.getUTCHours())}:${two(clock.getUTCMinutes())}`;
 }
 
 /** A coordinate as the stop list shows it. */

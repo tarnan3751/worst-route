@@ -322,6 +322,7 @@ body {
 }
 
 .field input[type="number"],
+.field input[type="datetime-local"],
 .field select {
   width: 100%;
   padding: 3px 6px;
@@ -361,6 +362,11 @@ body {
 .radios select {
   padding: 1px 4px;
   font: inherit;
+}
+
+.field input[type="datetime-local"] {
+  min-width: 0; /* its own width would widen the column past the panel */
+  padding: 3px 4px;
 }
 
 .vehicle {
@@ -424,6 +430,7 @@ body {
   color: var(--muted);
 }
 
+.stat-arrives,
 .stat-towns,
 .stat-states,
 .stat-fuel,

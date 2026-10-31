@@ -11,6 +11,7 @@ import {
   encodeUrlState,
   openRoute,
   settingsFrom,
+  geojsonUrl,
   shareImageUrl,
   urlStateOf,
   type UrlMode,
@@ -28,6 +29,7 @@ const full: UrlState = {
   turns: null,
   strict: null,
   vehicle: null,
+  departure: null,
   stops: [
     { lat: 45.5231, lon: -122.6765 },
     { lat: 45.519368, lon: -122.662765 },
@@ -46,6 +48,7 @@ const nothing: UrlState = {
   turns: null,
   strict: null,
   vehicle: null,
+  departure: null,
   stops: null,
 };
 
@@ -470,3 +473,71 @@ describe("a route's vehicle opened by its link", () => {
     }
   });
 });
+
+describe("the departure in the URL and in a route's link", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("round-trips a departure with its offset, and ignores what is not one", () => {
+    for (const departure of [
+      "2026-10-31T09:00:00-07:00",
+      "2026-10-31T09:00+05:30",
+      "2026-11-01T02:00:00Z",
+    ]) {
+      const state = { ...nothing, departure };
+      expect(decodeUrlState(encodeUrlState(state))).toEqual(state);
+    }
+    expect(encodeUrlState({ ...nothing, departure: "2026-10-31T09:00:00+05:30" })).toBe(
+      "?departure=2026-10-31T09%3A00%3A00%2B05%3A30",
+    );
+    for (const text of ["2026-10-31T09:00", "2026-10-31", "tomorrow", "2026-13-31T09:00:00Z", ""]) {
+      expect(decodeUrlState(`?departure=${encodeURIComponent(text)}`).departure).toBeNull();
+    }
+    const url = decodeUrlState("?departure=2026-10-31T09%3A00%3A00-07%3A00");
+    expect(settingsFrom(url, DEFAULT_SETTINGS).departure).toBe("2026-10-31T09:00:00-07:00");
+    expect(urlStateOf({ ...emptyApp(), settings: DEFAULT_SETTINGS }).departure).toBeNull(); // now
+  });
+
+  it("takes a stored request's departure into the settings, and keeps the panel's without one", async () => {
+    const { route } = loadStream("portland-directions-stream");
+    const open = async (departure: string | null) => {
+      stubFetch((call) =>
+        call.url.endsWith("/geojson")
+          ? json({ type: "FeatureCollection", features: [] })
+          : json({ ...route, request: { ...route.request, departure } }),
+      );
+      const store = new Store({
+        ...emptyApp(),
+        settings: { ...DEFAULT_SETTINGS, departure: "2026-11-02T08:00:00-08:00" },
+      });
+      expect(
+        await openRoute(route.route_id, store, new JobRunner(store, fakeView(), () => {})),
+      ).toBe(true);
+      return store;
+    };
+    const stored = await open("2026-10-31T09:00:00-07:00");
+    expect(stored.state.settings.departure).toBe("2026-10-31T09:00:00-07:00");
+    expect(encodeUrlState(urlStateOf(stored.state))).toContain(
+      "&departure=2026-10-31T09%3A00%3A00-07%3A00&",
+    );
+    const none = await open(null);
+    expect(none.state.settings.departure).toBe("2026-11-02T08:00:00-08:00");
+  });
+
+  it("downloads the route's GeoJSON from the API, through the /api proxy", () => {
+    expect(geojsonUrl("5ea844bffd40")).toBe("/api/routes/5ea844bffd40/geojson");
+  });
+});
+
+/** An app with nothing in it. */
+function emptyApp(): AppState {
+  return {
+    region: null,
+    stops: [],
+    settings: DEFAULT_SETTINGS,
+    run: IDLE_RUN,
+    route: null,
+    error: null,
+  };
+}

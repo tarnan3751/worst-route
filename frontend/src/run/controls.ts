@@ -1,12 +1,13 @@
 // Running a job (docs/reference/frontend.md, **Run**): `JobRunner`, a job's lifecycle, which the
 // tests drive without a DOM, and `mountRunControls`, the Go, Cancel, Reroll and Make it worse
 // buttons and the live stat line (ratio, length, drive time, attempts, elapsed; the drive and
-// the delays under the slowest time, the items collected, the turns; once stored, the towns and
-// states the route passes through, its extra fuel and its share of the roads within reach).
+// the delays under the slowest time, the items collected, the turns; once stored, its arrival,
+// the towns and states it passes through, its extra fuel and its share of the roads within
+// reach).
 //
 // Go posts the stops (each stop along the way labelled as its marker is numbered, "Stop 2") and
-// settings (the target, the objective with its item, the turn constraints and the vehicle among
-// them), and Reroll the same without a seed,
+// settings (the target, the objective with its item, the turn constraints, the vehicle and the
+// departure, now when none is set, among them), and Reroll the same without a seed,
 // so the server picks one; the 202's seed goes into the settings. Make it worse posts the shown route as `base_route_id`
 // with the seed after the last one tried on it (its own at first), the base route giving the
 // stops, tier and leash; the settings' seed follows the route shown, so it changes only when a
@@ -39,6 +40,7 @@ import type {
   Turns,
 } from "../api/types";
 import {
+  formatClock,
   formatCount,
   formatDistance,
   formatDuration,
@@ -53,6 +55,7 @@ import type { RouteLayer } from "../map/routeLayer";
 import {
   IDLE_RUN,
   TARGET_TOLERANCE,
+  departureOf,
   modeOf,
   targetOf,
   vehicleOf,
@@ -85,6 +88,7 @@ function jobRequest(state: Readonly<AppState>, seed: number | null): RouteReques
     budget_s: settings.budgetS,
     target: targetOf(settings),
     vehicle: vehicleOf(settings),
+    departure: departureOf(settings),
   };
   if (seed !== null) request.seed = seed;
   return request;
@@ -101,6 +105,7 @@ function worseRequest(state: Readonly<AppState>, route: RouteDocument, seed: num
     budget_s: settings.budgetS,
     target: targetOf(settings),
     vehicle: vehicleOf(settings),
+    departure: departureOf(settings),
   };
 }
 
@@ -336,7 +341,8 @@ export function mountRunControls(root: HTMLElement, store: Store, runner: JobRun
   const rows = names.map((name) => el("div", `stat-${name}`));
   const [ratio, line, target, note, time, items, turns] = rows;
   root.replaceChildren(el("h2", "", "Run"), buttons, ratio, line, time, items, turns, target, note);
-  const routeRows = ["towns", "states", "fuel", "roads"].map((name) => el("div", `stat-${name}`));
+  const routeNames = ["arrives", "towns", "states", "fuel", "roads"];
+  const routeRows = routeNames.map((name) => el("div", `stat-${name}`));
   root.append(...routeRows);
 
   store.watch(["region", "stops", "route", "run", "settings"], (state) => {
@@ -442,20 +448,21 @@ export interface RouteLine {
   title: string;
 }
 
-/** The stored route's rows, after the run's: the towns it passes through (the first two and how
- * many more; all of them in the tooltip), the states (by their codes), the fuel it burns beyond
- * the sensible route's and its cost (with a vehicle), and its share of the roads within reach.
- * Empty where the document says nothing, and while no stored route is shown. */
-export function routeLines(
-  state: Readonly<AppState>,
-): [RouteLine, RouteLine, RouteLine, RouteLine] {
+/** The stored route's rows, after the run's: when it arrives (with a departure; the day and the
+ * minute at the departure's offset, the whole time in the tooltip), the towns it passes through
+ * (the first two and how many more; all of them in the tooltip), the states (by their codes), the
+ * fuel it burns beyond the sensible route's and its cost (with a vehicle), and its share of the
+ * roads within reach. Empty where the document says nothing, and while no stored route is
+ * shown. */
+export function routeLines(state: Readonly<AppState>): RouteLine[] {
   const none = { text: "", title: "" };
   const { route, run } = state;
-  if (route === null || run.phase !== "done") return [none, none, none, none];
-  const { towns, states, extra_fuel_gal: fuel, extra_cost_usd: cost } = route.metrics;
+  if (route === null || run.phase !== "done") return [none, none, none, none, none];
+  const { arrival, towns, states, extra_fuel_gal: fuel, extra_cost_usd: cost } = route.metrics;
   const fraction = route.metrics.network_fraction;
   const more = towns && towns.length > 2 ? ` +${towns.length - 2}` : "";
   return [
+    arrival ? { text: `arrives ${formatClock(arrival)}`, title: arrival } : none,
     towns?.length
       ? { text: `towns: ${towns.slice(0, 2).join(", ")}${more}`, title: towns.join(", ") }
       : none,

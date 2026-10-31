@@ -1,16 +1,18 @@
 // Links (docs/reference/frontend.md, **Links**).
 //
 // The request's settings and stops live in the URL
-// (`?seed=&budget=&tier=&leash=&target=&mode=&turns=&strict=&vehicle=&stops=`, the target as
-// `max`, `ratio:<x>` or `duration:<seconds>`, the mode as `distance`, `time` or `collect:<item>`
-// and the turns as `left` or `right`, with `strict=1` (both written only when not the default),
-// the vehicle as `<mpg>,<gas price>` (only when not the default), the stops as
-// `lat,lon;lat,lon;...` at 6 decimals, as they were clicked), so a link reproduces a request;
+// (`?seed=&budget=&tier=&leash=&target=&mode=&turns=&strict=&vehicle=&departure=&stops=`, the
+// target as `max`, `ratio:<x>` or `duration:<seconds>`, the mode as `distance`, `time` or
+// `collect:<item>` and the turns as `left` or `right`, with `strict=1` (both written only when
+// not the default), the vehicle as `<mpg>,<gas price>` (only when not the default), the departure
+// as an ISO 8601 time with its offset (only when set), the stops as `lat,lon;lat,lon;...` at 6
+// decimals, as they were clicked), so a link reproduces a request;
 // `?route=<id>` opens a stored route without running anything, its own request then giving the
 // stops and settings. `UrlSync` keeps the URL in step with what the app shows once it is
 // started, which is after a `?route=` link has been opened, or has failed to open (the parameter
-// then stays). The share section copies a link to the route shown, and opens its share image
-// (`GET /routes/{id}/share.png`) in a new tab.
+// then stays). The share section copies a link to the route shown, opens its share image
+// (`GET /routes/{id}/share.png`) in a new tab, and downloads its GeoJSON
+// (`GET /routes/{id}/geojson`).
 import { API_BASE, errorBody, getRoute, getRouteGeojson } from "../api/client";
 import type { CollectItem, LineString, Target, Tier, Vehicle } from "../api/types";
 import type { JobRunner } from "../run/controls";
@@ -34,6 +36,7 @@ import {
   type Store,
   type TurnSetting,
 } from "../state";
+import { parseIsoTime } from "../format";
 import { el } from "../util/dom";
 import { round6 } from "../util/geo";
 
@@ -54,6 +57,7 @@ export interface UrlState {
   turns: Exclude<TurnSetting, "any"> | null;
   strict: true | null;
   vehicle: Vehicle | null;
+  departure: string | null;
   stops: { lat: number; lon: number }[] | null;
 }
 
@@ -135,6 +139,7 @@ export function decodeUrlState(search: string): UrlState {
     turns,
     strict: turns !== null && params.get("strict") === "1" ? true : null,
     vehicle: parseVehicle(params.get("vehicle")),
+    departure: parseIsoTime(params.get("departure") ?? ""),
     stops: stops ? parseStops(stops) : null,
   };
 }
@@ -160,6 +165,7 @@ export function encodeUrlState(state: UrlState): string {
   if (state.vehicle !== null) {
     params.push(`vehicle=${state.vehicle.mpg},${state.vehicle.gas_price_usd}`);
   }
+  if (state.departure !== null) params.push(`departure=${encodeURIComponent(state.departure)}`);
   if (state.stops !== null && state.stops.length > 0) {
     params.push(`stops=${state.stops.map(({ lat, lon }) => `${lat},${lon}`).join(";")}`);
   }
@@ -188,6 +194,7 @@ export function urlStateOf(state: Readonly<AppState>): UrlState {
     turns: turns === "any" ? null : turns,
     strict: turns !== "any" && settings.strict ? true : null,
     vehicle: usual ? null : vehicleOf(settings),
+    departure: settings.departure,
     stops: state.stops.map(({ lat, lon }) => ({ lat, lon })),
   };
 }
@@ -218,12 +225,14 @@ export function settingsFrom(url: UrlState, defaults: Settings): Settings {
     strict: url.strict ?? defaults.strict,
     mpg: url.vehicle?.mpg ?? defaults.mpg,
     gasPriceUsd: url.vehicle?.gas_price_usd ?? defaults.gasPriceUsd,
+    departure: url.departure ?? defaults.departure,
   };
 }
 
-/** Open stored route `routeId`: its stops and settings (its mode, turns and vehicle among them;
- * the panel's vehicle stays when it has none, or one outside the panel's limits), the route and
- * its baseline. Whether it opened; when not, the banner says why. */
+/** Open stored route `routeId`: its stops and settings (its mode, turns, vehicle and departure
+ * among them; the panel's vehicle stays when it has none, or one outside the panel's limits, and
+ * its departure when it has none), the route and its baseline. Whether it opened; when not, the
+ * banner says why. */
 export async function openRoute(
   routeId: string,
   store: Store,
@@ -232,7 +241,7 @@ export async function openRoute(
   try {
     const [route, geojson] = await Promise.all([getRoute(routeId), getRouteGeojson(routeId)]);
     const { request } = route;
-    const { objective, item, constraints } = request;
+    const { objective, item, constraints, departure } = request;
     const vehicle = withinLimits(request.vehicle);
     store.update({
       stops: (request.stops ?? []).map(({ lat, lon }, k) => {
@@ -250,6 +259,7 @@ export async function openRoute(
       turns: constraints?.no_left ? "no_left" : constraints?.no_right ? "no_right" : "any",
       strict: constraints?.strict ?? false,
       ...(vehicle ? { mpg: vehicle.mpg, gasPriceUsd: vehicle.gas_price_usd } : {}),
+      ...(departure ? { departure } : {}),
     });
     const baseline = geojson.features.find((feature) => feature.properties.kind === "baseline");
     const geometry = baseline?.geometry?.type === "LineString" ? baseline.geometry : null;
@@ -287,8 +297,13 @@ export function shareImageUrl(routeId: string): string {
   return `${API_BASE}/routes/${routeId}/share.png`;
 }
 
-/** The share section: a link to the route shown, a button that copies it, and its share
- * image. */
+/** The GeoJSON of stored route `routeId`: the route, its baseline and its stops. */
+export function geojsonUrl(routeId: string): string {
+  return `${API_BASE}/routes/${routeId}/geojson`;
+}
+
+/** The share section: a link to the route shown, a button that copies it, its share image and
+ * its GeoJSON. */
 export function mountShare(root: HTMLElement, store: Store): void {
   const link = el("input", "link");
   link.readOnly = true;
@@ -297,8 +312,9 @@ export function mountShare(root: HTMLElement, store: Store): void {
   const image = el("a", "", "Open share image");
   image.target = "_blank";
   image.rel = "noopener";
+  const download = el("a", "", "Download GeoJSON");
   const imageLine = el("p");
-  imageLine.append(image);
+  imageLine.append(image, " · ", download);
   root.replaceChildren(el("h2", "", "Share"), hint, link, copy, imageLine);
   copy.addEventListener("click", async () => {
     link.select();
@@ -318,6 +334,8 @@ export function mountShare(root: HTMLElement, store: Store): void {
     if (id !== undefined) {
       link.value = `${location.origin}${location.pathname}?route=${id}`;
       image.href = shareImageUrl(id);
+      download.href = geojsonUrl(id);
+      download.download = `worst-route-${id}.geojson`;
     }
   });
 }

@@ -9,6 +9,7 @@ import {
 } from "../__fixtures__/http";
 import { loadStream } from "../__fixtures__/stream";
 import type { RouteDocument, RouteRequest } from "../api/types";
+import { isoWithOffset } from "../format";
 import { DEFAULT_SETTINGS, IDLE_RUN, Store, type Settings } from "../state";
 import { busy } from "../stops/stopList";
 import { JobRunner, routeLines, statLines } from "./controls";
@@ -241,6 +242,7 @@ describe("modes and turn constraints", () => {
       budget_s: 20,
       target: { kind: "max" },
       vehicle: { mpg: 24, gas_price_usd: 3.89 },
+      departure: expect.any(String),
     });
   });
 
@@ -423,6 +425,32 @@ describe("the vehicle and the stored route's rows", () => {
     });
   });
 
+  it("sends the departure set, or now at the browser's offset", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-31T16:00:30Z"));
+    const calls = stubFetch((call) => created(call, "jd"));
+    const s = store(directions.route);
+    const runner = new JobRunner(s, fakeView(), () => {});
+    await runner.go();
+    const now = (calls[0].body as RouteRequest).departure!;
+    expect(now).toBe(isoWithOffset(new Date()));
+    expect(Date.parse(now)).toBe(Date.parse("2026-10-31T16:00:30Z"));
+    s.update({ run: IDLE_RUN, route: directions.route });
+    s.updateSettings({ departure: "2026-11-02T08:15:00-08:00" });
+    await runner.worse();
+    expect(calls[1].body).toMatchObject({ departure: "2026-11-02T08:15:00-08:00" });
+    vi.useRealTimers();
+  });
+
+  it("says when a route with a departure arrives, at the departure's offset", () => {
+    const arrival = "2026-10-31T17:42:13.25-07:00";
+    const s = store({ ...directions.route, metrics: { ...directions.route.metrics, arrival } });
+    s.updateRun({ phase: "done" });
+    expect(routeLines(s.state)[0]).toEqual({ text: "arrives Sat 17:42", title: arrival });
+    s.update({ route: directions.route }); // recorded without a departure
+    expect(routeLines(s.state)[0]).toEqual(none);
+  });
+
   it("sends the vehicle set with Make it worse, Go and Reroll", async () => {
     const calls = stubFetch((call) => created(call, "jv"));
     const s = store(directions.route);
@@ -446,11 +474,12 @@ describe("the vehicle and the stored route's rows", () => {
     const s = store();
     await new JobRunner(s, fakeView(), () => {}).go();
     for (const event of directions.events.slice(0, -1)) sources[0].send(event.event, event.data);
-    expect(routeLines(s.state)).toEqual([none, none, none, none]);
+    expect(routeLines(s.state)).toEqual([none, none, none, none, none]);
     sources[0].send("done", directions.events.at(-1)!.data);
     await settle();
     expect(statLines(s.state)[0]).toBe("14.5×");
     expect(routeLines(s.state)).toEqual([
+      none, // recorded without a departure
       { text: "towns: Portland", title: "Portland" },
       { text: "states: OR", title: "Oregon" },
       { text: "fuel: +2.7 gal · $10.50", title: "" },
@@ -473,16 +502,16 @@ describe("the vehicle and the stored route's rows", () => {
       extra_cost_usd: null,
       network_fraction: 0.004,
     });
-    expect(routeLines(many.state)).toEqual([
+    expect(routeLines(many.state).slice(1)).toEqual([
       { text: "towns: Portland, Beaverton +3", title: towns.join(", ") },
       { text: "states: OR, WA", title: "Oregon, Washington" },
       none, // no vehicle
       { text: "roads used: under 1 % of those within reach", title: "" },
     ]);
     const two = shown({ towns: towns.slice(0, 2) });
-    expect(routeLines(two.state)[0].text).toBe("towns: Portland, Beaverton");
+    expect(routeLines(two.state)[1].text).toBe("towns: Portland, Beaverton");
     const nowhere = shown({ towns: [], states: null });
-    expect(routeLines(nowhere.state).slice(0, 2)).toEqual([none, none]);
+    expect(routeLines(nowhere.state).slice(1, 3)).toEqual([none, none]);
     const {
       extra_fuel_gal,
       extra_cost_usd,
@@ -494,7 +523,7 @@ describe("the vehicle and the stored route's rows", () => {
     } = directions.route.metrics; // a server older than them
     const s = store({ ...directions.route, metrics: old });
     s.updateRun({ phase: "done" });
-    expect(routeLines(s.state)).toEqual([none, none, none, none]);
+    expect(routeLines(s.state)).toEqual([none, none, none, none, none]);
   });
 });
 

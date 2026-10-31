@@ -11,7 +11,7 @@ nothing there.
 | Module | What it holds |
 |---|---|
 | `main.ts` | bootstrap and wiring: the store from the URL's state, the panel's parts, the region's bbox, a stored route when the URL names one, clicks on the map, the cancel on `pagehide` |
-| `state.ts` | `Store`, the app's state on an `EventTarget`; `Settings`, `Stop`, `RunView`, `targetOf`, `modeOf` (the request's objective, item and turn constraints), `vehicleOf`; the API's limits (tiers, budget, leash, targets), the vehicle's, and the modes and items it plans |
+| `state.ts` | `Store`, the app's state on an `EventTarget`; `Settings`, `Stop`, `RunView`, `targetOf`, `modeOf` (the request's objective, item and turn constraints), `vehicleOf`, `departureOf`; the API's limits (tiers, budget, leash, targets), the vehicle's, and the modes and items it plans |
 | `api/types.ts` | the API's shapes, written by hand from `api.md` |
 | `api/client.ts` | the fetch wrappers (`geocode` among them), `ApiError`, `errorBody`, `subscribe` (a job's events over `EventSource`) |
 | `map/basemap.ts` | the basemap and its switch (**Basemap**) |
@@ -20,13 +20,13 @@ nothing there.
 | `map/stopsLayer.ts` | the stop markers and the snapped-position ghosts |
 | `stops/stopList.ts` | how a click, a drag or a removal changes the stops (`placeStop`: a click's, and a place search's pick); the list in the panel |
 | `stops/search.ts` | `PlaceSearch` (the place search, no DOM, so the tests drive it) and `mountPlaceSearch`, its field, button and results |
-| `settings/panel.ts` | the request's settings (the mode, the turns and the vehicle among them), the row an error's `field` names, and the units |
+| `settings/panel.ts` | the request's settings (the mode, the turns, the vehicle and the departure among them), the row an error's `field` names, and the units |
 | `run/controls.ts` | `JobRunner`, a job's lifecycle (no DOM, so the tests drive it); `mountRunControls`, Go, Cancel, Reroll, Make it worse and the stat line; `statLines` and `routeLines`, its rows |
 | `directions/panel.ts` | `StepLocator` (where the steps lie along the route's geometry), `stepRows`, `DirectionsPanel` (the list's rows, a hover's highlight and a click's pan, no DOM) and `mountDirections` (**Directions**) |
 | `toasts.ts` | `Toasts`, the rotation (no DOM), and `mountToasts`, the strip under the map (**Toasts**) |
-| `share/share.ts` | the URL state, `UrlSync`, `openRoute`, `shareImageUrl`, the share section (**Links**) |
+| `share/share.ts` | the URL state, `UrlSync`, `openRoute`, `shareImageUrl`, `geojsonUrl`, the share section (**Links**) |
 | `banner.ts` | the error banner, with "Try without strict" for `INFEASIBLE_TURN_CONSTRAINT` |
-| `format.ts` | distances (mi/km), durations, ratios, counts, items collected; fuel and its cost, percentages, states by their codes |
+| `format.ts` | distances (mi/km), durations, ratios, counts, items collected; fuel and its cost, percentages, states by their codes; times of day (`isoWithOffset`, `parseIsoTime`, `formatClock`) |
 | `util/geo.ts`, `util/dom.ts` | rounding and bounds; building DOM with text, never HTML |
 
 ## Running it
@@ -94,6 +94,12 @@ is most of it), 300 kB gzipped.
   price in dollars a gallon (3.89 by default, 0.50–20); a value outside them is put back. Every
   request carries them as its `vehicle` (`{mpg, gas_price_usd}`), so every stored route has its
   extra fuel and its cost. An `INVALID_REQUEST` naming `field: "vehicle"` highlights the row.
+- **Departure.** A date and time (`datetime-local`, the browser's local time) under the
+  vehicle, empty by default ("empty: now"). Every request carries it as its `departure`, an ISO
+  8601 time with the browser's offset to the second (`2026-10-31T09:00:00-05:00`), or, when
+  empty, the time Go (Reroll, Make it worse) is pressed; the document's `arrival` follows from
+  it. A departure that came with a link or a stored route keeps its own offset until it is
+  changed (the field shows its clock there). `field: "departure"` highlights the row.
 - **Mode and Turns.** The Mode row, above the target, picks the objective: "Longest"
   (`distance`, the default), "Slowest" (`time`: the driving and the waits at signals and stop
   signs) or "Collect" (`collect`), which shows a list of what to collect: toll booths, level
@@ -112,15 +118,14 @@ is most of it), 300 kB gzipped.
   gives it ("Stop 2", "Stop 3", …, which the directions say: "Arrive at Stop 2; continue"; the
   start and the end go without one, so the API keeps its own "Arrive at your destination" and
   "Arrive back where you started"), and the settings (the target as
-  `{kind: "ratio", value}` or
-  `{kind: "duration", seconds}`; the `objective`; the `item` only under collect; the
-  `constraints` `{no_left, no_right, strict}` only when a side is avoided, the key left out
-  otherwise, as the API's own serializer does; the `vehicle`), and its 202's seed goes into the
-  settings.
-  Reroll posts the same without a seed, so the server picks one. Make it worse posts the shown
-  route as `base_route_id`, with the budget, mode, turns, target and vehicle from the panel (a route
-  opened by link has put its own in the panel first), leaving the stops,
-  tier and leash to the base route (the API's rule), and the seed after the last one tried on
+  `{kind: "ratio", value}` or `{kind: "duration", seconds}`; the `objective`; the `item` only
+  under collect; the `constraints` `{no_left, no_right, strict}` only when a side is avoided,
+  the key left out otherwise, as the API's own serializer does; the `vehicle` and the
+  `departure`), and its 202's seed goes into the settings. Reroll posts the same without a
+  seed, so the server picks one. Make it worse posts the shown route as `base_route_id`, with
+  the budget, mode, turns, target, vehicle and departure from the panel (a route opened by link
+  has put its own in the panel first), leaving the stops, tier and leash to the base route
+  (the API's rule), and the seed after the last one tried on
   that route (its own seed at first). The settings' seed follows the route shown: when the
   job's `done` names the base route (nothing worse was found), the route and its seed stay, and
   the next press tries the seed after; with a target, the base route may already meet it ("already
@@ -145,14 +150,15 @@ is most of it), 300 kB gzipped.
   `timeout`, `failed`), the seed, and, when Make it worse found nothing, "no worse route found
   with seed N; try again or Reroll". The rows follow the run's own mode (what it asked, even
   when Make it worse found nothing and shows the base route), or a route opened by link's
-  request. Under them, once the route is stored, four rows from its document (`routeLines`):
-  the towns it passes through, the first two and how many more ("towns: Beaverton, West Slope
-  +14", every name in the row's tooltip); the states by their USPS codes ("states: OR, WA", the
-  names in the tooltip); the fuel it burns beyond the sensible route's and its cost ("fuel:
-  +6.8 gal · $28.83"); and its share of the roads within reach ("roads used: 29 % of those
-  within reach", "under 1 %" as the toasts say). A row the document has nothing for (a server
-  without the places index has no towns or states) is left empty, and all four are while a
-  job runs.
+  request. Under them, once the route is stored, five rows from its document (`routeLines`): when it
+  arrives, the day and the minute at the departure's offset ("arrives Sat 14:57", the whole time in
+  the tooltip; `formatClock`); the towns it passes through, the first two and how many more ("towns:
+  Beaverton, West Slope +14", every name in the row's tooltip); the states by their USPS codes
+  ("states: OR, WA", the names in the tooltip); the fuel it burns beyond the sensible route's and
+  its cost ("fuel: +6.8 gal · $28.83"); and its share of the roads within reach ("roads used: 29 %
+  of those within reach", "under 1 %" as the toasts say). A row the document has nothing for (a
+  server without the places index has no towns or states; one stored without a departure has no
+  arrival) is left empty, and all five are while a job runs.
 - **Directions** (`directions/panel.ts`). A collapsible section under the run's, empty (with
   the hint "The directions come once a route is stored.") until the stored route's document is
   fetched, on `done` or by a link; it lists the document's `directions` with no other request,
@@ -283,25 +289,31 @@ show the route on a blank background.
 ## Links
 
 The URL carries the request:
-`?seed=&budget=&tier=&leash=&target=&mode=&turns=&strict=&vehicle=&stops=lat,lon;lat,lon;…`,
+`?seed=&budget=&tier=&leash=&target=&mode=&turns=&strict=&vehicle=&departure=&stops=lat,lon;lat,lon;…`,
 the target as `max`, `ratio:<x>` or `duration:<seconds>`, the mode as `distance`, `time` or
-`collect:<item>` (`collect:bridge`), the turns as `left` or `right` and `strict=1` (read only
-with a side), the vehicle as `<mpg>,<gas price>` (`vehicle=30,4.25`, both within the panel's
-limits); the mode, the turns and the vehicle are written only when not the default (Longest,
-Any, 24 mpg at $3.89), so a distance link reads as before. A ratio target beside `mode=collect:…` reads as "as bad as
-possible", as the API takes no ratio under collect. The URL is rewritten (`history.replaceState`, by
+`collect:<item>` (`collect:bridge`), the turns as `left` or `right` and `strict=1` (read only with a
+side), the vehicle as `<mpg>,<gas price>` (`vehicle=30,4.25`, both within the panel's limits), the
+departure as an ISO 8601 time with its offset, encoded (`departure=2026-10-31T09%3A00%3A00-05%3A00`;
+a day the month lacks is not one); the mode, the turns and the vehicle are written only when not the
+default (Longest, Any, 24 mpg at $3.89), the departure only when set, so a distance link reads as
+before. A ratio target beside `mode=collect:…` reads as "as bad as possible", as the API takes no
+ratio under collect. The URL is rewritten (`history.replaceState`, by
 `UrlSync`) whenever the stops or settings change, so a link reproduces the request (Go with the
 same seed plans the same route on the same build). A value that does not parse, or lies outside
 the API's limits, is ignored and the default kept. Once a route is shown, the URL
 also carries `route=<id>`; the share section offers `…/?route=<id>` with a copy button, and an
 "Open share image" link to `/api/routes/<id>/share.png` (`shareImageUrl`), the server's PNG of the
-route (`docs/reference/api.md`, **Share image**), opening in a new tab (`rel="noopener"`).
+route (`docs/reference/api.md`, **Share image**), opening in a new tab (`rel="noopener"`), and a
+"Download GeoJSON" link to `/api/routes/<id>/geojson` (`geojsonUrl`), the route, its baseline
+and its stops as a FeatureCollection, saved as `worst-route-<id>.geojson` (the `download`
+attribute, the proxy keeping it on the page's origin).
 
 `?route=<id>` opens a stored route without running anything (`openRoute`): `GET /routes/{id}`
 and `GET /routes/{id}/geojson` (for the baseline), the stops and settings from the route's own
-request (its seed, budget, tier, leash, target, objective, item, turn constraints and vehicle;
-the panel keeps its item under another objective, and its vehicle when the request has none
-or one outside the panel's limits, as the URL's is;
+request (its seed, budget, tier, leash, target, objective, item, turn constraints, vehicle and
+departure; the panel keeps its item under another objective, its vehicle when the request has
+none or one outside the panel's limits, as the URL's is, and its departure when the request has
+none;
 for a "make it worse" route, the base route's stops),
 the snaps from its stops, the route drawn whole, the camera fitted to it, its numbers in the
 stat line, its directions and its toasts, from which Make it worse and Reroll work as after a
@@ -318,13 +330,13 @@ follows the app again from the next change. The units are not in the URL.
 |---|---|
 | `map/routeLayer.test.ts` | `spliceLine` on hand-made lines (a longer and a shorter detour, either end, the input left alone); each recording replayed: it ends with the stored route's node count, every node where the job's final snapshot has it (whose stop positions are the route's), every drawn point a point of the stored geometry in order with the same ends; and at every snapshot after splices (the max-mode recording's after its 50th `progress`), the replayed nodes equal the snapshot's |
 | `api/types.test.ts` | each type's runtime spec, which the compiler holds to the type's keys; the specs against `api.md` (its JSON request example, and the field lists of the events, `done`'s metrics, `/regions`, the 202, the job status, the route document, `/routes/{id}/directions`, `/brands` and `/geocode`) and against every payload of the five recordings; the ratio recording's target reached in `done` and the document, its round-trip refusal; the slowest-time recording's time ratio, delays and turns in `done` and the document, its refusal of both turn constraints; the collect recording's bridges counted in every `progress`, in `done` and the document, its refusal of a ratio target; the directions recording's vehicle, fuel and cost, states and towns, its steps numbered from 1 with the driving steps' ranges covering the route's edges in order and adding up to its length, its first toast, its refusal of a vehicle of 0 mpg; a payload that does not fit is caught |
-| `run/controls.test.ts` | `JobRunner` with `fetch` and `EventSource` stubbed: a TypeError from the client and an event the app cannot handle end the run as `CLIENT_ERROR` with the controls unlocked (the job cancelled), the server's `error` closes the stream; Make it worse keeps the route and its seed when nothing worse is found and tries the next seed, follows a worse route's seed; Go and Reroll send the settings' seed, then none; leaving the page cancels a job whose POST is in flight once it is answered, a running one at once; a ratio and a drive-time target sent, shown while running and with what was achieved (`target reached`), and Make it worse whose base already meets its target; the objective, the item only under collect and the constraints only with a side sent (and not by default), Make it worse in the mode set; the slowest-time recording replayed (the lengths' ratio while running, then the time ratio, the drive and delays, the turns) and the collect recording's bridges counted live, then the stored route's; the run's mode shown when Make it worse in another finds nothing; "no lefts" and "no rights" (not with a U-turn); `INFEASIBLE_TURN_CONSTRAINT` as the error, and the refused request sent again without strict: a Go with its seed, a Make it worse on the same route with its seed, a Reroll with none; each stop along the way labelled as its marker is numbered ("Stop 2", "Stop 3"), the start and the end without a label; the vehicle set sent by Make it worse, Go and Reroll (the default in Make it worse's whole body); the directions recording replayed: no route rows while it runs, then its towns, states, fuel and share of the roads; the first two towns and how many more with every name in the tooltip, two states by their codes, no fuel without a vehicle, "under 1 %", and nothing from a document without them |
+| `run/controls.test.ts` | `JobRunner` with `fetch` and `EventSource` stubbed: a TypeError from the client and an event the app cannot handle end the run as `CLIENT_ERROR` with the controls unlocked (the job cancelled), the server's `error` closes the stream; Make it worse keeps the route and its seed when nothing worse is found and tries the next seed, follows a worse route's seed; Go and Reroll send the settings' seed, then none; leaving the page cancels a job whose POST is in flight once it is answered, a running one at once; a ratio and a drive-time target sent, shown while running and with what was achieved (`target reached`), and Make it worse whose base already meets its target; the objective, the item only under collect and the constraints only with a side sent (and not by default), Make it worse in the mode set; the slowest-time recording replayed (the lengths' ratio while running, then the time ratio, the drive and delays, the turns) and the collect recording's bridges counted live, then the stored route's; the run's mode shown when Make it worse in another finds nothing; "no lefts" and "no rights" (not with a U-turn); `INFEASIBLE_TURN_CONSTRAINT` as the error, and the refused request sent again without strict: a Go with its seed, a Make it worse on the same route with its seed, a Reroll with none; each stop along the way labelled as its marker is numbered ("Stop 2", "Stop 3"), the start and the end without a label; the vehicle set sent by Make it worse, Go and Reroll (the default in Make it worse's whole body); the departure set sent, or, empty, the time Go is pressed at the browser's offset (on a fake clock); "arrives Sat 17:42" from a document's arrival at its own offset, nothing without one; the directions recording replayed: no route rows while it runs, then its towns, states, fuel and share of the roads; the first two towns and how many more with every name in the tooltip, two states by their codes, no fuel without a vehicle, "under 1 %", and nothing from a document without them |
 | `directions/panel.test.ts` | on the directions recording: a row per step classed by its kind, numbered as the document numbers them (none for the 40 jokes, the numbers skipping them), a driving step's distance and time in miles and kilometres, the arrival's and a stop's rows with none; `StepLocator`: the driving steps' lines ending on their first and last nodes (more than 99 % exactly, all within a metre; the job's last snapshot gives where the nodes are) and covering the geometry end to end, a step given at least one segment however short its distance, no line for a step that drives nothing, every step starting where it is; `DirectionsPanel` with a stand-in map: the rows of the route shown and none without one, the units followed, a hover highlighting the right edges, from node to node (once for the same step), a joke and none highlighting nothing, a click panning to the step's start, the highlight forgotten when the route changes, a document without directions listing nothing |
 | `toasts.test.ts` | `Toasts` on fake timers: nothing and no timer while idle; the three waiting lines and the live ratio every 4 s while a job starts and runs (the ratio following `progress` while shown, round again), the ratio's slot skipped without one, and the line shown kept when the ratio comes; none of the last run's ratio while the next one's POST is in flight (and the route's back when it is refused); the stored route's toasts from the first, in order, every 4 s, looping (ten toasts, so ten periods come round); held under the pointer, a click moving on at once and starting the period again; nothing once the route is forgotten, nor for a document without toasts |
 | `api/client.test.ts` | the API's error bodies, `BAD_RESPONSE` for an HTML success, `HTTP_<status>`, `NETWORK`, `CLIENT_ERROR` |
 | `stops/search.test.ts` | `PlaceSearch` with `fetch` stubbed and a real store: nothing asked while typing, one `GET /api/geocode?q=&region=` on Search, nothing for a blank text or before the region; the candidates listed, an empty answer said; a pick placing the stop exactly as `placeStop` (a click) does, as the start and as a stop before the end, and clearing the field; nothing placed or asked while a job runs; a 429 in the banner, and a search closing it |
-| `share/share.test.ts` | the URL state round trip (every field, `auto`, seeds 0 and 2⁵³ − 1, clicked coordinates exactly), values it ignores, the app's state to the URL and back; a `?route=` link at startup: the URL untouched until the route opens, then written from its request, and kept, with the banner, when it does not open; targets in the URL, values ignored, and a ratio-target route opened by link; every mode and turn setting round-tripped, values ignored (strict without a side among them), a ratio beside a collect mode read as max, the defaults left out, the settings given back; a slowest-time and a collecting route opened by link (mode, item and turns into the settings, the URL and the stat line, the panel's item kept); the share image's URL; the vehicle round-tripped, at its limits, the default left out, values ignored; a route opened by link putting its request's vehicle into the settings and the URL (the default not written), and one without a vehicle, or with one outside the panel's limits, keeping the panel's |
-| `format.test.ts` | distances in both units and their thresholds, durations, ratios, counts, items one and many; drive times typed as a target, read and written back; fuel and its cost, percentages ("under 1 %"), states by their codes and a name not known |
+| `share/share.test.ts` | the URL state round trip (every field, `auto`, seeds 0 and 2⁵³ − 1, clicked coordinates exactly), values it ignores, the app's state to the URL and back; a `?route=` link at startup: the URL untouched until the route opens, then written from its request, and kept, with the banner, when it does not open; targets in the URL, values ignored, and a ratio-target route opened by link; every mode and turn setting round-tripped, values ignored (strict without a side among them), a ratio beside a collect mode read as max, the defaults left out, the settings given back; a slowest-time and a collecting route opened by link (mode, item and turns into the settings, the URL and the stat line, the panel's item kept); the share image's URL; the vehicle round-tripped, at its limits, the default left out, values ignored; a route opened by link putting its request's vehicle into the settings and the URL (the default not written), and one without a vehicle, or with one outside the panel's limits, keeping the panel's; the departure round-tripped with its offset (encoded), what is not an ISO time with an offset ignored, a route's link putting its request's departure into the settings and the URL, and one without keeping the panel's; the GeoJSON's URL |
+| `format.test.ts` | distances in both units and their thresholds, durations, ratios, counts, items one and many; drive times typed as a target, read and written back; fuel and its cost, percentages ("under 1 %"), states by their codes and a name not known; a time written at the browser's offset to the second and read back, ISO times with an offset read and others (a day the month lacks among them) refused, a time shown as a clock at its own offset |
 
 The drawn points are not the stored geometry point for point: a snapshot is simplified
 (`api.md`, **Applying the stream**) and a splice is not, so the replay has fewer points; it is
@@ -367,10 +379,11 @@ the budget at 14.5× (694 attempts); its document carries 586 steps (505 turns, 
 15 roundabouts, 40 jokes, the departure and the arrival), ten toasts, 2.7 gallons and $10.50
 extra, Oregon and Portland, and 10 % of the roads within reach; its job status's snapshot gives
 where every node of the stored route is, against which the directions' tests place the steps;
-its refusal is a vehicle of 0 mpg (`INVALID_REQUEST`, `field: "vehicle"`). To record one again (after an API change): run `serve` on a build,
-`POST /jobs` with its request, read `/jobs/{id}/events` to its end, then fetch the status, the
-route and the refusal, and write the same keys, one top-level value (and one event) per line; a
-script of a few lines with `httpx` does it. The max-mode run needs at least 50 `progress` events before
+its refusal is a vehicle of 0 mpg (`INVALID_REQUEST`, `field: "vehicle"`). To record one again
+(after an API change): run `serve` on a build, `POST /jobs` with its request, read
+`/jobs/{id}/events` to its end, then fetch the status, the route and the refusal, and write the same
+keys, one top-level value (and one event) per line; a script of a few lines with `httpx` does it.
+The max-mode run needs at least 50 `progress` events before
 its end, so a mid-run snapshot exists, and stays near 1 MB.
 
 ## Seeing it
@@ -455,12 +468,18 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
   in a fresh browser, showed the same route, rows, 2,026 steps, the vehicle and the first toast.
   With a 6 s budget (32.5×), the pointer over the toasts held one for 5 s and a click moved on.
   Beaverton → Milwaukie (seed 1, 15 s): 27.4×, "towns: Beaverton, West Slope +14", the 16
-  names in the tooltip, "fuel: +12.1 gal · $46.98". Three stops (a via in the Central Eastside,
-  seed 3, 4 s, 39.2×), the via labelled: "1609. Arrive at Stop 2; continue" in bold under the
-  marker numbered 2, and the API's own "1767. Arrive at your destination"; a round trip through
-  the same via (seed 1, 3 s) ends "Arrive back where you started", its stored request labelling
-  the via "Stop 2" and the ends not at all. Switching the units rebuilt the 2,026 steps in
-  41–69 ms.
+  names in the tooltip, "fuel: +12.1 gal · $46.98". Three stops (a via in the Central Eastside, seed
+  3, 4 s, 39.2×), the via labelled: "1609. Arrive at Stop 2; continue" in bold under the marker
+  numbered 2, and the API's own "1767. Arrive at your destination"; a round trip through the same
+  via (seed 1, 3 s) ends "Arrive back where you started", its stored request labelling the via
+  "Stop 2" and the ends not at all. Switching the units rebuilt the 2,026 steps in 41–69 ms. The
+  departure (seed 2, then 5, 3 s, a via): left empty, the request carried the time Go was pressed
+  ("2026-10-30T23:26:25-05:00"); typed as 31 Oct 09:00, the URL took
+  `departure=2026-10-31T09%3A00%3A00-05%3A00` and the route (seed 5, 17.8×, 4 h 14 min of driving
+  and its delays) "arrives Sat 14:57"; its link, in a fresh browser, put 09:00 back in the field.
+  "Download GeoJSON" pointed at `/api/routes/6bd8d2294df9/geojson` with the download name
+  `worst-route-6bd8d2294df9.geojson`, which answered 200 with the route, the baseline and three
+  stops.
 
 ## Limitations
 
@@ -482,5 +501,10 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
 - **A step's highlight is placed by distance**, not by its nodes (**Directions**): a few of its
   ends (0.1 % on Portland) are a point next to the node, within a metre. The document carries
   no offsets of its edges in its geometry; exact ones would need the API to send them.
+- **A route already stored keeps its first record's presentation**: the store names a route by
+  its content (`docs/reference/api.md`, **The store**), so a run that finds a route already
+  stored (the same request and seed again, or another seed landing on it) shows the first
+  record's arrival, fuel and stop names, whatever departure, vehicle or labels it was sent with:
+  changing the departure and pressing Go with the same seed shows the first arrival.
 - **The fuel is in US gallons and dollars** whatever the units, as the vehicle is set in mpg and
   dollars a gallon.

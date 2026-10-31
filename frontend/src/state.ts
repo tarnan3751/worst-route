@@ -17,7 +17,7 @@ import type {
   Turns,
   Vehicle,
 } from "./api/types";
-import type { Units } from "./format";
+import { isoWithOffset, type Units } from "./format";
 
 /** Where the API put a stop: from a job's `snapped` event or a stored route's stops. */
 export interface SnapInfo {
@@ -64,7 +64,8 @@ export type TurnSetting = "any" | "no_left" | "no_right";
  * `target`, with `ratio` (×, more than 1) or `durationS` as its number; each keeps its value
  * while another kind is chosen. `item` is what `collect` collects, kept while another objective
  * is chosen; `strict` counts only with a side to avoid. `mpg` and `gasPriceUsd` are the
- * vehicle, for the route's extra fuel and its cost. */
+ * vehicle, for the route's extra fuel and its cost; `departure` an ISO 8601 time with its
+ * offset, null for now. */
 export interface Settings {
   seed: number | null;
   budgetS: number;
@@ -79,6 +80,7 @@ export interface Settings {
   strict: boolean;
   mpg: number;
   gasPriceUsd: number;
+  departure: string | null;
   units: Units;
 }
 
@@ -96,6 +98,7 @@ export const DEFAULT_SETTINGS: Settings = {
   strict: false,
   mpg: 24,
   gasPriceUsd: 3.89,
+  departure: null,
   units: "mi",
 };
 
@@ -109,6 +112,11 @@ export function targetOf(settings: Settings): Target {
 /** The request's vehicle for `settings`. */
 export function vehicleOf(settings: Settings): Vehicle {
   return { mpg: settings.mpg, gas_price_usd: settings.gasPriceUsd };
+}
+
+/** The request's departure for `settings`: the time set, else now, at the browser's offset. */
+export function departureOf(settings: Settings): string {
+  return settings.departure ?? isoWithOffset(new Date());
 }
 
 /** A request's objective, item and turn constraints. */

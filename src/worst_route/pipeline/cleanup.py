@@ -1,7 +1,9 @@
 """`pipeline cleanup`: the raw graph made into the graph the no-repeat rule rests on.
 
 `docs/PLAN.md` §2.4; `docs/reference/pipeline.md`, cleanup. `run_cleanup` takes the raw graph
-`build` wrote and runs, in order: `simplify` (self-loops dropped, degree-2 chains collapsed),
+`build` wrote (networkx's graph, or the arrays engine's `RawGraph`, which `arrays.simplify`
+simplifies and hands on as networkx would hold it) and runs, in order: `simplify` (self-loops
+dropped, degree-2 chains collapsed),
 `consolidate.stage_a` (signal clusters and divided crossings), `carriageways.find_twins` (on the
 stage A graph, so stretches stage B makes internal keep their twins), `consolidate.stage_b`
 (interchanges and roundabouts as super-junctions with their transitions, the twins carried
@@ -32,6 +34,9 @@ import networkx as nx
 
 from worst_route import config
 from worst_route.pipeline import layout
+from worst_route.pipeline.arrays import simplify as arrays_simplify
+from worst_route.pipeline.arrays.build import RawGraph
+from worst_route.pipeline.arrays.to_nx import simplified_graph
 from worst_route.pipeline.carriageways import TwinStats, find_twins
 from worst_route.pipeline.connectivity import (
     DROPPED_LISTED,
@@ -117,10 +122,14 @@ def parameters() -> dict[str, Any]:
 
 
 def run_cleanup(
-    raw: nx.MultiDiGraph, *, allow_fragmented: bool = False
+    raw: nx.MultiDiGraph | RawGraph, *, allow_fragmented: bool = False
 ) -> tuple[nx.MultiDiGraph, CleanupReport]:
     """The cleaned graph and what each step did."""
-    report = CleanupReport(input={"nodes": raw.number_of_nodes(), "edges": raw.number_of_edges()})
+    if isinstance(raw, RawGraph):
+        size = {"nodes": len(raw.node_id), "edges": raw.edges}
+    else:
+        size = {"nodes": raw.number_of_nodes(), "edges": raw.number_of_edges()}
+    report = CleanupReport(input=size)
     clock = time.perf_counter()
 
     def lap(step: str) -> None:
@@ -129,7 +138,11 @@ def run_cleanup(
         report.seconds[step] = round(now - clock, 3)
         clock = now
 
-    graph, report.simplify = simplify(raw)
+    if isinstance(raw, RawGraph):
+        simplified, report.simplify = arrays_simplify.simplify(raw)
+        graph = simplified_graph(simplified)
+    else:
+        graph, report.simplify = simplify(raw)
     lap("simplify")
     graph, report.stage_a = stage_a(graph)
     lap("stage_a")

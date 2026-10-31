@@ -541,7 +541,7 @@ def save(region: RegionOption, build_id: BuildIdOption = None, force: ForceOptio
     meta = step.build_meta(spec, build_id, params, sources)
     try:
         data = step.graph_data(graph, [t["node_ids"] for t in tiers], meta)
-    except (step.EmptyTransitionsError, step.TooManySpeedsError) as error:
+    except (step.EmptyTransitionsError, step.ShapePointError, step.TooManySpeedsError) as error:
         _fail(f"save failed: {error}")
     report = step.save_build(data, directory, step.graph_geometry(graph, data))
     layout.write_sidecar(output, record)

@@ -170,29 +170,22 @@ def _run(indptr: np.ndarray, values: np.ndarray, i: int) -> list[int]:
 def check_build(data: GraphData) -> None:
     """The invariants on a saved build's arrays, with the format's own checks (`validate`).
 
-    (1) An id inside an edge is no node's member and lies inside one road unit only (`validate`
-    holds every member to one node); (2) an edge starts and ends in its nodes' members; (3) it
-    repeats no id; (4) twins are symmetric (`validate`); (5) transitions sit at super-junctions
-    and name their edges (`validate`). A unit is one edge, or the two directions of one road,
-    named by the smaller id. The tier masks are the tier's classes between kept nodes.
+    (1) Every original OSM node id is a member of one node only (`validate`); (2) twins are
+    symmetric (`validate`); (3) transitions sit at super-junctions and name their edges
+    (`validate`). A unit is one edge, or the two directions of one road, named by the smaller
+    id. The tier masks are the tier's classes between kept nodes. What lies inside the edges
+    (no member, one road unit each) is `check_saved`'s, from the stage: the build does not
+    keep it.
     """
     data.validate()
-    owner = np.repeat(np.arange(data.n), np.diff(data.member_indptr))
-    member_of = dict(zip(data.member_osm_ids.tolist(), owner.tolist(), strict=True))
-    unit_inside: dict[int, int] = {}
-    runs: dict[int, list[tuple[int, ...]]] = defaultdict(list)
+    runs: dict[int, list[int]] = defaultdict(list)
     for e in range(data.m):
-        ids = _run(data.osmnode_indptr, data.osmnode_ids, e)
-        assert len(set(ids)) == len(ids), f"edge {e} repeats an OSM id"
-        assert member_of[ids[0]] == data.edge_u[e] and member_of[ids[-1]] == data.edge_v[e]
-        unit = int(data.edge_unit[e])
-        for osm_id in ids[1:-1]:
-            assert osm_id not in member_of, f"{osm_id} is a member and inside edge {e}"
-            assert unit_inside.setdefault(osm_id, unit) == unit, f"{osm_id} inside two roads"
-        runs[unit].append(tuple(ids))
+        runs[int(data.edge_unit[e])].append(e)
     for unit, edges in runs.items():
-        assert len(edges) in (1, 2) and (len(edges) == 1 or edges[0] == edges[1][::-1])
-        assert unit == min(np.flatnonzero(data.edge_unit == unit))
+        assert len(edges) in (1, 2) and unit == min(edges)
+        if len(edges) == 2:
+            a, b = edges
+            assert (data.edge_u[a], data.edge_v[a]) == (data.edge_v[b], data.edge_u[b])
     supers = {NodeKind.INTERCHANGE, NodeKind.ROUNDABOUT}
     assert all(NodeKind(k) in supers for k in data.node_kind[data.trans_node].tolist())
     for t, classes in enumerate(TIERS):
@@ -208,7 +201,11 @@ def check_saved(graph: nx.MultiDiGraph, data: GraphData, geometry: Geometry) -> 
     """The build holds the enriched graph: its nodes (with each super-junction's roundabout rings),
     edges, twins, transitions and brands (each at nodes a route can pass through), keys as ids;
     its geometry draws each edge from its tail to its head within the simplification's tolerance
-    and the metre's rounding (half a metre on each axis) of the edge's shape."""
+    and the metre's rounding (half a metre on each axis) of the edge's shape. And what the
+    validator's proof from members assumes of the OSM nodes along the edges, which the build
+    does not keep: an edge starts and ends in its nodes' members and repeats no id, an id inside
+    an edge is no node's member and lies inside one road unit only, whose two directions run
+    over the same ids reversed."""
     keys = sorted(graph.edges(keys=True))
     edge_id = {key: e for e, key in enumerate(keys)}
     assert (data.n, data.m) == (graph.number_of_nodes(), len(keys))
@@ -229,7 +226,6 @@ def check_saved(graph: nx.MultiDiGraph, data: GraphData, geometry: Geometry) -> 
     for e, (u, v, k) in enumerate(keys):
         d = graph.edges[u, v, k]
         assert (data.edge_u[e], data.edge_v[e]) == (u, v)
-        assert _run(data.osmnode_indptr, data.osmnode_ids, e) == list(d["osm_nodes"])
         for name, attribute in (
             ("edge_length_m", "length"),
             ("edge_speed_kmh", "speed_kmh"),
@@ -250,6 +246,19 @@ def check_saved(graph: nx.MultiDiGraph, data: GraphData, geometry: Geometry) -> 
         )
         attributes = ("flags", "toll_booths", "level_crossings", "bearing_in", "bearing_out")
         assert saved == tuple(d[a] for a in attributes)
+    member_of = {m: v for v, held in graph.nodes(data="members") for m in held}
+    unit_inside: dict[int, int] = {}
+    runs: dict[int, list[list[int]]] = defaultdict(list)
+    for e, key in enumerate(keys):
+        ids = list(graph.edges[key]["osm_nodes"])
+        assert len(set(ids)) == len(ids), f"edge {e} repeats an OSM id"
+        assert member_of[ids[0]] == data.edge_u[e] and member_of[ids[-1]] == data.edge_v[e]
+        unit = int(data.edge_unit[e])
+        for osm_id in ids[1:-1]:
+            assert osm_id not in member_of, f"{osm_id} is a member and inside edge {e}"
+            assert unit_inside.setdefault(osm_id, unit) == unit, f"{osm_id} inside two roads"
+        runs[unit].append(ids)
+    assert all(len(r) == 1 or r[0] == r[1][::-1] for r in runs.values())
     xy, counts = edge_xy(data, geometry, np.arange(data.m))
     starts = np.cumsum(counts) - counts
     assert (xy[starts] == np.column_stack([data.node_x, data.node_y])[data.edge_u]).all()

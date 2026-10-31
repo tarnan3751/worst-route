@@ -57,7 +57,6 @@ def test_edge_ids_sorted_keeping_input_order() -> None:
     assert g.edge_u.tolist() == [0, 0, 1]
     assert g.edge_length_m.tolist() == [9.0, 8.0, 7.0]
     assert g.member_osm_ids.tolist() == [1, 2]
-    assert g.osmnode_ids.tolist() == [1, 2, 1, 2, 2, 1]
     with pytest.raises(ValueError, match="2 edges match"):
         edge_id(g, 0, 1)
     assert edge_id(g, 1, 0) == 2

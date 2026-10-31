@@ -13,11 +13,16 @@ recomputed from the request by the caller, not taken from the engine's state.
    range, and both ends of every edge in the active mask.
 2. `vertex_simple`: no node twice, except a round trip's start at both ends.
 3. `edge_simple`: no edge twice, no edge with its twin, no road unit twice.
-4. `osm_ids`: the raw-data proof. The route is expanded to original OSM node ids along its
-   edges (`osmnode_ids`; consecutive edges share their junction id once); no id appears twice,
-   each edge's first and last ids are members of its tail and head, and the member ids of a
-   node appear in one contiguous run (a round trip's start in its first and last), so no
-   consolidated junction is entered twice, whatever the engine's bookkeeping says.
+4. `osm_ids`: the raw-data proof. The route's nodes are expanded to the original OSM node ids
+   merged into each (`member_osm_ids`: a cluster's or a super-junction's members, a plain
+   node's own id), a round trip's closing node left out; no id appears twice, so no OSM
+   junction is passed twice, even one two build nodes hold, whatever the build's node ids and
+   the engine's bookkeeping say. The OSM nodes inside edges need no check: simplification
+   removes only a node with one through path per direction (`pipeline/simplify.py`), so such a
+   node lies once inside one edge, or inside the two directions of one road unit, and is no
+   node's member (`pipeline save` refuses a build where that fails); passing it twice means
+   driving an edge or a unit twice, which `edge_simple` refuses. Its index is the edge into the
+   node passed twice.
 5. `transitions`: every (edges[k-1], edges[k]) turn allowed at a node with transition rows.
 6. `stops`: `nodes[stop_idx[s]] == stop_nodes[s]`, strictly increasing positions from the
    first node to the last.
@@ -191,7 +196,7 @@ def validate_route(
         _chain(data, nodes, edges, node_mask),
         _vertex_simple(nodes, round_trip),
         _edge_simple(data, edges),
-        _osm_ids(data, edges, round_trip),
+        _osm_ids(data, nodes, round_trip),
         _transitions(data, nodes, edges),
         _stops(nodes, route.stop_idx, stop_nodes),
         _constraints(data, nodes, edges, node_mask, banned_edges, banned_turn_classes, hard),
@@ -271,52 +276,16 @@ def _edge_simple(data: GraphData, edges: NDArray[np.int64]) -> Check:
     return Check("edge_simple", True)
 
 
-def _osm_ids(data: GraphData, edges: NDArray[np.int64], round_trip: bool) -> Check:
-    runs = [data.osmnode_ids[data.osmnode_indptr[e] : data.osmnode_indptr[e + 1]] for e in edges]
-    order = np.argsort(data.member_osm_ids, kind="stable")
-    members = data.member_osm_ids[order]
-    holder = np.repeat(np.arange(data.n), np.diff(data.member_indptr))[order]
-
-    def owner(ids: NDArray[np.int64]) -> NDArray[np.int64]:
-        at = np.minimum(np.searchsorted(members, ids), len(members) - 1)
-        found: NDArray[np.int64] = np.where(members[at] == ids, holder[at], -1)
-        return found
-
-    first = owner(data.osmnode_ids[data.osmnode_indptr[edges]])
-    last = owner(data.osmnode_ids[data.osmnode_indptr[edges + 1] - 1])
-    bad = np.flatnonzero((first != data.edge_u[edges]) | (last != data.edge_v[edges]))
-    if len(bad):
-        k = bad[0]
-        return _fail(
-            "osm_ids", k, f"edge {edges[k]} does not start and end at members of its nodes"
-        )
-
-    ids_parts: list[NDArray[np.int64]] = []
-    edge_parts: list[NDArray[np.int64]] = []
-    for k, run in enumerate(runs):
-        if k and run[0] == ids_parts[-1][-1]:
-            run = run[1:]  # the junction id the previous edge ended on
-        ids_parts.append(run)
-        edge_parts.append(np.full(len(run), k, dtype=np.int64))
-    ids = np.concatenate(ids_parts)
-    edge_at = np.concatenate(edge_parts)
-    held = owner(ids)
-    closing = round_trip and held[0] == held[-1]
-
-    k = _first_repeat(ids[:-1] if closing and ids[0] == ids[-1] else ids)
+def _osm_ids(data: GraphData, nodes: NDArray[np.int64], round_trip: bool) -> Check:
+    walk = nodes[:-1] if round_trip and nodes[0] == nodes[-1] else nodes
+    starts = data.member_indptr[walk]
+    counts = data.member_indptr[walk + 1] - starts
+    within = np.arange(counts.sum()) - np.repeat(np.cumsum(counts) - counts, counts)
+    ids = data.member_osm_ids[np.repeat(starts, counts) + within]
+    k = _first_repeat(ids)
     if k is not None:
-        return _fail("osm_ids", edge_at[k], f"original OSM node {ids[k]} passed twice")
-
-    starts = np.flatnonzero(np.concatenate(([True], held[1:] != held[:-1])))
-    run_owner = held[starts]
-    junction = run_owner >= 0
-    run_owner, starts = run_owner[junction], starts[junction]
-    if closing:
-        run_owner, starts = run_owner[:-1], starts[:-1]  # the start's run at the end
-    k = _first_repeat(run_owner)
-    if k is not None:
-        node = run_owner[k]
-        return _fail("osm_ids", edge_at[starts[k]], f"the members of node {node} entered twice")
+        at = int(np.repeat(np.arange(len(walk)), counts)[k])
+        return _fail("osm_ids", max(at - 1, 0), f"original OSM node {ids[k]} passed twice")
     return Check("osm_ids", True)
 
 

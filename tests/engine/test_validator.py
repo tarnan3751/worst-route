@@ -242,15 +242,9 @@ def test_metrics_must_be_finite(bad: float) -> None:
     assert failed(check(route)) == ["metrics"]
 
 
-def with_osm(
-    data: GraphData, shapes: dict[tuple[int, int], list[int]], members: dict[int, list[int]]
-) -> GraphData:
-    """`data` with interior OSM ids inserted along some edges and extra members for some nodes."""
-    runs = []
-    for e in range(data.m):
-        ids = data.osmnode_ids[data.osmnode_indptr[e] : data.osmnode_indptr[e + 1]].tolist()
-        inner = shapes.get((int(data.edge_u[e]), int(data.edge_v[e])), [])
-        runs.append([ids[0], *inner, ids[-1]])
+def with_members(data: GraphData, members: dict[int, list[int]]) -> GraphData:
+    """`data` with more original OSM ids merged into some nodes, unchecked: an id two nodes
+    hold is a build `validate` refuses, which the validator must catch on its own."""
     held = [
         data.member_osm_ids[data.member_indptr[v] : data.member_indptr[v + 1]].tolist()
         + members.get(v, [])
@@ -258,59 +252,28 @@ def with_osm(
     ]
     return replace(
         data,
-        osmnode_indptr=np.concatenate(([0], np.cumsum([len(r) for r in runs]))).astype(np.int64),
-        osmnode_ids=np.array([i for r in runs for i in r], dtype=np.int64),
         member_indptr=np.concatenate(([0], np.cumsum([len(h) for h in held]))).astype(np.int64),
         member_osm_ids=np.array([i for h in held for i in h], dtype=np.int64),
     )
 
 
-def test_a_shared_shape_point_is_passed_twice() -> None:
-    g = with_osm(GRID, {(0, 1): [900], (4, 5): [900]}, {})
-    route = drawn(g, [0, 1, 4, 5])
-    result = check(route, g)
-    assert failed(result) == ["osm_ids"]
-    report = validate_route(g, route, stop_nodes=[0, 5], node_mask=ALL_NODES, banned_edges=NO_BANS)
-    assert report.check("osm_ids").index == 2 and "900" in report.check("osm_ids").detail
-
-
-def test_a_cluster_entered_twice_through_its_members() -> None:
-    # node 4 is a cluster of OSM nodes 5 and 100; the edge 0 → 3 runs through 100 unconsolidated
-    g = with_osm(GRID, {(0, 3): [100]}, {4: [100]})
+def test_one_osm_junction_held_by_two_build_nodes_is_passed_twice() -> None:
+    # node 4 is a cluster of OSM nodes 5 and 100, and node 3 a stub the consolidation left
+    # holding OSM node 100 too: the route passes that junction at node 3, then at node 4
+    g = with_members(GRID, {4: [100], 3: [100]})
     route = drawn(g, [1, 0, 3, 6, 7, 4, 5])
     report = validate_route(g, route, stop_nodes=[1, 5], node_mask=ALL_NODES, banned_edges=NO_BANS)
     assert [c.name for c in report.checks if not c.ok] == ["osm_ids"]
-    assert report.check("osm_ids").index == 4  # where the route enters node 4 a second time
-    assert report.check("osm_ids").detail == "the members of node 4 entered twice"
-    assert failed(check(drawn(g, [1, 4, 5]), g)) == []  # entering the cluster once is fine
+    assert report.check("osm_ids").index == 4  # the edge into node 4
+    assert report.check("osm_ids").detail == "original OSM node 100 passed twice"
+    assert failed(check(drawn(g, [1, 4, 5]), g)) == []  # each of them once is fine
+    assert failed(check(drawn(g, [0, 3, 6]), g)) == []
 
 
-def test_a_cluster_entered_by_one_member_and_left_by_another_is_one_visit() -> None:
-    g = with_osm(GRID, {}, {4: [100]})
-    runs = [
-        g.osmnode_ids[g.osmnode_indptr[e] : g.osmnode_indptr[e + 1]].tolist() for e in range(g.m)
-    ]
-    runs[edge_id(g, 4, 5)] = [100, 6]  # leaves node 4 from its other member
-    g = replace(
-        g,
-        osmnode_indptr=np.concatenate(([0], np.cumsum([len(r) for r in runs]))).astype(np.int64),
-        osmnode_ids=np.array([i for r in runs for i in r], dtype=np.int64),
-    )
-    assert failed(check(drawn(g, [1, 4, 5]), g)) == []
-
-
-def test_an_edge_that_does_not_end_at_its_node() -> None:
-    runs = [
-        GRID.osmnode_ids[GRID.osmnode_indptr[e] : GRID.osmnode_indptr[e + 1]].tolist()
-        for e in range(GRID.m)
-    ]
-    runs[edge_id(GRID, 1, 4)] = [2, 9]  # ends at node 8's OSM id
-    g = replace(GRID, osmnode_ids=np.array([i for r in runs for i in r], dtype=np.int64))
-    report = validate_route(
-        g, drawn(g, [0, 1, 4]), stop_nodes=[0, 4], node_mask=ALL_NODES, banned_edges=NO_BANS
-    )
-    assert [c.name for c in report.checks if not c.ok] == ["osm_ids"]
-    assert report.check("osm_ids").index == 1
+def test_a_cluster_s_members_are_one_visit_and_a_round_trip_closes_on_its_start() -> None:
+    g = with_members(GRID, {0: [100, 101], 4: [102]})
+    assert failed(check(drawn(g, [0, 1, 4, 3, 0]), g)) == []
+    assert failed(check(drawn(g, [1, 4, 3, 0, 1, 2]), g)) == ["vertex_simple", "osm_ids"]
 
 
 def test_validation_failed_carries_the_report() -> None:

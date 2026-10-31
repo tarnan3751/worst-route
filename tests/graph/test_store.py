@@ -57,7 +57,7 @@ def assert_same_build(a: GraphData, b: GraphData, geometry: Geometry | None = No
 def test_graph_version_is_pinned() -> None:
     # Freezes the version definition and the array order (docs/reference/graph.md): this
     # literal changes only under a tier A brief that changes the build format.
-    expected = "0f3826de53630fde673371e56241855deefa7dac399a301ddf9deb5093620aa0"
+    expected = "c72fe08e1865c22f6c418f1110aca7d2e494a584a1ef175acdcdd9cb5eda3eb8"
     assert small_build().meta["graph_version"] == expected
 
 

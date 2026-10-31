@@ -13,8 +13,8 @@ tier_nodes, meta)` turns the enriched graph into `GraphData`:
   tier whose classes hold the class; `edge_name` and `edge_ref` index the raw tags and
   `edge_identity` the identities, each table sorted; `speed_kmh` the distinct speeds, ascending,
   as float32, and `edge_speed` each edge's index among them (more than `MAX_SPEEDS` distinct
-  speeds raise `TooManySpeedsError`); `osmnode_ids` from `osm_nodes`. The way ids (`osmids`)
-  stay in the stages.
+  speeds raise `TooManySpeedsError`). The OSM nodes along each edge (`osm_nodes`) and its way
+  ids (`osmids`) stay in the stages.
 - **Twins** and **transitions**: the cleaned graph's tables with keys turned into ids, rows
   sorted.
 - **Tiers**: `tier_node_mask[t]` the nodes `tiers` kept; `tier_edge_mask[t]` the edges of the
@@ -27,7 +27,11 @@ tier_nodes, meta)` turns the enriched graph into `GraphData`:
 
 It refuses a super-node whose transition table is empty (`EmptyTransitionsError`): for cleanup
 that means no turn through it is allowed, but `GraphData` reads a node without rows as allowing
-every turn, so the build cannot say it.
+every turn, so the build cannot say it. It refuses too a graph that breaks what the validator's
+proof from original OSM ids rests on, now that the build keeps only the nodes' members
+(`ShapePointError`, `docs/reference/engine.md`, the validator's `osm_ids`): an edge that does
+not start and end at OSM nodes merged into its tail and head, or an OSM node inside an edge
+that lies inside it twice, is some node's member, or lies inside two road units.
 
 `build_meta` assembles the build's `meta`: the region, the time, `counts` (filled in by
 `graph_data`), `params` (`build_params`: the region, its bbox and CRS, the configuration the
@@ -82,6 +86,11 @@ class EmptyTransitionsError(ValueError):
     """A super-node allows no turn, which the build format cannot express."""
 
 
+class ShapePointError(ValueError):
+    """An edge's OSM nodes break the validator's proof: its ends not its nodes' members, or an
+    OSM node inside it that is a member or lies inside another road unit."""
+
+
 class TooManySpeedsError(ValueError):
     """More distinct speeds than the build's uint8 `edge_speed` can index."""
 
@@ -118,6 +127,8 @@ def graph_data(
                 f"{nodes[node]['lon']:.5f}) allows no turn through it, which a build cannot "
                 "express: a node without transition rows allows every turn"
             )
+
+    _check_shape_points(graph, keys)
 
     brands: list[tuple[str, str | None, list[tuple[int, int]]]] = graph.graph["brands"]
     strings = Strings(
@@ -196,8 +207,6 @@ def graph_data(
         out_edges=np.arange(len(keys), dtype=np.int32),
         in_indptr=_indptr(np.bincount(edge_v, minlength=n).tolist()),
         in_edges=np.argsort(edge_v, kind="stable").astype(np.int32),
-        osmnode_indptr=_indptr([len(d["osm_nodes"]) for d in edges]),
-        osmnode_ids=_concat([d["osm_nodes"] for d in edges]),
         twin_indptr=_indptr([len(row) for row in twin_rows]),
         twin_edges=np.array([e for row in twin_rows for e in row], dtype=np.int32),
         trans_node=trans[:, 0].copy(),
@@ -217,6 +226,35 @@ def graph_data(
     for name in ARRAY_SPECS:
         getattr(data, name).flags.writeable = False
     return data
+
+
+def _check_shape_points(graph: nx.MultiDiGraph, keys: list[EdgeKey]) -> None:
+    """Raise `ShapePointError` unless each edge starts and ends at OSM nodes merged into its
+    tail and head, and each OSM node inside an edge lies inside it once, is no node's member and
+    lies inside one road unit (an edge, or the two directions of a road) only."""
+    member_of = {m: v for v, members in graph.nodes(data="members") for m in members}
+    unit_of: dict[int, EdgeKey] = {}
+    for key in keys:
+        u, v, _ = key
+        data = graph.edges[key]
+        ids = data["osm_nodes"]
+        if member_of.get(ids[0]) != u or member_of.get(ids[-1]) != v:
+            raise ShapePointError(
+                f"edge {key} does not start and end at OSM nodes merged into nodes {u} and {v}"
+            )
+        if len(set(ids)) != len(ids):
+            twice = next(i for k, i in enumerate(ids) if i in ids[:k])
+            raise ShapePointError(f"OSM node {twice} lies twice inside edge {key}")
+        for osm_id in ids[1:-1]:
+            if osm_id in member_of:
+                raise ShapePointError(
+                    f"OSM node {osm_id} lies inside edge {key} and is merged into node "
+                    f"{member_of[osm_id]}"
+                )
+            if unit_of.setdefault(osm_id, data["unit"]) != data["unit"]:
+                raise ShapePointError(
+                    f"OSM node {osm_id} lies inside edge {key} and inside another road"
+                )
 
 
 def _indptr(lengths: list[int]) -> NDArray[np.int64]:

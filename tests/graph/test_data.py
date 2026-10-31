@@ -82,7 +82,6 @@ MALFORMED: list[tuple[str, Callable[[GraphData], GraphData], str]] = [
     ),
     ("indptr order", edited("twin_indptr", setitem(1, 3)), "twin_indptr"),
     ("empty member run", edited("member_indptr", setitem(1, 0)), "member_indptr: every run"),
-    ("short osmnode run", edited("osmnode_indptr", setitem(1, 1)), "osmnode_indptr: every run"),
     ("node kind", edited("node_kind", setitem(0, 4)), "node_kind"),
     ("edge_v range", edited("edge_v", setitem(7, 4)), "edge_v"),
     ("edge_u range", edited("edge_u", setitem(0, -1)), "edge_u"),

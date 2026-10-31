@@ -186,8 +186,6 @@ def make_graph(
         out_edges=np.arange(m, dtype=np.int32),
         in_indptr=_indptr(edge_v, n),
         in_edges=np.argsort(edge_v, kind="stable").astype(np.int32),
-        osmnode_indptr=np.arange(0, 2 * m + 1, 2, dtype=np.int64),
-        osmnode_ids=np.stack([osm_ids[edge_u], osm_ids[edge_v]], axis=1).reshape(2 * m),
         twin_indptr=np.concatenate(([0], np.cumsum([len(t) for t in twin_sets]))).astype(np.int64),
         twin_edges=np.array([b for t in twin_sets for b in sorted(t)], dtype=np.int32),
         trans_node=trans[:, 0].copy(),

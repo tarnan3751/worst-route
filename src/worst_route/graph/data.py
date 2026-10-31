@@ -99,9 +99,6 @@ ARRAY_SPECS: dict[str, tuple[np.dtype[Any], tuple[str | int, ...]]] = {
     "out_edges": (np.dtype(np.int32), ("m",)),
     "in_indptr": (np.dtype(np.int64), ("n+1",)),
     "in_edges": (np.dtype(np.int32), ("m",)),
-    # OSM nodes along each edge
-    "osmnode_indptr": (np.dtype(np.int64), ("m+1",)),
-    "osmnode_ids": (np.dtype(np.int64), ("*",)),
     # twins
     "twin_indptr": (np.dtype(np.int64), ("m+1",)),
     "twin_edges": (np.dtype(np.int32), ("*",)),
@@ -181,9 +178,6 @@ class GraphData:
     out_edges: NDArray[np.int32]  # each node's out-edges, ascending edge id
     in_indptr: NDArray[np.int64]
     in_edges: NDArray[np.int32]  # each node's in-edges, ascending edge id
-    # OSM nodes along each edge
-    osmnode_indptr: NDArray[np.int64]
-    osmnode_ids: NDArray[np.int64]  # original OSM node ids along each edge, endpoints included
     # twins: using an edge bans every edge in its row (symmetric)
     twin_indptr: NDArray[np.int64]
     twin_edges: NDArray[np.int32]
@@ -297,7 +291,6 @@ class GraphData:
         _check_indptr("member_indptr", self.member_indptr, len(self.member_osm_ids), 1)
         if len(np.unique(self.member_osm_ids)) != len(self.member_osm_ids):
             raise ValueError("member_osm_ids: an original OSM node id is a member twice")
-        _check_indptr("osmnode_indptr", self.osmnode_indptr, len(self.osmnode_ids), 2)
         _check_indptr("twin_indptr", self.twin_indptr, len(self.twin_edges), 0)
         _check_indptr("out_indptr", self.out_indptr, m, 0)
         _check_indptr("in_indptr", self.in_indptr, m, 0)

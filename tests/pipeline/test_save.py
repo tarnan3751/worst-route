@@ -21,6 +21,7 @@ from worst_route.pipeline import save
 from worst_route.pipeline.enrich import run_enrich
 from worst_route.pipeline.save import (
     EmptyTransitionsError,
+    ShapePointError,
     TooManySpeedsError,
     graph_data,
     graph_geometry,
@@ -168,6 +169,36 @@ def test_a_super_junction_with_no_allowed_turn_is_refused(tmp_path: Path) -> Non
         graph_data(graph, tier_nodes(graph), META)
     assert str(refusal.value).startswith(f"super-junction {node} (roundabout, at 45.")
     assert "allows no turn through it" in str(refusal.value)
+
+
+def test_osm_nodes_that_break_the_validator_s_proof_are_refused(tmp_path: Path) -> None:
+    # The validator proves a route passes no OSM node twice from the nodes' members alone: each
+    # edge must start and end in its nodes' members, and an OSM node inside an edge must lie
+    # inside it once, be no member and lie inside that road only.
+    graph = enriched(FIXTURES / "grid.osm", tmp_path)
+    keys = sorted(graph.edges(keys=True))
+    one = next(k for k in keys if len(graph.edges[k]["osm_nodes"]) > 2)
+    other = next(k for k in keys if graph.edges[k]["unit"] != graph.edges[one]["unit"])
+    ids = list(graph.edges[one]["osm_nodes"])
+    member = next(m for v, held in graph.nodes(data="members") if v not in one[:2] for m in held)
+    cases = {
+        "does not start and end at OSM nodes merged into": [ids[-1], *ids[1:-1], ids[-1]],
+        f"OSM node {member} lies inside edge": [ids[0], member, *ids[1:]],
+        f"OSM node {ids[1]} lies inside edge .* and inside another road": None,
+    }
+    for k, (message, changed) in enumerate(cases.items()):
+        graph = enriched(FIXTURES / "grid.osm", tmp_path / str(k))
+        if changed is None:  # the other road runs through one of this road's inner nodes
+            them = list(graph.edges[other]["osm_nodes"])
+            graph.edges[other]["osm_nodes"] = (them[0], ids[1], *them[1:])
+        else:
+            graph.edges[one]["osm_nodes"] = tuple(changed)
+        with pytest.raises(ShapePointError, match=message):
+            graph_data(graph, tier_nodes(graph), META)
+    graph = enriched(FIXTURES / "grid.osm", tmp_path / "twice")
+    graph.edges[0, 1, 0]["osm_nodes"] = (1000, 1100, 10**12, 1100, 1001)
+    with pytest.raises(ShapePointError, match=r"OSM node 1100 lies twice inside edge \(0, 1, 0\)"):
+        graph_data(graph, tier_nodes(graph), META)
 
 
 def test_more_speeds_than_a_build_can_index_are_refused(

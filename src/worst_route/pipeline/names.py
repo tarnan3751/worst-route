@@ -9,6 +9,10 @@ a space put between a letter prefix and its number (`I5` → `I 5`), and a trail
 business route never equals its mainline. `normalize_name` casefolds, drops periods, expands
 directionals (`NE` → `northeast`) and, except as the first word ("St Johns"), the USPS street
 suffixes (`St` → `street`); `name_without_directions` also leaves the directional words out.
+`road_letter` is the letter a name starts with for the alphabet route (`engine/alphabet_search.py`):
+its first letter once the directional words that lead it are dropped (but a directional followed
+by a street type alone, "North Street", is the name), or None (a numbered street, or no Latin
+letter), which makes the road a free connector.
 `road_signature` is a road's identity for the cleanup steps: its normalised ref set when it has a
 ref, else its normalised name, else None. `identity_of` is the one identity enrich stores per
 edge (hard mode, directions): the highest-class ref, ranked Interstate, US, state (a state's
@@ -17,6 +21,7 @@ postal code or `SR`), then any other, alphabetically within a class, each ref ke
 """
 
 import re
+import unicodedata
 from collections.abc import Mapping
 from typing import Any
 
@@ -74,6 +79,7 @@ _STREET_SUFFIXES = {
     "cir": "circle",
     "wy": "way",
 }
+_STREET_TYPES = frozenset(_STREET_SUFFIXES.values())
 
 
 def normalize_ref(value: str) -> tuple[str, ...]:
@@ -108,6 +114,30 @@ def name_without_directions(value: str) -> str:
     Hwy E" both become "pacific highway"."""
     words = normalize_name(value).split()
     return " ".join(word for word in words if word not in _DIRECTIONS)
+
+
+def road_letter(value: str) -> str | None:
+    """The letter, A to Z, a road named `value` starts with for the alphabet route, or None.
+
+    The name is normalised (`normalize_name`: casefolded, `NW` → `northwest`), and its leading
+    directional words are dropped unless only a street type follows one, so "Southwest Broadway"
+    is B, "NW Glisan St" G and "Southwest Parkway Avenue" P, but "North Street" is N and
+    "E Avenue" E.
+    Then, accents taken off (NFKD), its first letter or digit decides: a letter a-z is the
+    road's letter, uppercased; a digit (a numbered street, "Northeast 82nd Avenue") or any other
+    letter (another script), or no letter or digit at all, is None, a free connector.
+    """
+    words = normalize_name(value).split()
+    while len(words) > 1 and words[0] in _DIRECTIONS:
+        if len(words) == 2 and words[1] in _STREET_TYPES:  # "North Street": the name itself
+            break
+        words = words[1:]
+    for char in unicodedata.normalize("NFKD", " ".join(words)):
+        if "a" <= char <= "z":
+            return char.upper()
+        if char.isalnum():  # a digit, or a letter of another script
+            return None
+    return None
 
 
 def road_signature(tags: Mapping[str, Any]) -> RoadSignature | None:

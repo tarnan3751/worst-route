@@ -85,6 +85,39 @@ def lattice(
     return g
 
 
+# One tree per letter, A to Z: names for the alphabet route's lattices.
+# fmt: off
+TREES = (
+    "Alder", "Birch", "Cedar", "Dogwood", "Elm", "Fir", "Ginkgo", "Hawthorn", "Ivy", "Juniper",
+    "Kauri", "Larch", "Maple", "Nutmeg", "Oak", "Pine", "Quince", "Rowan", "Spruce", "Tamarack",
+    "Upas", "Viburnum", "Willow", "Xylosma", "Yew", "Zelkova",
+)
+# fmt: on
+
+
+def named_roads(
+    rows: int, cols: int, row_names: Sequence[str | None], col_names: Sequence[str | None]
+) -> dict[tuple[int, int], dict[str, str]]:
+    """`lattice`'s `roads` naming its row r `row_names[r]` and its column c `col_names[c]` (None
+    leaves one unnamed)."""
+    roads: dict[tuple[int, int], dict[str, str]] = {}
+    for r, name in enumerate(row_names):
+        if name is not None:
+            for c in range(cols - 1):
+                roads[(r * cols + c, r * cols + c + 1)] = {"name": name}
+    for c, name in enumerate(col_names):
+        if name is not None:
+            for r in range(rows - 1):
+                roads[(r * cols + c, (r + 1) * cols + c)] = {"name": name}
+    return roads
+
+
+def avenue(k: int) -> str:
+    """The k-th numbered avenue, a free connector: "1st Avenue", "2nd Avenue", ..."""
+    suffix = "th" if 10 <= k % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(k % 10, "th")
+    return f"{k}{suffix} Avenue"
+
+
 def edges_of(data: GraphData, nodes: Sequence[int]) -> np.ndarray:
     """The edges along a node path, each the one edge between consecutive nodes."""
     pairs = zip(nodes[:-1], nodes[1:], strict=True)

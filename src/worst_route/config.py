@@ -242,6 +242,20 @@ TURN_PENALTY_S = 90.0
 COLLECT_ITEM_WEIGHT = 1e6
 COLLECT_RADIUS_FRACTION = 0.5
 COLLECT_RADIUS_MIN_M = 2000.0
+# The alphabet route (`engine/alphabet_search.py`; `docs/PLAN.md` §3.8): the score is letters ×
+# ALPHABET_LETTER_WEIGHT + the length (less a soft turn constraint's penalties), letters first.
+# The roads of the next letter are looked for within ALPHABET_RADIUS_M of driving, then twice
+# that while it is under the leash, then anywhere in the request's area; a road's lookahead counts
+# the roads of the letter after it within ALPHABET_RADIUS_M (straight line) of where its ride
+# ends. A step tries at most ALPHABET_CANDIDATE_TRIES roads, and a run ends "converged" after
+# ALPHABET_PATIENCE restarts in a row that found no better route. Tuned on Portland (build
+# ffe2e7c881ca), Powell's to Reed and to PDX, seeds 1-3, 30 s: a better route still turns up
+# after hundreds of restarts, so 100 gave 9-20 letters, 300 gave 10-23 and 1000 gave 13-23
+# (20-23 in five runs of six), each converging in 10-27 s or running to the budget.
+ALPHABET_LETTER_WEIGHT = 1e6
+ALPHABET_RADIUS_M = 1500.0
+ALPHABET_CANDIDATE_TRIES = 8
+ALPHABET_PATIENCE = 1000
 
 # Cleanup (`docs/PLAN.md` §2.4; `docs/reference/pipeline.md`, cleanup).
 # Stage A (`pipeline/consolidate.py`): the radius OSMnx buffers each node by; two nodes merge

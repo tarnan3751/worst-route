@@ -5,6 +5,7 @@ from worst_route.pipeline.names import (
     name_without_directions,
     normalize_name,
     normalize_ref,
+    road_letter,
     road_signature,
 )
 
@@ -128,3 +129,36 @@ def test_name_without_directions(name: str, expected: str) -> None:
 )
 def test_identity_of(tags: dict[str, str], expected: str | None) -> None:
     assert identity_of(tags) == expected
+
+
+@pytest.mark.parametrize(
+    ("name", "letter"),
+    [
+        ("Alder Street", "A"),
+        ("Southwest Broadway", "B"),  # a directional dropped before a name
+        ("NW Glisan St", "G"),  # abbreviated
+        ("Northwest Broadway Street", "B"),
+        ("N. Lombard St.", "L"),
+        ("North Street", "N"),  # kept before a street type alone
+        ("Southwest Parkway Avenue", "P"),  # dropped before more than one word
+        ("North Terrace Drive", "T"),
+        ("Southeast Circle Avenue", "C"),
+        ("South Avenue", "S"),
+        ("E Avenue", "E"),
+        ("North", "N"),  # nothing would be left
+        ("Northeast 82nd Avenue", None),  # a numbered street
+        ("N 1st St", None),
+        ("21st Avenue", None),
+        ("St Johns Avenue", "S"),  # St as the first word is not a street
+        ("Éclair Way", "E"),  # accents taken off
+        ("Ñandu Road", "N"),
+        ("straße", "S"),
+        ("'A' Street", "A"),  # punctuation skipped
+        ("Жуковская", None),  # no Latin letter
+        ("²nd Street", None),
+        ("", None),
+        ("—", None),
+    ],
+)
+def test_road_letter(name: str, letter: str | None) -> None:
+    assert road_letter(name) == letter

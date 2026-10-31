@@ -234,6 +234,17 @@ def test_a_cluster_sits_at_its_buffers_or_at_its_points(tmp_path: Path, overpass
     assert off_midpoint < 1e-9 if overpass else off_midpoint > 1.0
 
 
+def test_buffers_touching_at_a_corner_stay_apart() -> None:
+    """Two 8 m buffers 16 m apart meet at one corner only: OSMnx's union keeps them two parts,
+    and so do the groups; a hair closer they share a stretch and are one."""
+    radii = np.array([8.0, 8.0])
+    for d, groups in ((16.0, 2), (15.9, 1), (16.1, 2)):
+        xy = np.array([[525000.0, 5040000.0], [525000.0 + d, 5040000.0]])
+        buffers = shapely.buffer(shapely.points(xy), radii, quad_segs=BUFFER_QUAD_SEGS)
+        assert len(set(buffer_groups(xy, radii).tolist())) == groups
+        assert len(getattr(shapely.union_all(buffers), "geoms", [None])) == groups
+
+
 def _reordered(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
     """The graph with its nodes and edges added in reverse order."""
     result = nx.MultiDiGraph()

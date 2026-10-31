@@ -195,7 +195,9 @@ def buffer_groups(xy: NDArray[np.float64], radii: NDArray[np.float64]) -> NDArra
 
     A buffer is the `BUFFER_QUAD_SEGS` polygon OSMnx merges. Two whose centres lie further apart
     than the sum of their radii cannot meet; the others are tested with GEOS on the polygons
-    themselves, whose corners decide the pairs near that sum.
+    themselves, whose corners decide the pairs near that sum. Two that meet at a point only (a
+    corner on a corner or a side) stay apart, as they do in OSMnx's union of the buffers, which
+    keeps them two parts; two that share a stretch of boundary or more are one.
     """
     if len(xy) == 0:
         return np.zeros(0, dtype=np.int32)
@@ -209,6 +211,9 @@ def buffer_groups(xy: NDArray[np.float64], radii: NDArray[np.float64]) -> NDArra
         shapely.points(xy[ends]), radii[ends], quad_segs=BUFFER_QUAD_SEGS
     )
     meet = shapely.intersects(polygon[a], polygon[b])
+    touch = np.flatnonzero(meet)[shapely.touches(polygon[a[meet]], polygon[b[meet]])]
+    common = shapely.intersection(polygon[a[touch]], polygon[b[touch]])
+    meet[touch[shapely.get_dimensions(common) < 1]] = False  # a point or points only
     links = coo_matrix((np.ones(int(meet.sum())), (a[meet], b[meet])), shape=(len(xy), len(xy)))
     labels: NDArray[np.int32] = connected_components(links, directed=False)[1].astype(np.int32)
     return labels

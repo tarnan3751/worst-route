@@ -10,6 +10,11 @@ merges), so that each node's successors and predecessors, and the keys of parall
 ... per pair of nodes: an edge between two nodes that both stay is never removed), come out as
 networkx's.
 
+`stage_a_graph(graph)` is the `MultiDiGraph` that `consolidate.stage_a` makes, the same way: its
+nodes keyed and ordered as OSMnx numbers them, with `kind` and `members` too; its edges added
+in the order OSMnx adds them (the simplified graph's), with the same keys and attributes, up to
+the integer type of the labels (OSMnx keys some by NumPy integers, of the same value).
+
 A pickle writes a string several dicts share once, so to make the stage files the networkx
 engine writes, byte for byte, the strings are shared as there: each way's tag values objects of
 its own, shared by every edge along it, as osmium hands them out (`_WayTags`); and the keys the
@@ -30,6 +35,7 @@ from worst_route.config import ALLEY_SERVICE
 from worst_route.pipeline import PIPELINE_VERSION
 from worst_route.pipeline.arrays.build import Tagset
 from worst_route.pipeline.arrays.simplify import SimplifiedGraph
+from worst_route.pipeline.arrays.stage_a import CLUSTER, StageAGraph
 from worst_route.pipeline.build import EDGE_TAGS
 
 
@@ -59,6 +65,42 @@ def simplified_graph(graph: SimplifiedGraph) -> nx.MultiDiGraph:
     return result
 
 
+def stage_a_graph(graph: StageAGraph) -> nx.MultiDiGraph:
+    """The stage A graph as networkx holds it."""
+    keys = _raw_keys()
+    result = _empty(graph.crs_epsg, keys)
+    labels = graph.node_label.tolist()
+    members = np.split(graph.member_id, graph.member_indptr[1:-1])
+    result.add_nodes_from(
+        (
+            node,
+            _node(keys, kind == CLUSTER, x, y, lon, lat)
+            | {
+                "kind": "cluster" if kind == CLUSTER else "plain",
+                "members": tuple(members[k].tolist()),
+            },
+        )
+        for k, (node, x, y, lon, lat, kind) in enumerate(
+            zip(
+                labels,
+                graph.node_x.tolist(),
+                graph.node_y.tolist(),
+                graph.node_lon.tolist(),
+                graph.node_lat.tolist(),
+                graph.node_kind.tolist(),
+                strict=True,
+            )
+        )
+    )
+    every = np.arange(len(graph.edge_u))
+    data = _attributes(graph, every, graph.coord_indptr, graph.coord_x, graph.coord_y, keys)
+    result.add_edges_from(
+        (labels[graph.edge_u[e]], labels[graph.edge_v[e]], data[e])
+        for e in np.argsort(graph.edge_from).tolist()
+    )
+    return result
+
+
 def _raw_keys() -> dict[str, str]:
     """The keys of the networkx engine's raw graph as `cleanup` reads it back from `build.pkl`:
     one object per name, apart from the code's own strings of the same names."""
@@ -76,8 +118,18 @@ def _empty(crs_epsg: int, keys: dict[str, str]) -> nx.MultiDiGraph:
     return result
 
 
+def _node(
+    keys: dict[str, str], merged: bool, x: float, y: float, lon: float, lat: float
+) -> dict[str, Any]:
+    """A stage A node's position: a merged cluster's as `consolidate.stage_a` writes it, a plain
+    node's as the raw graph holds it."""
+    if merged:
+        return {"x": x, "y": y, "lon": lon, "lat": lat}
+    return {keys["x"]: x, keys["y"]: y, keys["lon"]: lon, keys["lat"]: lat}
+
+
 def _attributes(
-    graph: SimplifiedGraph,
+    graph: SimplifiedGraph | StageAGraph,
     edges: NDArray[np.int64],
     coord_indptr: NDArray[np.int64],
     coord_x: NDArray[np.float64],

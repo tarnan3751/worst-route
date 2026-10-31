@@ -12,9 +12,9 @@ files are NAD83, EPSG:4269, taken as equal):
                             cb_<vintage>_<FIPS>_place_500k.zip present whose polygon meets the
                             region's bbox, CDPs (LSAD 57) included, by GEOID
 
-The region's bbox is its build's (`params.bbox`), else its own in `config.REGIONS`, else its
-state's polygon's bounds. A state whose polygon meets the bbox without a places file present is
-reported as missing, not an error.
+The region's bbox is its build's (`params.bbox`), else its own in `config.REGIONS`, else the
+bounds of its states' polygons. A state whose polygon meets the bbox without a places file
+present is reported as missing, not an error.
 
 `PlaceIndex.load(region)` reads the three files (None when one is absent: callers then know no
 states or towns and draw no outlines) and answers, for a route's line in lon/lat,
@@ -131,15 +131,17 @@ def write_places(
 ) -> PlacesWritten:
     """Write the places index for `region` from the Census files (or any files with their
     columns): the states, the outlines, and the places meeting `bbox` (west, south, east,
-    north; None: the bounds of the region's state)."""
+    north; None: the bounds of the region's states)."""
     import pandas as pd
 
     out_dir.mkdir(parents=True, exist_ok=True)
     state_frame = _read(states, STATE_COLUMNS).sort_values("STATEFP", ignore_index=True)
     outline_frame = _read(outlines, STATE_COLUMNS).sort_values("STATEFP", ignore_index=True)
     if bbox is None:
-        fips = STATES[REGIONS[region].state][1]
-        box = shapely.envelope(state_frame.geometry[state_frame["STATEFP"] == fips].iloc[0])
+        fips = [STATES[state][1] for state in REGIONS[region].states]
+        box = shapely.envelope(
+            shapely.union_all(state_frame.geometry[state_frame["STATEFP"].isin(fips)])
+        )
     else:
         box = shapely.box(*bbox)
     covered: set[str] = set()

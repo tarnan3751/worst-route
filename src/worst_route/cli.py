@@ -6,7 +6,8 @@ Every step takes `--region` (a key of `config.REGIONS`), `--build-id` and `--for
 and `build` also take `--source`, a file read instead of the step's usual input (fixtures,
 tests); `cleanup` and `tiers` also take `--allow-fragmented`; `build` and `cleanup` take
 `--engine` (networkx or arrays, the same build; `docs/reference/pipeline.md`, **The arrays
-engine**). Each step
+engine**). `download` fetches each of the region's state extracts in turn, and `filter` reads
+and merges them, with a warning on stderr when their data dates differ. Each step
 (`docs/reference/pipeline.md`) prints what it wrote and its counts, or that its output is up to
 date and was skipped; a missing input, a failed download, a cleanup or tiers step whose graph
 is too fragmented, a step whose earlier stages are stale (`layout.stale_stages`), or a save that
@@ -243,21 +244,22 @@ def version() -> None:
 def download(
     region: RegionOption, build_id: BuildIdOption = None, force: ForceOption = False
 ) -> None:
-    """Fetch the region's Geofabrik state extract."""
+    """Fetch the region's Geofabrik state extracts, one after another."""
     import httpx
 
     from worst_route.pipeline.download import download_state
 
-    try:
-        path, skipped = download_state(REGIONS[region].state, force=force)
-    except (ValueError, httpx.HTTPError) as error:
-        detail = (str(error).splitlines() or [type(error).__name__])[0]
-        typer.echo(f"download failed: {detail}", err=True)
-        raise typer.Exit(code=1) from None
-    if skipped:
-        typer.echo(f"skipped: {path} matches its md5 (--force to fetch again)")
-    else:
-        typer.echo(f"wrote {path} ({_size(path)}), md5 verified")
+    for state in REGIONS[region].states:
+        try:
+            path, skipped = download_state(state, force=force)
+        except (ValueError, httpx.HTTPError) as error:
+            detail = (str(error).splitlines() or [type(error).__name__])[0]
+            typer.echo(f"download failed: {detail}", err=True)
+            raise typer.Exit(code=1) from None
+        if skipped:
+            typer.echo(f"skipped: {path} matches its md5 (--force to fetch again)")
+        else:
+            typer.echo(f"wrote {path} ({_size(path)}), md5 verified")
 
 
 @pipeline_app.command("filter")
@@ -267,24 +269,34 @@ def filter_(
     force: ForceOption = False,
     source: SourceOption = None,
 ) -> None:
-    """Keep the drivable roads and the POIs; clip to the region's bbox."""
+    """Keep the drivable roads and the POIs of the region's extracts; clip to its bbox."""
     from worst_route.pipeline.filter import filter_roads, source_timestamp
 
     spec = REGIONS[region]
-    src = source if source is not None else layout.raw_pbf(spec.state)
-    _require(src, f"run `worst-route pipeline download --region {region}` first")
+    sources = [source] if source is not None else [layout.raw_pbf(s) for s in spec.states]
+    for src in sources:
+        _require(src, f"run `worst-route pipeline download --region {region}` first")
     roads, pois = layout.roads_pbf(region), layout.pois_parquet(region)
+    inputs = [
+        {**entry, "source_timestamp": source_timestamp(src)}
+        for src in sources
+        for entry in _inputs(src)
+    ]
     record: dict[str, Any] = {
         "step": "filter",
-        "inputs": _inputs(src),
-        "source_timestamp": source_timestamp(src),
+        "inputs": inputs,
         "params": {"bbox": spec.bbox, "pipeline_version": PIPELINE_VERSION},
     }
     if not force and pois.exists() and layout.sidecar_matches(roads, record):
         typer.echo(f"skipped: {roads} and {pois} are up to date (--force to redo)")
         return
+    dates = sorted({str(entry["source_timestamp"]) for entry in inputs})
+    if len(dates) > 1:
+        typer.echo(
+            f"warning: the extracts hold data of different dates: {', '.join(dates)}", err=True
+        )
     layout.sidecar(roads).unlink(missing_ok=True)
-    stats = filter_roads([src], roads, pois, spec.bbox)
+    stats = filter_roads(sources, roads, pois, spec.bbox)
     layout.write_sidecar(roads, record)
     typer.echo(f"wrote {roads} ({_size(roads)}) and {pois} ({_size(pois)})")
     typer.echo(

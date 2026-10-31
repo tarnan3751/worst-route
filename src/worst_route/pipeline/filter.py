@@ -14,9 +14,12 @@
 `source_timestamp` reads an extract's data date from its header, for the step's sidecar.
 
 Sources (several for a multi-state build) are read in order; a way or POI already taken from an
-earlier source is skipped, and the per-source road files are merged into one, sorted, with
-duplicate nodes dropped. Outputs are written to temporary files and renamed into place. Values
-are copied out of pyosmium's objects, which are views into its buffers.
+earlier source is skipped, though the way's nodes are still taken from each source that holds
+it, and the per-source road files are merged into one, sorted, each node once at its newest
+version: so when the extracts differ only in their shared nodes, the merge writes the roads one
+extract of their union would (a way or POI that differs keeps the first extract's version).
+Outputs are written to temporary files and renamed into place. Values are copied out of
+pyosmium's objects, which are views into its buffers.
 """
 
 from collections import Counter
@@ -131,6 +134,7 @@ def _write_roads(
                 stats.ways_outside += 1
             elif way.id in taken:
                 stats.ways_duplicate += 1
+                writer.id_tracker.add_references(way)  # its nodes: the newest wins the merge
             else:
                 taken.add(way.id)
                 if box is not None:

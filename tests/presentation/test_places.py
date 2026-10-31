@@ -129,12 +129,26 @@ def test_a_state_the_bbox_meets_without_its_places_file_is_missing(tmp_path: Pat
 def test_without_a_bbox_the_region_s_state_bounds_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    lattice = REGIONS["portland"].model_copy(update={"name": "lattice", "state": "westland"})
+    lattice = REGIONS["portland"].model_copy(update={"name": "lattice", "states": ("westland",)})
     monkeypatch.setitem(places.REGIONS, "lattice", lattice)
     monkeypatch.setitem(places.STATES, "westland", ("WL", "91"))
     written = write_fixture_places(tmp_path, bbox=None, states=("91",), region="lattice")
     assert written.by_state == {"WL": 2}  # Middlefield and Eastbrook lie east of Westland
     assert written.missing == [EASTLAND]  # Westland's bounds touch Eastland along the border
+
+
+def test_without_a_bbox_a_region_of_two_states_takes_both_bounds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    both = REGIONS["portland"].model_copy(
+        update={"name": "both", "states": ("westland", "eastland")}
+    )
+    monkeypatch.setitem(places.REGIONS, "both", both)
+    monkeypatch.setitem(places.STATES, "westland", ("WL", "91"))
+    monkeypatch.setitem(places.STATES, "eastland", ("EL", "92"))
+    written = write_fixture_places(tmp_path, bbox=None, region="both")
+    assert written.by_state == {"EL": 2, "WL": 2}
+    assert written.missing == []
 
 
 def test_the_files_have_the_documented_columns(tmp_path: Path) -> None:
@@ -211,4 +225,4 @@ def test_states_lists_the_50_states_and_dc() -> None:
     assert len({usps for usps, _ in STATES.values()}) == len({f for _, f in STATES.values()}) == 51
     assert all(len(fips) == 2 and fips.isdigit() for _, fips in STATES.values())
     assert STATES["oregon"] == ("OR", "41") and STATES["district-of-columbia"] == ("DC", "11")
-    assert all(region.state in STATES for region in REGIONS.values())
+    assert all(state in STATES for region in REGIONS.values() for state in region.states)

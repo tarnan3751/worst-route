@@ -250,8 +250,9 @@ states_outline.parquet   the same columns                  the 20m file: 52 rows
 ```
 
 The region's bbox is its latest build's (`params.bbox`), else its own in `config.REGIONS`, else
-its state's polygon's bounds. Every places file present is read, so a region across a state line
-has both states' places (STUSPS says which). It prints what it wrote, and on stderr a warning,
+the bounds of its states' polygons (the union of them, for a region of several states). Every
+places file present is read, so a region across a state line has both states' places (STUSPS
+says which). It prints what it wrote, and on stderr a warning,
 not an error, for each state whose polygon meets the bbox but whose places file is absent; a
 missing state file is one line and exit 1. It rewrites its files each time (about a second), the
 same files from the same inputs:

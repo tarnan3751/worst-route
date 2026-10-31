@@ -24,12 +24,12 @@ def test_build_id() -> None:
     assert layout.build_id_for("1" * 32, portland) != build_id
     assert layout.build_id_for("0" * 32, REGIONS["oregon"]) != build_id
     moved = Region(
-        name="portland", state="oregon", bbox=(-123.0, 45.2, -122.3, 45.7), crs_epsg=32610
+        name="portland", states=("oregon",), bbox=(-123.0, 45.2, -122.3, 45.7), crs_epsg=32610
     )
     assert layout.build_id_for("0" * 32, moved) != build_id
-    reprojected = Region(name="portland", state="oregon", bbox=portland.bbox, crs_epsg=5070)
+    reprojected = Region(name="portland", states=("oregon",), bbox=portland.bbox, crs_epsg=5070)
     assert layout.build_id_for("0" * 32, reprojected) != build_id
-    same = Region(name="portland", state="oregon", bbox=portland.bbox, crs_epsg=32610)
+    same = Region(name="portland", states=("oregon",), bbox=portland.bbox, crs_epsg=32610)
     assert layout.build_id_for("0" * 32, same) == build_id
 
 

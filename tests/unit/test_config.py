@@ -2,12 +2,14 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from worst_route.config import (
     ALLEY_SERVICE,
     KEPT_HIGHWAY,
     REGIONS,
     HighwayClass,
+    Region,
     Settings,
     settings,
 )
@@ -23,15 +25,28 @@ def fresh_settings() -> Iterator[None]:
 def test_regions_present() -> None:
     portland = REGIONS["portland"]
     assert portland.name == "portland"
-    assert portland.state == "oregon"
+    assert portland.states == ("oregon",)
     assert portland.bbox == (-123.05, 45.25, -122.35, 45.72)
     assert portland.crs_epsg == 32610
 
     oregon = REGIONS["oregon"]
     assert oregon.name == "oregon"
-    assert oregon.state == "oregon"
+    assert oregon.states == ("oregon",)
     assert oregon.bbox is None
     assert oregon.crs_epsg == 32610
+
+
+def test_a_region_of_two_states() -> None:
+    region = REGIONS["oregon-washington"]
+    assert region.name == "oregon-washington"
+    assert region.states == ("oregon", "washington")
+    assert region.bbox is None
+    assert region.crs_epsg == 32610
+
+
+def test_a_region_names_a_state() -> None:
+    with pytest.raises(ValidationError):
+        Region(name="nowhere", states=(), crs_epsg=32610)
 
 
 def test_data_dir_defaults_to_data(monkeypatch: pytest.MonkeyPatch) -> None:

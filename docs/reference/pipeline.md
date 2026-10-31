@@ -9,7 +9,8 @@ Built: every step, `download`, `filter`, `build`, `cleanup`, `enrich`, `tiers`, 
 `save` writes the build in the format `docs/reference/graph.md` describes, which `worst-route
 plan` reads. Portland and the whole of Oregon (**Oregon**) build and pass QA. Every step from
 `build` to `save` runs on arrays, the default engine (**The arrays engine**), to the networkx
-engine's build (`--engine networkx`).
+engine's build (`--engine networkx`). A region may name several states, whose extracts
+`filter` merges (**Regions of several states**).
 
 ## Commands
 
@@ -24,9 +25,9 @@ uv run worst-route pipeline save     --region portland [--build-id ID] [--force]
 uv run worst-route pipeline qa       --region portland [--build-id ID] [--force]
 ```
 
-`--region` is a key of `config.REGIONS` (a Geofabrik state slug, an optional bbox, a projected
-CRS). `--source` makes `filter` or `build` read that file instead of its usual input (a fixture,
-in tests). `--engine` (`arrays`, the default `config.DEFAULT_PIPELINE_ENGINE`, or `networkx`)
+`--region` is a key of `config.REGIONS` (one or more Geofabrik state slugs, an optional bbox, a
+projected CRS). `--source` makes `filter` or `build` read that file instead of its usual input
+(a fixture, in tests; for `filter`, instead of every extract of the region). `--engine` (`arrays`, the default `config.DEFAULT_PIPELINE_ENGINE`, or `networkx`)
 chooses the engine of `build` and `cleanup`; both make the same build, byte for byte (**The
 arrays engine**), and `cleanup` reads the build stage of its own engine. Every step accepts `--build-id` and `--force`; `download` and `filter` ignore the
 build id; the steps from `cleanup` on read the build `--build-id` names, else the region's
@@ -112,9 +113,13 @@ report beside it in `qa/`.
   qa: its thresholds, its inputs `meta.json` and the stage reports, its output `qa/qa.json`).
   Inputs are recorded by file name and md5, so moving the data directory does not invalidate
   them. The
-  filter's sidecar also records `source_timestamp`, the extract's data date from its header
+  filter's sidecar records one input per extract, in the region's order, each with its
+  `source_timestamp` too, the extract's data date from its header
   (`osmosis_replication_timestamp`, read by `filter.source_timestamp`; null when the header has
-  none, as in the fixtures), for the `save` step to carry into the build's metadata.
+  none, as in the fixtures), for the `save` step to carry into the build's metadata. Before
+  M5.3 the sidecar held one `source_timestamp` beside the inputs; `filter` reruns once on such a
+  record (writing the same roads file, so the build id stays and `build` skips), and `save`
+  refuses one until it has, naming the rerun.
 - **Skipping:** a step is skipped, with a message, while its outputs exist and its sidecar
   equals what it would record now; `--force` runs it anyway. The sidecar is deleted before a
   step runs, so an interrupted run is never mistaken for a finished one (`cleanup` also deletes
@@ -139,6 +144,8 @@ report beside it in `qa/`.
 
 ## `download`
 
+`pipeline download` fetches each of the region's states in order, one line each, and stops at the
+first that fails (a rerun skips the extracts already current).
 `download.download_state(state, force=False, fetch=fetch) -> Download(path, skipped)` fetches
 `https://download.geofabrik.de/north-america/us/<state>-latest.osm.pbf` and its `.md5`
 (`<hex>  <filename>`), each to a `.part` file. Only when the extract's md5 matches the
@@ -183,10 +190,15 @@ per object and kind, columns (`POI_SCHEMA`): `osm_type` (`n`/`w`), `osm_id`, `lo
 way's is the mean of its node locations, a closed way's repeated first node counted once.
 Relations are not read.
 
-**Several sources** (multi-state builds) are read in order: a way or POI already taken from an
-earlier source is skipped (`ways_duplicate`), the per-source road files are merged with
-`MergeInputReader` (sorted, duplicate nodes dropped). Outputs are written to temporary files
-and renamed into place. The CLI passes one source: the region's state extract, or `--source`.
+**Several sources** (a region of several states, **Regions of several states**) are read in
+order: a way or POI already taken from an earlier source is skipped (`ways_duplicate`), though
+the way's nodes are still taken from each source that holds it, and the per-source road files are
+merged with `MergeInputReader` (sorted, each node once at its newest version): so when the
+extracts differ only in their shared nodes, the merge writes the bytes one extract of their union
+would (a way or POI that differs keeps the first extract's version). Outputs are written to
+temporary files and renamed into place. The CLI passes the region's state extracts in its order,
+or `--source` alone, and warns on stderr when the extracts' data dates differ ("warning: the
+extracts hold data of different dates: …").
 
 `FilterStats`: `ways_read` (highway ways), `ways_excluded`, `ways_outside` (no node in the
 bbox), `ways_duplicate`, `ways_kept`, and `pois` (rows per kind).
@@ -712,14 +724,16 @@ path per direction, and at a node with two edges in and two out only the two dir
 road, so it holds by construction; on Portland its 366,196 inner OSM nodes do.
 
 `save.build_meta` assembles `meta`: `region`, `build_id`, `crs_epsg`, `created` (UTC),
-`pipeline_version`, `format` (4), `sources` and `params`. `save.build_sources` gives the extract `filter`
-read (file, md5 and `source_timestamp`) after checking that the filtered roads are still the
-ones `build` read (their md5 against the sidecar of the build stage cleanup read,
-`layout.build_stage`: `build.pkl`'s or the arrays engine's `build/`'s); otherwise it raises
-`SourcesChangedError` and the CLI says "the filtered extract changed since this build was
-built; rebuild". `save.build_params` gives the `region`, its `bbox` and `crs_epsg`, the
-`config` and `allow_fragmented` the cleanup, enrich and tiers sidecars recorded, and save's own
-`config` (`save.parameters()`: `GEOMETRY_SIMPLIFY_M`, the geometry's tolerance), so
+`pipeline_version`, `format` (4), `sources` and `params`. `save.build_sources` gives the
+extracts `filter` read, in order (file, md5 and `source_timestamp` of each), after checking that
+the filtered roads are still the ones `build` read (their md5 against the sidecar of the build
+stage cleanup read, `layout.build_stage`: `build.pkl`'s or the arrays engine's `build/`'s);
+otherwise it raises `SourcesChangedError` and the CLI says "the filtered extract changed since
+this build was built; rebuild". A filter record of the shape before M5.3 (no data date per
+extract) is refused the same way, naming the `filter` rerun. `save.build_params` gives the
+`region`, its `bbox` and `crs_epsg`, the `config` and `allow_fragmented` the cleanup, enrich and
+tiers sidecars recorded, and save's own `config` (`save.parameters()`: `GEOMETRY_SIMPLIFY_M`, the
+geometry's tolerance), so
 `graph_version` covers what the build was made with; `pipeline_version` stays out of
 `params`. `graph_data` fills `counts`: nodes, edges, twin
 pairs, transition rows, super-junctions. `save_build` writes the build and its geometry with
@@ -1093,6 +1107,35 @@ against 4 s), enrich, tiers and the build 6.5 s against 23 s. No super-junction 
 a turn there; a round dropping one (tables emptied by hand) takes 0.08 s on arrays, as long as a
 connectivity pass.
 
+## Regions of several states
+
+M5.3 (`docs/PLAN.md` §7). A region's `states` (`config.Region`) are Geofabrik slugs; `download`
+fetches each, and `filter` reads them in that order into one roads file and one POI table, the
+rest of the pipeline unchanged. Geofabrik cuts each extract along a polygon that reaches a little
+past the state line and keeps every way that touches it complete, with all its nodes
+(https://download.geofabrik.de/technical.html), so a road crossing the line is in both
+extracts, whole and under the same ids; a road that continues it beyond the line is in the other
+extract only, and a single extract ends there, a dead end. The merge reads that way once (from
+the first extract, in the region's order) and every node once (its newest version), so the
+continuation meets it at
+the shared node and the road is one road with one node sequence. Oregon's extract alone has 395
+dead ends beyond Oregon's polygon (Idaho 125, Washington 118, California 95, Nevada 17, 39
+outside every state, in the water or Canada), out of 61,249.
+
+The merge holds every per-extract roads file in memory while it sorts them (`MergeInputReader`),
+which suits a region's chosen roads but not every road of the country: an all-roads national
+region would need a streaming merge.
+
+Extracts of one day are cut from one snapshot. Extracts of different days still merge into a
+reference-complete file, since each per-extract file is complete, but a border way edited between
+the two snapshots can come out as the earlier extract's whole way beside the later one's
+pieces; so `filter` warns when the dates differ, and a national region is downloaded in one
+sitting (`download --force`).
+
+| Region | States | CRS |
+|---|---|---|
+| `oregon-washington` | oregon, washington | EPSG:32610 |
+
 ## Fixtures
 
 Hand-written OSM XML under `tests/fixtures/osm/`, read directly by pyosmium (no conversion),
@@ -1112,6 +1155,7 @@ file, not across files. Each file's header comment states what the pipeline must
 | `divided.osm` | a dual-carriageway primary (`ref=OR 99W`, written `OR-99W` on one side) 25 m apart with mismatched side junctions and a right-in/right-out on one side, crossed by a divided minor street: the 4-node crossing becomes one cluster, five exact twin pairs |
 | `diamond.osm` | a motorway over a two-way secondary with four diamond ramps: the two sides' ramps join into one interchange, all 16 (in, out) pairs allowed, two twin pairs |
 | `cloverleaf.osm` | two motorways crossing on an overpass with four loops and four outer ramps (gores 120–240 m apart): one interchange of 16 gores, all 16 pairs allowed (U-turns through two loops included), four twin pairs |
+| `border_south.osm`, `border_north.osm` | two states' extracts as Geofabrik cuts them, the line at lat 45.5: both hold a highway crossing it (900) complete with its nodes, a signal on it and a brand node by the line; each holds a street continuing the highway on its side. Alone, each ends the highway in a dead end beyond the line; merged, 3 ways, 6 nodes each once, 2 POI rows, a raw graph of 4 junctions, 3 segments, 6 edges |
 
 The tests are `tests/pipeline/`: `test_exclusions.py`, `test_download.py`, `test_filter.py`,
 `test_build.py`, `test_layout.py`, `test_names.py`, `test_simplify.py`, `test_consolidate.py`

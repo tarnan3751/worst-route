@@ -263,6 +263,28 @@ def test_filtered_file_builds_the_same_graph(tmp_path: Path) -> None:
     assert list(filtered.edges(keys=True, data=True)) == list(direct.edges(keys=True, data=True))
 
 
+def test_extracts_merged_at_filter_join_at_the_line(tmp_path: Path) -> None:
+    # Alone, each extract cuts Border Hwy off beyond the line; merged, it is one road joining
+    # South St to North St, with dead ends only where the streets really end.
+    def dead_ends(graph: nx.MultiDiGraph) -> list[int]:
+        undirected = nx.Graph(graph)
+        return sorted(v for v in undirected if undirected.degree(v) == 1)
+
+    roads = tmp_path / "roads.osm.pbf"
+    filter_roads(
+        [FIXTURES / "border_south.osm", FIXTURES / "border_north.osm"],
+        roads,
+        tmp_path / "p.parquet",
+        None,
+    )
+    merged, stats = build_raw_graph(roads, UTM_10N)
+    assert (stats.ways_kept, stats.segments, stats.nodes, stats.edges) == (3, 3, 4, 6)
+    assert dead_ends(merged) == [9010, 9020]
+    assert dead_ends(build("border_south")[0]) == [9004, 9010]
+    assert dead_ends(build("border_north")[0]) == [9001, 9020]
+    assert merged.edges[9001, 9004, 0]["osm_nodes"] == (9001, 9002, 9003, 9004)
+
+
 def test_empty_roads_file(tmp_path: Path) -> None:
     roads = tmp_path / "roads.osm.pbf"
     bbox = (-100.0, 40.0, -99.0, 41.0)  # far from every fixture

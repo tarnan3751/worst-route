@@ -37,8 +37,9 @@ that lies inside it twice, is some node's member, or lies inside two road units.
 `graph_data`), `params` (`build_params`: the region, its bbox and CRS, the configuration the
 cleanup, enrich and tiers sidecars recorded, and save's own, `parameters()`: the geometry's
 simplification tolerance; without the pipeline version, which `meta` keeps on
-its own) and `sources` (`build_sources`: the extract `filter` read, its md5 and data date,
-refused with `SourcesChangedError` when the filtered roads are no longer those `build` read).
+its own) and `sources` (`build_sources`: the extracts `filter` read, the md5 and data date of
+each, refused with `SourcesChangedError` when the filtered roads are no longer those `build`
+read, or when the filter's record is of the older shape without a data date per extract).
 `graph_geometry(graph, data)` is the build's geometry (`graph/geometry.py`): each edge's
 projected shape simplified by Douglas–Peucker to `GEOMETRY_SIMPLIFY_M` (shapely, its ends kept;
 the lengths and bearings were measured on the whole shape at enrich) and encoded as whole-metre
@@ -110,7 +111,7 @@ class TooManySpeedsError(ValueError):
 
 
 class SourcesChangedError(ValueError):
-    """The filtered extract is not the one the build was made from."""
+    """The filter's record does not describe the extracts the build was made from."""
 
 
 @dataclass
@@ -498,11 +499,12 @@ def parameters() -> dict[str, Any]:
 
 
 def build_sources(region: Region, build_dir: Path) -> list[dict[str, Any]]:
-    """The extract `filter` read for this build: file, md5 and data date.
+    """The extracts `filter` read for this build, in order: file, md5 and data date of each.
 
     Raises `SourcesChangedError` when the filtered roads are no longer the ones `build` read
     (their md5 against the one the build stage's sidecar recorded): the filter's record then
-    describes another build's extract.
+    describes another build's extracts; and when the filter's record gives no data date per
+    extract, as a filter run before M5.3 recorded it.
     """
     roads = layout.roads_pbf(region.name)
     built = json.loads(layout.sidecar(layout.build_stage(build_dir)).read_text())
@@ -510,11 +512,13 @@ def build_sources(region: Region, build_dir: Path) -> list[dict[str, Any]]:
         raise SourcesChangedError(
             "the filtered extract changed since this build was built; rebuild"
         )
-    filtered = json.loads(layout.sidecar(roads).read_text())
-    return [
-        {**source, "source_timestamp": filtered["source_timestamp"]}
-        for source in filtered["inputs"]
-    ]
+    sources: list[dict[str, Any]] = json.loads(layout.sidecar(roads).read_text())["inputs"]
+    if any("source_timestamp" not in source for source in sources):
+        raise SourcesChangedError(
+            f"the filter's record gives no data date per extract; rerun `worst-route pipeline "
+            f"filter --region {region.name}` (its output stays the same)"
+        )
+    return sources
 
 
 def build_meta(

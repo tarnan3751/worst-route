@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="hand">
+  <!-- The northern of two states' extracts; border_south.osm says what the pair makes. This one
+       holds Border Hwy (900) complete as the southern one does, the Waffle House by the line
+       (9050), and North St (902), which continues the highway north from 9004. Read alone, it
+       cuts the highway off at 9001, a dead end beyond the line, where South St continues it in
+       the other extract. -->
+  <node id="9001" version="1" lat="45.4970000" lon="-122.6000000"/>
+  <node id="9002" version="1" lat="45.4990000" lon="-122.6000000">
+    <tag k="highway" v="traffic_signals"/>
+  </node>
+  <node id="9003" version="1" lat="45.5010000" lon="-122.6000000"/>
+  <node id="9004" version="1" lat="45.5030000" lon="-122.6000000"/>
+  <node id="9020" version="1" lat="45.5050000" lon="-122.6000000"/>
+  <node id="9050" version="1" lat="45.4996000" lon="-122.6010000">
+    <tag k="amenity" v="restaurant"/>
+    <tag k="brand" v="Waffle House"/>
+    <tag k="brand:wikidata" v="Q1701206"/>
+    <tag k="name" v="Waffle House"/>
+  </node>
+  <way id="900" version="1">
+    <nd ref="9001"/>
+    <nd ref="9002"/>
+    <nd ref="9003"/>
+    <nd ref="9004"/>
+    <tag k="highway" v="primary"/>
+    <tag k="name" v="Border Hwy"/>
+  </way>
+  <way id="902" version="1">
+    <nd ref="9004"/>
+    <nd ref="9020"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="North St"/>
+  </way>
+</osm>

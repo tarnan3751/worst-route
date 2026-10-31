@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="hand">
+  <!-- Two states' extracts, as Geofabrik cuts them: this is the southern one; border_north.osm
+       is the northern one. The state line runs along lat 45.5000, and each extract's polygon
+       reaches a little past it, so both hold Border Hwy (900), which crosses the line, complete
+       with its nodes 9001-9004 (a signal at 9002, its tag in both), and the Waffle House by the
+       line (9050). South St (901) is this extract's alone, ending at 9001; North St (902) is the
+       other's, continuing from 9004. Read alone, this extract cuts the road off at 9004, a dead
+       end beyond the line; merged with the northern one, 900 is read once and 9004 joins it to
+       North St. Expected after filtering both: ways 900, 901, 902; nodes 9001-9004, 9010, 9020,
+       each once; 2 POI rows; a raw graph of 4 junctions (9010, 9001, 9004, 9020), 3 segments, 6
+       directed edges, all two-way. -->
+  <node id="9001" version="1" lat="45.4970000" lon="-122.6000000"/>
+  <node id="9002" version="1" lat="45.4990000" lon="-122.6000000">
+    <tag k="highway" v="traffic_signals"/>
+  </node>
+  <node id="9003" version="1" lat="45.5010000" lon="-122.6000000"/>
+  <node id="9004" version="1" lat="45.5030000" lon="-122.6000000"/>
+  <node id="9010" version="1" lat="45.4950000" lon="-122.6000000"/>
+  <node id="9050" version="1" lat="45.4996000" lon="-122.6010000">
+    <tag k="amenity" v="restaurant"/>
+    <tag k="brand" v="Waffle House"/>
+    <tag k="brand:wikidata" v="Q1701206"/>
+    <tag k="name" v="Waffle House"/>
+  </node>
+  <way id="900" version="1">
+    <nd ref="9001"/>
+    <nd ref="9002"/>
+    <nd ref="9003"/>
+    <nd ref="9004"/>
+    <tag k="highway" v="primary"/>
+    <tag k="name" v="Border Hwy"/>
+  </way>
+  <way id="901" version="1">
+    <nd ref="9010"/>
+    <nd ref="9001"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="South St"/>
+  </way>
+</osm>

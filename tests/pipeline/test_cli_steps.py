@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 import numpy as np
+import osmium
 import pyarrow.parquet as pq
 import pytest
 from typer.testing import CliRunner
@@ -21,7 +22,7 @@ from tests.pipeline.invariants import check_build
 from tests.pipeline.test_carriageways import mapped_twice
 from tests.pipeline.test_cleanup import cut_interchange
 from worst_route.cli import app
-from worst_route.config import REGIONS
+from worst_route.config import REGIONS, Region
 from worst_route.graph.store import read_build
 from worst_route.pipeline import PIPELINE_VERSION, download, layout
 from worst_route.pipeline.arrays import cleaned
@@ -114,8 +115,13 @@ def test_filter_from_a_source(data_dir: Path) -> None:
     sidecar = json.loads((data_dir / "filtered" / "portland.roads.osm.pbf.inputs.json").read_text())
     assert sidecar == {
         "step": "filter",
-        "inputs": [{"file": "grid.osm", "md5": layout.file_md5(FIXTURES / "grid.osm")}],
-        "source_timestamp": None,  # the fixture's header has none; Geofabrik's extracts do
+        "inputs": [
+            {
+                "file": "grid.osm",
+                "md5": layout.file_md5(FIXTURES / "grid.osm"),
+                "source_timestamp": None,  # the fixture's header has none; Geofabrik's do
+            }
+        ],
         "params": {
             "bbox": list(REGIONS["portland"].bbox or ()),
             "pipeline_version": PIPELINE_VERSION,
@@ -160,6 +166,79 @@ def test_filter_clips_to_the_region(data_dir: Path, tmp_path: Path) -> None:
         and "outside bbox 4" in output
         and "pois: 0 (none)" in output
     )
+
+
+BORDER = Region(name="border", states=("south", "north"), crs_epsg=32610)
+
+
+def raw_extract(state: str, fixture: str, timestamp: str | None = None) -> Path:
+    """The fixture written as `state`'s Geofabrik extract, with that data date in its header."""
+    path = layout.raw_pbf(state)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = osmium.io.Header()
+    if timestamp is not None:
+        header.set("osmosis_replication_timestamp", timestamp)
+    with osmium.SimpleWriter(path, header=header) as writer:
+        for obj in osmium.FileProcessor(FIXTURES / f"{fixture}.osm"):
+            writer.add(obj)
+    return path
+
+
+def test_download_fetches_every_state_of_a_region(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(REGIONS, "border", BORDER)
+    real = download.download_state
+    monkeypatch.setattr(
+        download, "download_state", functools.partial(real, fetch=fake_fetch(b"extract"))
+    )
+    code, output = pipeline("download", "--region", "border")
+    assert code == 0, output
+    raw = data_dir / "raw"
+    assert [line.split(" (")[0] for line in output.splitlines()] == [
+        f"wrote {raw / 'south-latest.osm.pbf'}",
+        f"wrote {raw / 'north-latest.osm.pbf'}",
+    ]
+    code, output = pipeline("download", "--region", "border")
+    assert code == 0 and [line.split(" matches")[0] for line in output.splitlines()] == [
+        f"skipped: {raw / 'south-latest.osm.pbf'}",
+        f"skipped: {raw / 'north-latest.osm.pbf'}",
+    ]
+
+
+def test_filter_merges_the_extracts_of_a_region_of_several_states(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(REGIONS, "border", BORDER)
+    south = raw_extract("south", "border_south", "2026-10-29T21:21:26Z")
+    north = raw_extract("north", "border_north", "2026-10-28T21:21:02Z")
+    result = runner.invoke(app, ["pipeline", "filter", "--region", "border"])
+    assert result.exit_code == 0, result.output
+    assert "ways: read 4, kept 3, excluded 0, outside bbox 0, duplicate 1" in result.stdout
+    assert "pois: 2 (brand 1, traffic_signals 1)" in result.stdout
+    assert result.stderr == (
+        "warning: the extracts hold data of different dates: "
+        "2026-10-28T21:21:02Z, 2026-10-29T21:21:26Z\n"
+    )
+    sidecar = json.loads(layout.sidecar(layout.roads_pbf("border")).read_text())
+    assert sidecar["inputs"] == [
+        {
+            "file": "south-latest.osm.pbf",
+            "md5": layout.file_md5(south),
+            "source_timestamp": "2026-10-29T21:21:26Z",
+        },
+        {
+            "file": "north-latest.osm.pbf",
+            "md5": layout.file_md5(north),
+            "source_timestamp": "2026-10-28T21:21:02Z",
+        },
+    ]
+    code, output = pipeline("build", "--region", "border")
+    assert code == 0 and "segments 3, nodes 4, edges 6" in output
+    north.unlink()
+    code, output = pipeline("filter", "--region", "border", "--force")
+    assert code == 1
+    assert f"missing input {north}: run `worst-route pipeline download --region border`" in output
 
 
 def test_filter_needs_its_input(data_dir: Path) -> None:
@@ -715,6 +794,22 @@ def test_save_refuses_sources_of_another_extract(data_dir: Path) -> None:
     assert result.exit_code == 1
     assert result.stderr == (
         "save failed: the filtered extract changed since this build was built; rebuild\n"
+    )
+
+
+def test_save_refuses_a_filter_record_without_a_date_per_extract(data_dir: Path) -> None:
+    saved_build(str(FIXTURES / "divided.osm"))
+    # The record as a filter before M5.3 wrote it: one data date, not one per extract.
+    sidecar = layout.sidecar(layout.roads_pbf("portland"))
+    record = json.loads(sidecar.read_text())
+    for entry in record["inputs"]:
+        del entry["source_timestamp"]
+    sidecar.write_text(json.dumps({**record, "source_timestamp": None}))
+    result = runner.invoke(app, ["pipeline", "save", "--region", "portland", "--force"])
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "save failed: the filter's record gives no data date per extract; rerun `worst-route "
+        "pipeline filter --region portland` (its output stays the same)\n"
     )
 
 

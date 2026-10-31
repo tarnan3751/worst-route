@@ -8,9 +8,10 @@ the API offers the frontend (`WORST_ROUTE_BASEMAP`, `raster` or `pmtiles`;
 `settings()` returns one cached instance; tests that change the environment call
 `settings.cache_clear()`.
 
-`REGIONS` names the areas the pipeline builds (`docs/PLAN.md` §2): each is a Geofabrik state
-extract, optionally clipped to a bbox, with the projected CRS its metric steps use;
-`PIPELINE_VERSION` is the version every build id and sidecar records. Speeds,
+`REGIONS` names the areas the pipeline builds (`docs/PLAN.md` §2): each is one or more Geofabrik
+state extracts, read in order and merged, optionally clipped to a bbox, with the projected CRS
+its metric steps use (the regions of several states follow `STATES`); `PIPELINE_VERSION` is the
+version every build id and sidecar records. Speeds,
 tier definitions, class allowlists and defaults join this module as their steps are built.
 
 `HighwayClass` numbers the road classes a build keeps (stored per edge as `edge_highway`) and
@@ -46,10 +47,12 @@ class Settings(BaseSettings):
 
 
 class Region(BaseModel):
-    """A named build area: a Geofabrik state extract, optionally clipped to a bbox."""
+    """A named build area: Geofabrik state extracts, merged, optionally clipped to a bbox."""
 
     name: str
-    state: str  # Geofabrik slug, e.g. "oregon"
+    # Geofabrik slugs, e.g. ("oregon",), read in this order: a way two extracts hold (one crossing
+    # their border) is taken from the first.
+    states: tuple[str, ...] = Field(min_length=1)
     bbox: tuple[float, float, float, float] | None = None  # (min_lon, min_lat, max_lon, max_lat)
     crs_epsg: int  # projected CRS for the metric steps
 
@@ -57,11 +60,11 @@ class Region(BaseModel):
 REGIONS: dict[str, Region] = {
     "portland": Region(
         name="portland",
-        state="oregon",
+        states=("oregon",),
         bbox=(-123.05, 45.25, -122.35, 45.72),
         crs_epsg=32610,
     ),
-    "oregon": Region(name="oregon", state="oregon", crs_epsg=32610),
+    "oregon": Region(name="oregon", states=("oregon",), crs_epsg=32610),
 }
 
 # The pipeline's version enters every build id and every step's sidecar (`pipeline/layout.py`);
@@ -492,6 +495,12 @@ STATES: dict[str, tuple[str, str]] = {
     "wisconsin": ("WI", "55"),
     "wyoming": ("WY", "56"),
 }
+
+# Regions of several states (M5.3; `docs/reference/pipeline.md`, **Regions of several states**):
+# their extracts are read in this order and merged at `filter`.
+REGIONS["oregon-washington"] = Region(
+    name="oregon-washington", states=("oregon", "washington"), crs_epsg=32610
+)
 
 # Presentation (`docs/reference/presentation.md`). Directions: a left or right turn is "slight"
 # when its change of bearing is at most DIRECTIONS_SLIGHT_DEG and "sharp" beyond

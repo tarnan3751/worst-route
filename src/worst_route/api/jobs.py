@@ -48,6 +48,12 @@ job as `WORKER_FAILED` and the sweep goes on.
 With `inline_workers` (tests), the worker runs in a thread of this process on a `queue.Queue`,
 and stopping it sets an Event it checks at its next accepted splice; everything else is the
 same code.
+
+Every log line about a job carries its id (`job_id`, a field of the JSON logs, `api/logs.py`)
+and the id of the request that submitted it (`request_id`, kept on the job: a queued job is
+started from whatever freed its slot, another job's follower, a cancel or the sweep, whose
+context is not its own), and each job's end is one INFO line: its status, its stop reason or
+error code, its route and how long it ran.
 """
 
 import asyncio
@@ -67,7 +73,7 @@ from typing import Any, Protocol
 import numpy as np
 from pydantic import BaseModel
 
-from worst_route.api import sse
+from worst_route.api import logs, sse
 from worst_route.api.schemas import (
     Done,
     DoneMetrics,
@@ -245,6 +251,7 @@ class Job:
     input: dict[str, Any]
     base: RouteArrays | None
     created: datetime
+    request_id: str | None = None  # the request that submitted it (`logs.request_id`)
     status: JobState = "queued"
     started: datetime | None = None
     finished: datetime | None = None
@@ -364,6 +371,7 @@ class JobManager:
             input=input,
             base=base,
             created=datetime.now(UTC),
+            request_id=logs.request_id.get(),
         )
         self.jobs[job.id] = job
         self._emit(job, "snapped", self._snapped(job, prepared.masks))
@@ -392,7 +400,7 @@ class JobManager:
         try:
             await self._end_early(job, "cancelled")
         except Exception as error:
-            log.exception("job %s: cancelling it failed", job.id)
+            log.exception("job %s: cancelling it failed", job.id, extra=_fields(job))
             await self._fail_unended(job, error)
 
     def status(self, job: Job, *, with_snapshot: bool) -> JobStatus:
@@ -435,7 +443,7 @@ class JobManager:
         try:
             job.worker = kind(spec, f"worst-route job {job.id}")
         except Exception as error:
-            log.exception("job %s: its worker did not start", job.id)
+            log.exception("job %s: its worker did not start", job.id, extra=_fields(job))
             message = f"the worker did not start: {type(error).__name__}: {error}"
             job.error = ErrorBody(code="WORKER_FAILED", message=message)
             self._emit(job, "error", job.error)
@@ -483,7 +491,7 @@ class JobManager:
                     lost = Failed("WORKER_FAILED", "the worker stopped without a result")
                     await self._failed(job, lost)
         except Exception as error:
-            log.exception("job %s: following its worker failed", job.id)
+            log.exception("job %s: following its worker failed", job.id, extra=_fields(job))
             await self._fail_unended(job, error)
 
     def _started(self, job: Job, m: Started) -> None:
@@ -575,7 +583,7 @@ class JobManager:
     async def _failed(self, job: Job, m: Failed) -> None:
         job.closing = True
         if m.trace:
-            log.error("job %s failed: %s\n%s", job.id, m.message, m.trace)
+            log.error("job %s failed: %s\n%s", job.id, m.message, m.trace, extra=_fields(job))
         await self._error(job, ErrorBody(code=m.code, message=m.message, **m.fields))
 
     async def _end_early(self, job: Job, reason: StopReason) -> None:
@@ -612,7 +620,9 @@ class JobManager:
         )
         if not report.ok:
             failed = "; ".join(line for line in report.lines() if "FAILED" in line)
-            log.error("job %s: its route so far failed validation: %s", job.id, failed)
+            log.error(
+                "job %s: its route so far failed validation: %s", job.id, failed, extra=_fields(job)
+            )
             message = f"the route so far failed validation: {failed}"
             await self._error(job, ErrorBody(code="VALIDATION_FAILED", message=message))
             return
@@ -663,6 +673,11 @@ class JobManager:
         job.finished_at = time.monotonic()
         job.masks = None
         self._running.discard(job.id)
+        elapsed_s = round(job.finished_at - job.started_at, 1) if job.started_at else 0.0
+        outcome = job.error.code if job.error is not None else job.stopped_because
+        fields = {"status": status, "outcome": outcome, "route_id": job.route_id}
+        extra = {**_fields(job), **fields, "elapsed_s": elapsed_s}
+        log.info("job %s: %s (%s) after %.1f s", job.id, status, outcome, elapsed_s, extra=extra)
 
     # Events -------------------------------------------------------------------------------
 
@@ -691,7 +706,7 @@ class JobManager:
                 try:
                     await self._sweep_job(job)
                 except Exception:  # one job's trouble never stops the sweep
-                    log.exception("job %s: the sweep failed on it", job.id)
+                    log.exception("job %s: the sweep failed on it", job.id, extra=_fields(job))
 
     async def _sweep_job(self, job: Job) -> None:
         s, now = self.settings, time.monotonic()
@@ -699,7 +714,12 @@ class JobManager:
             if now - job.finished_at >= s.ttl_s:
                 self.jobs.pop(job.id, None)
         elif job.orphaned_since is not None and now - job.orphaned_since >= s.orphan_s:
-            log.info("job %s: no subscriber for %.0f s, cancelled", job.id, s.orphan_s)
+            log.info(
+                "job %s: no subscriber for %.0f s, cancelled",
+                job.id,
+                s.orphan_s,
+                extra=_fields(job),
+            )
             await self.cancel(job)  # an error while cancelling ends it as WORKER_FAILED
 
     # Payloads -----------------------------------------------------------------------------
@@ -785,6 +805,14 @@ class JobManager:
                 "backend": job.loaded.backend.name,
             },
         }
+
+
+def _fields(job: Job) -> dict[str, Any]:
+    """What a job's log lines carry besides their message (`api/logs.py`): its id, and the id
+    of the request that submitted it, whichever task logs them."""
+    if job.request_id is None:
+        return {"job_id": job.id}
+    return {"job_id": job.id, "request_id": job.request_id}
 
 
 def _done_metrics(document: dict[str, Any]) -> DoneMetrics:

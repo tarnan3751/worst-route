@@ -170,3 +170,39 @@ def test_serve_takes_the_geocoder_s_options(
     assert ran["app"].state.api.geocode is None
     assert runner.invoke(app, [*base, "--geocoder", "photon"]).exit_code == 2
     settings.cache_clear()
+
+
+def test_serve_takes_the_proxy_and_log_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import uvicorn
+
+    from worst_route.api.logs import JsonFormatter
+
+    g = grid_graph(3, 3, 100)
+    g = replace(g, meta={**g.meta, "region": "portland", "build_id": "b1"})
+    write_build(g, tmp_path / "graphs" / "portland" / "b1")
+    (tmp_path / "graphs" / "portland" / "latest").write_text("b1\n")
+    ran: dict[str, Any] = {}
+    monkeypatch.setattr(uvicorn, "run", lambda application, **kw: ran.update(app=application, **kw))
+    monkeypatch.setenv("WORST_ROUTE_DATA", str(tmp_path))
+    settings.cache_clear()
+    base = ["serve", "--region", "portland", "--backend", "python", "--geocoder", "none"]
+    base += ["--store", str(tmp_path / "r.db")]
+    plain = runner.invoke(app, base)
+    assert plain.exit_code == 0, plain.output
+    assert ran["app"].state.api.settings.trust_proxy is False
+    # uvicorn's own proxy headers stay off: only --trust-proxy names the client
+    assert (ran["proxy_headers"], ran["access_log"]) == (False, True)
+    assert ran["log_config"]["loggers"]["worst_route.access"]["level"] == "WARNING"
+    served = runner.invoke(app, [*base, "--trust-proxy", "--log-format", "json"])
+    assert served.exit_code == 0, served.output
+    assert served.stdout.splitlines()[-1] == "trusting the proxy's X-Forwarded-For and X-Request-ID"
+    assert ran["app"].state.api.settings.trust_proxy is True
+    assert (ran["proxy_headers"], ran["access_log"]) == (False, False)
+    config = ran["log_config"]
+    assert config["formatters"]["json"]["()"] is JsonFormatter
+    assert config["loggers"]["worst_route"]["handlers"] == ["json"]
+    assert config["handlers"]["json"]["stream"] == "ext://sys.stdout"
+    assert runner.invoke(app, [*base, "--log-format", "yaml"]).exit_code == 2
+    settings.cache_clear()

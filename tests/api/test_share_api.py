@@ -149,7 +149,9 @@ async def test_head_gives_the_headers_without_the_image(data: Path) -> None:
         for name in ("content-type", "cache-control", "content-length"):
             assert head.headers[name] == got.headers[name], name
         assert int(head.headers["content-length"]) == len(got.content)
-        assert (await client.head(url)).headers == head.headers  # from the cache
+        again = (await client.head(url)).headers  # from the cache
+        assert again.pop("x-request-id") != head.headers.pop("x-request-id")  # one per request
+        assert again == head.headers
         missing = await client.head("/routes/0123456789ab/share.png")
         assert missing.status_code == 404
 

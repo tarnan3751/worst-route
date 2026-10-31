@@ -48,7 +48,10 @@ build first, so a missing one is one line and exit 1, and keeps its routes in `-
 job cancelled, a worker failed) go to the same log. `--geocoder nominatim|none` and
 `--nominatim-url` set the geocoding proxy (`docs/reference/api.md`, **Geocoding**), whose
 cache is `geocode.sqlite` beside the store; it prints the geocoder and the User-Agent it sends,
-the contact from `WORST_ROUTE_CONTACT` included.
+the contact from `WORST_ROUTE_CONTACT` included. `--trust-proxy` believes a reverse proxy's
+`X-Forwarded-For` and `X-Request-ID` (uvicorn's own proxy headers are off), and `--log-format
+json` logs a JSON object a line on stdout, with request ids and without uvicorn's access lines
+(`api/logs.py`).
 
 `aux places` writes the places index (`docs/reference/presentation.md`, **Places**) under
 `<WORST_ROUTE_DATA>/aux/places/` from the Census files `tools/fetch_census.sh` fetched into
@@ -1152,6 +1155,12 @@ def _check_geocoder(value: str) -> str:
     return value
 
 
+def _check_log_format(value: str) -> str:
+    if value not in ("text", "json"):
+        raise typer.BadParameter(f"unknown log format {value!r}; known: text, json")
+    return value
+
+
 @app.command()
 def serve(
     region: RegionOption,
@@ -1173,6 +1182,21 @@ def serve(
         ),
     ] = "nominatim",
     nominatim_url: Annotated[str, typer.Option(help="Nominatim's address.")] = NOMINATIM_URL,
+    trust_proxy: Annotated[
+        bool,
+        typer.Option(
+            "--trust-proxy",
+            help="Behind a reverse proxy: its X-Forwarded-For names the client, "
+            "its X-Request-ID the request.",
+        ),
+    ] = False,
+    log_format: Annotated[
+        str,
+        typer.Option(
+            help="text (uvicorn's), or json: a JSON object a line on stdout, with request ids.",
+            callback=_check_log_format,
+        ),
+    ] = "text",
 ) -> None:
     """Serve the API."""
     import copy
@@ -1181,6 +1205,7 @@ def serve(
 
     from worst_route.api.app import ApiSettings, create_app, geocoder_user_agent
     from worst_route.api.jobs import JobSettings
+    from worst_route.api.logs import json_log_config
     from worst_route.graph.loader import BuildNotFound
 
     config = ApiSettings(
@@ -1193,6 +1218,7 @@ def serve(
         geocoder=cast(GeocoderName, geocoder),
         nominatim_url=nominatim_url,
         contact=settings().contact,
+        trust_proxy=trust_proxy,
     )
     try:
         application = create_app(config)
@@ -1206,9 +1232,23 @@ def serve(
         typer.echo("geocoder: none")
     else:
         typer.echo(f'geocoder: nominatim {nominatim_url} as "{geocoder_user_agent(config)}"')
-    log_config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
-    log_config["loggers"]["worst_route"] = {"handlers": ["default"], "level": "INFO"}
-    uvicorn.run(application, host=host, port=port, log_config=log_config)
+    if trust_proxy:
+        typer.echo("trusting the proxy's X-Forwarded-For and X-Request-ID")
+    if log_format == "json":
+        log_config = json_log_config()
+    else:
+        log_config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
+        log_config["loggers"]["worst_route"] = {"handlers": ["default"], "level": "INFO"}
+        log_config["loggers"]["worst_route.access"] = {"level": "WARNING", "propagate": False}
+    # uvicorn's own proxy headers off: --trust-proxy alone decides whom X-Forwarded-For names
+    uvicorn.run(
+        application,
+        host=host,
+        port=port,
+        log_config=log_config,
+        access_log=log_format == "text",
+        proxy_headers=False,
+    )
 
 
 aux_app = typer.Typer(help="Data beside the builds: the Census places index.", no_args_is_help=True)

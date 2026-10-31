@@ -14,6 +14,9 @@ else: every route it returns has passed the validator.
 | `geocode_api.py` | `GET /geocode` (**Geocoding**) |
 | `share_api.py` | `GET` and `HEAD /routes/{id}/share.png`, `SHARE_IMAGE_VERSION` (**Share image**) |
 | `directions_api.py` | `GET /routes/{id}/directions` |
+| `ready_api.py` | `GET /ready` (**Endpoints**) |
+| `logs.py` | `RequestLog` (request ids, access lines), `JsonFormatter`, `ContextFilter`, `json_log_config` (**Logs**) |
+| `limits.py` | `client_of` (who a client is), `client_hash` (**Logs**) |
 | `schemas.py` | the request and response models (pydantic), the SSE payloads |
 | `jobs.py` | `JobManager`, `JobSettings`, `Job`, `Subscription`, `prepare`, `TooManyJobs` |
 | `worker.py` | `run_job` (what a worker process runs), `JobSpec`, `RouteArrays`, the worker's messages |
@@ -33,6 +36,7 @@ Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in requests; every numb
 worst-route serve --region R [--build-id ID] [--host 127.0.0.1] [--port 8000] [--workers N]
                   [--backend auto|csr|python] [--store PATH]
                   [--geocoder nominatim|none] [--nominatim-url URL]
+                  [--trust-proxy] [--log-format text|json]
 ```
 
 It loads the region's build (`--build-id`, else the region's `latest`) before it listens, so a
@@ -63,8 +67,17 @@ backend: csr
 geocoder: nominatim https://nominatim.openstreetmap.org as "worst-route/0.1.0 (https://github.com/tarnan3751/worst-route)"
 ```
 
+`--trust-proxy` is for a server behind a reverse proxy (`docs/reference/hosting.md`): the client
+is then the last address of `X-Forwarded-For`, the one the proxy appended, and a request's id
+the proxy's `X-Request-ID` (**Logs**); without it both headers are ignored, and so is uvicorn's
+own handling of them (`proxy_headers` off), so the client is always the peer. It prints
+`trusting the proxy's X-Forwarded-For and X-Request-ID` after the geocoder's line.
+`--log-format json` logs one JSON object a line on stdout (**Logs**); `text`, the default, is
+uvicorn's format, as before.
+
 `create_app(ApiSettings(data_dir, region, build_id="latest", backend, store_path, jobs,
-geocoder="nominatim", nominatim_url, contact))` builds the same application in-process, and
+geocoder="nominatim", nominatim_url, contact, trust_proxy=False))` builds the same application
+in-process, and
 `create_app(settings, geocode=service)` with a geocoding service of the caller's own (a
 `FakeGeocoder` behind it, in the tests); the tests drive it over `httpx` (**Tests**).
 
@@ -166,6 +179,7 @@ FastAPI's `detail`):
 | 405 | `METHOD_NOT_ALLOWED` | a method a path does not take |
 | 409 | `BUILD_UNAVAILABLE` | a stored route whose build is no longer on disk at its `graph_version` |
 | any other | `HTTP_<status>` | any other HTTP error Starlette raises, its status in the code |
+| 500 | `INTERNAL_ERROR` | an exception nothing else answered (a bug): the message is only "internal error", the traceback goes to the log with the request's id, and the answer carries `X-Request-ID` (**Logs**) |
 
 The SSE `error` event uses the same body, with the codes above that a worker can meet, and:
 `CANCELLED` (cancelled while queued or before its route existed), `VALIDATION_FAILED` (a route
@@ -187,6 +201,7 @@ later.
 | Method | Path | Answer |
 |---|---|---|
 | GET | `/health` | `{status: "ok", builds: [{region, build_id, graph_version}]}` |
+| GET | `/ready` | `{status: "ready"\|"not_ready", checks: [{name, ok, detail}]}`: 200 when every check passes, else 503 (below) |
 | GET | `/regions` | `[{region, build_id, graph_version, bbox: [w, s, e, n], counts, tiers: [{tier, nodes, edges}]}]` |
 | POST | `/snap` | `{region, lat, lon, role: start\|via\|end, tier?}` → `{node, lat, lon, moved_m, note}` |
 | GET | `/brands` | `{region, brands: [{id, name, wikidata, locations}]}`, for `?region=` (below) |
@@ -200,6 +215,16 @@ later.
 | POST | `/routes/{id}/validate` | `{route_id, graph_version, ok, checks: [{name, ok, index, detail}]}`, the stops re-derived from the stored request (by this engine version only); an alphabet route's checks end with `alphabet` |
 | GET | `/geocode` | `{query, region, candidates: [{label, lat, lon, category}], cached}`, for `?q=&region=` (**Geocoding**) |
 | GET, HEAD | `/routes/{id}/share.png` | the route's share image, a 1200 × 630 PNG (`image/png`), cached; HEAD the same headers without it (**Share image**) |
+
+**`/ready`** says whether the deployment is whole, where `/health` says only that the process
+lives: `build`, the served build still on disk at the `graph_version` it loaded (a build
+replaced since, or gone, fails: restart to serve the new one); `store`, the route store
+answering a query; `places`, the region's places index loaded at startup (missing, the check
+names `worst-route aux places --region R`). A check that fails makes the answer 503 with
+`status: "not_ready"`; each check's `detail` says what it found, or what is missing and its
+remedy, never a path on the server or an error of its system (those go to the log, as
+warnings of `worst_route.api.ready_api`). Its use is a container's health check and a deploy's
+last step (`docs/reference/hosting.md`).
 
 **`/snap`** judges the stop in the tier's nodes and every node within `BUBBLE_KM` (3 km) of it,
 as a job's masks do near a stop (`auto` is T4); its `note` says why a stop moved ("moved 214 m
@@ -677,6 +702,46 @@ machine, with curl:
   2.73× (700.5 km, `target`); the document 0.6 MB in 0.08–0.15 s with 723 steps and 33 towns,
   `/directions` 11 ms, `/share.png` 0.54 s (115,836 road units, thinned to 17,050).
 
+## Logs
+
+Every HTTP request gets an id (`logs.RequestLog`, the app's middleware): 16 hex digits, or with
+`--trust-proxy` the proxy's `X-Request-ID` when it is 1 to 64 letters, digits, dots, dashes and
+underscores. The answer carries it as `X-Request-ID`, an unhandled error's 500 `INTERNAL_ERROR`
+too (the app's handler answers outside the middleware, and finds the id in the request's scope,
+`logs.request_id_of`; it logs the error with its traceback and the id, and uvicorn logs the
+traceback again as the server's error). While the request is served the id is in a context
+variable, which the log lines written meanwhile carry. A job keeps the id of the `POST /jobs`
+that submitted it, so every line about it carries that id, whatever task writes it: a queued
+job is started by whatever freed its slot (another job's follower, a cancel, the sweep), in
+that one's context. When the response ends (a stream's at its end), one line goes to
+the logger `worst_route.access`: the method, the path without its query (a place search's text
+never reaches the logs), the status (500 when the app raised before answering), the duration in
+milliseconds and the client as `client_hash`, 12 hex digits of a sha256 under a salt drawn at
+startup, so one client's lines can be followed within a run and its address is never written.
+The client (`limits.client_of`) is the peer's address, or with `--trust-proxy` the last address
+of `X-Forwarded-For` without the port a proxy may append (`203.0.113.9:4711`,
+`[2001:db8::1]:4711`); an IPv6 client is named by its /64, an IPv4-mapped one by its IPv4
+address.
+
+Every log line about a job carries its `job_id` and its `request_id`, and each job's end is one
+INFO line from `worst_route.api.jobs`: `job <id>: <status> (<outcome>) after <s> s`, with the
+fields `status` (`done` or `error`), `outcome` (the stop reason, or the error's code),
+`route_id` and `elapsed_s`.
+
+With `--log-format json` (`logs.json_log_config`) every record of uvicorn and of the package is
+one JSON object a line on stdout:
+
+```
+{"ts": "2026-10-31T07:27:21.591Z", "level": "INFO", "logger": "worst_route.access",
+ "message": "POST /jobs 202 31.2 ms", "request_id": "19550fcad0f0f870", "method": "POST",
+ "path": "/jobs", "status": 202, "duration_ms": 31.2, "client": "c60f7d8f1b3c"}
+```
+
+(on one line): `ts` (UTC, milliseconds), `level`, `logger`, `message`, the record's own fields,
+the request's id when one is being served, and `exc`, the traceback, after an exception.
+uvicorn's access lines, which carry the peer's address, are off; `worst_route.access` takes
+their place. In the text format uvicorn's access lines stay and `worst_route.access` is silent.
+
 ## Tests
 
 `tests/api/` (`support.py` writes lattice builds into a temporary data directory and holds the
@@ -685,6 +750,8 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 | Test file | What it covers |
 |---|---|
 | `test_schemas.py` | the request mirrors the engine's (a pilgrimage's brand included), its defaults, the seed's bounds, stops left out only with a base, malformed requests refused (both turn constraints at once, an unknown one); the target as the engine's, each kind with its own number and within its bounds; `done`'s time ratio, target, delays and turns typed |
+| `test_logs.py` | who a client is (the peer; the last `X-Forwarded-For` address only when trusted, without a port; IPv6 by its /64), its hash; a request id and one access line per request, without the address or the query; a proxy's request id kept only when trusted and well formed; a job's end line with its id, outcome and route and the id of the request that started it; a queued job's lines with its own request's id, not the one that freed its slot; an unhandled error's 500 `INTERNAL_ERROR` with the request's id, logged with it; a JSON line's fields and traceback |
+| `test_ready_api.py` | `/ready`: 200 with the build, the store and the places index; 503 without the index, and once the build is replaced or gone (while `/health` answers), its details without a path on the server |
 | `test_store.py` | the round trip (the stored route validates), unknown ids, the first record kept, what the id covers |
 | `test_sse.py` | path points and node indices, the per-edge simplification keeping nodes and original values, splices, metrics, the event encoding |
 | `test_jobs.py` | the manager with inline workers: event order and ids, a client replay equal to the stored route, late subscribers (after a worker that died with splices waiting too: they come before its `error`, ids rising strictly), `Last-Event-ID` resync, cancel (validated, stored, reproduced by its attempts), the queue and its limit, cancel before the route exists, continuations, the time limit, orphans running and queued, a worker that raises, a worker refusing a brand its request's area does not hold (`INVALID_REQUEST`), a store failure while cancelling (by hand and by the sweep, which goes on), a worker that does not start (the queue moves on), the TTL; a target run whose best is not its last route (an overshoot on a 5 × 5 lattice): a snapshot of the stored route before `done`, for live and late clients, and a cancel after the overshoot storing the closest route, reproduced by its attempts |
@@ -696,7 +763,7 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 
 `tests/engine/test_plan.py` covers `plan_route`'s hooks, `tests/graph/test_loader.py` the loader,
 and `tests/unit/test_cli.py` `serve`'s errors, options (the geocoder's included, with the line
-it prints) and its taking `csr` on a build with transition tables. `tests/geocode/` covers the
+it prints; `--trust-proxy` and `--log-format`, uvicorn's proxy headers off) and its taking `csr` on a build with transition tables. `tests/geocode/` covers the
 geocoding package: `normalise`; the cache and its TTL on a fake clock; the rate limit on a fake
 clock (a burst of ten serving six and refusing four, requests the interval plus a 300 ms
 latency apart, the interval from the answer, a failure spacing the next request too, a turn

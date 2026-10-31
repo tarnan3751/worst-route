@@ -515,3 +515,21 @@ class DirectionsOut(_Out):
 
     route_id: str
     directions: list[DirectionStep]
+
+
+# --- Readiness (`GET /ready`) -----------------------------------------------------------------
+
+
+class ReadyCheck(_Out):
+    """One thing a deployment needs: its name, whether it is there, and what was found."""
+
+    name: str
+    ok: bool
+    detail: str
+
+
+class ReadyOut(_Out):
+    """`GET /ready`: ready when every check passes (200), else not ready (503)."""
+
+    status: Literal["ready", "not_ready"]
+    checks: list[ReadyCheck]

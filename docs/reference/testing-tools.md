@@ -82,7 +82,8 @@ to `cleanup` and `tiers`. Per step it records the wall time, the user and system
 the peak resident set size of the step's process (`os.wait4`'s `ru_maxrss`, which is what
 `/usr/bin/time -l` reports on macOS), the exit code, the output, and the sizes of the files the
 step wrote (the filtered roads and POIs, the stage pickles and reports, the build's `arrays/`,
-`strings.json` and `meta.json`, the `qa/` layers). A step the CLI skips as up to date is
+`geometry/` (the edges' shapes in the compact format), `strings.json` and `meta.json`, the `qa/`
+layers). A step the CLI skips as up to date is
 reported as skipped. The first step that fails ends the run. It prints a Markdown table, writes
 the JSON report to `--out` (under `tools/out/`, which git ignores) and exits with the failed
 step's code, else 0. It needs real extracts under `WORST_ROUTE_DATA`, so the gate never runs it;

@@ -14,7 +14,8 @@ step afresh.
 Per step it records the wall time, the user and system CPU seconds and the peak resident set
 size of the step's process (`os.wait4`'s `ru_maxrss`, what `/usr/bin/time -l` reports on macOS),
 the exit code, the step's output, and the size of the files it wrote: the filtered roads and
-POIs, the stage pickles and reports, the build's `arrays/` and `strings.json`, the `qa/` layers.
+POIs, the stage pickles and reports, the build's `arrays/`, `geometry/` (the edges' shapes, in
+the compact format), `strings.json` and `meta.json`, the `qa/` layers.
 The first step that fails ends the run; its row and output are kept. It prints a table, writes
 the JSON report to `--out` (by default under `tools/out/`, which git ignores) and exits with the
 failed step's code, else 0.
@@ -41,7 +42,7 @@ STAGE_FILES = {
     "cleanup": ("stages/cleanup", "stages/cleanup.json"),
     "enrich": ("stages/enrich", "stages/enrich.json"),
     "tiers": ("stages/tiers.json",),
-    "save": ("arrays", "strings.json", "meta.json"),
+    "save": ("arrays", "geometry", "strings.json", "meta.json"),
     "qa": ("qa",),
 }
 # ru_maxrss is in bytes on macOS and in kibibytes on Linux.

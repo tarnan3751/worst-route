@@ -61,6 +61,18 @@ def test_each_step_is_measured(
     assert step["argv"][-1] == "--force" and not step["skipped"]
 
 
+def test_save_counts_every_part_of_the_build(data_dir: Path) -> None:
+    build = layout.build_dir("portland", "b1")
+    for name in ("arrays/node_x.npy", "geometry/coords.npy", "strings.json", "meta.json"):
+        (build / name).parent.mkdir(parents=True, exist_ok=True)
+        (build / name).write_bytes(b"x" * 10)
+    layout.latest_file("portland").write_text("b1\n")
+    sizes = bench().outputs("save", "portland")
+    assert sizes == {
+        str(build / n): 10 for n in ("arrays", "geometry", "strings.json", "meta.json")
+    }
+
+
 def test_the_first_failing_step_ends_the_run(data_dir: Path, tmp_path: Path) -> None:
     tool, out = bench(), tmp_path / "bench.json"
     argv = ["--region", "portland", "--steps", "cleanup,enrich", "--allow-fragmented"]

@@ -403,6 +403,73 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Directions */
+
+#directions summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+#directions summary h2 {
+  display: inline;
+}
+
+.directions {
+  max-height: 45vh;
+  margin: 8px 0 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.step {
+  padding: 3px 6px 3px calc(6px + 3.4em);
+  text-indent: -3.4em;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.step .num {
+  display: inline-block;
+  width: 3.4em;
+  padding-right: 0.5em;
+  text-indent: 0;
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.step .detail {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.step[data-k] {
+  cursor: pointer;
+}
+
+.step[data-k]:hover,
+.step[data-k]:focus {
+  background: #eef4fa;
+  outline: none;
+}
+
+.step[data-k]:focus-visible {
+  outline: 2px solid var(--via);
+}
+
+.step-stop,
+.step-arrive {
+  font-weight: 700;
+}
+
+.step-joke {
+  text-indent: 0;
+  font-style: italic;
+  color: var(--muted);
+}
+
 /* Share */
 
 #share .link {

@@ -67,6 +67,14 @@ export function placeStop(
 
 const ROLE_NAMES: Record<Role, string> = { start: "Start", via: "Stop", end: "End" };
 
+/** The request's label for stop `index`: a stop along the way named as its marker numbers it,
+ * "Stop 2", which the directions say ("Arrive at Stop 2; continue"); none for the start and the
+ * end, whose words are the API's own ("Arrive at your destination", "Arrive back where you
+ * started"). */
+export function stopLabel(index: number, count: number): string | null {
+  return roleOf(index, count) === "via" ? `${ROLE_NAMES.via} ${index + 1}` : null;
+}
+
 function snapLine(stop: Stop, units: Units): string | null {
   if (stop.snapped === null) return null;
   const { node, moved_m, note } = stop.snapped;

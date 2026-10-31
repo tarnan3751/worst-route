@@ -1,6 +1,7 @@
 // The MapLibre map (docs/reference/frontend.md): the basemap, its attribution and the
 // navigation control. Layers are stacked in the order they are added: the route's (routeLayer.ts:
-// baseline, casing, route, flash) above the basemap; the stops are DOM markers above the canvas.
+// baseline, casing, route, flash, the directions' highlight) above the basemap; the stops are DOM
+// markers above the canvas.
 import { Map as MapLibreMap, NavigationControl } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { Bounds } from "../util/geo";

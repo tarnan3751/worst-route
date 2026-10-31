@@ -1,10 +1,12 @@
 // Bootstrap and wiring (docs/reference/frontend.md): the store, from the URL's state; the map
-// and the panel's parts; the region's bbox from /regions; a stored route when the URL names one,
-// the URL left alone until it has opened; clicks on the map and a place search's picks add stops,
-// the same way (placeStop); leaving the page cancels a running job.
+// and the panel's parts (the directions, which highlight their steps on the route layer, among
+// them); the region's bbox from /regions; a stored route when the URL names one, the URL left
+// alone until it has opened; clicks on the map and a place search's picks add stops, the same way
+// (placeStop); leaving the page cancels a running job.
 import "./style.css";
 import { errorBody, getRegions } from "./api/client";
 import { mountBanner } from "./banner";
+import { DirectionsPanel, mountDirections } from "./directions/panel";
 import { createMap, fitTo } from "./map/map";
 import { RouteLayer } from "./map/routeLayer";
 import { StopsLayer } from "./map/stopsLayer";
@@ -57,6 +59,12 @@ map.once("load", () => {
   routeLayer = new RouteLayer(map);
   runner = new JobRunner(store, routeLayer, (bounds) => fitTo(map, bounds));
   mountRunControls(byId("run"), store, runner);
+  const layer = routeLayer;
+  const directions = new DirectionsPanel(store, {
+    highlight: (line) => layer.highlight(line),
+    panTo: (at) => map.panTo(at),
+  });
+  mountDirections(byId("directions"), directions);
   if (url.route !== null) {
     void openRoute(url.route, store, runner).then((opened) => urlSync.start(opened));
   }

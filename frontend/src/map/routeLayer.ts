@@ -1,8 +1,9 @@
 // The route on the map (docs/reference/frontend.md, **Live growth**).
 //
-// Three GeoJSON sources: the baseline (the sensible route, grey and dashed), the worst route
+// Four GeoJSON sources: the baseline (the sensible route, grey and dashed), the worst route
 // (with `lineMetrics`, so a `line-gradient` colours it from warm at the start to hot at the end,
-// over a white casing), and the flash (each new splice, bright, for 400 ms).
+// over a white casing), the flash (each new splice, bright, for 400 ms), and on top the stretch
+// of a step the directions panel points at (`highlight`).
 //
 // The route is kept as the stream sends it (docs/reference/api.md, **Applying the stream**): its
 // [lon, lat] points, and the index among them of each route node (consecutive edges share their
@@ -45,6 +46,7 @@ export function spliceLine(
 const BASELINE = "wr-baseline";
 const ROUTE = "wr-route";
 const FLASH = "wr-flash";
+const HIGHLIGHT = "directions-highlight";
 const FLASH_MS = 400;
 const GRADIENT = ["#fdd049", "#f98e2b", "#e8452c", "#b10026"];
 
@@ -72,7 +74,9 @@ export class RouteLayer {
   /** Adds the sources and layers; the map's style must be loaded. */
   constructor(map: MapLibreMap) {
     this.#map = map;
-    for (const id of [BASELINE, FLASH]) map.addSource(id, { type: "geojson", data: lines([]) });
+    for (const id of [BASELINE, FLASH, HIGHLIGHT]) {
+      map.addSource(id, { type: "geojson", data: lines([]) });
+    }
     map.addSource(ROUTE, { type: "geojson", data: lines([]), lineMetrics: true });
     const round = { "line-join": "round", "line-cap": "round" } as const;
     map.addLayer({
@@ -107,6 +111,13 @@ export class RouteLayer {
       layout: round,
       paint: { "line-color": "#00e5ff", "line-width": 7, "line-blur": 1 },
     });
+    map.addLayer({
+      id: HIGHLIGHT,
+      type: "line",
+      source: HIGHLIGHT,
+      layout: round,
+      paint: { "line-color": "#2563eb", "line-width": 8, "line-opacity": 0.9 },
+    });
   }
 
   /** The points drawn now. */
@@ -135,6 +146,11 @@ export class RouteLayer {
   setFinal(geometry: LineString): void {
     this.#line = { points: geometry.coordinates, index: [] };
     this.#draw(true);
+  }
+
+  /** A stretch of the route drawn over it, or none. */
+  highlight(line: LonLat[] | null): void {
+    this.#source(HIGHLIGHT).setData(lines(line ? [line] : []));
   }
 
   clear(): void {

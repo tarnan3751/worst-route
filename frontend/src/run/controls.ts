@@ -4,8 +4,9 @@
 // the delays under the slowest time, the items collected, the turns; once stored, the towns and
 // states the route passes through, its extra fuel and its share of the roads within reach).
 //
-// Go posts the stops and settings (the target, the objective with its item, the turn
-// constraints and the vehicle among them), and Reroll the same without a seed,
+// Go posts the stops (each stop along the way labelled as its marker is numbered, "Stop 2") and
+// settings (the target, the objective with its item, the turn constraints and the vehicle among
+// them), and Reroll the same without a seed,
 // so the server picks one; the 202's seed goes into the settings. Make it worse posts the shown route as `base_route_id`
 // with the seed after the last one tried on it (its own at first), the base route giving the
 // stops, tier and leash; the settings' seed follows the route shown, so it changes only when a
@@ -59,7 +60,7 @@ import {
   type RequestMode,
   type Store,
 } from "../state";
-import { busy } from "../stops/stopList";
+import { busy, stopLabel } from "../stops/stopList";
 import { el } from "../util/dom";
 import { lineBounds, type Bounds } from "../util/geo";
 
@@ -71,10 +72,13 @@ export type RouteView = Pick<
 
 /** The request Go makes, with `seed` (null: the server picks one). */
 function jobRequest(state: Readonly<AppState>, seed: number | null): RouteRequest {
-  const { settings } = state;
+  const { settings, stops } = state;
   const request: RouteRequest = {
     region: state.region?.region ?? "",
-    stops: state.stops.map(({ lat, lon }) => ({ lat, lon })),
+    stops: stops.map(({ lat, lon }, k) => {
+      const label = stopLabel(k, stops.length);
+      return label === null ? { lat, lon } : { lat, lon, label };
+    }),
     ...modeOf(settings),
     tier: settings.tier,
     leash_km: settings.leashKm,

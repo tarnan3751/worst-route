@@ -366,15 +366,30 @@ rendered once and cached (`docs/reference/api.md`, **Share image**).
   route's bbox with 15 % of its width and height on each side (at least 1 km across), widened to
   the map's shape with x scaled by cos(mean latitude), so distances look the same both ways.
   From the bottom up: the build's roads as light hairlines along its geometry (one edge per road
-  unit, those whose bounds meet the extent, found first by their bounds in the build's CRS
-  against the extent's outline projected and grown by `NETWORK_MARGIN_M`, 50 m, then decoded
-  and tested in lon/lat; only T0–T2 when more than 50,000 would show), the state outlines from
+  unit, those whose bounds meet the extent, first in the build's CRS against the extent's
+  outline projected and grown by `NETWORK_MARGIN_M`, 50 m, then in lon/lat; at most
+  `MAX_NETWORK_EDGES`, 100,000, as **The network** below says), the state outlines from
   the places index's 20m file in a darker grey (none without an index), the route in red
   (`#e8452c`, the map's) on a white casing, the baseline dashed in grey over it (the sensible
   route through the mess; none for a round trip), a ring at the start and a smaller dot at the
   end on top (a round trip's shows inside its ring).
 - **The footer**, bottom right: "worst-route · © OpenStreetMap contributors (ODbL) ·
   Boundaries: U.S. Census Bureau".
+
+**The network** is found without decoding most of it. A road unit with an end inside the box
+(the outline's in the build's CRS, then the extent in lon/lat) meets it: its ends are points of
+its line exactly, and `edge_points` gives them as `node_lon`, `node_lat` bit for bit. A unit
+whose ends both lie farther than its length from the box on some axis misses it, since every
+point of its line lies within its length of either end (`edge_length_m` is the length of the
+road's whole shape, which the drawn line simplifies; a metre more covers the decoding's
+rounding, half a metre on each axis, and the float32 length). Only the units between are
+decoded to tell, then the units drawn, once: the roads a full decode finds, by construction,
+which the tests check on a lattice of bent roads and on Portland. When more than 100,000 would
+show, it keeps those of T0–T2, then T0–T1, then T0, the first few enough, and if T0 alone is
+too many, its 100,000 longest units (the earlier of two the same length), drawn in unit order:
+the motorway and trunk stretches between interchanges, so a national map shows the interstates
+with the cities as clusters (from Chicago to Miami on the national T1 build, 100,000 of T0's
+385,356). It never draws more than the cap, and the same inputs give the same lines.
 
 It draws on a `Figure` with a `FigureCanvasAgg` of its own, never pyplot nor a process-wide
 backend, with DejaVu Sans as matplotlib ships it, given to each text by its file's path, and
@@ -383,14 +398,39 @@ another matplotlib or FreeType may draw a pixel differently). Importing matplotl
 build its font manager's cache, a scan of the system's fonts that took 11 s on a cold machine,
 once per machine; the API therefore imports this module only when it first renders, never at
 startup. matplotlib is not thread-safe, so renders take one lock in turn. `SHARE_IMAGE_VERSION`
-(1, in `api/share_api.py`) names the drawing; the API's cache files carry it, so it goes up
-whenever the drawing changes.
+(2 since the network's cap, in `api/share_api.py`) names the drawing; the API's cache files
+carry it, so it goes up whenever the drawing changes.
 
 **Measured** (Portland, `serve --port 0`, the dev machine, 2026-10-30, a warm font cache):
 Powell's → Reed (seed 1, `5ea844bffd40`, 62.4×, 299 mi): 489 kB in 2.0 s for the first image
 after the server started (matplotlib's import included), 8 ms from the cache; Powell's → Hayden
 Island (seed 3, 52.4×) next, 1.4 s, the OR/WA outline across the Columbia at the top right. In
 one process, a render takes 0.34 s once matplotlib and the fonts are loaded.
+
+**With the network's cap** (2026-10-31, the dev machine, load average 6–8): one process with
+matplotlib and the fonts loaded draws each route with the drawing before the network's cap
+(version 1) and after it (version 2), the median of five renders after a first, with the
+places index's state outlines. Portland's build is a453e105582b, Oregon's ea3b18096e8b and the
+national us-t1 c4a85b3d36d0; the routes are `worst-route plan --seed 1`, with `--budget 30`
+(Powell's → Reed, which then stops at its 5,000 attempts; Medford → Pioneer Courthouse Square,
+`--max-iterations 1000000`) or `--tier T1 --budget 60 --max-iterations 1000000` (both national
+trips converge). "Units" counts the road units whose bounds meet the map; "network" is the
+time `_network` takes to find the lines.
+
+| Route | Units | Lines drawn, v1 → v2 | Render, v1 → v2 | Network, v1 → v2 |
+|---|---|---|---|---|
+| Powell's → Reed, Portland (248 km, 32.2×) | 25,567 | 25,567, the same bytes | 0.147 → 0.136 s | 25 → 14 ms |
+| Medford → Pioneer Courthouse Square, Oregon (4,737 km, 10.7×) | 288,556 | 41,294 (T0–T2), the same bytes | 0.456 → 0.260 s | 210 → 31 ms |
+| Chicago → Miami, us-t1 (4,168 km, 1.87×) | 740,676 | 740,676 → 100,000 (the longest of T0's 385,356) | 3.38 → 0.64 s | 704 → 170 ms |
+| New York → Los Angeles, us-t1 (5,675 km, 1.26×) | 1,033,412 | 1,033,412 → 100,000 (the longest of T0's 512,708) | 4.80 → 0.64 s | 766 → 169 ms |
+
+The national images shrink from 410 and 295 kB to 310 and 240 kB. The longest units carry
+more points than the others (956,653 and 1,159,646 for the two national maps' 100,000), so a
+national render costs more than the lines' count suggests: with a cap of 50,000 both took
+0.42 s, a sparser network, and drawing the whole of T0 takes 1.9 s from Chicago to Miami and
+2.5 s from New York to Los Angeles. A later item: the collection's data limits, which the map's
+fixed extent never uses, take about 0.06 s of a national render (`autolim=False` would skip
+them).
 
 ## Tests
 
@@ -401,7 +441,8 @@ data directory and holds a route over the API tests' 10 × 10 lattice):
 |---|---|
 | `test_places.py` | the index's rows; states and towns in route order, the CDP included, and reversed; a route that comes back into a town listed where it first met it; a point repeated (a zero-length segment) met where it is; a route touching nothing; a touch counting; places outside the bbox left out; a state the bbox meets without its places file reported missing; the state's bounds when there is no bbox; the files' columns and CRS; no index when a file is missing; `aux places` on the fixture zipped as the Census ships it (shapefiles), with the latest build's bbox and the warning, and its missing state file; `STATES` (51, unique, every region's state) |
 | `test_comparisons.py` | the four lines above; the things in order, each with both lines; a sweep from 0.1 to 500,000 mi reaching every thing, and every "N×" line but those the list makes unreachable (derived from it), deterministic; the boundaries (equal is not longer, 2× exactly, the shorter line); every distance's format |
-| `test_share_image.py` | a 1200 × 630 PNG (its IHDR), the same bytes twice, with and without the index (which differ), no Software stamp; `headline` for each objective and a round trip; a slowest-time route drawing its own headline, a distance route ignoring its time ratio; a round trip; no baseline; the extent's margin and shape, and its minimum; the network one line per road unit, thinned when too many, and drawn along a bent geometry, only the units near the map |
+| `test_share_image.py` | a 1200 × 630 PNG (its IHDR), the same bytes twice, with and without the index (which differ), no Software stamp; `headline` for each objective and a round trip; a slowest-time route drawing its own headline, a distance route ignoring its time ratio; a round trip; no baseline; the extent's margin and shape, and its minimum; the network one line per road unit, drawn along a bent geometry, only the units near the map; the roads a full decode finds, on the lattice with every road bent over 243 maps in and around it and on a hairpin met only by its tip, and none decoded to tell for a map holding every road or none; under a cap of 10, thinned to T0–T2, T0–T1, T0, then the longest units of T0 (359 of one length: the first ten; among unequal lengths the ten longest, ties to the lower unit id, a long unit outside T0 left out), the same lines twice |
+| `test_share_image_data.py` (`data`) | Portland: on the map of Powell's → Reed and two smaller ones inside it, the network is the roads a full decode finds |
 | `test_fetch_census.py` | the script against a `curl` stand-in on PATH: the URLs and User-Agent, a file without a pinned sum kept with its sum printed, a pinned file whose sum differs deleted (exit 1), a failed fetch leaving no `.part` file and fetching no further (exit 1), a bad FIPS code fetching nothing (exit 2) |
 | `test_directions.py` | each step's words on small named graphs (`streets.py`): the town's turns, an interior stop with and without a label (the road going on as "Continue on"), a round trip's arrival, the turn words at the slight and sharp bands' ends, straight on continuing only on a new road, a turn on the same road its own step ("to stay on"), never "to stay on" an unnamed road, US 26 through downtown (a ref joining a name straight on unannounced, then each turn a step), unnamed roads and an alley in words, a ramp of two links toward the motorway's first ref and one the route ends on, a ramp carrying the ref of the road it joins (US 30) still ending, toward that road, an interchange on the ramp or where it meets the motorway adding no second ramp, an interchange without a link a junction like another and a roundabout node (the same road through it cut too), the diamond and roundabout fixtures through the pipeline; planned lattice routes with signals, a round trip included: the ranges tiling the edges, the distances adding up to the length and the times to the driving and delays; names, refs and the compass, half-way bearings clockwise |
 | `test_jokes.py` | forty distinct jokes and their placeholders, one turn counted as "1 turn"; the same seed the same jokes, another seed others; over 20 seeds no joke twice, every placeholder filled, the real steps kept in order and numbered again, each joke empty after a driving step, the gaps within their band; a long route spreading nearly all forty to its end; the ratio, the turns before and the step's distance filled in; a round trip without ratio jokes and a route without turns without turn counts; a short route without a joke; the distances' format; `route_directions` with and without jokes |
@@ -448,3 +489,7 @@ Census publishes them.
   gallons and dollars; the numeric fields are metric.
 - **The image is 1200 × 630 only**, in miles (the comparison gives kilometres too); the units
   toggle does not reach it.
+- **A national map's cities are thin**: where T0 alone holds more than 100,000 road units the
+  image draws its 100,000 longest, the motorways and trunks between interchanges; the primary
+  roads are gone and a city's short motorway units and ramps thin to a cluster (from Chicago
+  to Miami on the national T1 build, 100,000 of T0's 385,356).

@@ -398,8 +398,10 @@ T1 build**; the inputs to the decision gate, §3.2):
   reach of a 150 km leash.
 - **A T1-only graph refuses one town in five as a stop**: 81.8% of the Census places have a node
   within 5 km a trip can start from (52–55% in the Dakotas and Nebraska).
-- **The share image takes 3.9 s** to draw a 4,168 km route over every T1 road in its bounding box
-  (the T0–T2 thinning keeps them all in a T1 build).
+- **The share image's cities are thin on a national map**: drawing every T1 road in the
+  bounding box of a 4,168 km route took 3.9 s (the T0–T2 thinning kept them all in a T1
+  build); the image now draws at most 100,000 road units, the longest of the 385,356 motorway
+  and trunk units there, in 0.64 s (`docs/reference/presentation.md`, **Share image**).
 - **Washington's ferry islands fail the 200-node connectivity rule**: San Juan Island (1,154
   nodes), Vashon–Maury, Lopez, Orcas, Anderson Island and the Point Roberts exclave; the rule is
   kept, the measurement builds run with `--allow-fragmented`, and the thresholds are revisited at
@@ -684,9 +686,10 @@ brief):
   (the one new dependency), DejaVu Sans as matplotlib ships it rather than a bundled font, the
   baseline dashed over the route, a slowest-time route showing its time ratio ("slower than the
   sensible route") where the others show their ratio of lengths, a round trip its length; cached
-  per route under the drawing's version (`share/<id>-v1.png` beside the route store), rendered
-  once for concurrent first requests; a link in the share section, opening in a new tab, not a
-  modal.
+  per route under the drawing's version (`share/<id>-v<version>.png` beside the route store),
+  rendered once for concurrent first requests; a link in the share section, opening in a new
+  tab, not a modal. The network is at most 100,000 road units, thinned by tier and then to the
+  longest units of T0 (version 2, 2026-10-31).
 - **States and towns from Census cartographic boundary polygons**, not the Gazetteer: the 5m
   states, the 20m outlines for drawing, each state's 500k places; every LSAD, **CDPs included**
   (names people know, such as Aloha and Cedar Mill); "passed through" = the route's line

@@ -1522,7 +1522,8 @@ give few node-disjoint detours, so the runs converge in seconds; both routes val
 mapped, its spatial index, the national places index) and 1.2 GB after a route document and a
 share image; a job's worker peaked at 694 MB. Chicago → Miami on T1, a 4,168 km route (1.87×,
 converged): `GET /routes/{id}` 0.18 s (0.53 MB), `GET /routes/{id}/share.png` 3.87 s on its first
-render (0.41 MB; it draws every T1 road in the route's bounding box), then cached.
+render (0.41 MB; it drew every T1 road in the route's bounding box, which the drawing now caps:
+`docs/reference/presentation.md`, **Share image**), then cached.
 
 ## Limitations
 

@@ -96,7 +96,9 @@ def enriched_stages(engine: PipelineEngine) -> list[str]:
 
 def cleanup_engine(build: Path) -> PipelineEngine | None:
     """The engine the build's cleanup ran, whose stage the build holds (cleanup removes the
-    other engine's), or None before cleanup has run."""
+    other engine's), or None before cleanup has run. A build cleaned by the arrays engine before
+    it wrote `stages/cleanup/` holds a handed-over `cleanup.pkl` and reads as the networkx
+    engine's; the default cleanup then reruns into `stages/cleanup/` (`pipeline.md`)."""
     for engine, (_, recorded) in CLEANUP_STAGES.items():
         if stage_file(build, recorded).exists():
             return engine

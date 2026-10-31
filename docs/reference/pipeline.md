@@ -108,10 +108,12 @@ report beside it in `qa/`.
   it (a sidecar written before the engine was recorded is the networkx engine's, and an arrays
   stage counts as written once its manifest is); enrich: its config and the pipeline version, its inputs
   the cleanup stage (`cleanup/manifest.json`, or `cleanup.pkl` from the networkx engine) and the
-  POI table; tiers: like cleanup, its input the enrich stage (`enrich/manifest.json` or
-  `enrich.pkl`); save: the pipeline version and the `params` it copies into the build's meta, so
+  POI table; tiers: like cleanup, its inputs the stages the enriched graph is read from
+  (`layout.enriched_stages`: `enrich.pkl` from the networkx engine; from the arrays engine
+  `enrich/manifest.json` and `cleanup/manifest.json`, the cleanup stage the enrich stage lies
+  on); save: the pipeline version and the `params` it copies into the build's meta, so
   a changed parameter that leaves every stage byte-identical is still another input, its inputs
-  the enrich stage and `tiers.json`, its output `stages/save.json`;
+  the same stages and `tiers.json`, its output `stages/save.json`;
   qa: its thresholds, its inputs `meta.json` and the stage reports, its output `qa/qa.json`).
   Inputs are recorded by file name and md5, so moving the data directory does not invalidate
   them. The
@@ -132,8 +134,9 @@ report beside it in `qa/`.
   it again. `qa` prints its stored thresholds when it skips, and fails again when they fail.
 - **Stale stages:** a step reads earlier stages only when they are fresh. `layout.stale_stages`
   walks the chain `STAGE_CHAIN` (cleanup from `build/manifest.json` or `build.pkl`, enrich from
-  the cleanup stage of the same engine, tiers from the enrich stage, save from the enrich stage
-  and `tiers.json`) and names each
+  the cleanup stage of the same engine, tiers from the stages the enriched graph is read from,
+  the cleanup stage among them on the arrays engine, save from the same and `tiers.json`) and
+  names each
   stage whose sidecar records an input md5 that the file there no longer has (or a file now
   gone), or records none of the chain's inputs; a stage not yet made is not stale. `save` checks
   the filtered extract against the sidecar of the build stage cleanup read

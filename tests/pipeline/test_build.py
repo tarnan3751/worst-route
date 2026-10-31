@@ -285,6 +285,17 @@ def test_extracts_merged_at_filter_join_at_the_line(tmp_path: Path) -> None:
     assert merged.edges[9001, 9004, 0]["osm_nodes"] == (9001, 9002, 9003, 9004)
 
 
+def test_a_class_ceiling_builds_what_the_filter_keeps(tmp_path: Path) -> None:
+    t1 = frozenset({"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link"})
+    roads = tmp_path / "roads.osm.pbf"
+    filter_roads([FIXTURES / "diamond.osm"], roads, tmp_path / "p.parquet", None, t1)
+    filtered, stats = build_raw_graph(roads, UTM_10N, t1)
+    direct, direct_stats = build_raw_graph(FIXTURES / "diamond.osm", UTM_10N, t1)
+    assert direct_stats.ways_kept == stats.ways_kept == 6
+    assert list(direct.edges(keys=True, data=True)) == list(filtered.edges(keys=True, data=True))
+    assert {d["highway"] for _, _, d in direct.edges(data=True)} == {"motorway", "motorway_link"}
+
+
 def test_empty_roads_file(tmp_path: Path) -> None:
     roads = tmp_path / "roads.osm.pbf"
     bbox = (-100.0, 40.0, -99.0, 41.0)  # far from every fixture

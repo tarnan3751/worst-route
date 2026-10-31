@@ -44,6 +44,25 @@ def test_a_region_of_two_states() -> None:
     assert region.crs_epsg == 32610
 
 
+def test_the_national_t1_region() -> None:
+    region = REGIONS["us-t1"]
+    assert len(region.states) == 49 and len(set(region.states)) == 49
+    assert "alaska" not in region.states and "hawaii" not in region.states
+    assert "district-of-columbia" in region.states
+    assert region.bbox is None and region.crs_epsg == 5070
+    assert region.classes == "T1"
+    assert region.road_classes == {
+        "motorway",
+        "motorway_link",
+        "trunk",
+        "trunk_link",
+        "primary",
+        "primary_link",
+    }
+    assert REGIONS["oregon-washington-t1"].road_classes == region.road_classes
+    assert REGIONS["oregon-washington"].road_classes is None
+
+
 def test_a_region_names_a_state() -> None:
     with pytest.raises(ValidationError):
         Region(name="nowhere", states=(), crs_epsg=32610)

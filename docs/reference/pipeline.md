@@ -98,7 +98,8 @@ report beside it in `qa/`.
   extract, every route planned on it is the one the version before plans.
 - **Sidecar:** after `filter`, `build` or `cleanup` writes its output it records
   `{"step", "inputs": [{"file", "md5"}], "params"}` in `<output>.inputs.json` (filter: the
-  bbox and the pipeline version; build: the region, bbox, CRS and pipeline version; cleanup:
+  bbox and the pipeline version; build: the region, bbox, CRS and pipeline version; both also
+  the class ceiling, `classes`, for a region that has one; cleanup:
   `allow_fragmented`, the config values it depends on, `cleanup.parameters()`, and the pipeline
   version, its input being `build/manifest.json` or, from the networkx engine, `build.pkl`; build
   and cleanup also record their `engine`, beside `params` rather than in them, so that changing
@@ -157,15 +158,16 @@ autouse fixture in `tests/pipeline/conftest.py` fails any test that would reach 
 
 ## `filter`
 
-`filter.filter_roads(sources, roads_out, pois_out, bbox) -> FilterStats` reads each source with
-pyosmium 4 in two passes.
+`filter.filter_roads(sources, roads_out, pois_out, bbox, classes=None) -> FilterStats` reads
+each source with pyosmium 4 in two passes.
 
 **Roads.** With a bbox, `FileProcessor(src, NODE | WAY)` with node locations, `EntityFilter(WAY)`
 and `KeyFilter("highway")` (pyosmium refuses `with_locations()` unless nodes are read, so nodes
 are read and filtered out); without one (`oregon`), the ways alone, with no locations. A way is
-kept when `exclusions.is_kept` accepts
-its tags and, with a bbox, at least one of its node locations lies inside it (boundary
-inclusive): a way that touches the box is kept whole, and a way that crosses the box with no
+kept when `exclusions.kept_class` accepts
+its tags, its class is among `classes` when the region has a ceiling (`config.Region.classes`,
+`T1` keeping motorway, trunk, primary and their links, `config.TIERS`), and, with a bbox, at
+least one of its node locations lies inside it (boundary inclusive): a way that touches the box is kept whole, and a way that crosses the box with no
 node inside is dropped. Kept ways go through `BackReferenceWriter`, which adds the nodes they
 reference with their tags stripped.
 
@@ -200,17 +202,21 @@ temporary files and renamed into place. The CLI passes the region's state extrac
 or `--source` alone, and warns on stderr when the extracts' data dates differ ("warning: the
 extracts hold data of different dates: …").
 
-`FilterStats`: `ways_read` (highway ways), `ways_excluded`, `ways_outside` (no node in the
-bbox), `ways_duplicate`, `ways_kept`, and `pois` (rows per kind).
+`FilterStats`: `ways_read` (highway ways), `ways_excluded`, `ways_above_ceiling` (kept by the
+exclusions and inside the bbox, but of a class above the ceiling, so `ways_kept +
+ways_above_ceiling` is what the region would keep without one), `ways_outside` (no node in the bbox), `ways_duplicate`,
+`ways_kept`, and `pois` (rows per kind). The CLI adds "above T1 N" to its ways line for a region
+with a ceiling. The POIs are the region's whatever its ceiling.
 
 ## `build`
 
-`build.build_raw_graph(roads, crs_epsg) -> (nx.MultiDiGraph, BuildStats)`, then
+`build.build_raw_graph(roads, crs_epsg, classes=None) -> (nx.MultiDiGraph, BuildStats)`, then
 `build.save_stage(graph, stats, build_dir)`.
 
 1. One pass with `FileProcessor(roads, NODE | WAY)`: node id → (lon, lat) into arrays; each
-   way's node refs and the tags in `EDGE_TAGS`. `exclusions.kept_class` is applied again (so an
-   unfiltered file builds the same graph as its filtered version), a way id seen twice is read
+   way's node refs and the tags in `EDGE_TAGS`. `exclusions.kept_class` and the region's class
+   ceiling are applied again (so an unfiltered file builds the same graph as its filtered
+   version), a way id seen twice is read
    once, and a node repeated back to back in a way is read once (as OSMnx does), so it makes no
    junction and no zero-length self-loop. A way that references a node absent from the file
    raises `ValueError`, also when the file has no nodes at all.
@@ -731,7 +737,9 @@ stage cleanup read, `layout.build_stage`: `build.pkl`'s or the arrays engine's `
 otherwise it raises `SourcesChangedError` and the CLI says "the filtered extract changed since
 this build was built; rebuild". A filter record of the shape before M5.3 (no data date per
 extract) is refused the same way, naming the `filter` rerun. `save.build_params` gives the
-`region`, its `bbox` and `crs_epsg`, the `config` and `allow_fragmented` the cleanup, enrich and
+`region`, its `bbox` and `crs_epsg`, its class ceiling (`classes`, only for a region that has one,
+so every other build's params are as they were), the `config` and `allow_fragmented` the
+cleanup, enrich and
 tiers sidecars recorded, and save's own `config` (`save.parameters()`: `GEOMETRY_SIMPLIFY_M`, the
 geometry's tolerance), so
 `graph_version` covers what the build was made with; `pipeline_version` stays out of
@@ -1132,9 +1140,18 @@ the two snapshots can come out as the earlier extract's whole way beside the lat
 pieces; so `filter` warns when the dates differ, and a national region is downloaded in one
 sitting (`download --force`).
 
-| Region | States | CRS |
-|---|---|---|
-| `oregon-washington` | oregon, washington | EPSG:32610 |
+| Region | States | Classes | CRS |
+|---|---|---|---|
+| `oregon-washington` | oregon, washington | all | EPSG:32610 |
+| `oregon-washington-t1` | oregon, washington | T1 | EPSG:32610 |
+| `us-t1` | the 48 contiguous states and DC, in `config.STATES`' order | T1 | EPSG:5070 |
+
+**The class ceiling.** A region's `classes` (`T0`–`T3`) keeps only that tier's road classes from
+`filter` on, so the national T1 build never reads a residential street into memory; the steps
+after `build` are unchanged, and on such a build the tiers above the ceiling hold the same roads
+as it. `us` stays the name of an all-roads national region, for after the decision M5.3 informs.
+Alaska and Hawaii are left out of `us-t1`: no road reaches them, so connectivity would drop them,
+and CONUS Albers does not cover them; they would be regions of their own.
 
 ## Fixtures
 

@@ -1,9 +1,9 @@
 """`pipeline build`: the filtered roads as a raw directed graph in OSMnx's conventions.
 
 `docs/PLAN.md` §2.3. `build_raw_graph` reads the roads file once with pyosmium: node locations
-into arrays, and the kept ways (`exclusions.kept_class` applied again, so an unfiltered file
-builds too; duplicates by id read once; a node repeated back to back in a way read once, as
-OSMnx does) with the tags in `EDGE_TAGS`. A node is a **junction**
+into arrays, and the kept ways (`exclusions.kept_class` and the region's class ceiling applied
+again, so an unfiltered file builds too; duplicates by id read once; a node repeated back to
+back in a way read once, as OSMnx does) with the tags in `EDGE_TAGS`. A node is a **junction**
 when kept ways reference it at least twice (two ways, or one way passing through it twice) or
 it ends a way; every other node is a shape point. Each way is split at its junctions into
 segments, and each segment becomes one edge per direction its one-way rule allows (`direction`).
@@ -101,8 +101,11 @@ def direction(tags: Tags) -> tuple[str, bool, bool]:
     return "two_way", True, True
 
 
-def build_raw_graph(roads: Path, crs_epsg: int) -> tuple[nx.MultiDiGraph, BuildStats]:
-    """The raw directed graph of the roads file, its coordinates projected to `crs_epsg`."""
+def build_raw_graph(
+    roads: Path, crs_epsg: int, classes: frozenset[RoadClass] | None = None
+) -> tuple[nx.MultiDiGraph, BuildStats]:
+    """The raw directed graph of the roads file, its coordinates projected to `crs_epsg`; with
+    `classes`, of the roads of those classes only."""
     stats = BuildStats()
     node_ids: list[int] = []
     lons: list[float] = []
@@ -119,6 +122,8 @@ def build_raw_graph(roads: Path, crs_epsg: int) -> tuple[nx.MultiDiGraph, BuildS
         stats.ways_read += 1
         road_class = kept_class(osm_way.tags)
         if road_class is None or osm_way.id in ways:
+            continue
+        if classes is not None and road_class not in classes:
             continue
         rule, forward, backward = direction(osm_way.tags)
         tags = {key: value for key in EDGE_TAGS if (value := osm_way.tags.get(key)) is not None}

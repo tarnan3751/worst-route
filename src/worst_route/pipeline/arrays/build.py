@@ -2,12 +2,13 @@
 
 The arrays engine's `build` (`docs/reference/pipeline.md`, **The arrays engine**). It reads the
 roads file once, as `pipeline.build.build_raw_graph` does, and makes the same raw graph as
-arrays: the same kept ways (`exclusions.kept_class` again, a way id seen twice read once, a node
-repeated back to back read once), the same junctions (referenced at least twice, or ending a
-way), the same segments in the same order, the same one-way rule (`build.direction`), the same
-coordinates, lengths and stats. Node locations are read as osmium's fixed-point integers, whose
-quotient by 10^7 is exactly the `lon` and `lat` osmium gives; projection is pyproj's, and each
-segment's length is GEOS's (`shapely.length`), in chunks of `LENGTH_CHUNK` segments.
+arrays: the same kept ways (`exclusions.kept_class` and the region's class ceiling again, a way
+id seen twice read once, a node repeated back to back read once), the same junctions
+(referenced at least twice, or ending a way), the same segments in the same order, the same
+one-way rule (`build.direction`), the same coordinates, lengths and stats. Node locations are
+read as osmium's fixed-point integers, whose quotient by 10^7 is exactly the `lon` and `lat`
+osmium gives; projection is pyproj's, and each segment's length is GEOS's (`shapely.length`), in
+chunks of `LENGTH_CHUNK` segments.
 
 `RawGraph` holds the result. Its nodes are the junctions that end a segment, in the order the
 networkx graph holds them (first appearance as a segment's first or last node); its segments are
@@ -32,7 +33,7 @@ from numpy.typing import NDArray
 from worst_route.pipeline import layout
 from worst_route.pipeline.arrays.stage import read_stage, write_stage
 from worst_route.pipeline.build import EDGE_TAGS, BuildStats, direction
-from worst_route.pipeline.exclusions import kept_class
+from worst_route.pipeline.exclusions import RoadClass, kept_class
 
 LENGTH_CHUNK = 1_000_000  # segments per call of shapely.length
 FIXED = 10_000_000  # osmium's fixed-point coordinate precision
@@ -80,8 +81,11 @@ class RawGraph:
         return int(self.seg_forward.sum() + self.seg_backward.sum())
 
 
-def build_raw_arrays(roads: Path, crs_epsg: int) -> tuple[RawGraph, BuildStats]:
-    """The raw graph of the roads file as arrays, its coordinates projected to `crs_epsg`."""
+def build_raw_arrays(
+    roads: Path, crs_epsg: int, classes: frozenset[RoadClass] | None = None
+) -> tuple[RawGraph, BuildStats]:
+    """The raw graph of the roads file as arrays, its coordinates projected to `crs_epsg`; with
+    `classes`, of the roads of those classes only."""
     stats = BuildStats()
     node_ids, fixed_lon, fixed_lat = array("q"), array("i"), array("i")
     way_ids, way_sizes, way_tags = array("q"), array("q"), array("i")
@@ -100,7 +104,7 @@ def build_raw_arrays(roads: Path, crs_epsg: int) -> tuple[RawGraph, BuildStats]:
         osm_way = cast(osmium.osm.Way, entity)  # the file is read for nodes and ways only
         stats.ways_read += 1
         road_class = kept_class(osm_way.tags)
-        if road_class is None:
+        if road_class is None or (classes is not None and road_class not in classes):
             continue
         tags = tuple((k, value) for k in EDGE_TAGS if (value := osm_way.tags.get(k)) is not None)
         before = len(refs)

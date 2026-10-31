@@ -9,9 +9,9 @@ the API offers the frontend (`WORST_ROUTE_BASEMAP`, `raster` or `pmtiles`;
 `settings.cache_clear()`.
 
 `REGIONS` names the areas the pipeline builds (`docs/PLAN.md` §2): each is one or more Geofabrik
-state extracts, read in order and merged, optionally clipped to a bbox, with the projected CRS
-its metric steps use (the regions of several states follow `STATES`); `PIPELINE_VERSION` is the
-version every build id and sidecar records. Speeds,
+state extracts, read in order and merged, optionally clipped to a bbox and limited to a tier's
+road classes, with the projected CRS its metric steps use (the regions of several states follow
+`STATES`); `PIPELINE_VERSION` is the version every build id and sidecar records. Speeds,
 tier definitions, class allowlists and defaults join this module as their steps are built.
 
 `HighwayClass` numbers the road classes a build keeps (stored per edge as `edge_highway`) and
@@ -55,6 +55,15 @@ class Region(BaseModel):
     states: tuple[str, ...] = Field(min_length=1)
     bbox: tuple[float, float, float, float] | None = None  # (min_lon, min_lat, max_lon, max_lat)
     crs_epsg: int  # projected CRS for the metric steps
+    # A ceiling: only the road classes of this tier (`TIERS`) are kept, from `filter` on.
+    classes: Literal["T0", "T1", "T2", "T3"] | None = None
+
+    @property
+    def road_classes(self) -> frozenset[str] | None:
+        """The road classes (`exclusions.RoadClass`) the ceiling keeps; None without one."""
+        if self.classes is None:
+            return None
+        return frozenset(c.name.lower() for c in TIERS[int(self.classes[1])])
 
 
 REGIONS: dict[str, Region] = {
@@ -497,10 +506,18 @@ STATES: dict[str, tuple[str, str]] = {
 }
 
 # Regions of several states (M5.3; `docs/reference/pipeline.md`, **Regions of several states**):
-# their extracts are read in this order and merged at `filter`.
+# their extracts are read in this order and merged at `filter`. `us-t1` is the 48 contiguous
+# states and DC at T1, the national build that validates the pipeline before the decision on an
+# all-roads one (`us`, kept for it); Alaska and Hawaii have no road to them and lie outside
+# CONUS Albers (EPSG:5070), so they would be regions of their own.
+_CONUS = tuple(state for state in STATES if state not in ("alaska", "hawaii"))
 REGIONS["oregon-washington"] = Region(
     name="oregon-washington", states=("oregon", "washington"), crs_epsg=32610
 )
+REGIONS["oregon-washington-t1"] = Region(
+    name="oregon-washington-t1", states=("oregon", "washington"), crs_epsg=32610, classes="T1"
+)
+REGIONS["us-t1"] = Region(name="us-t1", states=_CONUS, crs_epsg=5070, classes="T1")
 
 # Presentation (`docs/reference/presentation.md`). Directions: a left or right turn is "slight"
 # when its change of bearing is at most DIRECTIONS_SLIGHT_DEG and "sharp" beyond

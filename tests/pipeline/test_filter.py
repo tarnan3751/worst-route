@@ -19,9 +19,14 @@ GRID_STREETS = list(range(2000, 2006)) + list(range(2100, 2106))
 GRID_ROAD_NODES = [1000 + 10 * r + c for r in range(6) for c in range(6)] + [1100, 1101, 1102, 1103]
 
 
-def run(tmp_path: Path, *names: str, bbox: tuple[float, float, float, float] | None = None):
+def run(
+    tmp_path: Path,
+    *names: str,
+    bbox: tuple[float, float, float, float] | None = None,
+    classes: frozenset[str] | None = None,
+):
     roads, pois = tmp_path / "roads.osm.pbf", tmp_path / "pois.parquet"
-    stats = filter_roads([FIXTURES / f"{n}.osm" for n in names], roads, pois, bbox)
+    stats = filter_roads([FIXTURES / f"{n}.osm" for n in names], roads, pois, bbox, classes)
     return stats, roads, pq.read_table(pois).to_pylist()
 
 
@@ -203,6 +208,38 @@ def test_the_merge_keeps_each_node_s_newest_version_as_one_extract_would(tmp_pat
     assert versions[3] == (2, 45.5011, -122.6001)
     assert (merged / "r.osm.pbf").read_bytes() == (union / "r.osm.pbf").read_bytes()
     assert (merged / "p.parquet").read_bytes() == (union / "p.parquet").read_bytes()
+
+
+def test_the_ceiling_counts_only_the_ways_a_bbox_keeps(tmp_path: Path) -> None:
+    # Kept and above the ceiling together are what the region keeps without one, with a bbox
+    # too: a way outside the box is outside, whatever its class.
+    t1 = REGIONS["us-t1"].road_classes
+    for name, bbox, kept, above, outside in [
+        ("far", (-100.0, 40.0, -99.0, 41.0), 0, 0, 9),
+        ("near", (-123.0, 45.0, -122.0, 46.0), 6, 3, 0),
+    ]:
+        capped, _, _ = run(tmp_path / name / "capped", "diamond", bbox=bbox, classes=t1)
+        uncapped, _, _ = run(tmp_path / name / "uncapped", "diamond", bbox=bbox)
+        assert (capped.ways_kept, capped.ways_above_ceiling, capped.ways_outside) == (
+            kept,
+            above,
+            outside,
+        )
+        assert capped.ways_kept + capped.ways_above_ceiling == uncapped.ways_kept
+
+
+def test_a_class_ceiling_keeps_only_its_classes(tmp_path: Path) -> None:
+    t1 = REGIONS["us-t1"].road_classes
+    stats, roads, rows = run(tmp_path, "diamond", classes=t1)
+    # I-5's carriageways and ramps; not SE Main St (secondary) or the two residential streets.
+    assert sorted(contents(roads)[1]) == [150, 151, 152, 153, 160, 161]
+    assert (stats.ways_read, stats.ways_kept, stats.ways_above_ceiling) == (9, 6, 3)
+    assert stats.ways_excluded == 0
+    stats, roads, rows = run(tmp_path / "border", "border_south", "border_north", classes=t1)
+    nodes, ways, _ = contents(roads)
+    assert ways == [900] and nodes == [9001, 9002, 9003, 9004]
+    assert (stats.ways_kept, stats.ways_duplicate, stats.ways_above_ceiling) == (1, 1, 2)
+    assert len(rows) == 2  # the POIs are the region's, whatever its roads
 
 
 def test_empty_poi_table_keeps_its_schema(tmp_path: Path) -> None:

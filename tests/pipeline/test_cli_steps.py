@@ -241,6 +241,24 @@ def test_filter_merges_the_extracts_of_a_region_of_several_states(
     assert f"missing input {north}: run `worst-route pipeline download --region border`" in output
 
 
+def test_filter_and_build_keep_the_classes_under_a_ceiling(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(REGIONS, "border", BORDER.model_copy(update={"classes": "T1"}))
+    raw_extract("south", "border_south")
+    raw_extract("north", "border_north")
+    code, output = pipeline("filter", "--region", "border")
+    assert code == 0, output
+    assert "ways: read 4, kept 1, excluded 0, outside bbox 0, duplicate 1, above T1 2" in output
+    sidecar = json.loads(layout.sidecar(layout.roads_pbf("border")).read_text())
+    assert sidecar["params"]["classes"] == "T1"
+    code, output = pipeline("build", "--region", "border")
+    assert code == 0 and "segments 1, nodes 2, edges 2" in output
+    build_id = layout.latest_file("border").read_text().strip()
+    built = layout.sidecar(layout.build_stage(layout.build_dir("border", build_id)))
+    assert json.loads(built.read_text())["params"]["classes"] == "T1"
+
+
 def test_filter_needs_its_input(data_dir: Path) -> None:
     code, output = pipeline("filter", "--region", "portland")
     assert code == 1

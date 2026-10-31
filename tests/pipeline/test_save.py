@@ -21,12 +21,12 @@ from tests.pipeline.chain import (
 from tests.pipeline.copies import overlapping
 from tests.pipeline.invariants import check_build, check_saved
 from tests.pipeline.osm import write_osm
-from worst_route.config import GEOMETRY_SIMPLIFY_M, PIPELINE_VERSION, TIERS
+from worst_route.config import GEOMETRY_SIMPLIFY_M, PIPELINE_VERSION, REGIONS, TIERS
 from worst_route.graph.data import FORMAT_VERSION, NodeKind
 from worst_route.graph.geometry import edge_xy, read_geometry
 from worst_route.graph.store import graph_version, read_build
 from worst_route.graph.testing import GRID_ORIGIN, make_graph
-from worst_route.pipeline import save
+from worst_route.pipeline import layout, save
 from worst_route.pipeline.enrich import run_enrich
 from worst_route.pipeline.save import (
     EmptyTransitionsError,
@@ -295,3 +295,13 @@ def test_the_geometry_is_the_shape_within_the_tolerance_and_the_rounding(
     assert counts[0] <= len(line)
     drawn, shape = shapely.LineString(xy), shapely.LineString(line)
     assert shapely.hausdorff_distance(drawn, shape, densify=0.05) <= GEOMETRY_SIMPLIFY_M + 0.71
+
+
+def test_params_record_a_region_s_class_ceiling(tmp_path: Path) -> None:
+    # Only a region with one records it, so every other build's params, and graph_version, stay.
+    for _, output in save.step_outputs(tmp_path):
+        sidecar = layout.sidecar(layout.stage_file(tmp_path, output))
+        sidecar.parent.mkdir(parents=True, exist_ok=True)
+        sidecar.write_text(json.dumps({"params": {"pipeline_version": PIPELINE_VERSION}}))
+    assert "classes" not in save.build_params(REGIONS["portland"], tmp_path)
+    assert save.build_params(REGIONS["us-t1"], tmp_path)["classes"] == "T1"

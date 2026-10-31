@@ -474,17 +474,21 @@ def _lookup(index: dict[str, int], values: list[str | None]) -> NDArray[np.int32
 
 
 def build_params(region: Region, build_dir: Path) -> dict[str, Any]:
-    """The build's params: the region, its bbox and CRS, and each step's recorded configuration.
+    """The build's params: the region, its bbox and CRS, its class ceiling when it has one, and
+    each step's recorded configuration.
 
     The configuration is what the cleanup, enrich and tiers sidecars recorded (their
     `allow_fragmented` and `config`), without the pipeline version, which `meta` keeps apart,
-    and save's own (`parameters()`), under "save".
+    and save's own (`parameters()`), under "save". The ceiling (`classes`) is left out for a
+    region without one, so the params of every such build read as they did before it existed.
     """
     params: dict[str, Any] = {
         "region": region.name,
         "bbox": None if region.bbox is None else list(region.bbox),
         "crs_epsg": region.crs_epsg,
     }
+    if region.classes is not None:
+        params["classes"] = region.classes
     for step, output in step_outputs(build_dir):
         sidecar = layout.sidecar(layout.stage_file(build_dir, output))
         recorded = json.loads(sidecar.read_text())["params"]

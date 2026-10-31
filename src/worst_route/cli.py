@@ -7,7 +7,8 @@ and `build` also take `--source`, a file read instead of the step's usual input 
 tests); `cleanup` and `tiers` also take `--allow-fragmented`; `build` and `cleanup` take
 `--engine` (networkx or arrays, the same build; `docs/reference/pipeline.md`, **The arrays
 engine**). `download` fetches each of the region's state extracts in turn, and `filter` reads
-and merges them, with a warning on stderr when their data dates differ. Each step
+and merges them, with a warning on stderr when their data dates differ; `filter` and `build`
+keep only the classes under a region's ceiling (`config.Region.classes`). Each step
 (`docs/reference/pipeline.md`) prints what it wrote and its counts, or that its output is up to
 date and was skipped; a missing input, a failed download, a cleanup or tiers step whose graph
 is too fragmented, a step whose earlier stages are stale (`layout.stale_stages`), or a save that
@@ -282,11 +283,10 @@ def filter_(
         for src in sources
         for entry in _inputs(src)
     ]
-    record: dict[str, Any] = {
-        "step": "filter",
-        "inputs": inputs,
-        "params": {"bbox": spec.bbox, "pipeline_version": PIPELINE_VERSION},
-    }
+    params: dict[str, Any] = {"bbox": spec.bbox, "pipeline_version": PIPELINE_VERSION}
+    if spec.classes is not None:  # recorded only with one, so other regions' records stay
+        params["classes"] = spec.classes
+    record: dict[str, Any] = {"step": "filter", "inputs": inputs, "params": params}
     if not force and pois.exists() and layout.sidecar_matches(roads, record):
         typer.echo(f"skipped: {roads} and {pois} are up to date (--force to redo)")
         return
@@ -296,12 +296,13 @@ def filter_(
             f"warning: the extracts hold data of different dates: {', '.join(dates)}", err=True
         )
     layout.sidecar(roads).unlink(missing_ok=True)
-    stats = filter_roads(sources, roads, pois, spec.bbox)
+    stats = filter_roads(sources, roads, pois, spec.bbox, spec.road_classes)
     layout.write_sidecar(roads, record)
     typer.echo(f"wrote {roads} ({_size(roads)}) and {pois} ({_size(pois)})")
+    ceiling = "" if spec.classes is None else f", above {spec.classes} {stats.ways_above_ceiling}"
     typer.echo(
         f"ways: read {stats.ways_read}, kept {stats.ways_kept}, excluded {stats.ways_excluded}, "
-        f"outside bbox {stats.ways_outside}, duplicate {stats.ways_duplicate}"
+        f"outside bbox {stats.ways_outside}, duplicate {stats.ways_duplicate}{ceiling}"
     )
     kinds = ", ".join(f"{kind} {n}" for kind, n in stats.pois.items())
     typer.echo(f"pois: {sum(stats.pois.values())} ({kinds or 'none'})")
@@ -337,15 +338,17 @@ def build(
             "pipeline_version": PIPELINE_VERSION,
         },
     }
+    if spec.classes is not None:  # as filter's record
+        record["params"]["classes"] = spec.classes
     if not force and _up_to_date(output, record):
         typer.echo(f"skipped: build {bid} is up to date at {output} (--force to redo)")
     else:
         layout.sidecar(output).unlink(missing_ok=True)
         if engine == "arrays":
-            raw, stats = arrays_build.build_raw_arrays(roads, spec.crs_epsg)
+            raw, stats = arrays_build.build_raw_arrays(roads, spec.crs_epsg, spec.road_classes)
             arrays_build.save_stage(raw, stats, directory)
         else:
-            graph, stats = networkx_build.build_raw_graph(roads, spec.crs_epsg)
+            graph, stats = networkx_build.build_raw_graph(roads, spec.crs_epsg, spec.road_classes)
             networkx_build.save_stage(graph, stats, directory)
         layout.write_sidecar(output, record)
         typer.echo(f"build {bid}: wrote {output} ({_size(output)}, {engine})")

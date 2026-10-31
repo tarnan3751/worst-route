@@ -137,6 +137,15 @@ def test_the_raw_graph_is_the_same(name: str) -> None:
     assert_same_graph(want, raw_graph(got))
 
 
+def test_a_class_ceiling_gives_the_same_raw_graph() -> None:
+    t1 = frozenset({"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link"})
+    source = FIXTURES / "diamond.osm"
+    want, want_stats = build_raw_graph(source, UTM_10N, t1)
+    got, got_stats = build_raw_arrays(source, UTM_10N, t1)
+    assert got_stats == want_stats and want_stats.ways_kept == 6
+    assert_same_graph(want, raw_graph(got))
+
+
 @pytest.mark.parametrize("name", ALL_FIXTURES)
 def test_the_simplified_graph_is_the_same(name: str) -> None:
     source = FIXTURES / f"{name}.osm"

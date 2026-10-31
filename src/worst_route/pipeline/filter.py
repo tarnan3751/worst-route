@@ -2,7 +2,8 @@
 
 `docs/PLAN.md` §2.2. `filter_roads` reads each source extract with pyosmium in two passes:
 
-- **Roads.** Highway ways that `exclusions.is_kept` accepts and, when a bbox is given, that have
+- **Roads.** Highway ways that `exclusions.kept_class` accepts, of a class under the region's
+  ceiling when it has one (`config.Region.classes`), and, when a bbox is given, that have
   at least one node location inside it; a way that touches the box is kept whole, so the clip
   leaves no half-ways. Node locations are read only when there is a bbox to clip to. Kept ways
   go through a `BackReferenceWriter`, which adds the nodes they reference, their tags stripped.
@@ -32,7 +33,7 @@ import osmium
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from worst_route.pipeline.exclusions import Tags, is_kept
+from worst_route.pipeline.exclusions import RoadClass, Tags, kept_class
 
 type BBox = tuple[float, float, float, float]  # (min_lon, min_lat, max_lon, max_lat)
 
@@ -64,6 +65,7 @@ class FilterStats:
 
     ways_read: int = 0  # highway ways
     ways_excluded: int = 0  # dropped by the exclusion rules
+    ways_above_ceiling: int = 0  # kept by them, but of a class above the region's ceiling
     ways_outside: int = 0  # no node inside the bbox
     ways_duplicate: int = 0  # already taken from an earlier source
     ways_kept: int = 0
@@ -79,9 +81,14 @@ def poi_kinds(tags: Tags) -> list[str]:
 
 
 def filter_roads(
-    sources: list[Path], roads_out: Path, pois_out: Path, bbox: BBox | None
+    sources: list[Path],
+    roads_out: Path,
+    pois_out: Path,
+    bbox: BBox | None,
+    classes: frozenset[RoadClass] | None = None,
 ) -> FilterStats:
-    """Write the kept roads of `sources` to `roads_out` and their POIs to `pois_out`."""
+    """Write the kept roads of `sources` to `roads_out` and their POIs to `pois_out`; with
+    `classes`, only the roads of those classes."""
     stats = FilterStats()
     box = osmium.osm.Box(*bbox) if bbox is not None else None
     roads_out.parent.mkdir(parents=True, exist_ok=True)
@@ -91,7 +98,7 @@ def filter_roads(
         taken: set[int] = set()
         on_kept_ways: set[int] = set()  # node ids, collected only when clipping
         for source, part in zip(sources, parts, strict=True):
-            _write_roads(source, part, box, taken, on_kept_ways, stats)
+            _write_roads(source, part, box, classes, taken, on_kept_ways, stats)
         if len(parts) == 1:
             parts[0].replace(roads_out)
         else:
@@ -114,6 +121,7 @@ def _write_roads(
     source: Path,
     out: Path,
     box: osmium.osm.Box | None,
+    classes: frozenset[RoadClass] | None,
     taken: set[int],
     on_kept_ways: set[int],
     stats: FilterStats,
@@ -128,10 +136,13 @@ def _write_roads(
         for entity in processor:
             way = cast(osmium.osm.Way, entity)  # the entity filter passes ways only
             stats.ways_read += 1
-            if not is_kept(way.tags):
+            road_class = kept_class(way.tags)
+            if road_class is None:
                 stats.ways_excluded += 1
             elif box is not None and not any(box.contains(n.location) for n in way.nodes):
                 stats.ways_outside += 1
+            elif classes is not None and road_class not in classes:
+                stats.ways_above_ceiling += 1
             elif way.id in taken:
                 stats.ways_duplicate += 1
                 writer.id_tracker.add_references(way)  # its nodes: the newest wins the merge

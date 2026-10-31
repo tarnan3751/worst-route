@@ -6,8 +6,9 @@ or it is `highway=service` with `service=alley` (class "alley"), unless it is `a
 access for cars is in `BLOCKING_ACCESS`. Access follows OSM's hierarchy, the most specific key
 present deciding (`ACCESS_KEYS`): `motorcar`, else `motor_vehicle`, else `access`; so
 `motor_vehicle=no` + `motorcar=yes` is kept and `access=yes` + `motor_vehicle=no` is dropped.
-`filter` applies `is_kept` to every highway way; `build` applies `kept_class` again and stores
-the class as the edge's `highway`.
+`filter` applies `kept_class` to every highway way (with the region's class ceiling,
+`config.Region.classes`); `build` applies both again and stores the class as the edge's
+`highway`.
 """
 
 from typing import Protocol

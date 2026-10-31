@@ -50,10 +50,14 @@ def run_step(engine: str, step: str, region: str, work: Path, allow_fragmented: 
     clock = time.perf_counter()
     if step == "build":
         if engine == "arrays":
-            raw, stats = arrays_build.build_raw_arrays(layout.roads_pbf(region), spec.crs_epsg)
+            raw, stats = arrays_build.build_raw_arrays(
+                layout.roads_pbf(region), spec.crs_epsg, spec.road_classes
+            )
             arrays_build.save_stage(raw, stats, directory)
         else:
-            graph, stats = build.build_raw_graph(layout.roads_pbf(region), spec.crs_epsg)
+            graph, stats = build.build_raw_graph(
+                layout.roads_pbf(region), spec.crs_epsg, spec.road_classes
+            )
             build.save_stage(graph, stats, directory)
     elif step == "cleanup":
         if engine == "arrays":

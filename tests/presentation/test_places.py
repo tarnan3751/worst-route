@@ -1,10 +1,12 @@
 """The places index on the fixture (`support.py`): what `write_places` keeps, the states and
-towns a route passes through in route order, `aux places`, and the STATES table."""
+towns a route passes through in route order, the state each point lies in, `aux places`, and the
+STATES table."""
 
 import zipfile
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pyarrow.parquet as pq
 import pytest
 import shapely
@@ -109,6 +111,20 @@ def test_a_touch_counts(index: PlaceIndex) -> None:
     # Along Middlefield's west edge (-122.673) from south of it to its south-west corner.
     line = shapely.LineString([(-122.673, 45.505), (-122.673, 45.512)])
     assert index.towns_passed(line) == [MIDDLEFIELD]
+
+
+def test_each_point_lies_in_its_state_or_in_none(index: PlaceIndex) -> None:
+    points = np.array(
+        [
+            (-122.68, 45.515),  # Westland
+            (-122.65, 45.53),  # Eastland
+            (-122.674, 45.52),  # on the border: the first state, by STATEFP
+            (-122.7, 45.5),  # Westland's south-west corner: a touch counts
+            (-100.0, 40.0),  # in neither
+        ]
+    )
+    assert index.states_at(points) == [WESTLAND, EASTLAND, WESTLAND, WESTLAND, None]
+    assert index.states_at(np.empty((0, 2))) == []
 
 
 def test_places_outside_the_bbox_are_left_out(tmp_path: Path) -> None:

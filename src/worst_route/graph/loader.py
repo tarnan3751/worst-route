@@ -4,7 +4,8 @@
 `<data_dir>/graphs/<region>/<build_id>/` with `store.read_build`, every array memory-mapped, so
 worker processes share one copy through the OS page cache, and returns it as `Loaded`: the
 `GraphData`, its `SpatialIndex`, the backend `backend` names (`make_backend`) and the build's
-directory. `Loaded.geometry` reads the build's geometry (`graph/geometry.py`) on first use,
+directory; `Loaded.bbox` is its area (its `params.bbox`, else its nodes' extent), worked out once.
+`Loaded.geometry` reads the build's geometry (`graph/geometry.py`) on first use,
 memory-mapped: the API process draws routes with it, a job's worker never touches it. "latest"
 is the id in `graphs/<region>/latest`, read on every call. The two builds used last stay
 loaded, keyed by data directory, region, build id and backend. A build that is not there, or
@@ -40,6 +41,17 @@ class Loaded:
     spatial: SpatialIndex
     backend: GraphBackend
     path: Path
+
+    @cached_property
+    def bbox(self) -> tuple[float, float, float, float]:
+        """The build's area, (west, south, east, north): its `params.bbox`, else its nodes'
+        extent, worked out on first use."""
+        bbox = self.data.meta["params"].get("bbox")
+        if bbox is not None:
+            west, south, east, north = (float(v) for v in bbox)
+            return west, south, east, north
+        lon, lat = self.data.node_lon, self.data.node_lat
+        return float(lon.min()), float(lat.min()), float(lon.max()), float(lat.max())
 
     @cached_property
     def geometry(self) -> "Geometry":

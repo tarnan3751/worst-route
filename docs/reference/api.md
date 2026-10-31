@@ -10,7 +10,8 @@ else: every route it returns has passed the validator.
 | Module | What it holds |
 |---|---|
 | `app.py` | `create_app`, `ApiSettings`, `Api` (the app's state), `geocoder_user_agent`, the error handlers |
-| `routes_api.py` | the endpoints, the checks `POST /jobs` makes before a job exists, `ApiError`, `api_of`, `region_of`, `bbox_of`, `stored_route`, `build_of`, `stored_delays`, `presentation_of`, `directions_of` |
+| `routes_api.py` | the endpoints, the checks `POST /jobs` makes before a job exists, `ApiError`, `api_of`, `region_of`, `bbox_of`, `holds`, `display_of`, `stored_route`, `build_of`, `places_of`, `stored_delays`, `presentation_of`, `directions_of` |
+| `pick_api.py` | `POST /regions/pick`, `pick_region` (**Picking a build**) |
 | `geocode_api.py` | `GET /geocode` (**Geocoding**) |
 | `share_api.py` | `GET` and `HEAD /routes/{id}/share.png`, `SHARE_IMAGE_VERSION` (**Share image**) |
 | `directions_api.py` | `GET /routes/{id}/directions` |
@@ -80,7 +81,7 @@ own handling of them (`proxy_headers` off), so the client is always the peer. It
 `--log-format json` logs one JSON object a line on stdout (**Logs**); `text`, the default, is
 uvicorn's format, as before. `--public` applies the public limits (**Public limits**) and prints
 them last: `public: a client runs 1 job at once with 3 waiting, budgets up to 60 s, 10 place
-searches a minute`. The basemap the frontend draws is `WORST_ROUTE_BASEMAP`'s, `raster` (the
+searches and 60 picks of a build a minute`. The basemap the frontend draws is `WORST_ROUTE_BASEMAP`'s, `raster` (the
 default) or `pmtiles` (**Basemap**), and with `pmtiles` `serve` prints the file it serves,
 `basemap: pmtiles <data>/basemap/<region>.pmtiles`, before the proxy's and the public lines.
 
@@ -184,7 +185,7 @@ FastAPI's `detail`), but for the basemap's files' range errors: `/basemap/` answ
 |---|---|---|
 | 422 | `INVALID_REQUEST` (+ `errors`, pydantic's without their `input`, and `field` when every error lies in one field of the body; or + `field`) | a body or field that does not parse (a seed beyond 2⁶³ − 1 included, `Infinity` or `NaN` for a number), an unknown objective, a target out of bounds, a ratio target for a round trip (`field: "target"`), `collect` without an item or an item for another objective, or an unknown item (`field: "item"`), a ratio target under `collect` or `brand` (`field: "target"`), `brand` without a brand, a brand for another objective, one the build does not have or one the request's area does not hold (`field: "brand"`), `alphabet` with a stop between its ends (`field: "stops"`), a target (`field: "target"`) or a base route (`field: "base_route_id"`), both turn constraints or `strict` without one (`field: "constraints"`); a place search's query empty or over 200 characters once normalised (`field: "q"`); `/brands` without a region |
 | 422 | `UNKNOWN_REGION` | a region this server does not serve |
-| 422 | `STOP_OUTSIDE_REGION` (+ `stop_index`) | outside the region's bbox: the build's `params.bbox`, else its nodes' extent |
+| 422 | `STOP_OUTSIDE_REGION` (+ `stop_index`) | outside the region's bbox: the build's `params.bbox`, else its nodes' extent; for `POST /regions/pick`, a stop no served region's bbox holds with the others (**Picking a build**) |
 | 422 | `NO_NODE_NEAR` (+ `stop_index`, null when no single stop is to blame) | no node within 5 km can play the stop's role |
 | 422 | `STOP_UNREACHABLE_WITHOUT_REPEAT` (+ `leg`, `stop_index`) | no route covers the leg without repeating a road, after the re-snap fallback (`stop_index` is the leg's later stop), with or without a strict turn constraint: under one, when the seed's legs cannot be built without it either; under hard mode, also when they can be built without hard mode (alone, or with the strict constraint alone), the message then "the seed found no way from stop 0 to stop 1 under hard mode, …; try without hard" |
 | 422 | `INFEASIBLE_TURN_CONSTRAINT` (+ `leg`, `stop_index`, `constraint`) | under a strict turn constraint (`constraint`: `no_left` or `no_right`), no route covers the leg without repeating a road or turning that way, after the re-snap fallback, while the seed's legs can be built without the constraint (one more build, on failure only; under hard mode too, when they can be built under hard mode alone); the message ends "under the strict no-left constraint; try without strict" |
@@ -228,6 +229,7 @@ state build, since every failing seed search looks again for a node-simple path
 | GET | `/config` | `{public, basemap: {kind, tiles, glyphs, sprite}, limits: {budget_max_s, leash_max_km}}` (**Basemap**) |
 | GET, HEAD | `/basemap/{path}` | the files under `<WORST_ROUTE_DATA>/basemap/`, with byte ranges (**Basemap**) |
 | GET | `/regions` | `[{region, name, build_id, graph_version, bbox: [w, s, e, n], counts, tiers: [{tier, nodes, edges}]}]`, in the order served; `name` is what the frontend calls the region (`config.Region.display`: "Oregon", "United States"; the id for a region `config.REGIONS` does not name) |
+| POST | `/regions/pick` | `{stops: [{lat, lon}]}` (one or more) → `{region, build_id, reason}`: the served region a trip with those stops runs on (**Picking a build**) |
 | POST | `/snap` | `{region, lat, lon, role: start\|via\|end, tier?}` → `{node, lat, lon, moved_m, note}` |
 | GET | `/brands` | `{region, brands: [{id, name, wikidata, locations}]}`, for `?region=` (below) |
 | POST | `/jobs` | 202 `{job_id, events_url, seed}` |
@@ -344,6 +346,48 @@ none of them stored, so a route stored before they existed has them too:
   and bubbles) that the route drives.
 
 The document has no comparison line: the share image has it.
+
+## Picking a build
+
+**`POST /regions/pick`** names the served region a trip runs on (`api/pick_api.py`), so a server
+of several builds (**Running it**) plans each trip on the smallest that holds it: a trip within
+Oregon on Oregon's all-roads build, Portland → Chicago on the national one. The body is the
+trip's stops, one or more, as `POST /jobs` takes them (`{stops: [{lat, lon}, ...]}`, a `label`
+allowed and ignored); the answer:
+
+```
+{"region": "oregon", "build_id": "ea3b18096e8b", "reason": "all stops in Oregon"}
+```
+
+Of the served regions whose bbox holds every stop (the bbox `POST /jobs` checks a stop against:
+the build's `params.bbox`, else its nodes' extent, worked out once a build: `Loaded.bbox`), in
+order, where a stop's state is the one whose Census polygon holds it (a touch counts; on a border
+the first by FIPS code), from any places index the server has loaded (`PlaceIndex.states_at`;
+they all hold the same states):
+
+1. a region clipped to a bbox (`config.Region.bbox`, as portland is), the smallest bbox first:
+   "all stops within Portland". With a places index loaded it must also name every stop's state
+   among its states (`config.Region.states`): Portland → Vancouver, WA, both in portland's bbox,
+   goes to a region holding Washington, not onto Oregon's roads near the river. Without an
+   index, its bbox alone decides, and so it does for a region `config.REGIONS` does not name;
+2. a region of whole states whose states hold every stop's state, the fewest states first: "all
+   stops in Oregon", "stops in Oregon and Illinois" (two states, in the order the stops first
+   enter them), "stops in 3 states". When a served region of fewer states holds the stops' states
+   but its bbox misses a stop (Oregon's build ends short of Oregon's line in places), the reason
+   says so: "all stops in Oregon, one beyond Oregon's build";
+3. else the one with the most states (the national one): "a stop in no state" when one lies in
+   none (at sea, abroad), "no places index: by bounding box" when the server has loaded no places
+   index, else, when no region served holds the stops' states, "stops in Oregon and Washington,
+   by bounding box".
+
+A tie goes to the region served first. No region's bbox holding every stop is 422
+`STOP_OUTSIDE_REGION`, `stop_index` the first stop outside the region whose bbox holds the most of
+them (the first served on a tie): "stop 1 (21.3069, -157.8583) is outside every region served here
+(oregon, us-t1)", or, when each stop lies in some region, "no region served here holds every stop:
+stop 1 (...) is outside westland, which holds the most of them". A body without a stop is 422
+`INVALID_REQUEST` (`field: "stops"`); a public server answers a client's sixty-first pick in a
+minute `RATE_LIMITED` (**Public limits**). The pick is the server's; `POST /jobs` still names its
+region, and the frontend sends the one picked (`docs/reference/frontend.md`, **Using it**).
 
 ## Events
 
@@ -812,6 +856,11 @@ and a local server have always had them. Off by default.
   minute; try again in N s". It is checked after the query, the region and `GEOCODER_DISABLED`,
   before the cache, and a refused search counts nothing. Nominatim's own rate limit (one request
   a second for the whole server) stays as it is (**Geocoding**).
+- **Each client's share of the picks of a build** (`POST /regions/pick`, **Picking a build**): at
+  most sixty in any minute (`PUBLIC_PICK_PER_MINUTE`, a `GeocodeQuota` of its own, so picks never
+  take a place search's share); the sixty-first is `RATE_LIMITED` with `retry_after_s` and the
+  message "at most 60 picks a minute; try again in N s", checked after the body. The frontend
+  asks once a change of the stops, 300 ms after the last.
 
 The CLI has none of these limits; `worst-route plan` plans any budget the engine takes.
 

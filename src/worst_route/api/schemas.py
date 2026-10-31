@@ -27,7 +27,8 @@ The SSE events' payloads are `Snapped`, `BaselineOut`, `Progress` (with `SpliceO
 requests; every number is metric.
 
 `GeocodeOut`, with its `GeocodeCandidateOut`s, answers `GET /geocode`, and `DirectionsOut`
-`GET /routes/{id}/directions` (at the end of the module).
+`GET /routes/{id}/directions`; `RegionPickIn` is the body of `POST /regions/pick`, which
+`RegionPickOut` answers (at the end of the module).
 """
 
 from datetime import datetime
@@ -563,3 +564,20 @@ class ConfigOut(_Out):
     public: bool
     basemap: BasemapOut
     limits: LimitsOut
+
+
+# --- Which build a trip runs on (`POST /regions/pick`) --------------------------------------
+
+
+class RegionPickIn(_In):
+    """`POST /regions/pick`: a trip's stops, one or more."""
+
+    stops: list[StopIn] = Field(min_length=1)
+
+
+class RegionPickOut(_Out):
+    """The served region a trip with those stops runs on, its build, and why, for the UI."""
+
+    region: str
+    build_id: str
+    reason: str

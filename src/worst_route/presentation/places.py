@@ -17,8 +17,9 @@ bounds of its states' polygons. A state whose polygon meets the bbox without a p
 present is reported as missing, not an error.
 
 `PlaceIndex.load(region)` reads the three files (None when one is absent: callers then know no
-states or towns and draw no outlines) and answers, for a route's line in lon/lat,
-`states_crossed` and `towns_passed`: every polygon the line intersects (a touch counts), ordered
+states or towns and draw no outlines) and answers `states_at`, the state each point lies in (the
+API's pick of a build for a trip's stops), and, for a route's line in lon/lat, `states_crossed`
+and `towns_passed`: every polygon the line intersects (a touch counts), ordered
 by where the route first meets it. That is the first of the route's segments, in route order,
 that intersects the polygon, then the point of their intersection nearest that segment's start
 (its start itself for a zero-length segment, a point repeated); polygons met at the same point
@@ -226,6 +227,19 @@ class PlaceIndex:
             [Town(name, lsad, usps, geoid) for geoid, name, _, lsad, usps in town_rows],
             town_shapes,
         )
+
+    def states_at(self, points: NDArray[np.float64]) -> list[State | None]:
+        """The state each (lon, lat) point lies in (a touch counts), None for a point in none (at
+        sea, abroad); a point on a border is the first state's, by STATEFP."""
+        shapes, tree = self._states
+        geoms = cast(Shapes, shapely.points(points))
+        with self._lock:
+            point, shape = tree.query(geoms)  # the bounds meet; then each pair on the polygon
+            inside = shapely.intersects(shapes[shape], geoms[point])
+        first: dict[int, int] = {}
+        for p, k in zip(point[inside].tolist(), shape[inside].tolist(), strict=True):
+            first[p] = min(k, first.get(p, k))
+        return [self.states[first[p]] if p in first else None for p in range(len(geoms))]
 
     def states_crossed(self, line: shapely.LineString) -> list[State]:
         """The states `line` passes through, in the order it first enters them."""

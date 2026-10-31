@@ -142,13 +142,15 @@ def region_of(api: "Api", region: str) -> Loaded:
 
 
 def bbox_of(loaded: Loaded) -> tuple[float, float, float, float]:
-    """The region's bbox: the build's own (`params.bbox`), else its nodes' extent."""
-    bbox = loaded.data.meta["params"].get("bbox")
-    if bbox is not None:
-        west, south, east, north = (float(v) for v in bbox)
-        return west, south, east, north
-    lon, lat = loaded.data.node_lon, loaded.data.node_lat
-    return float(lon.min()), float(lat.min()), float(lon.max()), float(lat.max())
+    """The region's bbox: the build's own (`params.bbox`), else its nodes' extent (`Loaded.bbox`,
+    worked out once a build)."""
+    return loaded.bbox
+
+
+def holds(loaded: Loaded, lat: float, lon: float) -> bool:
+    """Whether the region's bbox (`bbox_of`) holds (lat, lon)."""
+    west, south, east, north = bbox_of(loaded)
+    return west <= lon <= east and south <= lat <= north
 
 
 def display_of(region: str) -> str:
@@ -159,8 +161,8 @@ def display_of(region: str) -> str:
 
 
 def _check_inside(loaded: Loaded, lat: float, lon: float, **fields: Any) -> None:
-    west, south, east, north = bbox_of(loaded)
-    if not (west <= lon <= east and south <= lat <= north):
+    if not holds(loaded, lat, lon):
+        west, south, east, north = bbox_of(loaded)
         region = loaded.data.meta["region"]
         message = f"({lat}, {lon}) is outside {region} ({west}, {south}, {east}, {north})"
         raise ApiError(422, "STOP_OUTSIDE_REGION", message, **fields)

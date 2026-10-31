@@ -1488,7 +1488,8 @@ def serve(
         typer.echo(
             f"public: a client runs {limits.running_per_client} job at once with "
             f"{limits.queued_per_client} waiting, budgets up to {limits.budget_max_s:g} s, "
-            f"{limits.geocode_per_minute} place searches a minute"
+            f"{limits.geocode_per_minute} place searches and {limits.pick_per_minute} picks "
+            "of a build a minute"
         )
     site: Starlette = application
     if frontend is not None:

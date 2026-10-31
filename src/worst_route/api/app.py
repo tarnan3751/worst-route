@@ -3,22 +3,23 @@
 `create_app(settings)` loads each served region's build (memory-mapped, `graph.loader`) and its
 geometry, which drawing a route needs, when it is called, so `worst-route serve` fails before it
 listens when a build or its geometry is missing; it opens the route store, builds the geocoding
-service (Nominatim, with its cache `geocode.sqlite` beside the route store; none when the
-geocoder is `none`; a test passes its own), loads each region's places index
-(`presentation.places`; none for a region `worst-route aux places` has not written one for, whose
-routes then use a served region's that covers its states, `routes_api.places_of`) and mounts the
-endpoints (`routes_api`, `geocode_api`, `share_api`, whose images are cached in `share/` beside
-the route store, `directions_api` and `ready_api`). Its lifespan starts and stops the job
-manager, and closes the geocoder's client. `ApiSettings` says which builds (each region with its
-build id, the first region the default), which backend, where the store is, the job limits, and
-the geocoder: which, at what URL, with what contact in its User-Agent (`geocoder_user_agent`);
-whether a reverse proxy in front of it is trusted (`trust_proxy`: its `X-Forwarded-For` names the
-client, its `X-Request-ID` the request); and whether it is public (`public`: the limits
-`limits.PUBLIC`, a budget up to 60 s and each client's share of the jobs and the place searches,
-held as `Api.limits`, the job manager's settings and `Api.quota`; else `limits.LOCAL`); and the
-basemap `GET /config` offers the frontend (`basemap`, its file named by `basemap_name`, by default
-the first region), whose files it serves under `/basemap/` (`basemap_api`). Every request gets an
-id and an access line (`logs.RequestLog`).
+service (Nominatim, with its cache `geocode.sqlite` beside the route store; none when the geocoder
+is `none`; a test passes its own), loads each region's places index (`presentation.places`; none
+for a region `worst-route aux places` has not written one for, whose routes then use a served
+region's that covers its states, `routes_api.places_of`) and mounts the endpoints (`routes_api`,
+`pick_api`, which picks the build a trip runs on, `geocode_api`, `share_api`, whose images are
+cached in `share/` beside the route store, `directions_api` and `ready_api`). Its lifespan starts
+and stops the job manager, and closes the geocoder's client. `ApiSettings` says which builds (each
+region with its build id, the first region the default), which backend, where the store is, the job
+limits, and the geocoder: which, at what URL, with what contact in its User-Agent
+(`geocoder_user_agent`); whether a reverse proxy in front of it is trusted (`trust_proxy`: its
+`X-Forwarded-For` names the client, its `X-Request-ID` the request); and whether it is public
+(`public`: the limits `limits.PUBLIC`, a budget up to 60 s and each client's share of the jobs, the
+place searches and the picks of a build, held as `Api.limits`, the job manager's settings,
+`Api.quota` and `Api.pick_quota`; else `limits.LOCAL`); and the basemap `GET /config` offers the
+frontend (`basemap`, its file named by `basemap_name`, by default the first region), whose files it
+serves under `/basemap/` (`basemap_api`). Every request gets an id and an access line
+(`logs.RequestLog`).
 
 Every error answers an `ErrorBody` (`{code, message, ...}`): an endpoint refuses with
 `routes_api.ApiError(status, code, message, **fields)`, a malformed request is 422
@@ -49,6 +50,7 @@ from worst_route.api import (
     basemap_api,
     directions_api,
     geocode_api,
+    pick_api,
     ready_api,
     routes_api,
     share_api,
@@ -112,6 +114,7 @@ class Api:
     letters: dict[str, np.ndarray] = field(default_factory=dict)
     limits: Limits = LOCAL
     quota: GeocodeQuota | None = None  # each client's place searches, on a public server
+    pick_quota: GeocodeQuota | None = None  # each client's picks of a build, on a public server
 
 
 def geocoder_user_agent(settings: ApiSettings) -> str:
@@ -162,10 +165,21 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
     places = {region: PlaceIndex.load(region, settings.data_dir) for region in builds}
     share_dir = store_path.parent / "share"
     quota = GeocodeQuota(limits.geocode_per_minute) if limits.geocode_per_minute else None
+    picks = GeocodeQuota(limits.pick_per_minute) if limits.pick_per_minute else None
     app.state.api = Api(
-        settings, builds, store, jobs, service, places, share_dir, limits=limits, quota=quota
+        settings,
+        builds,
+        store,
+        jobs,
+        service,
+        places,
+        share_dir,
+        limits=limits,
+        quota=quota,
+        pick_quota=picks,
     )
     app.include_router(routes_api.router)
+    app.include_router(pick_api.router)
     app.include_router(geocode_api.router)
     app.include_router(share_api.router)
     app.include_router(directions_api.router)

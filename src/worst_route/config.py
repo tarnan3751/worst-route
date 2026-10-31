@@ -480,14 +480,17 @@ GEOCODE_MAX_QUERY_CHARS = 200
 # Public hosting (`docs/reference/api.md`, **Public limits**; `docs/reference/hosting.md`), only
 # with `serve --public`: a client (`api/limits.py`) runs at most PUBLIC_RUNNING_PER_CLIENT jobs at
 # once and has at most PUBLIC_QUEUED_PER_CLIENT more waiting, a budget is at most
-# PUBLIC_BUDGET_MAX_S (BUDGET_MAX_S otherwise), and a client searches places at most
-# PUBLIC_GEOCODE_PER_MINUTE times in any minute. A request's own leash stays at most LEASH_MAX_KM;
+# PUBLIC_BUDGET_MAX_S (BUDGET_MAX_S otherwise), a client searches places at most
+# PUBLIC_GEOCODE_PER_MINUTE times in any minute and asks which build its stops run on
+# (`POST /regions/pick`, once a change of its stops) at most PUBLIC_PICK_PER_MINUTE times. A
+# request's own leash stays at most LEASH_MAX_KM;
 # the automatic leash follows the trip (LEASH_LONG_FACTOR of it beyond 750 km), and the budget
 # bounds the job.
 PUBLIC_RUNNING_PER_CLIENT = 1
 PUBLIC_QUEUED_PER_CLIENT = 3
 PUBLIC_BUDGET_MAX_S = 60.0
 PUBLIC_GEOCODE_PER_MINUTE = 10
+PUBLIC_PICK_PER_MINUTE = 60
 
 
 # Census boundaries (`docs/reference/presentation.md`, **Places**). CENSUS_VINTAGE is the year of

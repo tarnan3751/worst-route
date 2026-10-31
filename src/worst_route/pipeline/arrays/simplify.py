@@ -33,6 +33,7 @@ from numba import njit
 from numpy.typing import NDArray
 
 from worst_route.pipeline.arrays.build import RawGraph, Tagset
+from worst_route.pipeline.arrays.order import iteration_order
 from worst_route.pipeline.simplify import SimplifyStats
 
 
@@ -97,13 +98,12 @@ def simplify(raw: RawGraph) -> tuple[SimplifiedGraph, SimplifyStats]:
     )
 
     live = np.flatnonzero(alive)
-    # networkx's order: tail position, the entry's first insertion, then the edge's own.
+    # Insertion: a raw edge's own, else the visit that made it, after every raw edge (`order.py`).
     merged = made_at[live] >= 0
     when = np.empty(len(live), dtype=np.int64)
     when[merged] = raw.node_id[made_at[live[merged]]]
     when[~merged] = seq[live[~merged]]
-    entry_merged, entry_when = _entry_first(p_tail[live], p_head[live], merged, when)
-    iteration = np.lexsort((when, merged, entry_when, entry_merged, p_tail[live]))
+    iteration = iteration_order(p_tail[live], p_head[live], merged, when)
     order = live[iteration]
     # networkx's graph is a copy of the raw graph, its edges added in the raw graph's iteration
     # order (which sets each node's predecessors in the order of their places), then the merges'
@@ -158,26 +158,6 @@ def simplify(raw: RawGraph) -> tuple[SimplifiedGraph, SimplifyStats]:
     stats.nodes = len(kept)
     stats.edges = len(order)
     return simplified, stats
-
-
-def _entry_first(
-    tail: NDArray[np.int32],
-    head: NDArray[np.int32],
-    merged: NDArray[np.bool_],
-    when: NDArray[np.int64],
-) -> tuple[NDArray[np.bool_], NDArray[np.int64]]:
-    """For each edge, the earliest insertion among the edges with its tail and head."""
-    first = np.lexsort((when, merged, head, tail))
-    pair = np.column_stack([tail[first], head[first]])
-    new = np.ones(len(first), dtype=np.bool_)
-    new[1:] = np.any(pair[1:] != pair[:-1], axis=1)
-    group = np.cumsum(new) - 1
-    lead = first[np.flatnonzero(new)]
-    entry_merged = np.empty(len(first), dtype=np.bool_)
-    entry_when = np.empty(len(first), dtype=np.int64)
-    entry_merged[first] = merged[lead][group]
-    entry_when[first] = when[lead][group]
-    return entry_merged, entry_when
 
 
 @_jit

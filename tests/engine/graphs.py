@@ -27,6 +27,7 @@ def lattice(
     rounded_lonlat: bool = False,
     primary_every: int = 0,
     roads: Mapping[tuple[int, int], Mapping[str, int]] | None = None,
+    brands: Mapping[str, Sequence[int]] | None = None,
 ) -> GraphData:
     """`grid_graph`'s two-way lattice (node r * cols + c), with twins and transitions.
 
@@ -36,6 +37,7 @@ def lattice(
     rest residential at 40 km/h), with a 30 s signal where two of them cross and a 10 s stop
     sign at their other nodes. `roads` gives `Edge` fields (`flags`, `toll_booths`,
     `level_crossings`) to both directions of the road a–b, keyed by (a, b) with a < b.
+    `brands` maps a brand's name to its nodes (`make_graph`'s).
     """
     xy = [(X0 + c * spacing_m, Y0 + r * spacing_m) for r in range(rows) for c in range(cols)]
     fields = roads or {}
@@ -64,7 +66,7 @@ def lattice(
     if rounded_lonlat:
         lon, lat = TO_LONLAT.transform([p[0] for p in xy], [p[1] for p in xy])
         lonlat = list(zip(np.round(lon, 7).tolist(), np.round(lat, 7).tolist(), strict=True))
-    g = make_graph(xy, edges, twins=twins, transitions=transitions, lonlat=lonlat)
+    g = make_graph(xy, edges, twins=twins, transitions=transitions, lonlat=lonlat, brands=brands)
     if primary_every == 0:
         return g
     delays = [

@@ -26,13 +26,16 @@ recomputed from the request by the caller, not taken from the engine's state.
    turn classed again here from the edges' bearings (`TURN_STRAIGHT_DEG`, `TURN_UTURN_DEG`),
    not with the engine's table.
 8. `metrics`: the reported length and time are finite and equal the ones recomputed from the
-   edges within a relative 1e-6, and reported `items` (the metrics' counters carry them for a
-   collecting route and for a route read from a file) equal the route's recount.
+   edges within a relative 1e-6, reported `items` (the metrics' counters carry them for a
+   collecting route and for a route read from a file) equal the route's recount, and a
+   reported `brand` (a pilgrimage's `{id, name, visits, of}`) equals its recount from the
+   build's brand index, `of` within the active mask.
 
 It deliberately uses nothing of `engine/route.py`'s bookkeeping, so a bug there cannot hide
-here too; it recounts the items with `objectives.collect.count_items`, which reads the route's
-arrays and the build's alone. A route whose ids are out of range fails `chain`, and the checks
-that would index with them fail as skipped. `ValidationFailed` carries a failing report.
+here too; it recounts the items with `objectives.collect.count_items` and a brand's visits
+with `objectives.brand.brand_counts`, which read the route's arrays and the build's alone. A
+route whose ids are out of range fails `chain`, and the checks that would index with them fail
+as skipped. `ValidationFailed` carries a failing report.
 """
 
 import math
@@ -44,6 +47,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from worst_route.config import TURN_STRAIGHT_DEG, TURN_UTURN_DEG
+from worst_route.engine.objectives.brand import brand_counts
 from worst_route.engine.objectives.collect import count_items
 from worst_route.graph.backend import TURN_LEFT, TURN_RIGHT, TURN_U
 from worst_route.graph.data import GraphData
@@ -174,7 +178,7 @@ def validate_route(
             _transitions(data, nodes, edges),
             _stops(nodes, route.stop_idx, stop_nodes),
             _constraints(data, nodes, edges, node_mask, banned_edges, banned_turn_classes),
-            _metrics(data, route, edges),
+            _metrics(data, route, edges, node_mask),
         )
     )
 
@@ -370,7 +374,9 @@ def _turns(data: GraphData, e_in: NDArray[np.int64], e_out: NDArray[np.int64]) -
     return turned
 
 
-def _metrics(data: GraphData, route: RouteLike, edges: NDArray[np.int64]) -> Check:
+def _metrics(
+    data: GraphData, route: RouteLike, edges: NDArray[np.int64], node_mask: NDArray[np.bool_]
+) -> Check:
     reported = route.metrics
     for name, values, value in (
         ("length_m", data.edge_length_m, reported.length_m),
@@ -385,4 +391,12 @@ def _metrics(data: GraphData, route: RouteLike, edges: NDArray[np.int64]) -> Che
         recounted = count_items(data, route.nodes, route.edges)
         if items != recounted:
             return Check("metrics", False, None, f"items reported {items}, recounted {recounted}")
+    brand = reported.counters.get("brand")
+    if brand is not None:
+        brand_id = brand.get("id") if isinstance(brand, Mapping) else None
+        if not (type(brand_id) is int and 0 <= brand_id < len(data.strings.brands)):  # no bool
+            return Check("metrics", False, None, f"brand reported {brand}: no such brand")
+        counted = brand_counts(data, brand_id, route.nodes, node_mask)
+        if dict(brand) != counted:
+            return Check("metrics", False, None, f"brand reported {brand}, recounted {counted}")
     return Check("metrics", True)

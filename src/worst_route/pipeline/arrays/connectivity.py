@@ -8,9 +8,10 @@ order networkx's are (each component's nodes ascending, each node's out-edges by
 `(u, v, key)`, Python's `sum` and NumPy's `mean`), so the report is the same to the bit.
 `keep_only` then numbers the kept nodes 0..n-1 as `consolidate.relabel` does: stage B's numbering
 is already the order relabel sorts by, so the kept nodes keep theirs, compacted, and the edges,
-twins, super-junctions and transitions follow. `without_no_turn` drops the super-junctions left
-with edges in and out and no allowed pair, and what connectivity drops after them, round by
-round, as `cleanup._without_no_turn` does, adding each round into the report in the same order.
+twins, super-junctions, restricted nodes and transitions follow. `without_no_turn` drops the
+nodes with a turn table (super-junctions, and the nodes a turn restriction gave one) left with
+edges in and out and no allowed pair, and what connectivity drops after them, round by round, as
+`cleanup._without_no_turn` does, adding each round into the report in the same order.
 """
 
 from dataclasses import replace
@@ -62,16 +63,17 @@ def largest_component(graph: StageBGraph) -> tuple[NDArray[np.bool_], Connectivi
 
 
 def without_no_turn(graph: StageBGraph, scc: ConnectivityReport) -> StageBGraph:
-    """The graph less every super-junction with edges in and out that allows no pair between
-    them, and less what connectivity drops after each round of those; each round added to `scc`.
-    """
+    """The graph less every node with a turn table (a super-junction, or a node a turn restriction
+    gave one) with edges in and out that allows no pair between them, and less what connectivity
+    drops after each round of those; each round added to `scc`."""
     dropped = list(scc.largest_dropped)
     while True:
         n = len(graph.node_x)
-        turns = np.bincount(graph.trans_node, minlength=n)[graph.super_node]
-        ins = np.bincount(graph.edge_v, minlength=n)[graph.super_node]
-        outs = np.bincount(graph.edge_u, minlength=n)[graph.super_node]
-        no_turn = graph.super_node[(turns == 0) & (ins > 0) & (outs > 0)]
+        tabled = np.concatenate([graph.super_node, graph.restricted_node])
+        turns = np.bincount(graph.trans_node, minlength=n)[tabled]
+        ins = np.bincount(graph.edge_v, minlength=n)[tabled]
+        outs = np.bincount(graph.edge_u, minlength=n)[tabled]
+        no_turn = tabled[(turns == 0) & (ins > 0) & (outs > 0)]
         if not len(no_turn):
             return graph  # untouched when nothing was dropped
         gone = np.zeros(n, dtype=np.bool_)
@@ -119,6 +121,7 @@ def keep_only(graph: StageBGraph, keep: NDArray[np.bool_]) -> StageBGraph:
     part_member_indptr, part_members = _rows(graph.part_member_indptr, parts)
     internal_indptr, internal = _rows(graph.internal_indptr, supers)
     trans = keep[graph.trans_node] & alive[graph.trans_in] & alive[graph.trans_out]
+    restricted = graph.restricted_node[keep[graph.restricted_node]]
     return replace(
         graph,
         node_kind=graph.node_kind[nodes],
@@ -150,6 +153,7 @@ def keep_only(graph: StageBGraph, keep: NDArray[np.bool_]) -> StageBGraph:
         trans_node=number[graph.trans_node[trans]].astype(np.int32),
         trans_in=renumber[graph.trans_in[trans]].astype(np.int32),
         trans_out=renumber[graph.trans_out[trans]].astype(np.int32),
+        restricted_node=number[restricted].astype(np.int32),
     )
 
 

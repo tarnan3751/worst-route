@@ -6,7 +6,9 @@ the ramp and roundabout components and their joins, those along a carriageway th
 and comes back to it (`_carriageway_rejoins`, `_comes_back`), the slip-lane centres, the pockets
 (along a road by its ref set or its name), the diameter guard's split, the super-nodes with their
 records and transitions, the twins carried across, then the nodes numbered as `consolidate.relabel`
-numbers them. The rules are `consolidate`'s (its module header has them); what this module adds is
+numbers them; with the turn tables of stage A nodes (`restrictions.turn_tables`), each honoured
+inside a super-junction by `consolidate`'s own walk (`_passages`, `_forcing`) and kept at a node
+outside them. The rules are `consolidate`'s (its module header has them); what this module adds is
 reading them off arrays in the order networkx would visit them, wherever the order can decide: the
 stage A graph's out-edges in its iteration order (the arrays' own, `order.py`), its nodes by their
 stage A labels (their index), the pocket search's ties to the order of discovery, the split's
@@ -15,7 +17,9 @@ super-node's position as the mean of its nodes' in label order. Everything else 
 
 Its local work (a cluster's nodes, its pockets, its records) runs in Python over the arrays,
 cluster by cluster: clusters hold a percent or two of the nodes. `StageBGraph` holds the result
-in the final numbering, with the stage A graph it came from for the internal edges' attributes.
+in the final numbering, with the stage A graph it came from for the internal edges' attributes;
+its transitions are the super-junctions' and those of the nodes outside them with a table
+(`restricted_node`).
 """
 
 import heapq
@@ -44,7 +48,13 @@ from worst_route.config import (
 )
 from worst_route.pipeline.arrays.stage_a import PLAIN, StageAGraph, _lengths
 from worst_route.pipeline.build import ROUNDABOUT_JUNCTIONS
-from worst_route.pipeline.consolidate import StageBStats, _forced, _reachability
+from worst_route.pipeline.consolidate import (
+    StageBStats,
+    Turns,
+    _forcing,
+    _passages,
+    _reachability,
+)
 from worst_route.pipeline.names import normalize_name, road_signature
 
 INTERCHANGE, ROUNDABOUT = 2, 3  # node kinds beside stage A's PLAIN and CLUSTER
@@ -86,6 +96,8 @@ class StageBGraph:
     trans_node: NDArray[np.int32]  # the allowed (in, out) pairs, by (node, in, out)
     trans_in: NDArray[np.int32]
     trans_out: NDArray[np.int32]
+    restricted_node: NDArray[np.int32]  # [r] ascending: the nodes outside the super-junctions
+    # whose rows are a turn table (`consolidate.stage_b`'s `G.graph["restricted"]`)
 
 
 class _View:
@@ -159,9 +171,14 @@ class _View:
 
 
 def stage_b(
-    graph: StageAGraph, twins: tuple[NDArray[np.int64], NDArray[np.int32]]
+    graph: StageAGraph,
+    twins: tuple[NDArray[np.int64], NDArray[np.int32]],
+    turns: Turns | None = None,
 ) -> tuple[StageBGraph, StageBStats]:
-    """The stage A graph with its interchanges and roundabouts as super-junctions."""
+    """The stage A graph with its interchanges and roundabouts as super-junctions, the turn
+    tables `turns` of its nodes (stage A node -> allowed pairs of stage A edge ids) honoured
+    inside them and kept at the others."""
+    turns = turns or {}
     stats = StageBStats()
     view = _View(graph)
     clusters = _absorb_pockets(view, _ramp_clusters(view, stats), stats)
@@ -175,7 +192,7 @@ def stage_b(
             stats.split += len(groups) > 1
         supers.extend((group, kind) for group in groups if len(group) > 1)
     supers.sort(key=lambda item: min(view.first[n] for n in item[0]))
-    return _rebuild(view, supers, twins, stats), stats
+    return _rebuild(view, supers, twins, turns, stats), stats
 
 
 def _ramp_clusters(view: _View, stats: StageBStats) -> list[set[int]]:
@@ -429,6 +446,7 @@ def _rebuild(
     view: _View,
     supers: list[tuple[set[int], int]],
     twins: tuple[NDArray[np.int64], NDArray[np.int32]],
+    turns: Turns,
     stats: StageBStats,
 ) -> StageBGraph:
     """The graph with each super-junction one node, its records, the twins carried across, then
@@ -484,11 +502,10 @@ def _rebuild(
         )
         members = {int(x) for k in nodes for x in node_members[k]}
         members.update(int(x) for e in edges for x in _osm_nodes(graph, e)[1:-1])
-        reach = _reachability(nodes, [(view.u[e], view.v[e]) for e in edges])
+        within = [(e, view.u[e], view.v[e]) for e in edges]
         rings = [(view.u[e], view.v[e]) for e in edges if view.roundabout[e]]
-        transitions = [
-            (into, out) for into, head in ins[i] for out, tail in outs[i] if tail in reach[head]
-        ]
+        transitions = _passages(ins[i], outs[i], within, turns)
+        stats.restricted += any(node in turns for node in nodes)
         parts = sorted(tuple(int(x) for x in node_members[k]) for k in nodes)
         records.append((sorted(members), parts, edges, canon, _components(rings), transitions))
         sizes[len(nodes)] += 1
@@ -496,11 +513,12 @@ def _rebuild(
         stats.internal_edges += len(edges)
 
     pairs, stats.twin_transitions, stats.twin_passages = _carry_twins(
-        view, supers, internal, ins, outs, pre_id, n, pu, pv, twins
+        view, supers, internal, ins, outs, pre_id, n, pu, pv, twins, turns
     )
     stats.superjunctions = {"interchange": kinds[INTERCHANGE], "roundabout": kinds[ROUNDABOUT]}
     stats.sizes = dict(sorted(sizes.items()))
-    return _relabel(view, supers, records, sx, sy, kept, pu, pv, key, pairs, stats)
+    restricted = {node: table for node, table in turns.items() if super_of[node] < 0}
+    return _relabel(view, supers, records, sx, sy, kept, pu, pv, key, pairs, restricted, stats)
 
 
 def _osm_nodes(graph: StageAGraph, e: int) -> list[int]:
@@ -527,10 +545,12 @@ def _carry_twins(
     pu: NDArray[np.int64],
     pv: NDArray[np.int64],
     twins: tuple[NDArray[np.int64], NDArray[np.int32]],
+    turns: Turns,
 ) -> tuple[set[tuple[int, int]], int, int]:
     """`consolidate._carry_twins` over edge ids: the twin pairs (both ways) among the kept edges'
     indices, the transitions that ban a twin of an internal edge they must drive, and the
-    passages banned for driving both edges of a twin pair inside their super-node."""
+    passages banned for driving both edges of a twin pair inside their super-node, a passage's
+    internal paths those the turn tables `turns` allow."""
     indptr, twin_edges = twins
     twin_of = {
         e: twin_edges[indptr[e] : indptr[e + 1]].tolist()
@@ -567,17 +587,13 @@ def _carry_twins(
         inside = [(e, f) for e in keys for f in twin_of.get(e, ()) if owner.get(f) == i and e < f]
         if not inside and not any(outside.values()):
             continue
-        ends = {x for e in keys for x in (view.u[e], view.v[e])}
-        ends |= {x for _, x in ins[i]} | {x for _, x in outs[i]}
-        reach = _reachability(ends, [(view.u[e], view.v[e]) for e in keys])
-        without = {
-            x: _reachability(ends, [(view.u[e], view.v[e]) for e in keys if e != x])
-            for x in {x for x in keys if outside[x]} | {x for pair in inside for x in pair}
-        }
+        dropped = {x for x in keys if outside[x]} | {x for pair in inside for x in pair}
+        within = [(e, view.u[e], view.v[e]) for e in keys]
+        forced = _forcing(ins[i], outs[i], within, turns, dropped)
         for e, f in inside:
             for into, head in ins[i]:
                 for out, tail in outs[i]:
-                    if _forced(reach, without, head, tail, (e, f)):  # type: ignore[arg-type]
+                    if forced(into, head, out, tail, (e, f)):
                         passages.add((i, into, out))
                         a, b = int(pre_id[into]), int(pre_id[out])
                         pairs.update({(a, b), (b, a)})
@@ -587,7 +603,7 @@ def _carry_twins(
                 continue
             for into, head in ins[i]:
                 for out, tail in outs[i]:
-                    if not _forced(reach, without, head, tail, (x,)):  # type: ignore[arg-type]
+                    if not forced(into, head, out, tail, (x,)):
                         continue
                     matched.add((i, into, out))
                     a, b = int(pre_id[into]), int(pre_id[out])
@@ -654,10 +670,13 @@ def _relabel(
     pv: NDArray[np.int64],
     key: NDArray[np.int64],
     pairs: set[tuple[int, int]],
+    restricted: Turns,
     stats: StageBStats,
 ) -> StageBGraph:
     """The graph numbered as `consolidate.relabel` numbers it: the stage A nodes left (plain and
-    clusters) by their smallest member, then the super-nodes by theirs; edges by (u, v, key)."""
+    clusters) by their smallest member, then the super-nodes by theirs; edges by (u, v, key).
+    The turn tables of the nodes left, `restricted` (stage A node and edge ids), join the
+    super-junctions' transitions."""
     graph = view.graph
     n, s = view.n, len(supers)
     stats.twin_pairs = len(pairs) // 2
@@ -753,6 +772,9 @@ def _relabel(
         roundabouts.append(rings)
         node = int(super_number[i])
         trans.extend((node, int(final[pre_id[a]]), int(final[pre_id[b]])) for a, b in transitions)
+    for stage_a_node, table in restricted.items():
+        node = int(number[stage_a_node])
+        trans.extend((node, int(final[pre_id[a]]), int(final[pre_id[b]])) for a, b in table)
     trans_array = np.array(sorted(trans), dtype=np.int32).reshape(-1, 3)
     part_member_indptr = np.zeros(len(part_lists) + 1, dtype=np.int64)
     np.cumsum([len(p) for p in part_lists], out=part_member_indptr[1:])
@@ -790,4 +812,5 @@ def _relabel(
         trans_node=trans_array[:, 0].copy(),
         trans_in=trans_array[:, 1].copy(),
         trans_out=trans_array[:, 2].copy(),
+        restricted_node=np.array(sorted(number[list(restricted)].tolist()), dtype=np.int32),
     )

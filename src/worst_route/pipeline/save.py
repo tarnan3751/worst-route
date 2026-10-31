@@ -16,7 +16,8 @@ tier_nodes, meta)` turns the enriched graph into `GraphData`:
   speeds raise `TooManySpeedsError`). The OSM nodes along each edge (`osm_nodes`) and its way
   ids (`osmids`) stay in the stages.
 - **Twins** and **transitions**: the cleaned graph's tables with keys turned into ids, rows
-  sorted.
+  sorted; the transitions are the super-junctions' and those of the nodes a turn restriction gave
+  a table (`restricted`).
 - **Tiers**: `tier_node_mask[t]` the nodes `tiers` kept; `tier_edge_mask[t]` the edges of the
   tier's classes with both ends kept.
 - **Collectibles**: `node_roundabouts`, the roundabout rings each super-junction's record counts
@@ -25,13 +26,14 @@ tier_nodes, meta)` turns the enriched graph into `GraphData`:
   `brand_locations`, in its order (the brand ids), each brand's name and wikidata id in
   `strings.brands` and `strings.brand_wikidata`.
 
-It refuses a super-node whose transition table is empty (`EmptyTransitionsError`): for cleanup
-that means no turn through it is allowed, but `GraphData` reads a node without rows as allowing
-every turn, so the build cannot say it. It refuses too a graph that breaks what the validator's
-proof from original OSM ids rests on, now that the build keeps only the nodes' members
-(`ShapePointError`, `docs/reference/engine.md`, the validator's `osm_ids`): an edge that does
-not start and end at OSM nodes merged into its tail and head, or an OSM node inside an edge
-that lies inside it twice, is some node's member, or lies inside two road units.
+It refuses a node whose transition table is empty, a super-node or a restricted node
+(`EmptyTransitionsError`): for cleanup that means no turn through it is allowed, but `GraphData`
+reads a node without rows as allowing every turn, so the build cannot say it. It refuses too a
+graph that breaks what the validator's proof from original OSM ids rests on, now that the build
+keeps only the nodes' members (`ShapePointError`, `docs/reference/engine.md`, the validator's
+`osm_ids`): an edge that does not start and end at OSM nodes merged into its tail and head, or an
+OSM node inside an edge that lies inside it twice, is some node's member, or lies inside two road
+units.
 
 `build_meta` assembles the build's `meta`: the region, the time, `counts` (filled in by
 `graph_data`), `params` (`build_params`: the region, its bbox and CRS, the configuration the
@@ -98,7 +100,12 @@ def step_outputs(build_dir: Path) -> list[tuple[str, str]]:
 
 
 class EmptyTransitionsError(ValueError):
-    """A super-node allows no turn, which the build format cannot express."""
+    """A node with a transition table allows no turn, which the build format cannot express."""
+
+
+def _junction(kind: str) -> str:
+    """What a node of `kind` with a transition table is called in an error."""
+    return "super-junction" if kind in ("interchange", "roundabout") else "restricted junction"
 
 
 class ShapePointError(ValueError):
@@ -135,12 +142,14 @@ def graph_data(
     edges = [graph.edges[key] for key in keys]
     nodes = [graph.nodes[v] for v in range(n)]  # cleanup numbers the nodes 0..n-1
     records: dict[int, dict[str, Any]] = graph.graph["superjunctions"]
-    for node, record in records.items():
-        if not record["transitions"]:
+    restricted: dict[int, tuple[tuple[EdgeKey, EdgeKey], ...]] = graph.graph.get("restricted", {})
+    tables = {node: record["transitions"] for node, record in records.items()} | restricted
+    for node, transitions in sorted(tables.items()):
+        if not transitions:
             raise EmptyTransitionsError(
-                f"super-junction {node} ({record['kind']}, at {nodes[node]['lat']:.5f}, "
-                f"{nodes[node]['lon']:.5f}) allows no turn through it, which a build cannot "
-                "express: a node without transition rows allows every turn"
+                f"{_junction(nodes[node]['kind'])} {node} ({nodes[node]['kind']}, at "
+                f"{nodes[node]['lat']:.5f}, {nodes[node]['lon']:.5f}) allows no turn through it, "
+                "which a build cannot express: a node without transition rows allows every turn"
             )
 
     _check_shape_points(graph, keys)
@@ -172,8 +181,8 @@ def graph_data(
     trans = np.array(
         sorted(
             (node, edge_id[into], edge_id[out])
-            for node, record in records.items()
-            for into, out in record["transitions"]
+            for node, transitions in tables.items()
+            for into, out in transitions
         ),
         dtype=np.int32,
     ).reshape(-1, 3)
@@ -192,6 +201,7 @@ def graph_data(
         "twin_pairs": sum(map(len, twin_rows)) // 2,
         "transitions": len(trans),
         "superjunctions": len(records),
+        "restricted": len(restricted),
     }
     data = GraphData(
         node_x=np.array([d["x"] for d in nodes], dtype=np.float64),
@@ -250,12 +260,13 @@ def graph_data_of(
     networkx engine's, array for array, with the same refusals."""
     b, a = graph.graph, graph.graph.stage_a
     n, m = len(b.node_x), len(b.edge_u)
-    turns = np.bincount(b.trans_node, minlength=n)[b.super_node]
+    tabled = np.sort(np.concatenate([b.super_node, b.restricted_node]))
+    turns = np.bincount(b.trans_node, minlength=n)[tabled]
     if len(turns) and not turns.all():
-        node = int(b.super_node[np.flatnonzero(turns == 0)[0]])
+        node = int(tabled[np.flatnonzero(turns == 0)[0]])
         kind = NodeKind(int(b.node_kind[node])).name.lower()
         raise EmptyTransitionsError(
-            f"super-junction {node} ({kind}, at {b.node_lat[node]:.5f}, "
+            f"{_junction(kind)} {node} ({kind}, at {b.node_lat[node]:.5f}, "
             f"{b.node_lon[node]:.5f}) allows no turn through it, which a build cannot "
             "express: a node without transition rows allows every turn"
         )
@@ -307,6 +318,7 @@ def graph_data_of(
         "twin_pairs": len(b.twin_edges) // 2,
         "transitions": len(b.trans_node),
         "superjunctions": len(b.super_node),
+        "restricted": len(b.restricted_node),
     }
     data = GraphData(
         node_x=np.asarray(b.node_x, dtype=np.float64),

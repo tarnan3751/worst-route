@@ -18,8 +18,9 @@ with `twins` (`twins.find_twins`'s table), the `G.graph["twins"]` that `carriage
 sets.
 
 `stage_b_graph(graph)` is the `MultiDiGraph` that `consolidate.stage_b` makes: its nodes and
-edges numbered and ordered as `consolidate.relabel` numbers them, with the `superjunctions` and
-`twins` tables, each edge named in them by a tuple of its own, as relabel writes them.
+edges numbered and ordered as `consolidate.relabel` numbers them, with the `superjunctions`,
+`restricted` and `twins` tables, each edge named in them by a tuple of its own, as relabel writes
+them.
 `cleanup_graph(graph)` is the graph cleanup hands on once connectivity has kept its largest
 component, with the view of its in-degrees that cleanup's last check caches.
 
@@ -127,7 +128,7 @@ def stage_a_graph(
 
 def stage_b_graph(graph: StageBGraph) -> nx.MultiDiGraph:
     """The stage B graph as networkx holds it (`consolidate.stage_b`'s, numbered by `relabel`),
-    with its `superjunctions` and `twins` tables."""
+    with its `superjunctions`, `restricted` and `twins` tables."""
     a = graph.stage_a
     keys = _raw_keys()
     tags_of = _WayTags(a.tagsets, keys)
@@ -170,7 +171,8 @@ def stage_b_graph(graph: StageBGraph) -> nx.MultiDiGraph:
     indptr, x_inner, y_inner = _runs_of(a, graph.internal_edge)
     inner = _attributes(a, graph.internal_edge, indptr, x_inner, y_inner, keys, tags_of)
     parts = np.split(graph.part_member_id, graph.part_member_indptr[1:-1])
-    transitions: dict[int, list[tuple[Any, Any]]] = {int(n): [] for n in graph.super_node}
+    tabled = [*graph.super_node.tolist(), *graph.restricted_node.tolist()]
+    transitions: dict[int, list[tuple[Any, Any]]] = {node: [] for node in tabled}
     for node, into, out in zip(
         graph.trans_node.tolist(), graph.trans_in.tolist(), graph.trans_out.tolist(), strict=True
     ):
@@ -192,6 +194,10 @@ def stage_b_graph(graph: StageBGraph) -> nx.MultiDiGraph:
             "transitions": tuple(transitions[node]),
         }
     result.graph["superjunctions"] = records
+    if len(graph.restricted_node):
+        result.graph["restricted"] = {
+            node: tuple(transitions[node]) for node in graph.restricted_node.tolist()
+        }
     twins = graph.twin_edges.tolist()
     result.graph["twins"] = {
         tuple(ends[e]): tuple(
@@ -205,10 +211,11 @@ def stage_b_graph(graph: StageBGraph) -> nx.MultiDiGraph:
 def cleanup_graph(graph: StageBGraph) -> nx.MultiDiGraph:
     """The cleaned graph as `cleanup.run_cleanup` returns it: `stage_b_graph`'s, with the view
     `cleanup._without_no_turn`'s last look at it caches, since a pickle holds it: the in-degrees,
-    asked of a super-junction that allows no turn (one without edges, as the graph is strongly
-    connected, so the out-degrees are never asked for)."""
+    asked of a node with a turn table that allows no turn (one without edges, as the graph is
+    strongly connected, so the out-degrees are never asked for)."""
     result = stage_b_graph(graph)
-    if not np.bincount(graph.trans_node, minlength=len(graph.node_x))[graph.super_node].all():
+    tabled = np.concatenate([graph.super_node, graph.restricted_node])
+    if not np.bincount(graph.trans_node, minlength=len(graph.node_x))[tabled].all():
         _ = result.in_degree
     return result
 

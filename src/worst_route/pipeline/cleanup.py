@@ -11,12 +11,13 @@ stage A graph, so stretches stage B makes internal keep their twins), `consolida
 (interchanges and roundabouts as super-junctions with their transitions, the twins carried across,
 then nodes numbered 0..n-1) and `connectivity.largest_component`, which keeps the largest strongly
 connected component and numbers the nodes 0..n-1 again. Connectivity does not read the turn tables,
-and dropping an edge drops the transitions that name it, so a super-junction can be left with edges
-in and out and no allowed pair between them: where a region's edge cuts an interchange, its pairs
-ran through the stubs beyond it. No route can pass through such a node, and a build cannot say so
-(a node without transition rows allows every turn), so it is dropped with its edges, connectivity
-runs again on what is left, and so on until none remains; the connectivity report adds the rounds
-up (`dropped_no_turn` counts those super-junctions). It raises `FragmentedGraphError`, before
+and dropping an edge drops the transitions that name it, so a node with a table (a super-junction,
+or a node outside them that a turn table is kept at, `G.graph["restricted"]`) can be left with
+edges in and out and no allowed pair between them: where a region's edge cuts an interchange, its
+pairs ran through the stubs beyond it. No route can pass through such a node, and a build cannot
+say so (a node without transition rows allows every turn), so it is dropped with its edges,
+connectivity runs again on what is left, and so on until none remains; the connectivity report
+adds the rounds up (`dropped_no_turn` counts those nodes). It raises `FragmentedGraphError`, before
 writing anything, when the kept share of the stage B graph's nodes is below
 `config.SCC_MIN_RETAINED`, or a component it drops holds more than `config.SCC_MAX_DROPPED_NODES`,
 and `allow_fragmented` is not set. `save_stage` pickles the graph, with its `superjunctions` and
@@ -28,7 +29,7 @@ changed threshold reruns it.
 import json
 import pickle
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -203,14 +204,20 @@ def _refuse_fragmented(scc: ConnectivityReport, allow_fragmented: bool) -> None:
 
 
 def _without_no_turn(graph: nx.MultiDiGraph, scc: ConnectivityReport) -> nx.MultiDiGraph:
-    """The graph less every super-junction with edges in and out that allows no pair between
-    them, and less what connectivity drops after each round of those; each round added to `scc`.
-    """
+    """The graph less every node with a turn table (a super-junction, or a node a turn restriction
+    gave one) with edges in and out that allows no pair between them, and less what connectivity
+    drops after each round of those; each round added to `scc`."""
     dropped = list(scc.largest_dropped)
+
+    def tables() -> Iterator[tuple[int, tuple[Any, ...]]]:
+        for node, record in graph.graph["superjunctions"].items():
+            yield node, record["transitions"]
+        yield from graph.graph.get("restricted", {}).items()
+
     while no_turn := {
         node
-        for node, record in graph.graph["superjunctions"].items()
-        if not record["transitions"] and graph.in_degree(node) and graph.out_degree(node)
+        for node, transitions in tables()
+        if not transitions and graph.in_degree(node) and graph.out_degree(node)
     }:
         lost = [d for u, v, d in graph.edges(data=True) if u in no_turn or v in no_turn]
         trimmed = relabel(graph, [node for node in graph if node not in no_turn])

@@ -61,6 +61,17 @@ out-edge's start (the same node counts). Route splicing enforces them; every sup
 entry, even when no pair is allowed (cleanup drops one left with edges in and out and no pair,
 after connectivity: `cleanup.py`).
 
+`stage_b(graph, turns)` takes the turn tables of the stage A nodes a turn restriction applies at
+(`restrictions.turn_tables`: node -> the allowed pairs of its in- and out-edges, stage A keys).
+A super-junction one of whose nodes has a table walks its interior edge by edge (`_passes`): a
+pair is allowed when a path through its internal edges leads from the in-edge to the out-edge
+making only moves the tables allow at the nodes it passes; with no table its passages are the
+reachability above, computed as before. The twins carried along a passage's internal path
+(below) follow the same walk. A node outside the super-junctions keeps its table, its pairs in
+stage B's keys: `G.graph["restricted"][node]`, the sorted allowed pairs, as a super-node's
+`transitions` are (the table is absent when no such node has one, so a graph without turn
+restrictions is the graph it was before them).
+
 Twins (`carriageways.find_twins`) are found on the stage A graph, so a carriageway stretch that
 stage B makes internal still has its twins; `stage_b` carries the table across (`_carry_twins`).
 An edge that stays maps to itself. An edge internal to a super-node maps to the super-node's
@@ -81,14 +92,15 @@ only the transition that drives the stretch and then the twin is banned. The tab
 symmetric.
 
 `relabel` numbers the nodes `0..n-1`: plain and cluster nodes by their smallest member, then the
-super-nodes by theirs, keeping edge keys and remapping the `superjunctions` and `twins` tables.
+super-nodes by theirs, keeping edge keys and remapping the `superjunctions`, `restricted` and
+`twins` tables.
 `stage_b` ends with it, and cleanup calls it again after dropping the small components.
 """
 
 import heapq
 import math
 from collections import Counter, defaultdict, deque
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -126,6 +138,8 @@ BUFFER_QUAD_SEGS = 16
 
 type EdgeKey = tuple[int, int, int]
 type EdgeData = dict[str, Any]
+# The turn tables of stage A nodes: node -> its allowed (in-edge, out-edge) pairs.
+type Turns = Mapping[Any, set[tuple[Any, Any]]]
 
 
 @dataclass
@@ -155,6 +169,7 @@ class StageBStats:
     twin_pairs: int = 0  # unordered twin pairs carried across
     twin_transitions: int = 0  # transitions that must drive an internal edge with a twin outside
     twin_passages: int = 0  # passages banned for driving both edges of a twin pair inside
+    restricted: int = 0  # super-junctions with a turn table at one of their nodes
     nodes: int = 0
     edges: int = 0
 
@@ -323,8 +338,12 @@ def _cluster_centres(
     return centres
 
 
-def stage_b(graph: nx.MultiDiGraph) -> tuple[nx.MultiDiGraph, StageBStats]:
-    """The stage A graph with its interchanges and roundabouts as super-junctions."""
+def stage_b(
+    graph: nx.MultiDiGraph, turns: Turns | None = None
+) -> tuple[nx.MultiDiGraph, StageBStats]:
+    """The stage A graph with its interchanges and roundabouts as super-junctions, the turn
+    tables `turns` of its nodes honoured inside them and kept at the others."""
+    turns = turns or {}
     stats = StageBStats()
     signature = _road_signatures(graph)
     clusters = _absorb_pockets(
@@ -392,14 +411,12 @@ def stage_b(graph: nx.MultiDiGraph) -> tuple[nx.MultiDiGraph, StageBStats]:
         )
         members = {m for n in nodes for m in graph.nodes[n]["members"]}
         members.update(m for _, data in edges for m in data["osm_nodes"][1:-1])
-        reach = _reachability(nodes, [(u, v) for (u, v, _), _ in edges])
+        within = [(key, key[0], key[1]) for key, _ in edges]
         rings = nx.Graph((u, v) for (u, v, _), data in edges if _is_roundabout(data))
         transitions = sorted(
-            (new_key[into], new_key[out])
-            for into, head in ins[i]
-            for out, tail in outs[i]
-            if tail in reach[head]
+            (new_key[into], new_key[out]) for into, out in _passages(ins[i], outs[i], within, turns)
         )
+        stats.restricted += any(node in turns for node in nodes)
         result.nodes[base + i]["members"] = tuple(sorted(members))
         superjunctions[base + i] = {
             "kind": kind,
@@ -413,9 +430,16 @@ def stage_b(graph: nx.MultiDiGraph) -> tuple[nx.MultiDiGraph, StageBStats]:
         kinds[kind] += 1
         stats.internal_edges += len(edges)
     result.graph["superjunctions"] = superjunctions
+    restricted = {
+        node: tuple(sorted((new_key[a], new_key[b]) for a, b in table))
+        for node, table in sorted(turns.items())
+        if node not in super_of
+    }
+    if restricted:  # absent when no node outside the super-junctions has a table
+        result.graph["restricted"] = restricted
     if "twins" in graph.graph:
         result.graph["twins"], stats.twin_transitions, stats.twin_passages = _carry_twins(
-            graph, internal, ins, outs, new_key, signature
+            graph, internal, ins, outs, new_key, signature, turns
         )
         stats.twin_pairs = sum(map(len, result.graph["twins"].values())) // 2
     stats.superjunctions = {kind: kinds[kind] for kind in sorted(SUPER_KINDS)}
@@ -731,10 +755,12 @@ def _carry_twins(
     outs: dict[int, list[tuple[EdgeKey, int]]],
     new_key: dict[EdgeKey, EdgeKey],
     signature: dict[EdgeKey, Any],
+    turns: Turns,
 ) -> tuple[dict[EdgeKey, tuple[EdgeKey, ...]], int, int]:
     """The stage A graph's twins table in stage B's edge keys (the module header has the rule),
     the number of transitions that ban a twin of an internal edge they must drive, and the number
-    of passages banned for driving both edges of a twin pair inside their super-node."""
+    of passages banned for driving both edges of a twin pair inside their super-node; a passage's
+    internal paths are those the turn tables `turns` allow."""
     twins: dict[EdgeKey, tuple[EdgeKey, ...]] = graph.graph["twins"]
     owner = {edge: i for i, edges in internal.items() for edge, _ in edges}
     targets: dict[EdgeKey, set[EdgeKey]] = {}
@@ -775,18 +801,13 @@ def _carry_twins(
         inside = [(e, f) for e in keys for f in twins.get(e, ()) if owner.get(f) == i and e < f]
         if not inside and not any(outside.values()):
             continue
-        ends = {n for edge in keys for n in edge[:2]}
-        ends |= {n for _, n in ins[i]} | {n for _, n in outs[i]}
-        reach = _reachability(ends, [edge[:2] for edge in keys])
-        without = {
-            x: _reachability(ends, [edge[:2] for edge in keys if edge != x])
-            for x in {x for x in keys if outside[x]} | {x for pair in inside for x in pair}
-        }
+        dropped = {x for x in keys if outside[x]} | {x for pair in inside for x in pair}
+        forced = _forcing(ins[i], outs[i], [(key, key[0], key[1]) for key in keys], turns, dropped)
 
         for e, f in inside:
             for into, head in ins[i]:
                 for out, tail in outs[i]:
-                    if _forced(reach, without, head, tail, (e, f)):
+                    if forced(into, head, out, tail, (e, f)):
                         passages.add((i, into, out))
                         pairs[new_key[into]].add(new_key[out])
                         pairs[new_key[out]].add(new_key[into])
@@ -795,7 +816,7 @@ def _carry_twins(
                 continue
             for into, head in ins[i]:
                 for out, tail in outs[i]:
-                    if not _forced(reach, without, head, tail, (x,)):
+                    if not forced(into, head, out, tail, (x,)):
                         continue
                     matched.add((i, into, out))
                     a, b = new_key[into], new_key[out]
@@ -813,16 +834,100 @@ def _carry_twins(
     return table, len(matched), len(passages)
 
 
-def _forced(
+def _forced[E: Hashable](
     reach: dict[int, set[int]],
-    without: dict[EdgeKey, dict[int, set[int]]],
+    without: dict[E, dict[int, set[int]]],
     head: int,
     tail: int,
-    drives: tuple[EdgeKey, ...],
+    drives: tuple[E, ...],
 ) -> bool:
     """Whether a passage from `head` to `tail` is allowed and every internal path of it drives
     each edge of `drives` (`without[x]` is the reachability with `x` taken out)."""
     return tail in reach[head] and all(tail not in without[x][head] for x in drives)
+
+
+def _passes[E: Hashable, N: Hashable](
+    ins: Iterable[tuple[E, N]],
+    outs: Iterable[tuple[E, N]],
+    inner: Iterable[tuple[E, N, N]],
+    allows: Callable[[E, E, N], bool],
+) -> set[tuple[E, E]]:
+    """The (in-edge, out-edge) pairs a walk joins through the `inner` edges (edge, tail, head),
+    from each in-edge (with the node it reaches) to an out-edge (with the node it leaves), every
+    move from one edge to the next at a node one `allows(edge, next, node)` allows. The walk is
+    over edges, each visited once from each in-edge, so a move depends on the edge it comes by."""
+    leaving: dict[N, list[tuple[E, N]]] = defaultdict(list)
+    for edge, u, v in inner:
+        leaving[u].append((edge, v))
+    exits: dict[N, list[E]] = defaultdict(list)
+    for edge, tail in outs:
+        exits[tail].append(edge)
+    allowed: set[tuple[E, E]] = set()
+    for into, head in ins:
+        seen = {into}
+        queue = deque([(into, head)])
+        while queue:
+            edge, at = queue.popleft()
+            allowed.update((into, out) for out in exits[at] if allows(edge, out, at))
+            for after, ahead in leaving[at]:
+                if after not in seen and allows(edge, after, at):
+                    seen.add(after)
+                    queue.append((after, ahead))
+    return allowed
+
+
+def _allowed_by(turns: Turns) -> Callable[[Any, Any, Any], bool]:
+    """A move from edge `a` to edge `b` at a node is allowed unless the node has a table without
+    the pair."""
+
+    def allows(a: Any, b: Any, node: Any) -> bool:
+        table = turns.get(node)
+        return table is None or (a, b) in table
+
+    return allows
+
+
+def _passages[E: Hashable](
+    ins: list[tuple[E, int]],
+    outs: list[tuple[E, int]],
+    inner: list[tuple[E, int, int]],
+    turns: Turns,
+) -> list[tuple[E, E]]:
+    """A super-junction's allowed (in-edge, out-edge) pairs, in-edge by in-edge: its internal
+    reachability when none of its nodes has a turn table, else the walk the tables allow."""
+    nodes = {n for _, u, v in inner for n in (u, v)} | {n for _, n in ins} | {n for _, n in outs}
+    if not any(node in turns for node in nodes):
+        reach = _reachability(nodes, [(u, v) for _, u, v in inner])
+        return [(into, out) for into, head in ins for out, tail in outs if tail in reach[head]]
+    allowed = _passes(ins, outs, inner, _allowed_by(turns))
+    return [(into, out) for into, _ in ins for out, _ in outs if (into, out) in allowed]
+
+
+def _forcing[E: Hashable](
+    ins: list[tuple[E, int]],
+    outs: list[tuple[E, int]],
+    inner: list[tuple[E, int, int]],
+    turns: Turns,
+    dropped: Iterable[E],
+) -> Callable[[E, int, E, int, tuple[E, ...]], bool]:
+    """`forced(into, head, out, tail, drives)`: whether the passage from `into` (reaching `head`)
+    to `out` (leaving `tail`) is allowed and every internal path of it drives each edge of
+    `drives`, all among `dropped`. Without a turn table at the super-junction's nodes, by its
+    reachability with and without each such edge (`_forced`); with one, by the walks the tables
+    allow (`_passes`)."""
+    ends = {n for _, u, v in inner for n in (u, v)} | {n for _, n in ins} | {n for _, n in outs}
+    if not any(node in turns for node in ends):
+        reach = _reachability(ends, [(u, v) for _, u, v in inner])
+        without = {
+            x: _reachability(ends, [(u, v) for edge, u, v in inner if edge != x]) for x in dropped
+        }
+        return lambda into, head, out, tail, drives: _forced(reach, without, head, tail, drives)
+    allows = _allowed_by(turns)
+    passes = _passes(ins, outs, inner, allows)
+    lost = {x: _passes(ins, outs, [i for i in inner if i[0] != x], allows) for x in dropped}
+    return lambda into, head, out, tail, drives: (
+        (into, out) in passes and all((into, out) not in lost[x] for x in drives)
+    )
 
 
 _NO_ROAD = object()  # the signature of a ramp or roundabout edge, equal to no road's
@@ -935,7 +1040,9 @@ def relabel(graph: nx.MultiDiGraph, keep: Iterable[int] | None = None) -> nx.Mul
     number = {old: new for new, old in enumerate(order)}
     result = nx.MultiDiGraph()
     result.graph.update(
-        (key, value) for key, value in graph.graph.items() if key not in ("superjunctions", "twins")
+        (key, value)
+        for key, value in graph.graph.items()
+        if key not in ("superjunctions", "restricted", "twins")
     )
     result.add_nodes_from((number[old], graph.nodes[old]) for old in order)
     result.add_edges_from(
@@ -961,6 +1068,14 @@ def relabel(graph: nx.MultiDiGraph, keep: Iterable[int] | None = None) -> nx.Mul
                 allowed = tuple(sorted((a, b) for a, b in pairs if a is not None and b is not None))
                 tables[number[node]] = {**record, "transitions": allowed}
         result.graph["superjunctions"] = dict(sorted(tables.items()))
+    restricted = {}
+    for node, transitions in graph.graph.get("restricted", {}).items():
+        if node in number:
+            pairs = ((renumber(a), renumber(b)) for a, b in transitions)
+            allowed = tuple(sorted((a, b) for a, b in pairs if a is not None and b is not None))
+            restricted[number[node]] = allowed
+    if restricted:
+        result.graph["restricted"] = dict(sorted(restricted.items()))
     if "twins" in graph.graph:
         twins = {}
         for edge, others in graph.graph["twins"].items():

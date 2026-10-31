@@ -491,7 +491,7 @@ def cleanup(
     )
     no_turn = ""
     if scc.dropped_no_turn:
-        no_turn = f", {scc.dropped_no_turn} super-junctions dropped with no allowed turn"
+        no_turn = f", {scc.dropped_no_turn} junctions dropped with no allowed turn"
     typer.echo(
         f"connectivity: kept {scc.nodes_after} of {scc.nodes_before} nodes; dropped "
         f"{scc.dropped_nodes} nodes and {scc.dropped_length_m / 1000:.1f} km "
@@ -723,7 +723,8 @@ def save(region: RegionOption, build_id: BuildIdOption = None, force: ForceOptio
     typer.echo(f"graph_version {report.graph_version}")
     typer.echo(
         f"nodes {c['nodes']}, edges {c['edges']}; {c['twin_pairs']} twin pairs; "
-        f"{c['transitions']} transitions at {c['superjunctions']} super-junctions"
+        f"{c['transitions']} transitions at {c['superjunctions']} super-junctions and "
+        f"{c['restricted']} restricted junctions"
     )
 
 

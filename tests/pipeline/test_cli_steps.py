@@ -386,7 +386,7 @@ def test_cleanup_counts_the_super_junctions_dropped_with_no_allowed_turn(
     lines = output.splitlines()
     assert lines[4].startswith("stage B: 1 super-junctions (interchange 1, roundabout 0)")
     assert lines[5].startswith("connectivity: kept 2 of ")
-    assert lines[5].endswith(" components, 1 super-junctions dropped with no allowed turn")
+    assert lines[5].endswith(" components, 1 junctions dropped with no allowed turn")
 
 
 def test_cleanup_counts_the_pairs_of_one_road_mapped_twice(data_dir: Path, tmp_path: Path) -> None:
@@ -722,6 +722,7 @@ def test_save_after_tiers(data_dir: Path) -> None:
         "twin_pairs": 0,
         "transitions": 0,
         "superjunctions": 0,
+        "restricted": 0,
     }
     assert meta["sources"] == [
         {
@@ -755,7 +756,8 @@ def test_save_output(data_dir: Path) -> None:
     assert lines[0].startswith(f"save b1: wrote {directory} (")
     assert lines[1:] == [
         f"graph_version {version}",
-        "nodes 7, edges 12; 2 twin pairs; 16 transitions at 1 super-junctions",
+        "nodes 7, edges 12; 2 twin pairs; 16 transitions at 1 super-junctions and 0 restricted "
+        "junctions",
     ]
 
 

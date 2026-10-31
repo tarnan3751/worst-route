@@ -121,11 +121,25 @@ def check_superjunctions(graph: nx.MultiDiGraph) -> None:
         assert list(record["transitions"]) == sorted(expected)
 
 
+def check_restricted(graph: nx.MultiDiGraph) -> None:
+    """(7) A restricted node's table (`G.graph["restricted"]`, present only when one has a table)
+    is at a plain or cluster node, sorted, and names its own in- and out-edges."""
+    restricted: dict[int, tuple[Any, ...]] = graph.graph.get("restricted", {})
+    assert "restricted" not in graph.graph or restricted
+    assert list(restricted) == sorted(restricted)
+    for node, transitions in restricted.items():
+        assert graph.nodes[node]["kind"] not in SUPER_KINDS
+        assert list(transitions) == sorted(set(transitions))
+        for (_, head, _), (tail, _, _) in transitions:
+            assert head == tail == node
+
+
 def check_all(raw: nx.MultiDiGraph, graph: nx.MultiDiGraph, *, complete: bool = True) -> None:
     check_partition(raw, graph, complete=complete)
     check_edges(graph)
     check_twins(graph)
     check_superjunctions(graph)
+    check_restricted(graph)
 
 
 def lost_through(graph: nx.MultiDiGraph) -> list[tuple[int, int, int]]:
@@ -171,12 +185,12 @@ def check_build(data: GraphData) -> None:
     """The invariants on a saved build's arrays, with the format's own checks (`validate`).
 
     (1) Every original OSM node id is a member of one node only (`validate`); (2) twins are
-    symmetric (`validate`); (3) transitions sit at super-junctions and name their edges
-    (`validate`). A unit is one edge, or the edges of one road in either direction (its two
-    directions, and every copy of it when it is mapped more than once), named by the smallest
-    id. The tier masks are the tier's classes between kept nodes. What lies inside the edges
-    (no member, one road unit each) is `check_saved`'s, from the stage: the build does not
-    keep it.
+    symmetric (`validate`); (3) a transition names edges that meet at its node (`validate`):
+    rows sit at super-junctions and at the nodes a turn restriction gave a table. A unit is one
+    edge, or the edges of one road in either direction (its two directions, and every copy of it
+    when it is mapped more than once), named by the smallest id. The tier masks are the tier's
+    classes between kept nodes. What lies inside the edges (no member, one road unit each) is
+    `check_saved`'s, from the stage: the build does not keep it.
     """
     data.validate()
     runs: dict[int, list[int]] = defaultdict(list)
@@ -187,8 +201,6 @@ def check_build(data: GraphData) -> None:
         ends = {(int(data.edge_u[e]), int(data.edge_v[e])) for e in edges}
         u, v = int(data.edge_u[unit]), int(data.edge_v[unit])
         assert ends <= {(u, v), (v, u)}
-    supers = {NodeKind.INTERCHANGE, NodeKind.ROUNDABOUT}
-    assert all(NodeKind(k) in supers for k in data.node_kind[data.trans_node].tolist())
     for t, classes in enumerate(TIERS):
         in_tier = np.isin(data.edge_highway, sorted(classes))
         kept = data.tier_node_mask[t]
@@ -277,11 +289,9 @@ def check_saved(graph: nx.MultiDiGraph, data: GraphData, geometry: Geometry) -> 
     for e, key in enumerate(keys):
         row = _run(data.twin_indptr, data.twin_edges, e)
         assert row == sorted(edge_id[t] for t in twins.get(key, ()))
-    rows = {
-        (node, edge_id[a], edge_id[b])
-        for node, record in graph.graph["superjunctions"].items()
-        for a, b in record["transitions"]
-    }
+    tables = {v: r["transitions"] for v, r in graph.graph["superjunctions"].items()}
+    tables |= graph.graph.get("restricted", {})
+    rows = {(node, edge_id[a], edge_id[b]) for node, pairs in tables.items() for a, b in pairs}
     table = np.column_stack([data.trans_node, data.trans_in, data.trans_out]).tolist()
     assert {tuple(row) for row in table} == rows and len(table) == len(rows)
     brands = graph.graph["brands"]

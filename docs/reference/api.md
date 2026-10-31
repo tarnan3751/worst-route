@@ -227,7 +227,7 @@ state build, since every failing seed search looks again for a node-simple path
 | GET | `/ready` | `{status: "ready"\|"not_ready", checks: [{name, ok, detail}]}`: 200 when every check passes, else 503 (below) |
 | GET | `/config` | `{public, basemap: {kind, tiles, glyphs, sprite}, limits: {budget_max_s, leash_max_km}}` (**Basemap**) |
 | GET, HEAD | `/basemap/{path}` | the files under `<WORST_ROUTE_DATA>/basemap/`, with byte ranges (**Basemap**) |
-| GET | `/regions` | `[{region, build_id, graph_version, bbox: [w, s, e, n], counts, tiers: [{tier, nodes, edges}]}]` |
+| GET | `/regions` | `[{region, name, build_id, graph_version, bbox: [w, s, e, n], counts, tiers: [{tier, nodes, edges}]}]`, in the order served; `name` is what the frontend calls the region (`config.Region.display`: "Oregon", "United States"; the id for a region `config.REGIONS` does not name) |
 | POST | `/snap` | `{region, lat, lon, role: start\|via\|end, tier?}` → `{node, lat, lon, moved_m, note}` |
 | GET | `/brands` | `{region, brands: [{id, name, wikidata, locations}]}`, for `?region=` (below) |
 | POST | `/jobs` | 202 `{job_id, events_url, seed}` |

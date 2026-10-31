@@ -111,6 +111,7 @@ async def test_health_and_regions_describe_the_loaded_build(data: Path) -> None:
             "builds": [{"region": "portland", "build_id": "grid", "graph_version": version}],
         }
         [region] = (await client.get("/regions")).json()
+        assert (region["region"], region["name"]) == ("portland", "Portland")
         assert region["bbox"] == GRID_BBOX and region["counts"]["nodes"] == 100
         assert [t["tier"] for t in region["tiers"]] == ["T0", "T1", "T2", "T3", "T4"]
         assert region["tiers"][4] == {"tier": "T4", "nodes": 100, "edges": 360}

@@ -76,6 +76,27 @@ def test_a_region_names_a_state() -> None:
         Region(name="nowhere", states=(), crs_epsg=32610)
 
 
+def test_a_region_s_display_name_and_states() -> None:
+    names = {name: region.display for name, region in REGIONS.items()}
+    assert names == {
+        "portland": "Portland",
+        "oregon": "Oregon",
+        "oregon-washington": "Oregon and Washington",
+        "oregon-washington-t1": "Oregon and Washington",
+        "us-t1": "United States",
+        "us": "United States",
+        "west-coast": "West Coast",
+    }
+    # By default its name as words, "of" and "and" left lowercase after the first.
+    assert (
+        Region(name="district-of-columbia", states=("district-of-columbia",), crs_epsg=1).display
+        == "District of Columbia"
+    )
+    assert Region(name="new-york", states=("new-york",), crs_epsg=1).display == "New York"
+    assert REGIONS["oregon"].fips == frozenset({"41"}) and len(REGIONS["us-t1"].fips) == 49
+    assert REGIONS["portland"].fips == frozenset({"41"})  # clipped to its bbox all the same
+
+
 def test_data_dir_defaults_to_data(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("WORST_ROUTE_DATA", raising=False)
     assert settings().data_dir == Path("data")

@@ -83,9 +83,11 @@ export interface TierCount {
   edges: number;
 }
 
-/** One entry of `GET /regions`. */
+/** One entry of `GET /regions`, in the order served: `name` is what the app calls it ("Oregon",
+ * "United States"; absent from servers older than it, the recordings' among them). */
 export interface Region {
   region: string;
+  name?: string;
   build_id: string;
   graph_version: string;
   bbox: Bbox;

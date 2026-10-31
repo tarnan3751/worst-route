@@ -59,6 +59,7 @@ async def test_the_builds_are_served_in_their_order(lands: Path) -> None:
             ("lands", "l1"),
         ]
         assert [r["counts"]["nodes"] for r in regions] == [100, 400]
+        assert [r["name"] for r in regions] == ["Westland", "Lands"]  # config's, by default
         health = (await http.get("/health")).json()
         assert [(b["region"], b["build_id"]) for b in health["builds"]] == [
             ("westland", "w1"),
@@ -73,6 +74,15 @@ async def test_the_builds_are_served_in_their_order(lands: Path) -> None:
             "code": "UNKNOWN_REGION",
             "message": "region 'atlantis' is not served here (lands, westland)",
         }
+
+
+async def test_a_region_config_does_not_name_is_named_by_its_id(
+    lands: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delitem(REGIONS, "lands")
+    async with hosted(lands, builds=BOTH) as (http, _):
+        regions = (await http.get("/regions")).json()
+        assert [r["name"] for r in regions] == ["Westland", "lands"]
 
 
 async def test_a_job_runs_on_each_build(lands: Path) -> None:

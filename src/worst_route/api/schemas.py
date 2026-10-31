@@ -175,6 +175,7 @@ class TierOut(_Out):
 
 class RegionOut(_Out):
     region: str
+    name: str  # what the frontend calls it (`config.Region.display`)
     build_id: str
     graph_version: str
     bbox: tuple[float, float, float, float]  # min lon, min lat, max lon, max lat

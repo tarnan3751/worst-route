@@ -229,6 +229,7 @@ const routeRequest = object<RouteRequest>({
 
 const region = object<Region>({
   region: "string",
+  name: optional("string"),
   build_id: "string",
   graph_version: "string",
   bbox: { tuple: ["number", "number", "number", "number"] },

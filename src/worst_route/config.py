@@ -11,8 +11,9 @@ the API offers the frontend (`WORST_ROUTE_BASEMAP`, `raster` or `pmtiles`;
 `REGIONS` names the areas the pipeline builds (`docs/PLAN.md` §2): each is one or more Geofabrik
 state extracts, read in order and merged, optionally clipped to a bbox and limited to a tier's
 road classes, with the projected CRS its metric steps use (the regions of several states follow
-`STATES`); `PIPELINE_VERSION` is the version every build id and sidecar records. Speeds,
-tier definitions, class allowlists and defaults join this module as their steps are built.
+`STATES`) and the name the frontend shows (`display`); `PIPELINE_VERSION` is the version every
+build id and sidecar records. Speeds, tier definitions, class allowlists and defaults join this
+module as their steps are built.
 
 `HighwayClass` numbers the road classes a build keeps (stored per edge as `edge_highway`) and
 `TIERS` lists each tier's classes (`docs/PLAN.md` §2.6). `DEFAULT_BACKEND` names the graph
@@ -47,10 +48,20 @@ class Settings(BaseSettings):
     basemap: BasemapName = "raster"  # WORST_ROUTE_BASEMAP: OSM's raster tiles, or pmtiles
 
 
+def display_name(slug: str) -> str:
+    """A slug as words, each capitalised but "of" and "and" after the first: "district-of-columbia"
+    is "District of Columbia"."""
+    words = slug.split("-")
+    return " ".join(w if k and w in ("of", "and") else w.capitalize() for k, w in enumerate(words))
+
+
 class Region(BaseModel):
     """A named build area: Geofabrik state extracts, merged, optionally clipped to a bbox."""
 
     name: str
+    # What the frontend calls it ("Oregon", "United States"; `GET /regions`' `name`): by default
+    # its name as words (`display_name`).
+    display: str = Field(default_factory=lambda data: display_name(data["name"]))
     # Geofabrik slugs, e.g. ("oregon",), read in this order: a way two extracts hold (one crossing
     # their border) is taken from the first.
     states: tuple[str, ...] = Field(min_length=1)
@@ -75,6 +86,7 @@ class Region(BaseModel):
 REGIONS: dict[str, Region] = {
     "portland": Region(
         name="portland",
+        display="Portland",
         states=("oregon",),
         bbox=(-123.05, 45.25, -122.35, 45.72),
         crs_epsg=32610,
@@ -546,15 +558,27 @@ STATES: dict[str, tuple[str, str]] = {
 # outside CONUS Albers (EPSG:5070), so they would be regions of their own.
 _CONUS = tuple(state for state in STATES if state not in ("alaska", "hawaii"))
 REGIONS["oregon-washington"] = Region(
-    name="oregon-washington", states=("oregon", "washington"), crs_epsg=32610
+    name="oregon-washington",
+    display="Oregon and Washington",
+    states=("oregon", "washington"),
+    crs_epsg=32610,
 )
 REGIONS["oregon-washington-t1"] = Region(
-    name="oregon-washington-t1", states=("oregon", "washington"), crs_epsg=32610, classes="T1"
+    name="oregon-washington-t1",
+    display="Oregon and Washington",
+    states=("oregon", "washington"),
+    crs_epsg=32610,
+    classes="T1",
 )
-REGIONS["us-t1"] = Region(name="us-t1", states=_CONUS, crs_epsg=5070, classes="T1")
-REGIONS["us"] = Region(name="us", states=_CONUS, crs_epsg=5070)
+REGIONS["us-t1"] = Region(
+    name="us-t1", display="United States", states=_CONUS, crs_epsg=5070, classes="T1"
+)
+REGIONS["us"] = Region(name="us", display="United States", states=_CONUS, crs_epsg=5070)
 REGIONS["west-coast"] = Region(
-    name="west-coast", states=("california", "oregon", "washington"), crs_epsg=5070
+    name="west-coast",
+    display="West Coast",
+    states=("california", "oregon", "washington"),
+    crs_epsg=5070,
 )
 
 # Presentation (`docs/reference/presentation.md`). Directions: a left or right turn is "slight"

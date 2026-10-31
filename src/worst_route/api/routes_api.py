@@ -1,7 +1,7 @@
 """The endpoints (`docs/reference/api.md`; `docs/PLAN.md` §4).
 
     GET    /health                     the loaded builds
-    GET    /regions                    each region's build, bbox, counts and tiers
+    GET    /regions                    each region's name, build, bbox, counts and tiers
     POST   /snap                       where a stop would go
     GET    /brands                     the region's brands, for a pilgrimage
     POST   /jobs                       plan a route: 202 {job_id, events_url, seed}
@@ -151,6 +151,13 @@ def bbox_of(loaded: Loaded) -> tuple[float, float, float, float]:
     return float(lon.min()), float(lat.min()), float(lon.max()), float(lat.max())
 
 
+def display_of(region: str) -> str:
+    """What the frontend calls a region (`config.Region.display`); its id when config does not
+    name it."""
+    known = REGIONS.get(region)
+    return region if known is None else known.display
+
+
 def _check_inside(loaded: Loaded, lat: float, lon: float, **fields: Any) -> None:
     west, south, east, north = bbox_of(loaded)
     if not (west <= lon <= east and south <= lat <= north):
@@ -250,7 +257,8 @@ def health(request: Request) -> Health:
 
 @router.get("/regions")
 def regions(request: Request) -> list[RegionOut]:
-    """Each region's build, bbox, counts and tiers."""
+    """Each region's name, build, bbox, counts and tiers, in the order served; a region
+    `config.REGIONS` does not name is named by its id."""
     out = []
     for region, loaded in api_of(request).builds.items():
         data = loaded.data
@@ -265,6 +273,7 @@ def regions(request: Request) -> list[RegionOut]:
         out.append(
             RegionOut(
                 region=region,
+                name=display_of(region),
                 build_id=data.meta["build_id"],
                 graph_version=data.meta["graph_version"],
                 bbox=bbox_of(loaded),

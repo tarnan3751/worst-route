@@ -2,9 +2,9 @@
 
 `Settings` holds what varies per machine, read from the environment: the data directory
 (`WORST_ROUTE_DATA`, default `./data`; `CLAUDE.md`, **Commands**), the User-Agent sent to
-outside services, the contact (`WORST_ROUTE_CONTACT`) the geocoder adds to it, and the basemap
-the API offers the frontend (`WORST_ROUTE_BASEMAP`, `raster` or `pmtiles`;
-`docs/reference/hosting.md`).
+outside services (`user_agent_of`: a product, the package's version and `PROJECT_URL`), the
+contact (`WORST_ROUTE_CONTACT`) the geocoder adds to it, and the basemap the API offers the
+frontend (`WORST_ROUTE_BASEMAP`, `raster` or `pmtiles`; `docs/reference/hosting.md`).
 `settings()` returns one cached instance; tests that change the environment call
 `settings.cache_clear()`.
 
@@ -32,9 +32,20 @@ from typing import Literal
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from worst_route import __version__
+
 # The basemap the API offers the frontend: OpenStreetMap's raster tiles (hobby volume, local
 # use) or Protomaps' vector tiles from a file the server holds (`api/basemap_api.py`).
 BasemapName = Literal["raster", "pmtiles"]
+
+# Where the project lives, named in the User-Agent of every request to an outside service.
+PROJECT_URL = "https://github.com/tarnan3751/worst-route"
+
+
+def user_agent_of(product: str) -> str:
+    """The User-Agent of `product` ("worst-route"): its name, the package's version and the
+    project's address, `worst-route/0.1.0 (https://github.com/...)`."""
+    return f"{product}/{__version__} ({PROJECT_URL})"
 
 
 class Settings(BaseSettings):
@@ -43,7 +54,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="WORST_ROUTE_", populate_by_name=True)
 
     data_dir: Path = Field(default=Path("data"), validation_alias="WORST_ROUTE_DATA")
-    user_agent: str = "worst-route/0.1.0 (https://github.com/tarnan3751/worst-route)"
+    user_agent: str = user_agent_of("worst-route")
     contact: str | None = None  # WORST_ROUTE_CONTACT: added to the geocoder's User-Agent
     basemap: BasemapName = "raster"  # WORST_ROUTE_BASEMAP: OSM's raster tiles, or pmtiles
 

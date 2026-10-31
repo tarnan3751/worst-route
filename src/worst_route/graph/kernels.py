@@ -355,9 +355,9 @@ def dijkstra_edges_masked(
     exit_edge: int,
     max_cost: float,
 ) -> tuple[bool, I32, I32]:
-    """(found, nodes, edges): a cheapest path src → dst over edge states whose every turn is
-    allowed, as `backend.py` defines it; src ≠ dst, both enterable, max_cost ≥ 0. Not found
-    when the first end state popped has a path that enters a node twice."""
+    """(found, nodes, edges): a cheapest walk src → dst over edge states whose every turn is
+    allowed, as `backend.py` defines it; src ≠ dst, both enterable, max_cost ≥ 0. The walk is
+    the first end state popped's path, which may enter a node twice."""
     m = out_edges.shape[0]
     # Per edge state: 0 not reached, 1 reached (dist and pred hold its best so far), 2 settled.
     state = np.zeros(m, dtype=np.uint8)
@@ -439,10 +439,6 @@ def dijkstra_edges_masked(
                 edges[k] = x
                 nodes[k] = edge_u[x]
                 x = pred[x]
-            order = np.sort(nodes)
-            for k in range(length):
-                if order[k] == order[k + 1]:  # a node entered twice: an illegal path
-                    return False, np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)
             return True, nodes, edges
         for k in range(out_indptr[v], out_indptr[v + 1]):
             f = out_edges[k]

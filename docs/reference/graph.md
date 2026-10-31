@@ -298,9 +298,12 @@ driven, banned or costed. A bad one is a `ValueError`.
   twice.
 - **Ties**: the heap orders entries by (cost, edge id); only a strictly smaller cost replaces a
   state's predecessor; `max_cost` is inclusive and bounds every state kept.
-- **The answer** is the path of the first end state popped, or None. **A path that enters a
-  node twice is None**: node-simplicity cannot be said in an edge-state search, and such a path
-  is illegal anyway (a turn table can make the cheapest legal way a loop round a block).
+- **The answer** is the path of the first end state popped, or None. **It is a walk, and may
+  enter a node twice**: node-simplicity cannot be said in an edge-state search, and a turn table
+  can make the cheapest legal way a loop round a block. Such a walk is illegal for a route, so a
+  caller that needs a simple path checks, as for the tree search (`engine/search.py` does:
+  `docs/reference/engine.md`, **Searches**). It never enters `src` again (no state returns to
+  the start) and passes `dst` only at its end (a dead end is never expanded).
 - From `src` to itself: the one-node path, unless both turn edges are given and their turn is
   not allowed at `src` (None).
 
@@ -396,9 +399,8 @@ call.
   predecessor are left uninitialised until it is reached, so a search does not fill O(m) floats:
   on Portland that fill would cost 18 µs a call, the state array costs 1.4 µs. A start state is
   kept at its own weight within `max_cost`, an infinite one included, as the reference keeps it;
-  a relaxed state only on a strictly smaller cost. The first end state popped is the answer,
-  unless its path enters a node twice (found by sorting a copy of the path's nodes): then nothing
-  is found.
+  a relaxed state only on a strictly smaller cost. The first end state popped is the answer, its
+  walk as it is, a node entered twice included.
 - `dijkstra_edges_tree(out_indptr, out_edges, edge_v, weights, enter_u8, banned_u8, final_u8,
   trans_indptr, trans_key, bearing_in, bearing_out, turn_class, banned_turns, src, entry_edge,
   max_cost) -> (edges, costs, parents)`: the tree search exactly (**The tree search**), with the
@@ -620,14 +622,17 @@ them.
 the same fixture: on random graphs with random transition tables, the exact path against a
 heap-free implementation of the edge-state tie rule and the cost against networkx over the edge
 states; without rows, the cost of `dijkstra` and its path when the cheapest is unique; the DFS
-against networkx's simple paths filtered by turns; crafted entry and exit edges, a loop that
-would repeat a node, no return to the start, the dead end at `dst`, bad arguments. Then its
+against networkx's simple paths filtered by turns; crafted entry and exit edges, a cheapest
+legal walk entering a node twice (the answer as it is), no return to the start, the dead end at
+`dst`, bad arguments. Then its
 parity tests compare the two backends byte for byte:
 - 300 hypothesis graphs with and without transition tables, turn edges, weights in
   {0, 0.5, 1, 2, inf}, masks, budgets (`src == dst` included), and depth and count limits, both
   searches compared;
 - 300 transition-aware searches on a 30 × 30 grid with one-way streets, tables at a third of
-  its junctions and tied weights, with turn edges, masks and budgets (heaps that grow);
+  its junctions and tied weights, with turn edges, masks and budgets (heaps that grow), the
+  walks among the answers that enter a node twice (21 of 157) each checked against networkx as
+  the cheapest legal walk;
 - the simple paths across a 5 × 5 grid whose nodes 6, 12 and 18 allow only straight on, corner
   to corner, between two of those nodes through turn edges, and under a mask and limits;
 - with banned turn classes: the same semantics tests (the tie rule, the cheapest legal walk,

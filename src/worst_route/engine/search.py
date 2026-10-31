@@ -6,7 +6,9 @@ turn constraint's), `shortest_path` is the transition-aware `GraphBackend.dijkst
 `simple_paths` the DFS with its turn checks, so a path turns only where the tables and the
 classes allow, at the junctions inside it and, given `entry_edge` and `exit_edge`, at its two
 ends. Otherwise no turn can be forbidden, so they are the node-state `dijkstra` and the plain
-DFS, whose paths every backend reproduces byte for byte; the turn edges are then ignored.
+DFS, whose paths every backend reproduces byte for byte; the turn edges are then ignored. The
+transition-aware search answers the cheapest legal walk, which may enter a node twice (a table
+can make the cheapest legal way a loop round a block); such a walk is no path here.
 
 `avoided_turn_classes` (a soft turn constraint's) are refused too on a first search; when it
 finds nothing, the search is made again without them, so a path avoids those turns when it
@@ -121,7 +123,7 @@ def _search(
             banned_edges=banned_edges,
             max_cost=max_cost,
         )
-    return backend.dijkstra_edges(
+    walk = backend.dijkstra_edges(
         src,
         dst,
         weights,
@@ -133,6 +135,22 @@ def _search(
         max_cost=max_cost,
         banned_turn_classes=banned_turn_classes,
     )
+    if walk is None or _reentry(walk[0]) >= 0:
+        return None
+    return walk
+
+
+def _reentry(nodes: IntArray) -> int:
+    """The position along a walk's nodes where it first enters a node a second time, or −1."""
+    order = np.sort(nodes)
+    if not (order[1:] == order[:-1]).any():
+        return -1
+    seen: set[int] = set()
+    for k, v in enumerate(nodes.tolist()):
+        if v in seen:
+            return k
+        seen.add(v)
+    return -1  # unreachable: a repeated node is seen again
 
 
 def simple_paths(

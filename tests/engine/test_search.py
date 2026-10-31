@@ -4,6 +4,7 @@ import pytest
 from worst_route.engine import search
 from worst_route.engine.search import shortest_path, simple_paths
 from worst_route.graph.backend import Path
+from worst_route.graph.csr_backend import CsrBackend
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
 from worst_route.graph.testing import edge_id, make_graph
@@ -11,6 +12,9 @@ from worst_route.graph.testing import edge_id, make_graph
 from .graphs import X0, Y0, lattice
 
 STRAIGHT_AT_4 = [((3, 4), (4, 5)), ((5, 4), (4, 3)), ((1, 4), (4, 7)), ((7, 4), (4, 1))]
+BACKENDS = pytest.mark.parametrize(
+    "backend_type", [PythonBackend, CsrBackend], ids=["python", "csr"]
+)
 
 
 def nodes_of(path: Path | None) -> list[int] | None:
@@ -66,3 +70,19 @@ def test_the_search_gives_up_after_its_rounds(monkeypatch: pytest.MonkeyPatch) -
     g = divided()
     monkeypatch.setattr(search, "TWIN_RESEARCH_ROUNDS", 0)
     assert shortest_path(PythonBackend(g), 0, 3, lengths(g), avoid_twins=True) is None
+
+
+def loop() -> GraphData:
+    """S (0) → A (1) → D (2) is shortest, but arriving from S, A allows only A → B (3), and from
+    C (4) only A → D: the cheapest legal walk, S A B C A D, enters A twice."""
+    xy = [(X0, Y0), (X0 + 100, Y0), (X0 + 200, Y0), (X0 + 150, Y0 + 100), (X0 + 50, Y0 + 100)]
+    edges = [(0, 1, 100.0), (1, 2, 100.0), (1, 3, 100.0), (3, 4, 100.0), (4, 1, 100.0)]
+    return make_graph(xy, edges, transitions=[((0, 1), (1, 3)), ((4, 1), (1, 2))])
+
+
+@BACKENDS
+def test_a_walk_entering_a_node_twice_is_no_path(backend_type) -> None:
+    g = loop()
+    b = backend_type(g)
+    assert nodes_of(b.dijkstra_edges(0, 2, lengths(g))) == [0, 1, 3, 4, 1, 2]
+    assert shortest_path(b, 0, 2, lengths(g)) is None

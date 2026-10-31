@@ -118,7 +118,7 @@ class PythonBackend:
         max_cost: float = math.inf,
         banned_turn_classes: int = 0,
     ) -> Path | None:
-        """A cheapest path src → dst whose every turn is allowed, within the masks, or None."""
+        """A cheapest walk src → dst whose every turn is allowed, within the masks, or None."""
         self._check_weights(weights)
         check_ends(self.data, src, dst)
         check_turn_edges(self.data, src, dst, entry_edge, exit_edge)
@@ -373,15 +373,13 @@ class PythonBackend:
             nodes.append(self._tail[e])
         return _as_path(nodes[::-1], edges[::-1])
 
-    def _edge_path(self, src: int, last: int, pred: dict[int, int]) -> Path | None:
-        """The path of edge states ending in `last`, or None when it enters a node twice."""
+    def _edge_path(self, src: int, last: int, pred: dict[int, int]) -> Path:
+        """The walk of edge states ending in `last` (it may enter a node twice)."""
         edges: list[int] = [last]
         while pred[edges[-1]] >= 0:
             edges.append(pred[edges[-1]])
         edges.reverse()
         nodes = [src, *(self._head[e] for e in edges)]
-        if len(set(nodes)) < len(nodes):
-            return None
         return _as_path(nodes, edges)
 
 

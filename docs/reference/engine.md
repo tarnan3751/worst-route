@@ -158,9 +158,9 @@ be forbidden, so they are the node-state `dijkstra` and the plain DFS, and the t
 ignored: every backend gives the same paths there, byte for byte, and the routes on such builds
 (the test lattices, the golden route) are what they were before the tables were searched.
 
-The transition-aware search answers None when the cheapest legal path passes a node twice (a
-table can make the cheapest legal way a loop round a block); such a path is illegal for a route
-anyway, so the caller's fallback applies as for no path at all.
+The transition-aware search answers the cheapest legal walk, which may pass a node twice (a
+table can make the cheapest legal way a loop round a block); such a walk is illegal for a route,
+so `shortest_path` answers None for it, and the caller's fallback applies as for no path at all.
 
 **Turn classes.** `shortest_path` and `simple_paths` take `banned_turn_classes` and
 `avoided_turn_classes` (sets of class bits, **Turns**), which `find_detour` passes from the
@@ -430,7 +430,8 @@ avoided turn (**Targets**).
 **Why strict is rarely satisfiable.** On a street grid a net left turn without left turns is
 three rights round a block, which comes back through the junction it left, and no junction may
 repeat; a node-simple way must spiral outward round the trip's own start, mostly beyond the
-leash, and the edge-state search answers None for the cheapest walk that loops (**Searches**).
+leash, and the cheapest walk the edge-state search finds then loops, which is no path
+(**Searches**).
 On Portland, strict no-left plans 4 of the 20 acceptance pairs and strict no-right 3 (the
 others fail at the seed, after the stops' fallback), and Powell's → Reed refuses (**On
 Portland**). The same geometry bounds a soft run: a detour that adds no left turn needs right
@@ -1515,7 +1516,7 @@ for stable bytes; `at_node`, a node's lon/lat rounded to 1e-7° as a request's s
 | `test_request.py` | the request model and its bounds (its target's too, and no ratio target for a round trip; the item only and always with `collect`, which takes no ratio; the brand only and always with `brand`, which takes none either, and left out of the JSON when there is none; the alphabet route with two stops only, a round trip among them, and no target), tier and leash auto, the masks and the tier's edge bans; the objective's keys, the constraints left out of the JSON when there are none, both at once refused |
 | `test_target.py` | the target's bounds; the goal's rules on values (the band's edges, phases, the closer route better and a tie to the later, growing and shrinking acceptance at the band, a duration moving one way, a candidate's value equal to the re-scored route's, a ratio and a duration under the slowest time and a duration under the distance on the experienced time, delays included); and on lattices with `check_delta`: ratio and duration targets reached while only growing, a base past a target shrinking into it, a route already within it stopping before an attempt, an unreachable target converging with the closest route, the overshoot after an empty cycle (the closest route returned, and a run cut at its attempt the prefix ending with it), the same bytes on both backends and twice; the slowest time reaching ratio and duration targets on its experienced time |
 | `test_snap.py` | roles, cul-de-sacs, stops kept apart, round trips only for identical points, an end near the start moved on, re-snapping |
-| `test_search.py` | the turn edges counting only on a build with rows, a path driving both carriageways searched again, and the rounds' limit |
+| `test_search.py` | the turn edges counting only on a build with rows, a path driving both carriageways searched again, and the rounds' limit; a cheapest legal walk entering a node twice no path, on both backends |
 | `test_seed_route.py` | `resolve_stops` deterministic, node-disjoint legs, legs avoiding later stops, the penalty re-solve on a corridor, the baseline, the re-snap walk out of a one-entrance ring, the start never moving, a point-to-point trip never collapsing onto the start, a leg between two stops on one node, unreachable legs named by both ends, a leg going round a junction that allows only straight on, the turn at a via, the baseline's legal legs and its turn-blind fallback, a leg driving both carriageways going round, a round trip to a neighbour not one road out and back, round-trip loops (never back along the way out) |
 | `test_objectives.py` | `Distance`, the radius, the registry (`brand` with its brand), and `delta` against a full re-score for every kind of term, the first-edge term included; the delays in every mode's metrics; `SlowestTime`'s terms, weights, waypoint pool, `describe` and primary quantity (the experienced time), and its `delta` against a full re-score |
 | `test_collect.py` | `count_items` and each item's score, items first then length (a bridge split by a junction once, a bridge at the start, a bridge run through a round trip's start once, a roundabout on a round trip's start once, a toll booth in either direction), `delta` against a full re-score for each item with windows at the route's start and at its end (a round trip's start inside a bridge run among them), the waypoint pool (the uncollected places, once per route, any node once none is left in the area), the radius, `describe`; for each item a loop run with `check_delta` that never gives an item back and validates; a request planning the same collecting route on both backends, and one reaching a duration target |

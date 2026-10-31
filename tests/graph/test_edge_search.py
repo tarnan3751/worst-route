@@ -4,6 +4,7 @@ Against the semantics in graph/backend.py: the node-state `dijkstra` on graphs w
 transition rows (same cost, a path whenever it finds one), a heap-free implementation of the
 edge-state tie rule on graphs with random transition tables (the exact path), a networkx search
 over the edge states (the cost), and a brute force over networkx's simple paths for the DFS.
+`dijkstra_edges` answers a walk, which may enter a node twice; the DFS's paths are simple.
 The same again with random bearings and a random set of banned turn classes, classed here by
 the rule written out (`Case.turn_class`). The tree search (`dijkstra_edges_tree`) against a
 heap-free implementation of its tie rule (the exact states, costs and parents) and networkx over
@@ -191,6 +192,13 @@ def cases(
 
 
 def assert_legal(case: Case, path: Path) -> None:
+    """A legal walk that enters no node twice."""
+    assert_legal_walk(case, path)
+    assert len(set(path[0].tolist())) == len(path[0])
+
+
+def assert_legal_walk(case: Case, path: Path) -> None:
+    """A walk from src to dst within the masks whose every turn is allowed."""
     nodes, edges = path
     g = case.g
     assert nodes.dtype == np.int32 and edges.dtype == np.int32
@@ -198,7 +206,6 @@ def assert_legal(case: Case, path: Path) -> None:
     assert nodes[0] == case.src and nodes[-1] == case.dst
     assert np.array_equal(g.edge_u[edges], nodes[:-1])
     assert np.array_equal(g.edge_v[edges], nodes[1:])
-    assert len(set(nodes.tolist())) == len(nodes)
     assert case.enterable()[nodes].all()
     assert not case.is_banned()[edges].any()
     turns = [case.entry, *edges.tolist(), case.exit]
@@ -212,8 +219,7 @@ def assert_legal(case: Case, path: Path) -> None:
 def tie_rule_reference(case: Case, max_cost: float) -> list[int] | None:
     """The semantics of graph/backend.py written without a heap: settle the open state of
     least (cost, edge id), relax its moves in ascending edge id, replace a predecessor only on a
-    strictly smaller cost; answer the first terminal state settled, None if its path repeats a
-    node. Returns the path's edges."""
+    strictly smaller cost; answer the first terminal state settled. Returns its walk's edges."""
     enter = case.enterable()
     if max_cost < 0 or not (enter[case.src] and enter[case.dst]):
         return None
@@ -239,9 +245,7 @@ def tie_rule_reference(case: Case, max_cost: float) -> list[int] | None:
             edges = [e]
             while pred[edges[-1]] >= 0:
                 edges.append(pred[edges[-1]])
-            edges.reverse()
-            nodes = [case.src, *(int(case.g.edge_v[x]) for x in edges)]
-            return edges if len(set(nodes)) == len(nodes) else None
+            return edges[::-1]
         for f in moves.get(e, []):
             through = c + float(case.weights[f])
             if f not in settled and through <= max_cost and through < cost.get(f, math.inf):
@@ -250,6 +254,8 @@ def tie_rule_reference(case: Case, max_cost: float) -> list[int] | None:
 
 def state_graph_cost(case: Case) -> float | None:
     """The least cost of any walk of edge states from src to an allowed end (networkx)."""
+    if not case.enterable()[case.src]:
+        return None
     graph = nx.DiGraph()
     for e, f in case.state_moves():
         graph.add_edge(e, f, weight=float(case.weights[f]))
@@ -273,7 +279,7 @@ def test_dijkstra_edges_follows_the_tie_rule(backend_type, case: Case, max_cost:
         return
     assert path is not None
     assert path[1].tolist() == expected
-    assert_legal(case, path)
+    assert_legal_walk(case, path)
     assert float(case.weights[path[1]].sum()) <= max_cost
 
 
@@ -288,8 +294,9 @@ def test_dijkstra_edges_finds_the_cheapest_legal_walk(backend_type, case: Case) 
     best = state_graph_cost(case)
     if best is None:
         assert path is None
-    elif path is not None:  # None only when the cheapest walk repeats a node
-        assert_legal(case, path)
+    else:
+        assert path is not None
+        assert_legal_walk(case, path)
         assert float(case.weights[path[1]].sum()) == best
 
 
@@ -400,7 +407,7 @@ def test_banned_turn_classes_follow_the_tie_rule(backend_type, case: Case, max_c
     expected = tie_rule_reference(case, max_cost)
     assert (None if path is None else path[1].tolist()) == expected
     if path is not None:
-        assert_legal(case, path)
+        assert_legal_walk(case, path)
 
 
 @EXAMPLES
@@ -414,8 +421,9 @@ def test_banned_turn_classes_give_the_cheapest_legal_walk(backend_type, case: Ca
     best = state_graph_cost(case)
     if best is None:
         assert path is None
-    elif path is not None:  # None only when the cheapest walk repeats a node
-        assert_legal(case, path)
+    else:
+        assert path is not None
+        assert_legal_walk(case, path)
         assert float(case.weights[path[1]].sum()) == best
 
 
@@ -497,9 +505,10 @@ def test_from_a_node_to_itself(backend_type) -> None:
     assert dfs == []
 
 
-def test_a_cheapest_walk_through_a_node_twice_is_none(backend_type) -> None:
+def test_a_cheapest_walk_through_a_node_twice_is_the_answer(backend_type) -> None:
     # S (0) → A (1) → D (2) is shortest, but arriving from S, A allows only A → B (3); from
-    # C (4), only A → D. The cheapest legal walk S A B C A D repeats A: no path.
+    # C (4), only A → D. The cheapest legal walk S A B C A D enters A twice: it is the answer,
+    # for the caller to check.
     xy = [(0.0, 0.0), (100.0, 0.0), (200.0, 0.0), (150.0, 100.0), (50.0, 100.0)]
     g = make_graph(
         xy,
@@ -508,7 +517,7 @@ def test_a_cheapest_walk_through_a_node_twice_is_none(backend_type) -> None:
     )
     b = backend_type(g)
     assert nodes_of(b.dijkstra(0, 2, lengths(g))) == [0, 1, 2]
-    assert b.dijkstra_edges(0, 2, lengths(g)) is None
+    assert nodes_of(b.dijkstra_edges(0, 2, lengths(g))) == [0, 1, 3, 4, 1, 2]
 
 
 def test_no_state_returns_to_the_start(backend_type) -> None:
@@ -693,12 +702,13 @@ def town_with_tables(seed: int) -> GraphData:
 
 def test_the_backends_agree_on_a_town_with_tables() -> None:
     # weights of 1, 2 or 3 (ties everywhere), random turn edges, masks and budgets: larger
-    # heaps (which grow) and longer paths than the hypothesis graphs
+    # heaps (which grow) and longer paths than the hypothesis graphs, and walks entering a node
+    # twice among them
     g = town_with_tables(0)
     rng = np.random.default_rng(1)
     weights = rng.integers(1, 4, size=g.m).astype(np.float64)
     backends = [make(g) for make in BACKENDS.values()]
-    found = 0
+    found = repeats = 0
     for _ in range(300):
         src, dst = (int(v) for v in rng.integers(g.n, size=2))
         ins = g.in_edges[g.in_indptr[src] : g.in_indptr[src + 1]].tolist()
@@ -718,8 +728,16 @@ def test_the_backends_agree_on_a_town_with_tables() -> None:
             for b in backends
         ]
         assert_same(paths)
-        found += paths[0] is not None
+        walk = paths[0]
+        found += walk is not None
+        if walk is not None and len(set(walk[0].tolist())) < len(walk[0]):
+            repeats += 1  # still the cheapest legal walk, against networkx over the edge states
+            entry, exit_ = turns["entry_edge"], turns["exit_edge"]
+            case = Case(g, weights, src, dst, entry, exit_, node_mask, forbid, banned)
+            assert_legal_walk(case, walk)
+            assert float(weights[walk[1]].sum()) == state_graph_cost(case)
     assert 100 < found < 300  # both kinds of answer were compared
+    assert repeats > 10  # walks entering a node twice among them (21 of 157)
 
 
 def test_the_backends_agree_on_every_turning_path_of_a_grid() -> None:

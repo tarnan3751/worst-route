@@ -106,7 +106,7 @@ class CsrBackend:
         max_cost: float = math.inf,
         banned_turn_classes: int = 0,
     ) -> Path | None:
-        """A cheapest path src → dst whose every turn is allowed, within the masks, or None."""
+        """A cheapest walk src → dst whose every turn is allowed, within the masks, or None."""
         self._check_weights(weights)
         check_ends(self.data, src, dst)
         check_turn_edges(self.data, src, dst, entry_edge, exit_edge)

@@ -42,14 +42,15 @@ state is the sum of the weights along it; the search never keeps a state costing
 `max_cost` (inclusive), and a negative `max_cost` finds nothing. Ties: the heap orders entries
 by (cost, edge id), out-edges are relaxed in ascending edge id, and only a strictly smaller cost
 replaces a state's predecessor. The answer is the path of the first terminal state popped, or
-None; **when that path enters a node twice, the answer is None**: node-simplicity is not
-expressible in an edge-state search, and such a path is illegal anyway. From `src` to itself the
-answer is the one-node path unless both turn edges are given and the turn (`entry_edge`,
-`exit_edge`) is not allowed at `src` (then None). On a build with no transition rows, and with
-either turn edge, it finds a path whenever `dijkstra` does, at the same cost (Dijkstra's tree of
-edge states never repeats a node when every turn is allowed); the path itself is `dijkstra`'s
-whenever the two tie rules pick the same one. `ValueError` for a turn edge outside [−1, m) or
-not meeting its end, and for `banned_turn_classes` outside [0, 7].
+None. **That path is a walk: it may enter a node twice** (node-simplicity is not expressible in
+an edge-state search, and a turn table can make the cheapest legal way a loop round a block), so
+a caller that needs a simple path checks, as for the tree search (`engine/search.py` does). From
+`src` to itself the answer is the one-node path unless both turn edges are given and the turn
+(`entry_edge`, `exit_edge`) is not allowed at `src` (then None). On a build with no transition
+rows, and with either turn edge, it finds a path whenever `dijkstra` does, at the same cost
+(Dijkstra's tree of edge states never repeats a node when every turn is allowed); the path itself
+is `dijkstra`'s whenever the two tie rules pick the same one. `ValueError` for a turn edge
+outside [−1, m) or not meeting its end, and for `banned_turn_classes` outside [0, 7].
 
 `dijkstra_edges_tree` is the same transition-aware search without a destination: the same start
 states, moves, turn checks, `max_cost` (inclusive; negative finds nothing) and tie rule, run
@@ -158,7 +159,7 @@ class GraphBackend(Protocol):
         max_cost: float = math.inf,
         banned_turn_classes: int = 0,
     ) -> Path | None:
-        """A cheapest path src → dst whose every turn is allowed, within the masks, or None."""
+        """A cheapest walk src → dst whose every turn is allowed, within the masks, or None."""
         ...
 
     def dijkstra_edges_tree(

@@ -37,7 +37,7 @@ from worst_route.pipeline import PIPELINE_VERSION, layout
 STEPS = ("filter", "build", "cleanup", "enrich", "tiers", "save", "qa")
 FRAGMENTED_STEPS = ("cleanup", "tiers")  # the steps that take --allow-fragmented
 STAGE_FILES = {
-    "build": ("stages/build.pkl",),
+    "build": ("stages/build",),  # the arrays engine's, the default
     "cleanup": ("stages/cleanup.pkl", "stages/cleanup.json"),
     "enrich": ("stages/enrich.pkl", "stages/enrich.json"),
     "tiers": ("stages/tiers.json",),

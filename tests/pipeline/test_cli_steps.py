@@ -22,6 +22,7 @@ from worst_route.cli import app
 from worst_route.config import REGIONS
 from worst_route.graph.store import read_build
 from worst_route.pipeline import PIPELINE_VERSION, download, layout
+from worst_route.pipeline.arrays.build import load_stage
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "osm"
 runner = CliRunner()
@@ -175,13 +176,8 @@ def test_build_after_filter(data_dir: Path) -> None:
     assert "ways: read 12, kept 12; segments 60, nodes 36, edges 110" in output
     assert "edges by one-way rule: oneway 5, oneway_reverse 5, two_way 100" in output
     stages = data_dir / "graphs" / "portland" / build_id / "stages"
-    assert sorted(p.name for p in stages.iterdir()) == [
-        "build.json",
-        "build.pkl",
-        "build.pkl.inputs.json",
-    ]
-    with (stages / "build.pkl").open("rb") as f:
-        assert pickle.load(f).number_of_edges() == 110
+    assert sorted(p.name for p in stages.iterdir()) == ["build", "build.inputs.json", "build.json"]
+    assert load_stage(stages.parent).edges == 110
     assert json.loads((stages / "build.json").read_text())["nodes"] == 36
     assert (data_dir / "graphs" / "portland" / "latest").read_text() == f"{build_id}\n"
 
@@ -189,11 +185,11 @@ def test_build_after_filter(data_dir: Path) -> None:
 def test_build_skips_unless_forced(data_dir: Path) -> None:
     oneway = str(FIXTURES / "oneway.osm")
     assert pipeline("build", "--region", "portland", "--source", oneway, "--build-id", "b1")[0] == 0
-    pkl = data_dir / "graphs" / "portland" / "b1" / "stages" / "build.pkl"
-    written = pkl.stat().st_mtime_ns
+    manifest = data_dir / "graphs" / "portland" / "b1" / "stages" / "build" / "manifest.json"
+    written = manifest.stat().st_mtime_ns
     code, output = pipeline("build", "--region", "portland", "--source", oneway, "--build-id", "b1")
     assert code == 0 and output.startswith("skipped: build b1 is up to date")
-    assert pkl.stat().st_mtime_ns == written
+    assert manifest.stat().st_mtime_ns == written
     code, output = pipeline(
         "build", "--region", "portland", "--source", oneway, "--build-id", "b1", "--force"
     )
@@ -262,9 +258,8 @@ def test_cleanup_after_build(data_dir: Path) -> None:
         assert pickle.load(f).number_of_nodes() == 15
     assert json.loads((stages / "cleanup.json").read_text())["stage_a"]["clusters"] == 1
     sidecar = json.loads((stages / "cleanup.pkl.inputs.json").read_text())
-    assert sidecar["inputs"] == [
-        {"file": "build.pkl", "md5": layout.file_md5(stages / "build.pkl")}
-    ]
+    manifest = stages / "build" / "manifest.json"
+    assert sidecar["inputs"] == [{"file": "build/manifest.json", "md5": layout.file_md5(manifest)}]
     assert sidecar["params"]["allow_fragmented"] is False
     assert sidecar["params"]["config"]["STAGE_B_JOIN_M"] == 500.0
 
@@ -334,7 +329,7 @@ def test_cleanup_needs_a_build(data_dir: Path) -> None:
     assert code == 1
     assert "missing input" in output and "pipeline build --region portland" in output
     code, output = pipeline("cleanup", "--region", "portland", "--build-id", "nope")
-    assert code == 1 and "nope" in output and "build.pkl" in output
+    assert code == 1 and "nope" in output and "build/manifest.json" in output
 
 
 def test_the_arrays_engine_through_the_cli(data_dir: Path) -> None:
@@ -369,7 +364,7 @@ def test_the_arrays_engine_through_the_cli(data_dir: Path) -> None:
     flags = ["--region", "portland", "--build-id", "arrays"]
     code, output = pipeline("cleanup", *flags, "--engine", "arrays")
     assert code == 0 and output.startswith("skipped: ")
-    code, output = pipeline("cleanup", *flags)  # networkx's input is not there
+    code, output = pipeline("cleanup", *flags, "--engine", "networkx")  # its input is not there
     assert code == 1 and "build.pkl" in output and "--engine networkx" in output
     manifest.write_text(manifest.read_text() + "\n")  # the build stage changed since cleanup
     code, output = pipeline("enrich", *flags, "--force")
@@ -379,14 +374,14 @@ def test_the_arrays_engine_through_the_cli(data_dir: Path) -> None:
 def test_sidecars_from_before_the_engine_are_the_networkx_engines(data_dir: Path) -> None:
     """A build and a cleanup whose sidecars do not record an engine, as the code before the
     arrays engine wrote them, are up to date for the networkx engine, not for arrays."""
-    stages = cleaned_build(str(FIXTURES / "divided.osm"))
+    stages = cleaned_build(str(FIXTURES / "divided.osm"), "b1", "--engine", "networkx")
     for sidecar in ("build.pkl.inputs.json", "cleanup.pkl.inputs.json"):
         record = json.loads((stages / sidecar).read_text())
         del record["engine"]
         (stages / sidecar).write_text(json.dumps(record, indent=2) + "\n")
     flags = ["--region", "portland", "--build-id", "b1"]
     for step in ("build", "cleanup"):
-        code, output = pipeline(step, *flags)
+        code, output = pipeline(step, *flags, "--engine", "networkx")
         assert code == 0 and output.startswith("skipped: "), output
     code, output = pipeline("cleanup", *flags, "--engine", "arrays")
     assert code == 1 and "build/manifest.json" in output  # its own build stage is not there
@@ -401,11 +396,12 @@ def test_an_arrays_stage_without_its_manifest_is_rebuilt(data_dir: Path) -> None
     assert code == 0 and output.startswith("build b1: wrote ") and manifest.exists()
 
 
-def cleaned_build(source: str, build_id: str = "b1") -> Path:
-    """Filter, build and clean a fixture under the test's data directory; the stages."""
+def cleaned_build(source: str, build_id: str = "b1", *engine: str) -> Path:
+    """Filter, build and clean a fixture under the test's data directory (with `--engine` and
+    an engine, if given); the stages."""
     assert pipeline("filter", "--region", "portland", "--source", source)[0] == 0
-    assert pipeline("build", "--region", "portland", "--build-id", build_id)[0] == 0
-    assert pipeline("cleanup", "--region", "portland", "--build-id", build_id)[0] == 0
+    assert pipeline("build", "--region", "portland", "--build-id", build_id, *engine)[0] == 0
+    assert pipeline("cleanup", "--region", "portland", "--build-id", build_id, *engine)[0] == 0
     return layout.build_dir("portland", build_id) / "stages"
 
 

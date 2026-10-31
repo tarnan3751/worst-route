@@ -8,8 +8,8 @@ contract.
 Built: every step, `download`, `filter`, `build`, `cleanup`, `enrich`, `tiers`, `save` and `qa`.
 `save` writes the build in the format `docs/reference/graph.md` describes, which `worst-route
 plan` reads. Portland and the whole of Oregon (**Oregon**) build and pass QA. `build` and the
-whole of cleanup (simplification, stage A, twins, stage B, connectivity) also run on arrays
-(`--engine arrays`, **The arrays engine**), to the same build.
+whole of cleanup (simplification, stage A, twins, stage B, connectivity) run on arrays, the
+default engine (**The arrays engine**), to the networkx engine's build (`--engine networkx`).
 
 ## Commands
 
@@ -26,7 +26,7 @@ uv run worst-route pipeline qa       --region portland [--build-id ID] [--force]
 
 `--region` is a key of `config.REGIONS` (a Geofabrik state slug, an optional bbox, a projected
 CRS). `--source` makes `filter` or `build` read that file instead of its usual input (a fixture,
-in tests). `--engine` (`networkx`, the default `config.DEFAULT_PIPELINE_ENGINE`, or `arrays`)
+in tests). `--engine` (`arrays`, the default `config.DEFAULT_PIPELINE_ENGINE`, or `networkx`)
 chooses the engine of `build` and `cleanup`; both make the same build, byte for byte (**The
 arrays engine**), and `cleanup` reads the build stage of its own engine. Every step accepts `--build-id` and `--force`; `download` and `filter` ignore the
 build id; the steps from `cleanup` on read the build `--build-id` names, else the region's
@@ -49,7 +49,7 @@ is the one place that names these paths.
 |---|---|
 | `raw/<state>-latest.osm.pbf`, `raw/<state>-latest.osm.pbf.md5` | `download` |
 | `filtered/<region>.roads.osm.pbf`, `filtered/<region>.pois.parquet` | `filter` |
-| `graphs/<region>/<build_id>/stages/build.pkl`, `stages/build.json` | `build` (`stages/build/` instead of `build.pkl` with `--engine arrays`) |
+| `graphs/<region>/<build_id>/stages/build/`, `stages/build.json` | `build` (`stages/build.pkl` instead of `build/` with `--engine networkx`) |
 | `graphs/<region>/latest` (the region's current build id, one line) | `build` |
 | `graphs/<region>/<build_id>/stages/cleanup.pkl`, `stages/cleanup.json` | `cleanup` |
 | `graphs/<region>/<build_id>/stages/enrich.pkl`, `stages/enrich.json` | `enrich` |
@@ -847,15 +847,17 @@ two halves are now one interchange through which the Newberg Highway, OR 219 on 
 
 ## The arrays engine
 
-`--engine arrays` runs `build` and the steps of `cleanup` built so far on NumPy arrays, scipy,
-shapely and Numba instead of networkx and OSMnx (`src/worst_route/pipeline/arrays/`), so that a
-state and later the whole country fit in memory and take hours rather than days (`docs/PLAN.md`
-§7 M5.2). It makes exactly the networkx engine's build: the same arrays byte for byte, the same
-strings, the same `graph_version`; the parity tests and `tools/parity.py` (below) hold it to
-that. Built so far: `build` and the whole of cleanup (simplification, stage A, twins, stage B,
-connectivity). The steps after it are still networkx's, handed the cleaned graph by
-`arrays/to_nx.py` as networkx itself would hold it; enrich, tiers and save's input join in a
-later series.
+`--engine arrays`, the default, runs `build` and the whole of `cleanup` on NumPy arrays, scipy,
+shapely and Numba instead of networkx and OSMnx (`--engine networkx`;
+`src/worst_route/pipeline/arrays/`), so that a state and later the whole country fit in memory
+and take hours rather than days (`docs/PLAN.md` §7 M5.2). It makes exactly the networkx engine's
+build: the same arrays byte for byte, the same strings, the same `graph_version`; the parity
+tests and `tools/parity.py` (below) hold it to that. The steps after cleanup are still
+networkx's, handed the cleaned graph by `arrays/to_nx.py` as networkx itself would hold it;
+enrich, tiers and save's input join in a later series. On a build the networkx engine made, the
+new default needs `build` run again before `cleanup`, whose input is now the arrays engine's
+build stage; `enrich`, `tiers` and `save` then skip, the cleanup stage being the same bytes, and
+`qa` runs again, the cleanup report's seconds being new.
 
 **Stages** (`arrays/stage.py`). A stage is a directory under `stages/`, one `.npy` per array
 (no pickles) and `tables.json` for the rest (the tag sets, the CRS), with `manifest.json`

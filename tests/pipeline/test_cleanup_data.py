@@ -1,5 +1,6 @@
-# The cleanup stage of Portland's latest build, read through WORST_ROUTE_DATA. Run on demand with
-# `uv run pytest -m data`; skipped when that build or its cleanup stage is not there.
+# The cleanup stage of Portland's latest build, made by either engine, read through
+# WORST_ROUTE_DATA. Run on demand with `uv run pytest -m data`; skipped when that build or its
+# cleanup stage is not there.
 import json
 import pickle
 from typing import Any
@@ -8,8 +9,10 @@ import networkx as nx
 import pytest
 
 from tests.pipeline.invariants import check_all, lost_through
+from tests.pipeline.parity import raw_graph
 from worst_route.config import SCC_MAX_DROPPED_NODES, SCC_MIN_RETAINED
 from worst_route.pipeline import layout
+from worst_route.pipeline.arrays.build import load_stage
 
 pytestmark = pytest.mark.data
 
@@ -22,15 +25,18 @@ def stages() -> Stages:
     if not latest.exists():
         pytest.skip(f"no Portland build under {latest.parent}")
     directory = layout.build_dir("portland", latest.read_text().strip())
-    paths = [layout.stage_file(directory, name) for name in ("build.pkl", "cleanup.pkl")]
+    built, cleaned = layout.build_stage(directory), layout.stage_file(directory, "cleanup.pkl")
     report = layout.stage_file(directory, "cleanup.json")
-    if not all(path.exists() for path in [*paths, report]):
+    if not all(path.exists() for path in (built, cleaned, report)):
         pytest.skip(f"no cleanup stage in {directory}")
-    graphs = []
-    for path in paths:
-        with path.open("rb") as f:
-            graphs.append(pickle.load(f))
-    return graphs[0], graphs[1], json.loads(report.read_text())
+    if built.is_dir():  # the arrays engine's build stage, as networkx holds the raw graph
+        raw = raw_graph(load_stage(directory))
+    else:
+        with built.open("rb") as f:
+            raw = pickle.load(f)
+    with cleaned.open("rb") as f:
+        graph = pickle.load(f)
+    return raw, graph, json.loads(report.read_text())
 
 
 def test_portland_invariants(stages: Stages) -> None:

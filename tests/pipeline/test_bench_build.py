@@ -45,7 +45,8 @@ def test_each_step_is_measured(
         str(layout.pois_parquet("portland")),
     }
     stages = layout.build_dir("portland", report["build_id"]) / "stages"
-    assert build["outputs"] == {str(stages / "build.pkl"): (stages / "build.pkl").stat().st_size}
+    raw = stages / "build"
+    assert build["outputs"] == {str(raw): sum(p.stat().st_size for p in raw.iterdir())}
     assert build["output"][1] == "ways: read 12, kept 12; segments 23, nodes 19, edges 30"
     printed = capsys.readouterr().out
     assert "| Step | Wall | CPU (user + sys) | Peak RSS | Output | Result |" in printed

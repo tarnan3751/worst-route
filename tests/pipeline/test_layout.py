@@ -102,7 +102,7 @@ def test_a_stage_recording_none_of_its_inputs_is_stale(tmp_path: Path) -> None:
 
 
 def test_the_build_stage_cleanup_read(tmp_path: Path) -> None:
-    assert layout.build_stage(tmp_path) == layout.stage_file(tmp_path, "build.pkl")  # none yet
+    assert layout.build_stage(tmp_path) == layout.stage_file(tmp_path, "build")  # the default's
     _stage(tmp_path, "build.pkl", [])
     _stage(tmp_path, "build/manifest.json", [])
     _stage(tmp_path, "cleanup.pkl", ["build/manifest.json"])

@@ -25,7 +25,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from worst_route.config import PipelineEngine, Region, settings
+from worst_route.config import DEFAULT_PIPELINE_ENGINE, PipelineEngine, Region, settings
 from worst_route.pipeline import PIPELINE_VERSION
 
 
@@ -76,15 +76,15 @@ BUILD_STAGES: dict[PipelineEngine, tuple[str, str]] = {
 
 
 def build_stage(build: Path) -> Path:
-    """The build stage the build's cleanup read, as its sidecar records (`build.pkl` before
-    cleanup has run)."""
+    """The build stage the build's cleanup read, as its sidecar records (the default engine's
+    before cleanup has run)."""
     side = sidecar(stage_file(build, "cleanup.pkl"))
     if side.exists():
         read = {i["file"] for i in json.loads(side.read_text())["inputs"]}
         for stage, recorded in BUILD_STAGES.values():
             if recorded in read:
                 return stage_file(build, stage)
-    return stage_file(build, BUILD_STAGES["networkx"][0])
+    return stage_file(build, BUILD_STAGES[DEFAULT_PIPELINE_ENGINE][0])
 
 
 def qa_file(build: Path, name: str) -> Path:

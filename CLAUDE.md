@@ -62,8 +62,8 @@ hold only what the engine and the validator read, and the roads' shapes, simplif
 sit apart in `geometry/`, which only the drawing of a route reads (`docs/reference/graph.md`,
 **Geometry**).
 M5.2's array pipeline has begun: `build` and the whole of cleanup (simplification,
-stage A, twins, stage B, connectivity) run on arrays under `--engine arrays` (`docs/reference/pipeline.md`, **The arrays engine**), to
-the networkx engine's build byte for byte.
+stage A, twins, stage B, connectivity) run on arrays, the default engine (`docs/reference/pipeline.md`, **The arrays engine**), to
+the networkx engine's build byte for byte (`--engine networkx`).
 The engine is at version 4: when the cheapest legal walk the transition-aware search finds
 passes a node twice, it searches again with the edge that comes back to it banned, up to 8
 times (`docs/reference/engine.md`, **Searches**).
@@ -113,7 +113,7 @@ Every command below exists. One a later milestone adds is marked with that miles
 | Tests that need a built graph (skipped by the gate) | `uv run pytest -m data` |
 | Lint and format check | `uv run ruff check . && uv run ruff format --check .` |
 | Types | `uv run mypy src` |
-| Pipeline, one step (all eight are real, run in this order; `filter` and `build` also take `--source PATH`, `cleanup` and `tiers` take `--allow-fragmented`, `build` and `cleanup` take `--engine networkx\|arrays`, the same build) | `uv run worst-route pipeline <download\|filter\|build\|cleanup\|enrich\|tiers\|save\|qa> --region portland` |
+| Pipeline, one step (all eight are real, run in this order; `filter` and `build` also take `--source PATH`, `cleanup` and `tiers` take `--allow-fragmented`, `build` and `cleanup` take `--engine arrays\|networkx`, arrays by default, the same build) | `uv run worst-route pipeline <download\|filter\|build\|cleanup\|enrich\|tiers\|save\|qa> --region portland` |
 | Fetch the Census boundary files (a person, never the gate or an agent; FIPS codes of the states whose places to fetch) | `tools/fetch_census.sh 41 53` |
 | Write the places index (states, outlines, the region's towns) from them | `uv run worst-route aux places --region portland` |
 | Plan a route from the CLI, validated (`--target ratio:20` or `duration:9h` aims for a target within ±2 %; `--base route.json` continues a saved route; `--objective time` the slowest; `--no-left` / `--no-right` such turns at a kilometre each, `--strict` none; `--hard` each road in one stretch, never driven again once left; `--objective collect --item bridge` collects bridges, or `toll_booth`, `level_crossing`, `roundabout`; `--objective brand --brand Starbucks` visits a brand's locations, by name or id; `--objective alphabet` drives roads A, B, C, … from `--from` to `--to`) | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |

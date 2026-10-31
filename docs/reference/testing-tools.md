@@ -67,6 +67,27 @@ leftover scan alone.
 `.github/workflows/gate.yml` runs `tools/gates.sh` on every push and pull request
 (ubuntu-latest, uv with Python 3.12, Node 22 for the frontend gate).
 
+## Measuring a build: `tools/bench_build.py`
+
+```
+uv run python tools/bench_build.py --region oregon [--source PATH] [--steps filter,build,...]
+    [--force] [--allow-fragmented] [--out tools/out/bench_build-<region>.json]
+```
+
+Runs a region's pipeline steps, `filter` to `qa` (all seven by default, in order; never
+`download`), each as `worst-route pipeline <step> --region R` in a process of its own, echoing
+its output, with `--source` passed to `filter`, `--force` to every step and `--allow-fragmented`
+to `cleanup` and `tiers`. Per step it records the wall time, the user and system CPU seconds,
+the peak resident set size of the step's process (`os.wait4`'s `ru_maxrss`, which is what
+`/usr/bin/time -l` reports on macOS), the exit code, the output, and the sizes of the files the
+step wrote (the filtered roads and POIs, the stage pickles and reports, the build's `arrays/`,
+`strings.json` and `meta.json`, the `qa/` layers). A step the CLI skips as up to date is
+reported as skipped. The first step that fails ends the run. It prints a Markdown table, writes
+the JSON report to `--out` (under `tools/out/`, which git ignores) and exits with the failed
+step's code, else 0. It needs real extracts under `WORST_ROUTE_DATA`, so the gate never runs it;
+it is a heavy job when the region is a state (`docs/reference/pipeline.md`, **Oregon**).
+`tests/pipeline/test_bench_build.py` runs it on the divided fixture.
+
 ## Lanes
 
 The main working tree is the coordinator's. A developer or reviewer works in a `git clone` under

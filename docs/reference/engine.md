@@ -107,8 +107,11 @@ the request's area holds any of its locations, is planning's to check (**Plannin
 route can be checked against the same masks later. The trip length is the straight-line length
 of the polyline through the projected stops.
 
-- **Tier auto**: below 15 km T4, below 60 km T3, below 250 km T2, below 800 km T1, else T0
-  (`TIER_AUTO_KM`).
+- **Tier auto**: below 800 km T4, else T0 (`TIER_AUTO_KM`, four thresholds, T4 below the first,
+  T0 from the last; they coincide, so T1–T3 are taken only when asked for). Engine version 3,
+  tuned on the Oregon build (**On Oregon**); before, below 15 km T4, below 60 km T3, below 250 km
+  T2, below 800 km T1, else T0. The golden routes ask for `tier: auto` on lattices about 2 km
+  across, T4 under both rules, so the tuning leaves them as they were.
 - **Leash auto**: 0.6 × the trip length within [3, 150] km; `leash` is the nodes within it of
   the polyline.
 - **Bubbles**: the nodes within 3 km of a stop (`BUBBLE_KM`).
@@ -119,6 +122,13 @@ of the polyline through the projected stops.
   between two of the tier's own nodes.
 - **`extent_m`**: the diagonal of the active nodes' bounding box. The loop's radius bound is
   `r_max = min(leash, extent)`.
+
+The masks cost one pass over the build's nodes and edges per request; the leash's distances
+(shapely, on the nodes inside the stops' bounding box grown by the leash) are nearly all of it.
+On the Oregon build (237,581 nodes, 593,555 edges) a statewide request's masks take 83–166 ms at
+load averages of 15–40 (Astoria → Ontario: 133 ms for the leash, which holds 161,341 nodes, under
+3 ms for the bubbles, `active` and `banned`), so they are computed over the whole build, not
+restricted to the leash's bounding box.
 
 ## Stops
 
@@ -1081,7 +1091,7 @@ replaying it needs the base file.
 **`validate`** reads a `route.json` and loads the build it names (or `--region` /
 `--build-id`). A file it cannot read (a missing field, an id beyond int32) is `cannot read …`
 and exit 1, and so is a file made by another engine version (`… was made by engine version 1;
-this is version 2: re-plan`): its stops are re-derived with this engine's search, which could
+this is version 3: re-plan`): its stops are re-derived with this engine's search, which could
 put them elsewhere. It refuses a build whose `graph_version` differs, recomputes the request's masks
 from the file's request, and re-derives the stops with `resolve_stops` on the backend
 `--backend` names. It prints the file's line, the backend's (`backend: csr`), one line per
@@ -1318,12 +1328,81 @@ converges on the same route, letters and restart count, and the two named trips,
 the restarts they ran (1,288 and 864), give the same route.json edges; so they do again on top
 of hard mode's series (2026-10-31), which changes no alphabet route.
 
+**On Oregon** (M5.1; build 5913ade7a2df at `graph_version` 73b137860fc2, pipeline version 3,
+`docs/reference/pipeline.md`, **Oregon**; `CsrBackend`; `worst-route plan --seed 1 --budget 30
+--max-iterations 1000000`; 2026-10-31, other lanes running, load average 15–40, so a rate compares
+only within a table; every route validates, `worst-route validate` too). The named trips run from
+Pioneer Courthouse Square (45.5189, −122.6793) to Bend (44.0582, −121.3153), Astoria (46.1879,
+−123.8313) to Ontario (44.0266, −116.9629), Eugene (44.0521, −123.0868) to the square, and Medford
+(42.3265, −122.8756) to the square. With engine version 2's automatic tiers (load 36–40):
+Portland → Bend on T2, 2.03×; Astoria → Ontario on T1, 1.17×, converged; Eugene → Portland on
+T2, 3.12×; Medford → Portland on T1, refused (below). Forced on each tier (`--tier`, load 15–33;
+"budget" or "converged", how the run stopped):
+
+| Trip, straight line | T1 | T2 | T3 | T4 |
+|---|---|---|---|---|
+| Portland → Bend, 195 km | 2.17×, budget | 5.31×, converged (5.16× and 5.18× at load 34–40) | 3.77×, budget (3.74× twice) | 9.26×, budget |
+| Astoria → Ontario, 592 km | 1.17×, converged | 1.32×, converged | 3.35×, converged | 3.56×, budget |
+| Eugene → Portland, 166 km | refused | 3.28×, budget | 6.73×, budget | 10.99×, budget |
+| Medford → Portland, 355 km | refused | 4.26×, budget | 5.37×, budget | 7.59×, budget |
+
+Ten random pairs 71–403 km apart (`tools/acceptance.py`'s draw, pair seed 2026, 60–650 km)
+planned 4 of 10 on T2, 7 on T3 (median 5.16×) and 8 on T4 (6.10–10.85×). The sparser tiers'
+networks hold few loops a detour can take without repeating a junction, so their runs converge
+early, and a rural stop's 3 km bubble seldom meets their roads (a stop in the Ochoco National
+Forest, 44.43, −120.35, lies on a tertiary road but 7.1 km from the nearest T1 or T2 node: on T2
+the seed cannot leave its bubble). So the automatic tier is T4 below 800 km (engine version 3,
+**Requests**). With it (load about 19):
+
+| Trip | Baseline | Worst | Ratio | Attempts, rate | Route |
+|---|---|---|---|---|---|
+| Portland → Bend (T4, leash 116.9 km) | 256.87 km | 2,689.84 km | 10.47× | 10,386, 346/s | 11,618 nodes |
+| Astoria → Ontario (leash 150 km) | 751.90 km | 3,027.09 km | 4.03× | 10,749, 358/s | 10,161 nodes |
+| Eugene → Portland (leash 99.7 km) | 181.26 km | 2,537.91 km | 14.00× | 9,808, 327/s | 12,013 nodes |
+| Medford → Portland (leash 150 km) | 443.99 km | 3,626.45 km | 8.17× | 5,981, 199/s | 11,610 nodes |
+
+Every run stopped on its budget; the `plan` process peaked at 375–498 MB, and `worst-route
+validate` of the Astoria → Ontario route takes 1.3 s. Astoria → Ontario stays the least bad: the
+route must cross the Cascades in the Columbia Gorge, where no detour exists. `tools/acceptance.py
+--region oregon --pairs 10` (3–15 km pairs, which T4 planned before too) plans 9 of 10, the
+validator passing all 9, median 2.82× (1.00–8.86×), median 2,398 attempts/s, every run converged
+in 0.3–13.8 s, Jaccard of seeds 1 and 2 0.11–0.39 on five pairs; the tenth, two points 8.8 km
+apart but 32.4 km by road, does not fit its 5.3 km leash (it plans with `--leash-km 10`). With
+`--min-km 60 --max-km 650 --jaccard 0` it plans 8 of 10, the validator passing all 8, median
+8.88× (6.47–12.74×), median 557 attempts/s, every run on its budget. A stop with no node within
+5 km is refused ("no node within 5000 m of (44.1, -121.77) can be an end stop", in the Three
+Sisters Wilderness).
+
+The refusals left are the transition-aware search's (**Limitations**, **Transitions**), each a
+super-junction the cheapest legal walk enters twice: Medford → Portland and Eugene → Portland on
+T1 at the Woodburn interchange (I-5 and OR 214/OR 219, node 236835), the random pairs from near
+Melrose (west of Roseburg) to near Warren (by St. Helens) and from near Rose Lodge to near
+Sisters on T4 at nodes 236640 (McKay Road
+and French Prairie Road by I-5 near Donald) and 236164 (Valley Junction, OR 18 and OR 22). At
+Woodburn the turn table is wrong: stage B made the interchange three super-junctions, the OR 214
+side (236835) and the OR 219 side (236639), whose ramps share only I-5 (the Newberg Highway
+changes its ref at the bridge), and an east one (236678). Northbound I-5, one OSM way
+(1186652782) with no turn restriction, enters 236835 at its off-ramp's gore, passes 236639 at its
+on-ramp's merge and comes back to 236835 at its own on-ramp's merge; the direct pass (edge 590380
+to 590995) is not in 236835's table, since no internal path joins those two members, and the
+stretch between is no pocket, running through 236639's member. So no route drives north
+straight through Woodburn on I-5 (southbound passes 236639 twice too, but its direct pass is in
+the table, through the off-ramp, the Newberg Highway and the on-ramp). A legal node-simple path
+exists, 455.0 km by OR 99E against the walk's 454.7 km, which the search does not look for.
+Statewide, carriageways of motorway, trunk or primary class that leave a super-junction and come
+back to it with the direct pass not in its table number 11 at 9 super-junctions (Portland's
+build: 5 at 4). The I-5 junction near Salem (237073) the turn-blind path also crosses is right:
+straight through is allowed both ways, and what the blind path did there, northbound I-5 onto the
+Salem Parkway's on-ramp, cannot be driven.
+
 ## Limitations
 
 - **Transitions.** The searches see the transition tables (**Searches**), but a leg or a part
   of a detour whose cheapest legal path passes a node twice is no path: the search does not
   look for the cheapest node-simple legal path, which a turn table can make longer than the
-  cheapest walk. The seed then falls back as for an unreachable leg.
+  cheapest walk. The seed then falls back as for an unreachable leg. On Oregon this refuses 2 of
+  ten random 60–650 km pairs on T4 and two of the four named trips on T1, at super-junctions
+  whose table forbids a same-road through movement (**On Oregon**).
 - **Twins within a leg.** A leg driving an edge and its twin is searched again without the
   later one, up to 8 times; a leg that needs more rounds, or whose only way drives a twin
   pair, falls back as an unreachable one.

@@ -664,6 +664,18 @@ machine, with curl:
   Before the places index's polygons were prepared (`docs/reference/presentation.md`,
   **Places**) the document took 0.26–0.38 s on a quiet machine (build e4b3b4ad90db) and
   1.8–2.6 s at load average 30, nine tenths of it the places lookups.
+- **Oregon** (`serve --region oregon --port 0`, csr, engine version 3, 2026-10-31, build
+  5913ade7a2df, 237,581 nodes and a 174 MB build, with the Oregon places index; load average
+  8–13). The API process holds 170–300 MB once the build is loaded (its pages of the mapped
+  arrays count) and 445–455 MB after drawing a share image. A job's worker peaks at 374–399 MB
+  RSS, most of it pages of the same mapped build, which workers share through the page cache.
+  Medford → Portland, seed 1, a 30 s budget: 265 `progress` events, `done` after 31.9 s at 9.27×
+  (4,116.9 km, `budget`); `GET /routes/{id}` 3.4 MB in 0.63–0.89 s, with 5,335 steps, 123 towns
+  and `["Oregon"]`; `/directions` 106 ms; `/share.png` 1.10 s to draw (174 kB; the route's
+  bbox, 186 × 387 km, meets 211,534 road units, so the network is thinned to T0–T2's 31,568), 1
+  ms from the cache. Portland → Bend with a 2.72× ratio target, seed 1: `done` after 7.3 s at
+  2.73× (700.5 km, `target`); the document 0.6 MB in 0.08–0.15 s with 723 steps and 33 towns,
+  `/directions` 11 ms, `/share.png` 0.54 s (115,836 road units, thinned to 17,050).
 
 ## Tests
 

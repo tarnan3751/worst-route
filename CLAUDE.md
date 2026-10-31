@@ -47,7 +47,10 @@ directions with deadpan jokes, the stats and the toasts in the route documents
 (`GET /routes/{id}`, `GET /routes/{id}/directions`, route.json, `worst-route directions`),
 which the frontend shows: a directions panel whose steps highlight on the map, rotating toasts,
 the extra stats with the arrival time, a vehicle and a departure setting, and the route's GeoJSON
-to download. M4 is built.
+to download. M4 is built. So is the whole of Oregon (M5's first step, `docs/reference/pipeline.md`,
+**Oregon**): it builds in 6–11 minutes with the same pipeline, measured by
+`tools/bench_build.py`, passes QA, and plans statewide trips on the all-roads tier, which the
+automatic tier now is below 800 km (engine version 3; `docs/reference/engine.md`, **On Oregon**).
 The plan (`docs/PLAN.md`,
 2026-10-30) is written and its open questions answered as far as `docs/project_overview.md` §3
 records. **M1 is built**: in the acceptance run on the
@@ -100,6 +103,7 @@ Every command below exists. One a later milestone adds is marked with that miles
 | Print a saved route's turn-by-turn directions (`--no-jokes` without the jokes) | `uv run worst-route directions route.json` |
 | API server (the coordinator only; agents use `--port 0` or a port of their own, `--store` in their own tree, and `--geocoder none` or `--nominatim-url` pointed at a local stub: no agent calls Nominatim) | `uv run worst-route serve --region portland` |
 | Frontend dev server / build / typecheck (with the prettier check) / tests / format (the dev server proxies `/api` to `WORST_ROUTE_API`, default `http://127.0.0.1:8000`; agents point it at their own server and add `-- --port <free>`) | `cd frontend && npm run dev` / `npm run build` / `npm run typecheck` / `npm test` / `npm run format` |
+| Build a region's pipeline with each step's time, peak memory and output sizes (a heavy job for a state; writes `tools/out/`, never downloads; `--steps`, `--force`, `--allow-fragmented`) | `uv run python tools/bench_build.py --region oregon --source data/raw/oregon-latest.osm.pbf` |
 | Land a delivered series | `tools/land_series.sh <patch-dir> <base-commit> <tree-hash>` |
 
 **Run the gate after every change.** The gate never downloads anything and never needs `data/`;
@@ -201,7 +205,8 @@ data/            gitignored: raw/, filtered/, aux/, graphs/<region>/<build_id>/
 src/worst_route/ config, cli; pipeline/, graph/, engine/ (objectives/), presentation/, geocode/, api/
 frontend/        Vite + TS app: src/{main,state,api,map,stops,settings,run,toasts,directions,share}
 tests/           fixtures/osm/*.osm, unit/, graph/, pipeline/, engine/, api/, property/, golden/, bench/
-tools/           gates.sh, land_series.sh, acceptance.py (the M1 acceptance run), fetch_census.sh; later: bench
+tools/           gates.sh, land_series.sh, acceptance.py (the M1 acceptance run), fetch_census.sh,
+                 bench_build.py (a region's pipeline, measured)
 .claude/agents/  scout, researcher, developer, reviewer
 .github/         workflows/gate.yml: the gate on every push and pull request
 ```

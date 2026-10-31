@@ -7,7 +7,7 @@ contract.
 
 Built: every step, `download`, `filter`, `build`, `cleanup`, `enrich`, `tiers`, `save` and `qa`.
 `save` writes the build in the format `docs/reference/graph.md` describes, which `worst-route
-plan` reads.
+plan` reads. Portland and the whole of Oregon (**Oregon**) build and pass QA.
 
 ## Commands
 
@@ -374,9 +374,15 @@ twice.
      kept and the tables below remapped.
 5. **Connectivity** (`connectivity.largest_component`): the largest strongly connected
    component is kept (networkx; ties to the component with the smallest node id). When it holds
-   less than `SCC_MIN_RETAINED` (0.99) of the nodes, `run_cleanup` raises
-   `FragmentedGraphError` and the CLI exits 1 without writing the stage, unless
-   `--allow-fragmented`. The kept nodes are numbered `0..n-1` again, in the same order.
+   less than `SCC_MIN_RETAINED` (0.98) of the nodes, or a component it would drop holds more
+   than `SCC_MAX_DROPPED_NODES` (200) nodes, `run_cleanup` raises `FragmentedGraphError`, whose
+   message says which, and the CLI exits 1 without writing the stage, unless
+   `--allow-fragmented`. The share alone cannot tell a town whose only way in a filtering rule
+   removed (one component, a fraction of a percent of a state's nodes) from the many small
+   networks a state holds behind tracks and private roads, so the cap on the largest dropped
+   component is the check for the first, and the share (0.99 until the Oregon build, **Oregon**)
+   for a filtering rule that fragments everything. The kept nodes are numbered `0..n-1` again, in
+   the same order.
 
 **The stage file.** `stages/cleanup.pkl` is the cleaned `MultiDiGraph`:
 
@@ -621,14 +627,92 @@ line):
 
 **Thresholds** (`docs/PLAN.md` §2.4f, §2.8): twins cover at least `QA_TWIN_COVERAGE_MIN` (0.95)
 of one-way motorway and trunk length (cleanup's figure; with none to measure it passes as n/a);
-cleanup kept at least `SCC_MIN_RETAINED` (0.99) of the nodes; every tier kept at least
+cleanup kept at least `SCC_MIN_RETAINED` (0.98) of the nodes ("SCC retained"); the largest
+component it dropped holds at most `SCC_MAX_DROPPED_NODES` (200) nodes ("SCC largest dropped", a
+threshold with a `maximum` instead of a `minimum`, printed "at most"); every tier kept at least
 `TIER_MIN_RETAINED` (0.95) of its own. `pipeline qa` prints each with its value and exits 1 when
 one fails. No map page and no random snap tests yet (§2.8 has them for later).
 
-**Portland** (1–1.5 s): twin coverage 0.9588, SCC retained 0.9960, tiers 1.0, 1.0, 1.0, 0.9995,
-1.0: passed. The whole pipeline from the Oregon extract takes 47–75 s on the dev machine,
-depending on its load; on the quieter run: filter 13 s, build 3 s, cleanup 23 s, enrich 4 s,
-tiers 2 s, save 2 s, qa 1 s.
+**Portland** (1–1.5 s): twin coverage 0.9588, SCC retained 0.9960, SCC largest dropped 11, tiers
+1.0, 1.0, 1.0, 0.9995, 1.0: passed (build ffe2e7c881ca, under the rules since the Oregon build as
+before them). The connectivity constants are cleanup's parameters, which every build's `params`
+record and so its `graph_version` covers: a build made under the new rules has the same arrays
+as one made before them but another `graph_version` (Portland at pipeline version 3:
+455bc53299d2… against ffe2e7c881ca's 8867636799a6), and the routes stored on the older build
+are refused ("re-plan"). So Portland's version 4 build, made under them, has another
+`graph_version` than the table under **Build ids** gives for it, which was measured before them.
+The whole pipeline from the Oregon extract takes 47–75 s on the dev machine, depending on its
+load; on the quieter run: filter 13 s, build 3 s, cleanup 23 s, enrich 4 s, tiers 2 s, save 2 s,
+qa 1 s.
+
+## Oregon
+
+The whole state (M5.1, `docs/PLAN.md` §7), region `oregon` in `config.REGIONS`: the Geofabrik
+extract `raw/oregon-latest.osm.pbf` (243 MB, md5 1de27cc62802f3db82645ec52a41026f, data of
+2026-10-28T21:21:02Z), no bbox, EPSG:32610; its places from the Census files of Oregon (FIPS 41)
+and Washington (53). Build 5913ade7a2df, pipeline version 3, `graph_version` 73b137860fc2; the
+numbers below are that build's (version 4 then moved stage A's clusters by a few nanometres).
+
+**Time and memory**, measured with `tools/bench_build.py --region oregon --source
+<raw extract> --force` (`docs/reference/testing-tools.md`) on the dev machine (Apple M5, 10 cores,
+24 GB) while other lanes ran, load average about 20:
+
+| Step | Wall | CPU (user + sys) | Peak RSS | Writes |
+|---|---|---|---|---|
+| filter | 44 s | 41 s | 0.93 GB | roads 31.4 MB, POIs 1.1 MB |
+| build | 31 s | 21 s | 1.47 GB | `build.pkl` 241.5 MB |
+| cleanup | 209 s | 165 s | 2.58 GB | `cleanup.pkl` 215 MB; simplify 14 s, stage A 133 s, twins 2 s, stage B 30 s, connectivity 16 s |
+| enrich | 51 s | 34 s | 1.94 GB | `enrich.pkl` 284 MB |
+| tiers | 12 s | 11 s | 1.60 GB | `tiers.json` 4.4 MB |
+| save | 24 s | 16 s | 1.62 GB | the build, 174.2 MB (`arrays/` 164 MB, `strings.json` 2.4 MB) |
+| qa | 7 s | 7 s | 1.62 GB | `qa/` 5.2 MB |
+| all | 378 s | | 2.58 GB | |
+
+At a load average of 20–60 the same steps took 10.5 minutes (cleanup 255 s, stage A 178 s), and
+cleanup's peak ranged from 2.58 to 3.91 GB over three runs; nothing else came near. Stage A,
+OSMnx's `consolidate_intersections`, is two thirds of cleanup and a third of the pipeline; the
+networkx stages hold the graph at about 1.5–2.5 GB in memory and 0.2–0.3 GB pickled. `docs/PLAN.md`
+§6 estimated 0.7 million nodes and 1.8 million edges, 20–40 minutes for build and simplify and
+20–60 for stage A: the graph is a third of that and the whole pipeline takes 6–11 minutes.
+
+**What it holds.** The filter keeps 202,426 of 861,974 highway ways and 36,947 POI rows (12,875
+brand, 4,809 level crossings, 14,018 stop signs, 35 toll booths, 5,210 signals). The raw graph
+has 284,718 nodes and 680,203 edges (355,611 segments). Simplify drops 2,267 self-loops and
+removes 21,438 nodes; stage A merges 24,430 nodes into 11,092 clusters; twins pair 11,385 of
+15,363 candidates (7,292 pairs), covering 97.3% of one-way motorway and trunk length; stage B
+makes 2,047 super-junctions (1,701 interchanges, of which 371 joined, 484 slip-lane clusters and
+22 split; 346 roundabouts), takes in 1,641 pocket nodes and carries 6,426 twin pairs;
+connectivity keeps 237,581 of 241,212 nodes. The build has 237,581 nodes and 593,555 edges,
+118,576 km of road (a two-way road once: residential 38,725, unclassified 29,702, tertiary 27,054,
+secondary 9,489, primary 5,566, trunk 3,926, motorway 2,840), 6,390 twin pairs and 30,311
+transition rows at 2,043 super-junctions. Enrich (28 s of its 51): 162,210 edges with a parsed
+speed; 59,220 identities; 304,513 units (289,042 two-way pairs); 8,575 bridge, 120 tunnel and 20
+toll edges; 22 toll booths (7 inside edges, 4 at junctions, 11 off the graph), 4,809 level
+crossings (2,244, 319, 2,246); of 14,018 stop signs 1,584 are junction members and 10,606 shape
+points, of 5,210 signals 4,114 and 997; 4,504 nodes have a delay; 178,933 are pass-through; 357
+roundabout rings at 354 super-junctions (345 roundabouts, 9 interchanges); of 12,875 brand POIs
+9,337 snapped, 343 at dead ends and 3,195 too far, 457 of 1,476 brands kept on 5,305 nodes (the
+Postal Service 249, Starbucks 209, Chevron 196, Subway 149, McDonald's 136, 76 135). Tiers: T0
+keeps 8,732 of 8,891 nodes (98.21%, 7 components), T1 20,386 of 20,472 (99.58%, 9), T2 39,151 of
+39,289 (99.65%, 7), T3 75,773 of 75,848 (99.90%, 24), T4 all. QA: twin coverage 0.9727, SCC
+retained 0.9849, SCC largest dropped 88, tiers 0.9821, 0.9958, 0.9965, 0.9990, 1.0: passed.
+`worst-route aux places --region oregon` (no bbox, so the state polygon's bounds) writes 506
+places (OR 426, WA 80) in under 5 s, warning that California's, Idaho's and Nevada's places files
+are absent.
+
+**What changed, and why.** Cleanup's connectivity failed at 98.49% under the 0.99 share it had
+then. What it drops is 1,255 components, 3,631 nodes and 2,225 km of road: residential and forest
+road networks whose only ways in are tracks, service roads or `access=private` ways (the largest,
+88 nodes and 132 km south of Cottage Grove, is reached through 65 tracks, 24 service ways and 10
+private residential or unclassified ways), and pieces of Washington, California and Idaho that
+the extract's edge cuts off (of the 20 largest: 77 nodes by Stella and 19 on Puget Island,
+Washington; 38 by Dorris, California; two of 17 in Idaho). So connectivity now fails on a share
+below 0.98 or a dropped component of more than 200 nodes (**cleanup**, step 5), which Oregon
+passes and Portland passes as before (99.60%, 11). Those constants enter every build's `params`,
+and so its `graph_version`: a build saved before them keeps its version until it is rebuilt,
+and rebuilding it gives another version with the same arrays, which refuses the routes stored
+on the old one (**qa**, Portland). The tiers' rule needed no change. Nothing else in the pipeline changed for the state;
+`engine.md`, **On Oregon**, has the trips and what the engine's tiers became.
 
 ## Fixtures
 

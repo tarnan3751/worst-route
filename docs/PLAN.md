@@ -213,7 +213,7 @@ Semantics: **using edge E bans every edge in twins(E).** This is conservative (a
 
 **f. Connectivity** (`connectivity.py`):
 - Strongly connected components (networkx, at cleanup and again per tier in `tiers`, §2.6). Keep the largest. Report dropped node count, total dropped length, and the 20 largest dropped components (size, length, centroid) — a large dropped component means a filtering bug (e.g. a town whose only access got excluded), not noise.
-- Thresholds that fail the build: all-roads graph must retain ≥ 99% of nodes (`pipeline cleanup` fails unless `--allow-fragmented`); each tier ≥ 95% of its own nodes.
+- Thresholds that fail the build: all-roads graph must retain ≥ 99% of nodes (`pipeline cleanup` fails unless `--allow-fragmented`); each tier ≥ 95% of its own nodes. As built since the Oregon build (M5.1, `docs/reference/pipeline.md`, **Oregon**): ≥ 98% of nodes, and no dropped component of more than 200 nodes (the town cut off), since a state holds many small networks behind tracks and private roads (Oregon keeps 98.49%, dropping 1,255 components of at most 88 nodes); the tiers' rule holds statewide as it is.
 - Fragmentation test for tiers: a fixture list of city pairs per region (Portland–Salem, Portland–Bend, …) must be mutually reachable at every tier that is supposed to cover that trip length.
 
 ### 2.5 `enrich`
@@ -235,10 +235,12 @@ Built for M1 without brands, states and places (M3, M4); the brands since (M3); 
 | Tier | Classes | Auto-selected for straight-line trip length |
 |---|---|---|
 | T0 | motorway, trunk (+links) | > 800 km |
-| T1 | + primary (+links) | 250–800 km |
-| T2 | + secondary (+links) | 60–250 km |
-| T3 | + tertiary (+links) | 15–60 km |
-| T4 | + residential, unclassified, living_street, alleys | < 15 km |
+| T1 | + primary (+links) | 250–800 km; as built since M5.1, by override only |
+| T2 | + secondary (+links) | 60–250 km; as built since M5.1, by override only |
+| T3 | + tertiary (+links) | 15–60 km; as built since M5.1, by override only |
+| T4 | + residential, unclassified, living_street, alleys | < 15 km; as built since M5.1, < 800 km |
+
+As built (M5.1, engine version 3; `docs/reference/engine.md`, **On Oregon**): on the Oregon build the all-roads graph gave the best routes in 30 s at every trip length a state holds and reached every stop the sparser tiers reached, so the automatic choice is T4 below 800 km and T0 beyond; the bands between wait for a national build (M5.3).
 
 Each tier is an edge mask on the master graph plus a node mask after re-running SCC within the tier: the tier's nodes are the largest strongly connected component of its own roads, and its edges those roads between kept nodes; `pipeline tiers` fails when a tier keeps less than 95% of the nodes its roads touch (`docs/reference/pipeline.md`, **tiers**). Node ids never change across tiers, so a manual override at runtime is just a different mask.
 **Local bubbles:** at request time, the active mask is `leash ∧ (tier_mask ∨ within(R, any stop))` with `R` = 3 km of all-roads graph around each stop, so a cross-state trip still starts from the user's actual street instead of snapping 10 km to the nearest primary road. The request also bans every edge outside the tier's edge mask unless both its ends lie in a bubble, so a lower-class road between two of the tier's own nodes stays out away from the stops (`docs/reference/engine.md`, **Requests**).
@@ -279,7 +281,7 @@ Why: `np.load(mmap_mode="r")` makes load time ~0 and lets worker processes share
 
 ### 2.8 `qa`
 
-Per build: counts by class and tier, SCC drop report, twin-pair statistics (pairs per class, unpaired one-way motorway length — should be near zero), super-junction count and size histogram, 50 random snap tests, and a map HTML with the GeoJSON layers. The build is "accepted" only when the QA thresholds in §2.4f pass. Built for M1 (`docs/reference/pipeline.md`, **qa**): `qa.json` with the counts, the reports, the twin coverage, the histogram and the thresholds (twin coverage ≥ 0.95, SCC retained ≥ 0.99, every tier ≥ 0.95), and the GeoJSON layers; the snap tests and the map page are later. This is the fastest way to catch the classic failures (a ramp class missing, all of I-84 unpaired, a bridge tagged `access=private`).
+Per build: counts by class and tier, SCC drop report, twin-pair statistics (pairs per class, unpaired one-way motorway length — should be near zero), super-junction count and size histogram, 50 random snap tests, and a map HTML with the GeoJSON layers. The build is "accepted" only when the QA thresholds in §2.4f pass. Built for M1 (`docs/reference/pipeline.md`, **qa**): `qa.json` with the counts, the reports, the twin coverage, the histogram and the thresholds (twin coverage ≥ 0.95, SCC retained ≥ 0.99, every tier ≥ 0.95; since M5.1, SCC retained ≥ 0.98 and its largest dropped component ≤ 200 nodes), and the GeoJSON layers; the snap tests and the map page are later. This is the fastest way to catch the classic failures (a ramp class missing, all of I-84 unpaired, a bridge tagged `access=private`).
 
 ---
 
@@ -756,6 +758,8 @@ Pipeline wall-clock on the M5 (single process unless noted):
 | consolidate B + twins + SCC + enrich (ours) | ~10 s (measured, without enrich) | 5–10 min | 30–60 min | 2–4 h |
 | array-based simplify/consolidate (M5 rewrite) | — | ~5 min | ~30 min | 1–2 h |
 
+Measured on Oregon (M5.1, 2026-10-31, `tools/bench_build.py`, `docs/reference/pipeline.md`, **Oregon**): the graph is a third of the estimate, 237,581 nodes and 593,555 edges (284,718 and 680,203 raw), and the build 174 MB (about 290 B an edge, its strings and transition tables included, against the ~100 B estimated). The whole pipeline took 6.3 min at load average 20 (10.5 min at 20–60): filter 44 s, build 31 s, simplify 14 s, stage A 133 s, twins 2 s, stage B 30 s, connectivity 16 s, enrich 51 s, tiers 12 s, save 24 s, qa 7 s; the largest process peaked at 2.6–3.9 GB (cleanup). A statewide request's masks take 83–166 ms (the leash's shapely distances over up to 161,000 nodes); runs on the all-roads tier make 200–1,400 attempts a second against Portland's thousands, their searches spanning a 100–150 km leash.
+
 Engine throughput:
 
 - One masked Dijkstra across a 40k-node grid (every node settled), measured: **1.7 ms** of CPU with the Numba kernels (~0.01 µs per relaxed edge), 21–50 ms with the pure-Python reference by the machine's load; ~1–2 s estimated with networkx. A small search costs 10–14 µs on Portland, once its weights array has been checked (`docs/reference/graph.md`, **The CSR backend**).
@@ -823,7 +827,7 @@ Deliverable: `worst-route plan --region portland --from 45.5231,-122.6765 --to 4
 
 ### M5 — Scaling up
 
-1. **Oregon** build with the OSMnx path; measure; fix tier fragmentation; local bubbles; tier auto-select tuned on real trips (Portland–Bend, Astoria–Ontario).
+1. **Oregon** build with the OSMnx path; measure; fix tier fragmentation; local bubbles; tier auto-select tuned on real trips (Portland–Bend, Astoria–Ontario). Built (2026-10-31; `docs/reference/pipeline.md`, **Oregon**; `docs/reference/engine.md`, **On Oregon**): the state builds in 6–11 min with the OSMnx path, peaking at 2.6–3.9 GB, measured by `tools/bench_build.py`, and passes QA once connectivity judges a state by its largest dropped component (≤ 200 nodes) and a 98% share; the tiers held statewide. Tuned on four trips and twenty random pairs, the automatic tier is the all-roads graph below 800 km (engine version 3): Portland → Bend 10.47×, Astoria → Ontario 4.03×, Eugene → Portland 14.00×, Medford → Portland 8.17× in 30 s; 8 of 10 random pairs of 60–650 km plan at a median of 8.88×, 9 of 10 of 3–15 km at 2.82×. Masks stay whole-build (83–166 ms). The refusals left come from the transition-aware search and super-junctions that forbid a same-road through movement (I-5 northbound at Woodburn), for M5.2's tier A work to decide.
 2. **Array-based simplify and consolidate** (replace OSMnx for big builds): degree-2 chain contraction in NumPy, stage A as cKDTree clustering with the `max_length` connectivity check, same outputs, parity test against OSMnx on Portland.
 3. **US at T1** (primary and up, ~3.5M edges): validates the national pipeline cheaply. Local bubbles need an all-roads graph with the same node ids, which a T1-only national build does not have. Decision gate: either (a) build **US all-roads** as the single master graph (~5.5 GB mmap, 2–4 h pipeline, bubbles and tiers as masks — the clean end state), or (b) keep T1 national + per-state all-roads builds and accept that cross-state trips start from the nearest primary road. Recommendation: (a) if M5.2's throughput makes it a few hours; otherwise (b).
 4. Public-hosting prep: Dockerfile, Protomaps PMTiles basemap, Photon or paid geocoder, per-IP limits, attribution text, `User-Agent` strings, structured logs. Deploy target can be a single 8–16 GB VPS for T3 national or a 32 GB box for all-roads.

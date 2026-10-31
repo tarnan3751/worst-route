@@ -74,6 +74,7 @@ from worst_route.graph.data import (
 from worst_route.graph.geometry import GEOMETRY_SPECS, Geometry, encode, read_geometry
 from worst_route.graph.store import read_build, write_build
 from worst_route.pipeline import PIPELINE_VERSION, layout
+from worst_route.pipeline.arrays.enrich import EnrichedGraph
 
 type EdgeKey = tuple[int, int, int]
 
@@ -226,6 +227,195 @@ def graph_data(
     for name in ARRAY_SPECS:
         getattr(data, name).flags.writeable = False
     return data
+
+
+def graph_data_of(
+    graph: EnrichedGraph, tier_nodes: list[list[int]], meta: dict[str, Any]
+) -> GraphData:
+    """The arrays engine's enriched graph as `GraphData`: what `graph_data` makes of the
+    networkx engine's, array for array, with the same refusals."""
+    b, a = graph.graph, graph.graph.stage_a
+    n, m = len(b.node_x), len(b.edge_u)
+    turns = np.bincount(b.trans_node, minlength=n)[b.super_node]
+    if len(turns) and not turns.all():
+        node = int(b.super_node[np.flatnonzero(turns == 0)[0]])
+        kind = NodeKind(int(b.node_kind[node])).name.lower()
+        raise EmptyTransitionsError(
+            f"super-junction {node} ({kind}, at {b.node_lat[node]:.5f}, "
+            f"{b.node_lon[node]:.5f}) allows no turn through it, which a build cannot "
+            "express: a node without transition rows allows every turn"
+        )
+    _check_shape_points_of(graph)
+
+    tagset = a.edge_tags[b.edge_from]
+    tags = [dict(t) for _, t in a.tagsets]
+    used = np.unique(tagset).tolist()
+    strings = Strings(
+        names=sorted({name for t in used if (name := tags[t].get("name")) is not None}),
+        refs=sorted({ref for t in used if (ref := tags[t].get("ref")) is not None}),
+        identities=list(graph.identities),
+        brands=[name for name, _, _ in graph.brands],
+        brand_wikidata=[wikidata for _, wikidata, _ in graph.brands],
+    )
+    index = {
+        table: {value: i for i, value in enumerate(getattr(strings, table))}
+        for table in ("names", "refs")
+    }
+    of_tagset = {  # a tag set no edge has is never looked up
+        table: np.array(
+            [-1 if (v := t.get(key)) is None else index[table].get(v, -1) for t in tags],
+            dtype=np.int32,
+        )
+        for table, key in (("names", "name"), ("refs", "ref"))
+    }
+    highway = np.array([HighwayClass[c.upper()] for c, _ in a.tagsets], dtype=np.uint8)[tagset]
+    speeds = graph.edge_speed_kmh.astype(np.float32)
+    speed_kmh = np.unique(speeds)
+    if len(speed_kmh) > MAX_SPEEDS:
+        raise TooManySpeedsError(
+            f"{len(speed_kmh)} distinct speeds, more than the {MAX_SPEEDS} a build can index"
+        )
+    edge_u, edge_v = b.edge_u.astype(np.int32), b.edge_v.astype(np.int32)
+
+    tier_node_mask = np.zeros((len(TIERS), n), dtype=np.bool_)
+    tier_edge_mask = np.zeros((len(TIERS), m), dtype=np.bool_)
+    for t, classes in enumerate(TIERS):
+        tier_node_mask[t, tier_nodes[t]] = True
+        in_tier = np.isin(highway, np.array(sorted(classes), dtype=np.uint8))
+        tier_edge_mask[t] = in_tier & tier_node_mask[t, edge_u] & tier_node_mask[t, edge_v]
+    tier_of = {c: next(t for t, classes in enumerate(TIERS) if c in classes) for c in HighwayClass}
+    roundabouts = np.zeros(n, dtype=np.uint8)
+    roundabouts[b.super_node] = b.super_roundabouts
+
+    counts = {
+        "nodes": n,
+        "edges": m,
+        "twin_pairs": len(b.twin_edges) // 2,
+        "transitions": len(b.trans_node),
+        "superjunctions": len(b.super_node),
+    }
+    data = GraphData(
+        node_x=np.asarray(b.node_x, dtype=np.float64),
+        node_y=np.asarray(b.node_y, dtype=np.float64),
+        node_kind=np.asarray(b.node_kind, dtype=np.uint8),
+        node_pass_through=np.asarray(graph.node_pass_through, dtype=np.bool_),
+        node_delay_s=graph.node_delay_s.astype(np.float32),
+        member_indptr=np.asarray(b.member_indptr, dtype=np.int64),
+        member_osm_ids=np.asarray(b.member_id, dtype=np.int64),
+        edge_u=edge_u,
+        edge_v=edge_v,
+        edge_length_m=b.edge_length.astype(np.float32),
+        edge_speed=np.searchsorted(speed_kmh, speeds).astype(np.uint8),
+        speed_kmh=speed_kmh,
+        edge_time_s=graph.edge_time_s.astype(np.float32),
+        edge_highway=highway,
+        edge_tier=np.array([tier_of[HighwayClass[c.upper()]] for c, _ in a.tagsets], np.uint8)[
+            tagset
+        ],
+        edge_name=of_tagset["names"][tagset],
+        edge_ref=of_tagset["refs"][tagset],
+        edge_identity=np.asarray(graph.edge_identity, dtype=np.int32),
+        edge_unit=graph.edge_unit.astype(np.int32),
+        edge_flags=np.asarray(graph.edge_flags, dtype=np.uint8),
+        edge_toll_booths=graph.edge_toll_booths.astype(np.uint8),
+        edge_level_crossings=graph.edge_level_crossings.astype(np.uint8),
+        edge_bearing_in=graph.edge_bearing_in.astype(np.int16),
+        edge_bearing_out=graph.edge_bearing_out.astype(np.int16),
+        out_indptr=_indptr(np.bincount(edge_u, minlength=n).tolist()),
+        out_edges=np.arange(m, dtype=np.int32),
+        in_indptr=_indptr(np.bincount(edge_v, minlength=n).tolist()),
+        in_edges=np.argsort(edge_v, kind="stable").astype(np.int32),
+        twin_indptr=np.asarray(b.twin_indptr, dtype=np.int64),
+        twin_edges=np.asarray(b.twin_edges, dtype=np.int32),
+        trans_node=np.asarray(b.trans_node, dtype=np.int32).copy(),
+        trans_in=np.asarray(b.trans_in, dtype=np.int32).copy(),
+        trans_out=np.asarray(b.trans_out, dtype=np.int32).copy(),
+        tier_node_mask=tier_node_mask,
+        tier_edge_mask=tier_edge_mask,
+        node_roundabouts=roundabouts,
+        brand_indptr=_indptr([len(at) for _, _, at in graph.brands]),
+        brand_nodes=np.array([v for _, _, at in graph.brands for v, _ in at], dtype=np.int32),
+        brand_locations=np.array([k for _, _, at in graph.brands for _, k in at], dtype=np.int32),
+        strings=strings,
+        meta={**meta, "counts": counts, "graph_version": ""},
+    )
+    for name in ARRAY_SPECS:
+        getattr(data, name).flags.writeable = False
+    return data
+
+
+def graph_geometry_of(graph: EnrichedGraph, data: GraphData) -> Geometry:
+    """The arrays engine's geometry: what `graph_geometry` makes of the same shapes."""
+    b = graph.graph
+    runs = np.repeat(np.arange(len(b.edge_u)), np.diff(b.coord_indptr))
+    shapes = np.asarray(shapely.linestrings(b.coord_x, b.coord_y, indices=runs)).reshape(-1)
+    simple = shapely.simplify(shapes, GEOMETRY_SIMPLIFY_M, preserve_topology=False)
+    points, owner = shapely.get_coordinates(simple, return_index=True)
+    indptr = np.concatenate(([0], np.cumsum(np.bincount(owner, minlength=len(shapes)))))
+    return encode(data, points, indptr.astype(np.int64))
+
+
+def _check_shape_points_of(graph: EnrichedGraph) -> None:
+    """`_check_shape_points` on the arrays engine's graph: the rules checked on arrays, and on a
+    breach the edges walked in key order as there, so the first breach raises the same error."""
+    b, a = graph.graph, graph.graph.stage_a
+    n, m = len(b.node_x), len(b.edge_u)
+    counts = np.diff(a.osmnode_indptr)[b.edge_from]
+    indptr = np.concatenate(([0], np.cumsum(counts))).astype(np.int64)
+    ids = a.osmnode_id[
+        np.repeat(a.osmnode_indptr[b.edge_from] - indptr[:-1], counts) + np.arange(indptr[-1])
+    ]
+    edge = np.repeat(np.arange(m), counts)
+    place = np.arange(len(ids)) - indptr[edge]
+    inner = (place > 0) & (place < counts[edge] - 1)
+    member_node = np.repeat(np.arange(n), np.diff(b.member_indptr))
+    order = np.argsort(b.member_id, kind="stable")
+    members, member_node = b.member_id[order], member_node[order]
+
+    def node_of(osm: NDArray[np.int64]) -> NDArray[np.int64]:
+        at = np.minimum(np.searchsorted(members, osm), max(len(members) - 1, 0))
+        found = (members[at] == osm) if len(members) else np.zeros(len(osm), dtype=np.bool_)
+        return np.where(found, member_node[at] if len(members) else -1, -1)
+
+    breach = bool(m) and bool(
+        np.any(node_of(ids[indptr[:-1]]) != b.edge_u)
+        or np.any(node_of(ids[indptr[1:] - 1]) != b.edge_v)
+    )
+    by_edge = np.lexsort((ids, edge))
+    breach |= bool(
+        np.any((edge[by_edge][1:] == edge[by_edge][:-1]) & (ids[by_edge][1:] == ids[by_edge][:-1]))
+    )
+    breach |= bool(np.any(np.isin(ids[inner], members)))
+    unit, osm = graph.edge_unit[edge[inner]], ids[inner]
+    by_osm = np.lexsort((unit, osm))
+    breach |= bool(
+        np.any((osm[by_osm][1:] == osm[by_osm][:-1]) & (unit[by_osm][1:] != unit[by_osm][:-1]))
+    )
+    if not breach:
+        return
+    member_of = dict(zip(members.tolist(), member_node.tolist(), strict=True))
+    unit_of: dict[int, int] = {}
+    for e in range(m):
+        key = (int(b.edge_u[e]), int(b.edge_v[e]), int(b.edge_key[e]))
+        u, v, _ = key
+        run = ids[indptr[e] : indptr[e + 1]].tolist()
+        if member_of.get(run[0]) != u or member_of.get(run[-1]) != v:
+            raise ShapePointError(
+                f"edge {key} does not start and end at OSM nodes merged into nodes {u} and {v}"
+            )
+        if len(set(run)) != len(run):
+            twice = next(i for k, i in enumerate(run) if i in run[:k])
+            raise ShapePointError(f"OSM node {twice} lies twice inside edge {key}")
+        for osm_id in run[1:-1]:
+            if osm_id in member_of:
+                raise ShapePointError(
+                    f"OSM node {osm_id} lies inside edge {key} and is merged into node "
+                    f"{member_of[osm_id]}"
+                )
+            if unit_of.setdefault(osm_id, int(graph.edge_unit[e])) != int(graph.edge_unit[e]):
+                raise ShapePointError(
+                    f"OSM node {osm_id} lies inside edge {key} and inside another road"
+                )
 
 
 def _check_shape_points(graph: nx.MultiDiGraph, keys: list[EdgeKey]) -> None:

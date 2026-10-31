@@ -127,6 +127,25 @@ def test_each_point_lies_in_its_state_or_in_none(index: PlaceIndex) -> None:
     assert index.states_at(np.empty((0, 2))) == []
 
 
+def test_each_town_has_a_point_inside_it(index: PlaceIndex) -> None:
+    points = index.town_points()
+    assert [(p.name, p.usps, p.lsad) for p in points] == [
+        (t.name, t.usps, t.lsad) for t in index.towns
+    ]
+    squares = {  # the fixture's polygons: (west, south, east, north)
+        "Westville": (-122.685, 45.512, -122.676, 45.517),
+        "Faraway": (-122.699, 45.535, -122.695, 45.539),
+        "Middlefield": (-122.673, 45.512, -122.67, 45.517),
+        "Eastbrook": (-122.669, 45.518, -122.664, 45.523),
+    }
+    for p in points:
+        west, south, east, north = squares[p.name]
+        assert west < p.lon < east and south < p.lat < north
+    westville = shapely.point_on_surface(shapely.box(*squares["Westville"]))
+    assert (points[0].lon, points[0].lat) == (westville.x, westville.y)
+    assert index.town_points() is points  # worked out once
+
+
 def test_places_outside_the_bbox_are_left_out(tmp_path: Path) -> None:
     written = write_fixture_places(tmp_path, bbox=(-122.69, 45.50, -122.66, 45.53))
     assert written.by_state == {"EL": 2, "WL": 1}

@@ -12,7 +12,7 @@ builds and the places index.
 
 | Module | What it holds |
 |---|---|
-| `places.py` | `write_places` (the index's writer), `PlaceIndex` (`load`, `states_at`, `states_crossed`, `towns_passed`, `outlines`), `State`, `Town`, `PlacesWritten`, `route_line`, `census_dir`, `places_dir`, `state_files`, `place_files` |
+| `places.py` | `write_places` (the index's writer), `PlaceIndex` (`load`, `states_at`, `town_points`, `states_crossed`, `towns_passed`, `outlines`), `State`, `Town`, `TownPoint`, `PlacesWritten`, `route_line`, `census_dir`, `places_dir`, `state_files`, `place_files` |
 | `comparisons.py` | `COMPARISONS`, `Comparison`, `SHORTER`, `comparison_line`, `distance_text`, `METRES_PER_MILE` |
 | `share_image.py` | `render_share_image`, `headline`, the image's sizes, thresholds and colours (its version, `SHARE_IMAGE_VERSION`, is the endpoint's, in `api/share_api.py`) |
 | `directions.py` | `directions`, `Step`, `StepKind`, `road_text`, `compass`, `turn_word`, `numbered` |
@@ -303,6 +303,13 @@ abroad: the API's pick of the build a trip runs on reads its stops' states so
 (`docs/reference/api.md`, **Picking a build**). Every index holds the same states, whichever
 region's it is.
 
+`town_points() -> tuple[TownPoint(name, usps, lsad, lon, lat), ...]` puts each town at a point
+inside its polygon, shapely's `point_on_surface` (GEOS's interior point: on the polygon, never
+outside it, as a centroid can be), in the towns' order (by GEOID), worked out on first use and
+kept (0.08 s for the national index's 31,540 towns): the daily route draws its two towns from
+them (`docs/reference/api.md`, **The daily route**), as `tools/acceptance.py --places` puts its
+points.
+
 On Portland, Powell's → Reed (seed 1) crosses `[OR]` and passes through Portland first (GEOID
 4159000, "Portland city"); a straight line from Aloha (45.4943, −122.8671) to Powell's
 (45.5231, −122.6765), then to Esther Short Park in Vancouver (45.6270, −122.6727), gives OR then
@@ -446,7 +453,7 @@ data directory and holds a route over the API tests' 10 × 10 lattice):
 
 | Test file | What it covers |
 |---|---|
-| `test_places.py` | the index's rows; states and towns in route order, the CDP included, and reversed; a route that comes back into a town listed where it first met it; a point repeated (a zero-length segment) met where it is; a route touching nothing; a touch counting; the state each point lies in (one in each, one on the border, a corner, one in neither); places outside the bbox left out; a state the bbox meets without its places file reported missing; the state's bounds when there is no bbox; the files' columns and CRS; no index when a file is missing; `aux places` on the fixture zipped as the Census ships it (shapefiles), with the latest build's bbox and the warning, and its missing state file; `STATES` (51, unique, every region's state) |
+| `test_places.py` | the index's rows; each town's point inside its polygon, in the towns' order, worked out once; states and towns in route order, the CDP included, and reversed; a route that comes back into a town listed where it first met it; a point repeated (a zero-length segment) met where it is; a route touching nothing; a touch counting; the state each point lies in (one in each, one on the border, a corner, one in neither); places outside the bbox left out; a state the bbox meets without its places file reported missing; the state's bounds when there is no bbox; the files' columns and CRS; no index when a file is missing; `aux places` on the fixture zipped as the Census ships it (shapefiles), with the latest build's bbox and the warning, and its missing state file; `STATES` (51, unique, every region's state) |
 | `test_comparisons.py` | the four lines above; the things in order, each with both lines; a sweep from 0.1 to 500,000 mi reaching every thing, and every "N×" line but those the list makes unreachable (derived from it), deterministic; the boundaries (equal is not longer, 2× exactly, the shorter line); every distance's format |
 | `test_share_image.py` | a 1200 × 630 PNG (its IHDR), the same bytes twice, with and without the index (which differ), no Software stamp; `headline` for each objective and a round trip; a slowest-time route drawing its own headline, a distance route ignoring its time ratio; a round trip; no baseline; the extent's margin and shape, and its minimum; the network one line per road unit, drawn along a bent geometry, only the units near the map; the roads a full decode finds, on the lattice with every road bent over 243 maps in and around it and on a hairpin met only by its tip, and none decoded to tell for a map holding every road or none; under a cap of 10, thinned to T0–T2, T0–T1, T0, then the longest units of T0 (359 of one length: the first ten; among unequal lengths the ten longest, ties to the lower unit id, a long unit outside T0 left out), the same lines twice |
 | `test_share_image_data.py` (`data`) | Portland: on the map of Powell's → Reed and two smaller ones inside it, the network is the roads a full decode finds |

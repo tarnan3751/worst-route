@@ -18,7 +18,8 @@ present is reported as missing, not an error.
 
 `PlaceIndex.load(region)` reads the three files (None when one is absent: callers then know no
 states or towns and draw no outlines) and answers `states_at`, the state each point lies in (the
-API's pick of a build for a trip's stops), and, for a route's line in lon/lat, `states_crossed`
+API's pick of a build for a trip's stops), `town_points`, each town at a point inside it (the
+daily route's draw of two towns), and, for a route's line in lon/lat, `states_crossed`
 and `towns_passed`: every polygon the line intersects (a touch counts), ordered
 by where the route first meets it. That is the first of the route's segments, in route order,
 that intersects the polygon, then the point of their intersection nearest that segment's start
@@ -75,6 +76,17 @@ class Town:
     lsad: str  # LSAD: "25" city, "43" town, "47" village, "21" borough, "57" CDP, ...
     usps: str  # STUSPS, "OR"
     geoid: str  # GEOID, "4159000"
+
+
+@dataclass(frozen=True)
+class TownPoint:
+    """A town at a point inside it: its polygon's `point_on_surface`, in lon/lat."""
+
+    name: str  # NAME, "Bend"
+    usps: str  # STUSPS, "OR"
+    lsad: str  # LSAD, "25"
+    lon: float
+    lat: float
 
 
 @dataclass(frozen=True)
@@ -208,6 +220,7 @@ class PlaceIndex:
         self._states = (state_shapes, shapely.STRtree(state_shapes))
         self._towns = (town_shapes, shapely.STRtree(town_shapes))
         self._lock = threading.Lock()  # prepared polygons are unsafe under concurrent use
+        self._points: tuple[TownPoint, ...] | None = None
 
     @classmethod
     def load(cls, region: str, data_dir: Path | None = None) -> "PlaceIndex | None":
@@ -240,6 +253,18 @@ class PlaceIndex:
         for p, k in zip(point[inside].tolist(), shape[inside].tolist(), strict=True):
             first[p] = min(k, first.get(p, k))
         return [self.states[first[p]] if p in first else None for p in range(len(geoms))]
+
+    def town_points(self) -> tuple[TownPoint, ...]:
+        """Each town at a point inside its polygon (`shapely.point_on_surface`), in the towns'
+        order (by GEOID), worked out on first use."""
+        with self._lock:
+            if self._points is None:
+                xy = shapely.get_coordinates(shapely.point_on_surface(self._towns[0]))
+                self._points = tuple(
+                    TownPoint(t.name, t.usps, t.lsad, float(lon), float(lat))
+                    for t, (lon, lat) in zip(self.towns, xy.tolist(), strict=True)
+                )
+            return self._points
 
     def states_crossed(self, line: shapely.LineString) -> list[State]:
         """The states `line` passes through, in the order it first enters them."""

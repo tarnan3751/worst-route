@@ -17,6 +17,12 @@ up to the integer type of the labels (OSMnx keys some by NumPy integers, of the 
 with `twins` (`twins.find_twins`'s table), the `G.graph["twins"]` that `carriageways.find_twins`
 sets.
 
+`stage_b_graph(graph)` is the `MultiDiGraph` that `consolidate.stage_b` makes: its nodes and
+edges numbered and ordered as `consolidate.relabel` numbers them, with the `superjunctions` and
+`twins` tables, each edge named in them by a tuple of its own, as relabel writes them.
+`cleanup_graph(graph)` is the graph cleanup hands on once connectivity has kept its largest
+component, with the view of its in-degrees that cleanup's last check caches.
+
 A pickle writes a string several dicts share once, so to make the stage files the networkx
 engine writes, byte for byte, the strings are shared as there: each way's tag values objects of
 its own, shared by every edge along it, as osmium hands them out (`_WayTags`); and the keys the
@@ -156,9 +162,9 @@ def stage_b_graph(graph: StageBGraph) -> nx.MultiDiGraph:
         tags_of,
         graph.edge_length,
     )
-    ends = list(
-        zip(graph.edge_u.tolist(), graph.edge_v.tolist(), graph.edge_key.tolist(), strict=True)
-    )
+    # Lists, so that each place in the tables below holds a tuple of its own, as relabel's do.
+    heads, keys_of = graph.edge_v.tolist(), graph.edge_key.tolist()
+    ends = [[u, v, k] for u, v, k in zip(graph.edge_u.tolist(), heads, keys_of, strict=True)]
     result.add_edges_from((u, v, k, d) for (u, v, k), d in zip(ends, data, strict=True))
 
     indptr, x_inner, y_inner = _runs_of(a, graph.internal_edge)
@@ -168,7 +174,7 @@ def stage_b_graph(graph: StageBGraph) -> nx.MultiDiGraph:
     for node, into, out in zip(
         graph.trans_node.tolist(), graph.trans_in.tolist(), graph.trans_out.tolist(), strict=True
     ):
-        transitions[node].append((tuple(ends[into]), tuple(ends[out])))  # a tuple each, as there
+        transitions[node].append((tuple(ends[into]), tuple(ends[out])))
     records = {}
     for i, node in enumerate(graph.super_node.tolist()):
         lo, hi = int(graph.internal_indptr[i]), int(graph.internal_indptr[i + 1])
@@ -193,6 +199,17 @@ def stage_b_graph(graph: StageBGraph) -> nx.MultiDiGraph:
         )
         for e in np.flatnonzero(np.diff(graph.twin_indptr)).tolist()
     }
+    return result
+
+
+def cleanup_graph(graph: StageBGraph) -> nx.MultiDiGraph:
+    """The cleaned graph as `cleanup.run_cleanup` returns it: `stage_b_graph`'s, with the view
+    `cleanup._without_no_turn`'s last look at it caches, since a pickle holds it: the in-degrees,
+    asked of a super-junction that allows no turn (one without edges, as the graph is strongly
+    connected, so the out-degrees are never asked for)."""
+    result = stage_b_graph(graph)
+    if not np.bincount(graph.trans_node, minlength=len(graph.node_x))[graph.super_node].all():
+        _ = result.in_degree
     return result
 
 

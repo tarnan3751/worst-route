@@ -2,9 +2,9 @@
 
 `docs/PLAN.md` §2.4; `docs/reference/pipeline.md`, cleanup. `run_cleanup` takes the raw graph
 `build` wrote (networkx's graph, or the arrays engine's `RawGraph`, which `arrays.simplify`,
-`arrays.stage_a`, `arrays.twins` and `arrays.stage_b` take through those steps before handing
-it on as networkx would hold it) and runs, in order: `simplify` (self-loops dropped, degree-2 chains
-collapsed), `consolidate.stage_a` (signal clusters and divided crossings),
+`arrays.stage_a`, `arrays.twins`, `arrays.stage_b` and `arrays.connectivity` take through those
+steps before handing it on as networkx would hold it) and runs, in order: `simplify` (self-loops
+dropped, degree-2 chains collapsed), `consolidate.stage_a` (signal clusters and divided crossings),
 `carriageways.find_twins` (on the stage A graph, so stretches stage B makes internal keep their
 twins), `consolidate.stage_b`
 (interchanges and roundabouts as super-junctions with their transitions, the twins carried
@@ -35,12 +35,13 @@ import networkx as nx
 
 from worst_route import config
 from worst_route.pipeline import layout
+from worst_route.pipeline.arrays import connectivity as arrays_connectivity
 from worst_route.pipeline.arrays import simplify as arrays_simplify
 from worst_route.pipeline.arrays import stage_a as arrays_stage_a
 from worst_route.pipeline.arrays import stage_b as arrays_stage_b
 from worst_route.pipeline.arrays import twins as arrays_twins
 from worst_route.pipeline.arrays.build import RawGraph
-from worst_route.pipeline.arrays.to_nx import stage_b_graph
+from worst_route.pipeline.arrays.to_nx import cleanup_graph
 from worst_route.pipeline.carriageways import TwinStats, find_twins
 from worst_route.pipeline.connectivity import (
     DROPPED_LISTED,
@@ -151,26 +152,38 @@ def run_cleanup(
         report.twins = twins[2]
         lap("twins")
         consolidated, report.stage_b = arrays_stage_b.stage_b(merged, twins[:2])
-        graph = stage_b_graph(consolidated)
-    else:
-        graph, report.simplify = simplify(raw)
-        lap("simplify")
-        graph, report.stage_a = stage_a(graph)
-        lap("stage_a")
-        report.twins = find_twins(graph)
-        lap("twins")
-        graph, report.stage_b = stage_b(graph)
+        lap("stage_b")
+        component, report.connectivity = arrays_connectivity.largest_component(consolidated)
+        consolidated = arrays_connectivity.without_no_turn(
+            arrays_connectivity.keep_only(consolidated, component), report.connectivity
+        )
+        _refuse_fragmented(report.connectivity, allow_fragmented)
+        lap("connectivity")
+        graph = cleanup_graph(consolidated)
+        lap("handover")
+        return graph, report
+    graph, report.simplify = simplify(raw)
+    lap("simplify")
+    graph, report.stage_a = stage_a(graph)
+    lap("stage_a")
+    report.twins = find_twins(graph)
+    lap("twins")
+    graph, report.stage_b = stage_b(graph)
     lap("stage_b")
     keep, report.connectivity = largest_component(graph)
-    scc = report.connectivity
-    graph = _without_no_turn(relabel(graph, keep), scc)
+    graph = _without_no_turn(relabel(graph, keep), report.connectivity)
+    _refuse_fragmented(report.connectivity, allow_fragmented)
+    lap("connectivity")
+    return graph, report
+
+
+def _refuse_fragmented(scc: ConnectivityReport, allow_fragmented: bool) -> None:
+    """Raise `FragmentedGraphError` when connectivity kept too little, unless allowed."""
     if not allow_fragmented and (
         scc.retained < config.SCC_MIN_RETAINED
         or _largest_dropped(scc) > config.SCC_MAX_DROPPED_NODES
     ):
         raise FragmentedGraphError(scc)
-    lap("connectivity")
-    return graph, report
 
 
 def _without_no_turn(graph: nx.MultiDiGraph, scc: ConnectivityReport) -> nx.MultiDiGraph:

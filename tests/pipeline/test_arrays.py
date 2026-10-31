@@ -28,18 +28,27 @@ from tests.pipeline.parity import assert_same_build, assert_same_graph, raw_grap
 from tests.pipeline.random_roads import random_roads
 from tests.pipeline.test_consolidate import _near_pair
 from worst_route.graph.data import GraphData
+from worst_route.pipeline import cleanup
+from worst_route.pipeline.arrays import connectivity as arrays_connectivity
 from worst_route.pipeline.arrays.build import build_raw_arrays, load_stage, save_stage
 from worst_route.pipeline.arrays.simplify import SimplifiedGraph
 from worst_route.pipeline.arrays.simplify import simplify as arrays_simplify
 from worst_route.pipeline.arrays.stage_a import StageAGraph
 from worst_route.pipeline.arrays.stage_a import stage_a as arrays_stage_a
+from worst_route.pipeline.arrays.stage_b import StageBGraph
 from worst_route.pipeline.arrays.stage_b import stage_b as arrays_stage_b
-from worst_route.pipeline.arrays.to_nx import simplified_graph, stage_a_graph, stage_b_graph
+from worst_route.pipeline.arrays.to_nx import (
+    cleanup_graph,
+    simplified_graph,
+    stage_a_graph,
+    stage_b_graph,
+)
 from worst_route.pipeline.arrays.twins import find_twins as arrays_find_twins
 from worst_route.pipeline.build import build_raw_graph
 from worst_route.pipeline.carriageways import find_twins
-from worst_route.pipeline.cleanup import run_cleanup
-from worst_route.pipeline.consolidate import stage_a, stage_a_tolerances, stage_b
+from worst_route.pipeline.cleanup import FragmentedGraphError, run_cleanup
+from worst_route.pipeline.connectivity import largest_component
+from worst_route.pipeline.consolidate import relabel, stage_a, stage_a_tolerances, stage_b
 from worst_route.pipeline.enrich import run_enrich
 from worst_route.pipeline.save import graph_data
 from worst_route.pipeline.simplify import simplify
@@ -486,3 +495,98 @@ def test_a_twin_that_is_a_boundary_edge(tmp_path: Path) -> None:
     find_twins(merged)
     _, stats = stage_b(merged)
     assert stats.twin_transitions > 0 and sum(stats.superjunctions.values()) == 1
+
+
+# Connectivity's own cases ----------------------------------------------------------------
+
+
+def test_components_of_one_size(tmp_path: Path) -> None:
+    """Three roads of two junctions each and a one-way spur off one: the component kept is the
+    one holding the smallest node, the others are listed by size and then length, and both
+    engines refuse the graph alike unless told to keep it."""
+    nodes = {1: (0, 0), 2: (300, 0), 3: (0, 500), 4: (200, 500)}
+    nodes |= {5: (0, 1000), 6: (400, 1000), 7: (600, 1000)}
+    road = {"highway": "residential"}
+    ways = [(10, [3, 4], road), (11, [1, 2], road), (12, [5, 6], road)]
+    ways.append((13, [6, 7], {**road, "oneway": "yes"}))
+    source = write_osm(tmp_path / "components.osm", nodes, ways)
+    assert_same_cleanup(source)
+    graph, report = run_cleanup(build_raw_arrays(source, UTM_10N)[0], allow_fragmented=True)
+    assert [graph.nodes[n]["members"] for n in graph] == [(1,), (2,)]
+    dropped = report.connectivity.largest_dropped
+    assert [c.nodes for c in dropped] == [2, 2, 1]
+    assert dropped[0].length_m > dropped[1].length_m > dropped[2].length_m == 0
+    refusals = []
+    for raw in (
+        read_back(build_raw_graph(source, UTM_10N)[0]),
+        build_raw_arrays(source, UTM_10N)[0],
+    ):
+        with pytest.raises(FragmentedGraphError) as refused:
+            run_cleanup(raw)
+        refusals.append(str(refused.value))
+    assert refusals[0] == refusals[1]
+
+
+def test_a_twin_left_without_its_pair(tmp_path: Path) -> None:
+    """A one-way side of a block and, beside it, a one-way carriageway leading nowhere: the
+    carriageway is dropped, and the side it was a twin of keeps no twins."""
+    nodes = {1: (0, 0), 2: (0, 400), 3: (300, 400), 4: (300, 0), 5: (20, 350), 6: (20, 50)}
+    road = {"highway": "residential"}
+    primary = {"highway": "primary", "name": "A Ave", "oneway": "yes"}
+    ways = [(10, [1, 2], primary), (11, [2, 3, 4, 1], road), (12, [5, 6], primary)]
+    source = write_osm(tmp_path / "twin.osm", nodes, ways)
+    simplified = assert_same_cleanup(source)
+    merged, _ = stage_a(simplified)
+    find_twins(merged)
+    assert merged.graph["twins"]
+    graph, report = run_cleanup(build_raw_arrays(source, UTM_10N)[0], allow_fragmented=True)
+    assert report.connectivity.dropped_nodes == 2 and not graph.graph["twins"]
+
+
+def arrays_stage_b_of(source: Path) -> StageBGraph:
+    merged = arrays_stage_a(arrays_simplify(build_raw_arrays(source, UTM_10N)[0])[0])[0]
+    return arrays_stage_b(merged, arrays_find_twins(merged)[:2])[0]
+
+
+def without_turns(graph: StageBGraph, emptied: int, limited: int | None = None) -> StageBGraph:
+    """The stage B graph with super-junction `emptied` allowing no turn, and `limited` (if given)
+    only the pairs over an edge between the two, the review's construction: dropping the first
+    leaves the second no turn, for a second round."""
+    u, v, node = graph.edge_u, graph.edge_v, graph.trans_node
+    between = ((u == limited) & (v == emptied)) | ((u == emptied) & (v == limited))
+    kept = (node != emptied) & (
+        (node != limited) | between[graph.trans_in] | between[graph.trans_out]
+    )
+    return dataclasses.replace(
+        graph,
+        trans_node=graph.trans_node[kept],
+        trans_in=graph.trans_in[kept],
+        trans_out=graph.trans_out[kept],
+    )
+
+
+@pytest.mark.parametrize(
+    ("case", "emptied", "limited", "rounds"),
+    [
+        ("roundabout", 4, None, 1),  # its four two-way arms lost inside the round
+        ("too wide", 3, 2, 2),
+        ("turn back", 5, 4, 2),
+        ("woodburn far", 9, 10, 2),
+    ],
+)
+def test_super_junctions_left_without_a_turn_round_by_round(
+    tmp_path: Path, case: str, emptied: int, limited: int | None, rounds: int
+) -> None:
+    """Super-junctions allowing no turn dropped as cleanup drops them, a round each, two-way
+    roads lost among their edges: the same report and graph on both engines."""
+    source = FIXTURES / f"{case}.osm" if case == "roundabout" else STAGE_B_CASES[case](tmp_path)
+    graph = without_turns(arrays_stage_b_of(source), emptied, limited)
+    want = stage_b_graph(graph)
+    keep, want_report = largest_component(want)
+    want = cleanup._without_no_turn(relabel(want, keep), want_report)
+    component, got_report = arrays_connectivity.largest_component(graph)
+    kept = arrays_connectivity.keep_only(graph, component)
+    got = cleanup_graph(arrays_connectivity.without_no_turn(kept, got_report))
+    assert got_report == want_report and got_report.dropped_no_turn == rounds
+    assert_same_graph(want, got)
+    assert pickle.dumps(got, pickle.HIGHEST_PROTOCOL) == pickle.dumps(want, pickle.HIGHEST_PROTOCOL)

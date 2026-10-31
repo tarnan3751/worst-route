@@ -570,6 +570,7 @@ FastAPI, JSON bodies validated by pydantic. All coordinates are `[lon, lat]` in 
 | GET | `/routes/{route_id}/geojson` | geometry only (for "open in …") |
 | GET | `/routes/{route_id}/share.png` | server-rendered share image, 1200 × 630, cached (built, M4) |
 | POST | `/routes/{route_id}/validate` | runs the validator, returns the report (debug/CI) |
+| GET | `/daily` | today's route: one trip a day, the same for everyone on the server, planned once (built, M6) |
 
 Every error answers `{code, message, ...}` (the error's own fields beside them), 422 for a request that cannot be planned, 429 when the server is full, 404 for an unknown job or route, 409 for a stored route whose build is gone.
 
@@ -714,6 +715,7 @@ frontend/
 │   ├── settings/panel.ts     # seed, budget, inefficiency target, scale (tier auto/override, leash), objective mode, units; constraints (M3), vehicle and departure (M4, built)
 │   ├── run/controls.ts       # Go / Cancel / Reroll (new seed) / Make it worse; the live stat line with the ratio ticking up
 │   ├── share/share.ts        # URL state, ?route= links, copy link, open share.png and download GeoJSON (M4, built)
+│   ├── daily/panel.ts        # (M6, built) today's route at the top of the panel, ?daily
 │   ├── banner.ts             # API errors, non-modal
 │   ├── format.ts             # units (mi/km toggle), durations, numbers; money and dates (M4, built)
 │   ├── util/                 # geo (rounding, bounds), dom
@@ -842,6 +844,8 @@ Deliverable: `worst-route plan --region portland --from 45.5231,-122.6765 --to 4
 ### M6 — Stretch
 
 Certified-worst mode (CP-SAT); OSM turn restrictions via the transitions table; stop reordering; portfolio runs (K seeds in parallel, stream the best); simulated-annealing acceptance.
+
+The game loop's first piece is built (2026-10-31; `docs/reference/api.md`, **The daily route**; `docs/reference/frontend.md`, **Using it**): the daily worst route. `GET /daily` gives one trip a day, the same for everyone on a server: two incorporated places of the main build's places index (the served region with the most states, the national build when served), drawn from the UTC date as the seed, 15–45 % of the build's bbox diagonal apart (849–2,547 km on `us-t3`), the first such pair the pre-flight accepts; planned once, on the day's first call, through the job manager with no client (which no client may cancel), as the longest route at the automatic tier with 5,000 attempts (`DAILY_MAX_ITERATIONS`), the server's largest budget as a safety net and the frontend's default vehicle and departure, and recorded per date and `graph_version` in the route store's `daily` table (drawn once, a full server answering 429 before any drawing), so every server with the same build plans the same route when the iterations end it. Planning it on all roads (T4) instead is a later option: 17–31× rather than 4–11×, at 1.7–3.4 times the time an attempt. The frontend shows it at the top of the panel ("Today's route": the date, the towns, "planning…" with the ratio so far, then the ratio, the share image and "Open it"), collapsed once the user plans a route of their own, and `?daily` opens it. On `us-t3` on 2026-10-31, Sageville, IA → Acworth, GA planned in 14–32 s to 6.58× (`a076702bbc25`), the same route on four servers. Scoring, accounts, leaderboards and "beat the engine" come next.
 
 ---
 

@@ -84,6 +84,10 @@ The engine is at version 5: when the cheapest legal walk the transition-aware se
 passes a node twice, a detour's search searches again with the edge that comes back to it banned,
 up to 8 times, and a seed leg's by a tree over bans, that edge else the one that first entered
 the node, its searches growing with the leg (`docs/reference/engine.md`, **Searches**).
+M6's first piece is built too, the daily worst route: `GET /daily`, one trip a day between two
+towns drawn from the date, planned once on the main build with a fixed number of attempts so every
+server with the build gets the same route, shown as "Today's route" at the top of the panel and
+opened by `?daily` (`docs/reference/api.md`, **The daily route**).
 The plan (`docs/PLAN.md`,
 2026-10-30) is written and its open questions answered as far as `docs/project_overview.md` §3
 records. **M1 is built**: in the acceptance run on the

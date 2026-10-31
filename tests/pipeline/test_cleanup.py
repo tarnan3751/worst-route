@@ -6,6 +6,7 @@ import networkx as nx
 import pytest
 
 from tests.pipeline.invariants import check_all
+from worst_route import config
 from worst_route.pipeline.build import build_raw_graph
 from worst_route.pipeline.cleanup import (
     FragmentedGraphError,
@@ -66,10 +67,30 @@ def test_a_fragmented_graph_fails() -> None:
     message = str(failure.value)
     assert message.startswith(
         "the largest strongly connected component keeps 3 of 13 nodes (23.08%), "
-        "below SCC_MIN_RETAINED (99%); largest dropped: 2 nodes, "
+        "below SCC_MIN_RETAINED (98%); largest dropped: 2 nodes, "
     )
     assert message.endswith("; pass --allow-fragmented to keep it anyway")
     assert failure.value.report.dropped_components == 7
+
+
+def test_a_graph_dropping_a_large_component_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config, "SCC_MIN_RETAINED", 0.2)  # the share alone would pass
+    monkeypatch.setattr(config, "SCC_MAX_DROPPED_NODES", 2)
+    graph, report = run_cleanup(raw("oneway"))  # its largest dropped component has 2 nodes
+    assert report.connectivity.retained < 0.25 and graph.number_of_nodes() == 3
+    monkeypatch.setattr(config, "SCC_MAX_DROPPED_NODES", 1)
+    with pytest.raises(FragmentedGraphError) as failure:
+        run_cleanup(raw("oneway"))
+    assert str(failure.value).startswith(
+        "the largest strongly connected component keeps 3 of 13 nodes (23.08%), and a "
+        "component it drops has more than SCC_MAX_DROPPED_NODES (1); largest dropped: 2 nodes, "
+    )
+    monkeypatch.setattr(config, "SCC_MIN_RETAINED", 0.98)
+    with pytest.raises(FragmentedGraphError) as failure:
+        run_cleanup(raw("oneway"))
+    assert "(23.08%), below SCC_MIN_RETAINED (98%), and a component it drops has more " in str(
+        failure.value
+    )
 
 
 def test_a_fragmented_graph_can_be_kept() -> None:
@@ -109,4 +130,5 @@ def test_parameters_are_json() -> None:
     values = parameters()
     assert json.loads(json.dumps(values)) == values
     assert values["STAGE_A_ARTERIAL_CLASSES"] == ["primary", "secondary", "trunk"]
-    assert values["SCC_MIN_RETAINED"] == 0.99
+    assert values["SCC_MIN_RETAINED"] == 0.98
+    assert values["SCC_MAX_DROPPED_NODES"] == 200

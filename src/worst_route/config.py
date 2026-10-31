@@ -299,8 +299,13 @@ TWIN_LATERAL_M = {
 }
 TWIN_BEARING_TOL = 30.0
 # Connectivity (`pipeline/connectivity.py`): cleanup fails when the largest strongly connected
-# component keeps fewer than this fraction of the nodes, unless --allow-fragmented.
-SCC_MIN_RETAINED = 0.99
+# component keeps fewer than SCC_MIN_RETAINED of the nodes, or when a component it drops holds
+# more than SCC_MAX_DROPPED_NODES (a town whose only way in a filtering rule removed), unless
+# --allow-fragmented. A state holds many small road networks reached only by tracks or private
+# roads, and the roads its extract's edge cuts off: Oregon keeps 98.49% of its nodes, dropping
+# 1,255 components of at most 88 nodes; Portland keeps 99.60%, dropping at most 11 at once.
+SCC_MIN_RETAINED = 0.98
+SCC_MAX_DROPPED_NODES = 200
 
 # Enrich (`docs/PLAN.md` §2.5; `docs/reference/pipeline.md`, enrich). An edge's speed is its
 # `maxspeed` tag when it parses, else its class's default here, in mph; a node's delay is the
@@ -335,7 +340,8 @@ BRAND_MIN_LOCATIONS = 3
 TIER_MIN_RETAINED = 0.95
 
 # QA (`docs/PLAN.md` §2.8; `pipeline/qa.py`): a build is accepted when twins cover at least this
-# share of one-way motorway and trunk length, cleanup kept SCC_MIN_RETAINED of the nodes, and
+# share of one-way motorway and trunk length, cleanup kept SCC_MIN_RETAINED of the nodes, the
+# largest component it dropped held at most SCC_MAX_DROPPED_NODES ("SCC largest dropped"), and
 # every tier TIER_MIN_RETAINED of its own.
 QA_TWIN_COVERAGE_MIN = 0.95
 

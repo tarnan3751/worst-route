@@ -8,7 +8,7 @@ import networkx as nx
 import pytest
 
 from tests.pipeline.invariants import check_all
-from worst_route.config import SCC_MIN_RETAINED
+from worst_route.config import SCC_MAX_DROPPED_NODES, SCC_MIN_RETAINED
 from worst_route.pipeline import layout
 
 pytestmark = pytest.mark.data
@@ -43,6 +43,7 @@ def test_portland_report(stages: Stages) -> None:
     _, graph, report = stages
     assert report["twins"]["coverage"] > 0.95
     assert report["connectivity"]["retained"] >= SCC_MIN_RETAINED
+    assert report["connectivity"]["largest_dropped"][0]["nodes"] <= SCC_MAX_DROPPED_NODES
     assert report["connectivity"]["nodes_after"] == graph.number_of_nodes()
     made = sum(report["stage_b"]["superjunctions"].values())
     assert 0 < len(graph.graph["superjunctions"]) <= made  # some lie in dropped components

@@ -18,8 +18,9 @@ super-junction records in `stages/enrich.pkl`, and writes under `qa/`:
   lists) and save reports, and the thresholds.
 
 The thresholds (`Threshold`): twin coverage of one-way motorway and trunk length at least
-`config.QA_TWIN_COVERAGE_MIN`, the share of nodes cleanup kept at least `SCC_MIN_RETAINED`, and
-each tier's at least `TIER_MIN_RETAINED`. Twin coverage with no one-way motorway or trunk to
+`config.QA_TWIN_COVERAGE_MIN`, the share of nodes cleanup kept at least `SCC_MIN_RETAINED`, the
+largest component it dropped at most `SCC_MAX_DROPPED_NODES` nodes, and each tier's share at
+least `TIER_MIN_RETAINED`. Twin coverage with no one-way motorway or trunk to
 measure passes as "n/a". `QaReport.passed` is their conjunction; the CLI exits 1 when it is
 false, after writing everything.
 """
@@ -35,6 +36,7 @@ import numpy as np
 
 from worst_route.config import (
     QA_TWIN_COVERAGE_MIN,
+    SCC_MAX_DROPPED_NODES,
     SCC_MIN_RETAINED,
     TIER_MIN_RETAINED,
     TIERS,
@@ -49,12 +51,14 @@ LAYERS = ("twins", "superjunctions", "dropped_components", "tiers")
 
 @dataclass
 class Threshold:
-    """One QA threshold; `value` None when there is nothing to measure (it passes)."""
+    """One QA threshold: `value` at least `minimum`, or at most `maximum` when that is set;
+    `value` None when there is nothing to measure (it passes)."""
 
     name: str
     value: float | None
-    minimum: float
+    minimum: float | None
     passed: bool
+    maximum: float | None = None
 
 
 @dataclass
@@ -80,6 +84,7 @@ def parameters() -> dict[str, Any]:
     return {
         "QA_TWIN_COVERAGE_MIN": QA_TWIN_COVERAGE_MIN,
         "SCC_MIN_RETAINED": SCC_MIN_RETAINED,
+        "SCC_MAX_DROPPED_NODES": SCC_MAX_DROPPED_NODES,
         "TIER_MIN_RETAINED": TIER_MIN_RETAINED,
     }
 
@@ -114,6 +119,7 @@ def run_qa(build_dir: Path) -> QaReport:
     report.superjunctions = {kind: dict(sorted(c.items())) for kind, c in histogram.items()}
 
     coverage = cleanup["twins"]["coverage"]
+    largest = max((c["nodes"] for c in cleanup["connectivity"]["largest_dropped"]), default=0)
     report.thresholds = [
         Threshold(
             "twin coverage",
@@ -122,6 +128,13 @@ def run_qa(build_dir: Path) -> QaReport:
             coverage is None or coverage >= QA_TWIN_COVERAGE_MIN,
         ),
         _threshold("SCC retained", cleanup["connectivity"]["retained"], SCC_MIN_RETAINED),
+        Threshold(
+            "SCC largest dropped",
+            largest,
+            None,
+            largest <= SCC_MAX_DROPPED_NODES,
+            SCC_MAX_DROPPED_NODES,
+        ),
         *(
             _threshold(f"{t['name']} retained", t["retained"], TIER_MIN_RETAINED)
             for t in tiers["tiers"]

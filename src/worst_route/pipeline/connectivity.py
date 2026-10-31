@@ -6,7 +6,8 @@ node id) and reports what the rest would drop: nodes, edges, length (a two-way r
 once: edges with `reversed` set are left out of the sums) and the `DROPPED_LISTED` largest
 dropped components (nodes, length of the edges leaving them, centroid). A large dropped
 component is a filtering bug, not noise. Cleanup fails when the kept share of nodes is below
-`config.SCC_MIN_RETAINED`, unless told to accept a fragmented graph.
+`config.SCC_MIN_RETAINED`, or when the largest dropped component holds more than
+`config.SCC_MAX_DROPPED_NODES`, unless told to accept a fragmented graph.
 """
 
 from dataclasses import dataclass, field

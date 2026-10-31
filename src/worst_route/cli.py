@@ -274,7 +274,8 @@ def cleanup(
         typer.Option(
             "--allow-fragmented",
             help="Keep the largest strongly connected component even when it holds fewer "
-            "than SCC_MIN_RETAINED of the nodes.",
+            "than SCC_MIN_RETAINED of the nodes or drops a component of more than "
+            "SCC_MAX_DROPPED_NODES.",
         ),
     ] = False,
 ) -> None:
@@ -581,8 +582,12 @@ def qa(region: RegionOption, build_id: BuildIdOption = None, force: ForceOption 
         thresholds = result.thresholds
         typer.echo(f"qa {build_id}: wrote {output.parent} (qa.json and {len(step.LAYERS)} layers)")
     for t in thresholds:
-        value = "n/a" if t.value is None else f"{t.value:.4f}"
-        typer.echo(f"{t.name}: {value} (at least {t.minimum}): {'pass' if t.passed else 'FAIL'}")
+        if t.maximum is None:
+            value = "n/a" if t.value is None else f"{t.value:.4f}"
+            bound = f"at least {t.minimum}"
+        else:  # a count
+            value, bound = f"{t.value:g}", f"at most {t.maximum:g}"
+        typer.echo(f"{t.name}: {value} ({bound}): {'pass' if t.passed else 'FAIL'}")
     failed = [t.name for t in thresholds if not t.passed]
     if failed:
         _fail(f"qa failed: {', '.join(failed)}")

@@ -7,8 +7,9 @@ stage A graph, so stretches stage B makes internal keep their twins), `consolida
 (interchanges and roundabouts as super-junctions with their transitions, the twins carried
 across, then nodes numbered 0..n-1) and `connectivity.largest_component`. It raises
 `FragmentedGraphError`, before anything is dropped, when the largest strongly connected
-component keeps less than `config.SCC_MIN_RETAINED` of the nodes and `allow_fragmented` is not
-set; otherwise it keeps that component and numbers the nodes 0..n-1 again. `save_stage` pickles
+component keeps less than `config.SCC_MIN_RETAINED` of the nodes, or a component it would drop
+holds more than `config.SCC_MAX_DROPPED_NODES`, and `allow_fragmented` is not set; otherwise it
+keeps that component and numbers the nodes 0..n-1 again. `save_stage` pickles
 the graph, with its `superjunctions` and `twins` tables in `G.graph`, to `stages/cleanup.pkl`
 and writes the report to `stages/cleanup.json`. `parameters` is what the step's sidecar records
 beside the input, so a changed threshold reruns it.
@@ -47,6 +48,7 @@ PARAMETERS = (
     "TWIN_LATERAL_M",
     "TWIN_BEARING_TOL",
     "SCC_MIN_RETAINED",
+    "SCC_MAX_DROPPED_NODES",
 )
 
 
@@ -64,20 +66,34 @@ class CleanupReport:
 
 
 class FragmentedGraphError(Exception):
-    """The largest strongly connected component keeps too few of the nodes."""
+    """The largest strongly connected component keeps too few of the nodes, or the graph
+    would lose a component too large to be noise."""
 
     def __init__(self, report: ConnectivityReport) -> None:
         largest = "; ".join(
             f"{c.nodes} nodes, {c.length_m:.0f} m at ({c.lon:.5f}, {c.lat:.5f})"
             for c in report.largest_dropped[:3]
         )
-        super().__init__(
+        kept = (
             f"the largest strongly connected component keeps {report.nodes_after} of "
-            f"{report.nodes_before} nodes ({report.retained:.2%}), below SCC_MIN_RETAINED "
-            f"({config.SCC_MIN_RETAINED:.0%}); largest dropped: {largest}; "
-            "pass --allow-fragmented to keep it anyway"
+            f"{report.nodes_before} nodes ({report.retained:.2%})"
+        )
+        if report.retained < config.SCC_MIN_RETAINED:
+            kept += f", below SCC_MIN_RETAINED ({config.SCC_MIN_RETAINED:.0%})"
+        if _largest_dropped(report) > config.SCC_MAX_DROPPED_NODES:
+            kept += (
+                f", and a component it drops has more than SCC_MAX_DROPPED_NODES "
+                f"({config.SCC_MAX_DROPPED_NODES})"
+            )
+        super().__init__(
+            f"{kept}; largest dropped: {largest}; pass --allow-fragmented to keep it anyway"
         )
         self.report = report
+
+
+def _largest_dropped(report: ConnectivityReport) -> int:
+    """The nodes of the largest component connectivity drops, 0 when it drops none."""
+    return report.largest_dropped[0].nodes if report.largest_dropped else 0
 
 
 def parameters() -> dict[str, Any]:
@@ -111,8 +127,12 @@ def run_cleanup(
     graph, report.stage_b = stage_b(graph)
     lap("stage_b")
     keep, report.connectivity = largest_component(graph)
-    if report.connectivity.retained < config.SCC_MIN_RETAINED and not allow_fragmented:
-        raise FragmentedGraphError(report.connectivity)
+    scc = report.connectivity
+    if not allow_fragmented and (
+        scc.retained < config.SCC_MIN_RETAINED
+        or _largest_dropped(scc) > config.SCC_MAX_DROPPED_NODES
+    ):
+        raise FragmentedGraphError(scc)
     graph = relabel(graph, keep)
     lap("connectivity")
     return graph, report

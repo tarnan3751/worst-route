@@ -634,7 +634,8 @@ def test_qa_after_save(data_dir: Path) -> None:
     assert output.splitlines() == [
         f"qa b1: wrote {directory / 'qa'} (qa.json and 4 layers)",
         "twin coverage: n/a (at least 0.95): pass",
-        "SCC retained: 1.0000 (at least 0.99): pass",
+        "SCC retained: 1.0000 (at least 0.98): pass",
+        "SCC largest dropped: 0 (at most 200): pass",
         *(f"T{t} retained: 1.0000 (at least 0.95): pass" for t in range(5)),
         "qa passed",
     ]

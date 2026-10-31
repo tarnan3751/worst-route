@@ -48,6 +48,7 @@ def test_qa_of_a_build_that_passes(tmp_path: Path) -> None:
     assert [(t.name, t.value, t.passed) for t in report.thresholds] == [
         ("twin coverage", None, True),  # no one-way motorway or trunk to measure
         ("SCC retained", 1.0, True),
+        ("SCC largest dropped", 0, True),
         ("T0 retained", 1.0, True),
         ("T1 retained", 1.0, True),
         ("T2 retained", 1.0, True),
@@ -119,6 +120,29 @@ def test_qa_twin_coverage_threshold(tmp_path: Path) -> None:
     assert (twin.name, twin.value, twin.minimum, twin.passed) == ("twin coverage", 0.9, 0.95, False)
 
 
+def test_qa_largest_dropped_component_threshold(tmp_path: Path) -> None:
+    path = built("divided", tmp_path)
+    stage = path / "stages" / "cleanup.json"
+    report = json.loads(stage.read_text())
+    dropped = [{"nodes": n, "length_m": 10.0, "lon": -122.6, "lat": 45.5} for n in (200, 3)]
+    report["connectivity"]["largest_dropped"] = dropped
+    stage.write_text(json.dumps(report))
+    largest = run_qa(path).thresholds[2]
+    assert (largest.name, largest.value, largest.minimum, largest.maximum, largest.passed) == (
+        "SCC largest dropped",
+        200,
+        None,
+        200,
+        True,
+    )
+    dropped[0]["nodes"] = 201
+    stage.write_text(json.dumps(report))
+    qa = run_qa(path)
+    assert not qa.passed and [t.name for t in qa.thresholds if not t.passed] == [
+        "SCC largest dropped"
+    ]
+
+
 def test_qa_lists_dropped_components(tmp_path: Path) -> None:
     path = built("divided", tmp_path)
     stage = path / "stages" / "cleanup.json"
@@ -145,6 +169,7 @@ def test_parameters_are_json() -> None:
     assert json.loads(json.dumps(values)) == values
     assert values == {
         "QA_TWIN_COVERAGE_MIN": 0.95,
-        "SCC_MIN_RETAINED": 0.99,
+        "SCC_MIN_RETAINED": 0.98,
+        "SCC_MAX_DROPPED_NODES": 200,
         "TIER_MIN_RETAINED": 0.95,
     }

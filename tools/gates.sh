@@ -5,7 +5,8 @@
 #   2. lint        uv run ruff check . && uv run ruff format --check .
 #   3. types       uv run mypy src
 #   4. tests       uv run pytest -q -m "not data"   (tests that need a built graph carry the `data` marker)
-#   5. frontend    npm ci (if node_modules is missing), npm run typecheck, npm run build, npm run test
+#   5. frontend    npm ci (if node_modules is missing or older than package-lock.json), npm run
+#                  typecheck, npm run build, npm run test
 #                  (when frontend/ exists)
 #   6. leftovers   grep for "[verify]" under src, tests, tools and frontend/src must find nothing
 # Prints one line per gate, the failing gate's output in full, and exits non-zero when any
@@ -97,7 +98,10 @@ if [ -f frontend/package.json ]; then
   else
     (
       cd frontend || exit 1
-      if [ ! -d node_modules ]; then npm ci >"$scratch/npm-ci.txt" 2>&1 || { cat "$scratch/npm-ci.txt"; exit 1; }; fi
+      # npm ci when node_modules is missing or older than the lockfile (a landed series added a package)
+      if [ ! -d node_modules ] || [ package-lock.json -nt node_modules ]; then
+        npm ci >"$scratch/npm-ci.txt" 2>&1 || { cat "$scratch/npm-ci.txt"; exit 1; }
+      fi
       npm run --silent typecheck && npm run --silent build && npm run --silent test
     ) >"$scratch/frontend.txt" 2>&1
     if [ $? -eq 0 ]; then

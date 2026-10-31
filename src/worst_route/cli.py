@@ -296,7 +296,8 @@ def filter_(
     force: ForceOption = False,
     source: SourceOption = None,
 ) -> None:
-    """Keep the drivable roads and the POIs of the region's extracts; clip to its bbox."""
+    """Keep the drivable roads, the POIs and the turn restrictions of the region's extracts;
+    clip to its bbox."""
     from worst_route.pipeline.filter import filter_roads, source_timestamp
 
     spec = REGIONS[region]
@@ -304,6 +305,7 @@ def filter_(
     for src in sources:
         _require(src, f"run `worst-route pipeline download --region {region}` first")
     roads, pois = layout.roads_pbf(region), layout.pois_parquet(region)
+    restrictions = layout.restrictions_parquet(region)
     inputs = [
         {**entry, "source_timestamp": source_timestamp(src)}
         for src in sources
@@ -313,8 +315,9 @@ def filter_(
     if spec.classes is not None:  # recorded only with one, so other regions' records stay
         params["classes"] = spec.classes
     record: dict[str, Any] = {"step": "filter", "inputs": inputs, "params": params}
-    if not force and pois.exists() and layout.sidecar_matches(roads, record):
-        typer.echo(f"skipped: {roads} and {pois} are up to date (--force to redo)")
+    written = pois.exists() and restrictions.exists()
+    if not force and written and layout.sidecar_matches(roads, record):
+        typer.echo(f"skipped: {roads}, {pois} and {restrictions} are up to date (--force to redo)")
         return
     dates = sorted({str(entry["source_timestamp"]) for entry in inputs})
     if len(dates) > 1:
@@ -322,9 +325,12 @@ def filter_(
             f"warning: the extracts hold data of different dates: {', '.join(dates)}", err=True
         )
     layout.sidecar(roads).unlink(missing_ok=True)
-    stats = filter_roads(sources, roads, pois, spec.bbox, spec.road_classes)
+    stats = filter_roads(sources, roads, pois, restrictions, spec.bbox, spec.road_classes)
     layout.write_sidecar(roads, record)
-    typer.echo(f"wrote {roads} ({_size(roads)}) and {pois} ({_size(pois)})")
+    typer.echo(
+        f"wrote {roads} ({_size(roads)}), {pois} ({_size(pois)}) and {restrictions} "
+        f"({_size(restrictions)})"
+    )
     ceiling = "" if spec.classes is None else f", above {spec.classes} {stats.ways_above_ceiling}"
     typer.echo(
         f"ways: read {stats.ways_read}, kept {stats.ways_kept}, excluded {stats.ways_excluded}, "
@@ -332,6 +338,10 @@ def filter_(
     )
     kinds = ", ".join(f"{kind} {n}" for kind, n in stats.pois.items())
     typer.echo(f"pois: {sum(stats.pois.values())} ({kinds or 'none'})")
+    left_out = ", ".join(f"{why} {n}" for why, n in stats.restrictions.items() if why != "kept")
+    typer.echo(
+        f"restrictions: kept {stats.restrictions.get('kept', 0)}; left out: {left_out or 'none'}"
+    )
 
 
 @pipeline_app.command()

@@ -256,7 +256,7 @@ def test_duplicate_ways_are_read_once(tmp_path: Path) -> None:
 def test_filtered_file_builds_the_same_graph(tmp_path: Path) -> None:
     roads = tmp_path / "roads.osm.pbf"
     grid = FIXTURES / "grid.osm"
-    filter_roads([grid, grid], roads, tmp_path / "p.parquet", None)
+    filter_roads([grid, grid], roads, tmp_path / "p.parquet", tmp_path / "r.parquet", None)
     filtered, stats = build_raw_graph(roads, UTM_10N)
     direct, _ = build("grid")
     assert stats.ways_read == 12
@@ -275,6 +275,7 @@ def test_extracts_merged_at_filter_join_at_the_line(tmp_path: Path) -> None:
         [FIXTURES / "border_south.osm", FIXTURES / "border_north.osm"],
         roads,
         tmp_path / "p.parquet",
+        tmp_path / "r.parquet",
         None,
     )
     merged, stats = build_raw_graph(roads, UTM_10N)
@@ -288,7 +289,9 @@ def test_extracts_merged_at_filter_join_at_the_line(tmp_path: Path) -> None:
 def test_a_class_ceiling_builds_what_the_filter_keeps(tmp_path: Path) -> None:
     t1 = frozenset({"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link"})
     roads = tmp_path / "roads.osm.pbf"
-    filter_roads([FIXTURES / "diamond.osm"], roads, tmp_path / "p.parquet", None, t1)
+    filter_roads(
+        [FIXTURES / "diamond.osm"], roads, tmp_path / "p.parquet", tmp_path / "r.parquet", None, t1
+    )
     filtered, stats = build_raw_graph(roads, UTM_10N, t1)
     direct, direct_stats = build_raw_graph(FIXTURES / "diamond.osm", UTM_10N, t1)
     assert direct_stats.ways_kept == stats.ways_kept == 6
@@ -299,7 +302,9 @@ def test_a_class_ceiling_builds_what_the_filter_keeps(tmp_path: Path) -> None:
 def test_empty_roads_file(tmp_path: Path) -> None:
     roads = tmp_path / "roads.osm.pbf"
     bbox = (-100.0, 40.0, -99.0, 41.0)  # far from every fixture
-    filter_roads([FIXTURES / "culdesac.osm"], roads, tmp_path / "p.parquet", bbox)
+    filter_roads(
+        [FIXTURES / "culdesac.osm"], roads, tmp_path / "p.parquet", tmp_path / "r.parquet", bbox
+    )
     graph, stats = build_raw_graph(roads, UTM_10N)
     assert graph.number_of_nodes() == graph.number_of_edges() == 0
     assert stats == BuildStats()

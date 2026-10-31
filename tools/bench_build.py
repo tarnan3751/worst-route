@@ -113,7 +113,11 @@ def size(path: Path) -> int:
 def outputs(step: str, region: str) -> dict[str, int]:
     """The files `step` writes for the region's latest build, with their sizes."""
     if step == "filter":
-        files = [layout.roads_pbf(region), layout.pois_parquet(region)]
+        files = [
+            layout.roads_pbf(region),
+            layout.pois_parquet(region),
+            layout.restrictions_parquet(region),
+        ]
         return {str(p): size(p) for p in files}
     latest = layout.latest_file(region)
     if not latest.exists():

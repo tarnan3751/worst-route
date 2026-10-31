@@ -154,6 +154,26 @@ KEPT_HIGHWAY: frozenset[str] = frozenset(
 ALLEY_SERVICE = "alley"
 BLOCKING_ACCESS = frozenset({"private", "no"})
 
+# OSM turn restrictions (`type=restriction` relations; `pipeline/filter.py` keeps them,
+# `pipeline/restrictions.py` applies them): the `restriction` values that ban the turns from the
+# `from` ways to the `to` ways at the `via` node, and those that ban every other turn from the
+# `from` ways there. Any other value (`no_right_turn_on_red`, a time rule written into the value)
+# is left out, as is a relation whose `except` names one of `RESTRICTION_EXCEPT_CARS`.
+RESTRICTION_NO: frozenset[str] = frozenset(
+    {
+        "no_left_turn",
+        "no_right_turn",
+        "no_straight_on",
+        "no_u_turn",
+        "no_entry",
+        "no_exit",
+    }
+)
+RESTRICTION_ONLY: frozenset[str] = frozenset(
+    {"only_left_turn", "only_right_turn", "only_straight_on", "only_u_turn"}
+)
+RESTRICTION_EXCEPT_CARS = frozenset({"motorcar", "motor_vehicle"})
+
 
 class HighwayClass(IntEnum):
     """The road classes a build keeps, stored per edge as `edge_highway` (uint8).

@@ -51,7 +51,7 @@ is the one place that names these paths.
 | Path | Written by |
 |---|---|
 | `raw/<state>-latest.osm.pbf`, `raw/<state>-latest.osm.pbf.md5` | `download` |
-| `filtered/<region>.roads.osm.pbf`, `filtered/<region>.pois.parquet` | `filter` |
+| `filtered/<region>.roads.osm.pbf`, `filtered/<region>.pois.parquet`, `filtered/<region>.restrictions.parquet` | `filter` |
 | `graphs/<region>/<build_id>/stages/build/`, `stages/build.json` | `build` (`stages/build.pkl` instead of `build/` with `--engine networkx`) |
 | `graphs/<region>/latest` (the region's current build id, one line) | `build` |
 | `graphs/<region>/<build_id>/stages/cleanup/`, `stages/cleanup.json` | `cleanup` (`stages/cleanup.pkl` with `--engine networkx`) |
@@ -163,8 +163,8 @@ autouse fixture in `tests/pipeline/conftest.py` fails any test that would reach 
 
 ## `filter`
 
-`filter.filter_roads(sources, roads_out, pois_out, bbox, classes=None) -> FilterStats` reads
-each source with pyosmium 4 in two passes.
+`filter.filter_roads(sources, roads_out, pois_out, restrictions_out, bbox, classes=None) ->
+FilterStats` reads each source with pyosmium 4 in three passes.
 
 **Roads.** With a bbox, `FileProcessor(src, NODE | WAY)` with node locations, `EntityFilter(WAY)`
 and `KeyFilter("highway")` (pyosmium refuses `with_locations()` unless nodes are read, so nodes
@@ -195,10 +195,30 @@ per object and kind, columns (`POI_SCHEMA`): `osm_type` (`n`/`w`), `osm_id`, `lo
 `kind` (`toll_booth`, `level_crossing`, `stop`, `traffic_signals`, `brand`), `brand`,
 `brand_wikidata`, `name` (null when the tag is absent). A node's position is its location; a
 way's is the mean of its node locations, a closed way's repeated first node counted once.
-Relations are not read.
+
+**Turn restrictions.** A third pass over each source's relations, `FileProcessor(src,
+RELATION)` with `TagFilter(("type", "restriction"))`, after the roads of every source are taken,
+keeps OSM's turn restrictions (pipeline version 8; cleanup applies them, **Turn restrictions**).
+A relation is a row when its `restriction` value is one `config.RESTRICTION_NO` names
+(`no_left_turn`, `no_right_turn`, `no_straight_on`, `no_u_turn`, `no_entry`, `no_exit`) or
+`RESTRICTION_ONLY` does (`only_left_turn`, `only_right_turn`, `only_straight_on`,
+`only_u_turn`), it has one `via` node, at least one `from` way and one `to` way, and every one of
+those ways is a kept road. Columns (`RESTRICTION_SCHEMA`): `relation_id`, `restriction`,
+`from_ways` and `to_ways` (lists of way ids), `via_node`, `except` (the tag as it is, null when
+absent); rows sorted by relation id. The others are left out, each counted under the first reason
+that holds (`filter.restriction_skip`, then the roads): `conditional` (a
+`restriction:conditional`, whatever its `restriction`), `vehicle` (no `restriction`, only values
+for some vehicles: `restriction:hgv`, `restriction:bus`, ...), `other_value`
+(`no_right_turn_on_red`, a time rule written into the value), `except` (an `except` naming
+`motorcar` or `motor_vehicle`, `RESTRICTION_EXCEPT_CARS`), `via_way` (a restriction over a way,
+not a node), `incomplete` (no single `via` node, or no `from` or `to` way), `outside` (a `from` or
+`to` way that is not a kept road: beyond the region, or a road the filter drops), `duplicate` (a
+relation an earlier extract already gave). The roads file holds no relations, so its bytes, and
+the build id, do not depend on them.
 
 **Several sources** (a region of several states, **Regions of several states**) are read in
-order: a way or POI already taken from an earlier source is skipped (`ways_duplicate`), though
+order: a way, POI or turn restriction already taken from an earlier source is skipped
+(`ways_duplicate`; a restriction is counted `duplicate`), though
 the way's nodes are still taken from each source that holds it, and the per-source road files are
 merged (`filter.merge_parts`: sorted, each node once at its newest version, of those at the
 newest timestamp, of those the earliest source's): so when the extracts differ only in their shared nodes, the merge writes the
@@ -222,8 +242,10 @@ extracts hold data of different dates: …").
 exclusions and inside the bbox, but of a class above the ceiling, so `ways_kept +
 ways_above_ceiling` is what the region would keep without one, but for a border way above the
 ceiling, counted in each extract that holds it), `ways_outside` (no node in the bbox),
-`ways_duplicate`, `ways_kept`, and `pois` (rows per kind). The CLI adds "above T1 N" to its ways line for a region
-with a ceiling. The POIs are the region's whatever its ceiling.
+`ways_duplicate`, `ways_kept`, `pois` (rows per kind) and `restrictions` (`kept` and the reasons
+above, those at 0 left out). The CLI adds "above T1 N" to its ways line for a region with a
+ceiling, and prints a `restrictions:` line, the rows kept and those left out by reason. The POIs
+are the region's whatever its ceiling.
 
 ## `build`
 

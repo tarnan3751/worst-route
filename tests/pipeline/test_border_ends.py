@@ -50,7 +50,13 @@ def regions(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     ]:
         monkeypatch.setitem(REGIONS, name, Region(name=name, states=states, crs_epsg=32610))
         sources = [FIXTURES / f"{f}.osm" for f in fixtures]
-        filter_roads(sources, layout.roads_pbf(name), layout.pois_parquet(name), None)
+        filter_roads(
+            sources,
+            layout.roads_pbf(name),
+            layout.pois_parquet(name),
+            layout.restrictions_parquet(name),
+            None,
+        )
 
 
 def test_dead_ends_and_where_they_lie(regions: None, tmp_path: Path) -> None:

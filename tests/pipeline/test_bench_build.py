@@ -47,6 +47,7 @@ def test_each_step_is_measured(
     assert set(filter_["outputs"]) == {
         str(layout.roads_pbf("portland")),
         str(layout.pois_parquet("portland")),
+        str(layout.restrictions_parquet("portland")),
     }
     stages = layout.build_dir("portland", report["build_id"]) / "stages"
     raw = stages / "build"

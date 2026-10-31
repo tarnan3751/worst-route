@@ -11,15 +11,23 @@
   the bbox, and nodes on a kept way wherever they lie (a level crossing on a road that straddles
   the box): one row per object and kind (`POI_SCHEMA`), at the node, or at the mean of a way's
   node locations (a closed way's repeated first node counted once).
+- **Turn restrictions.** The `type=restriction` relations whose `restriction` value is one
+  `config.RESTRICTION_NO` or `RESTRICTION_ONLY` names, with one `via` node, at least one `from`
+  and one `to` way, every one of them a kept road: one row each (`RESTRICTION_SCHEMA`), sorted by
+  relation id. Left out and counted (`FilterStats.restrictions`, by `restriction_skip`'s reason):
+  a `restriction:conditional`, a value for other vehicles only (`restriction:hgv` and no
+  `restriction`) or any other value, an `except` naming a car, a `via` way, members missing, a
+  `from` or `to` way that is not a kept road (outside the region, or not a road the filter keeps).
 
 `source_timestamp` reads an extract's data date from its header, for the step's sidecar.
 
-Sources (several for a multi-state build) are read in order; a way or POI already taken from an
-earlier source is skipped (the ways taken are kept in an `osmium.index.IdSet`, a bit set, not a
-Python set), though the way's nodes are still taken from each source that holds it, and the
-per-source road files are merged into one, sorted, each node once at its newest version: so
-when the extracts differ only in their shared nodes, the merge writes the roads one extract of
-their union would (a way or POI that differs keeps the first extract's version). The merge
+Sources (several for a multi-state build) are read in order; a way, POI or restriction already
+taken from an earlier source is skipped (the ways taken are kept in an `osmium.index.IdSet`, a
+bit set, not a Python set), though the way's nodes are still taken from each source that holds
+it, and the per-source road files are merged into one, sorted, each node once at its newest
+version: so when the extracts differ only in their shared nodes, the merge writes the roads one
+extract of their union would (a way, POI or restriction that differs keeps the first extract's
+version). The merge
 (`merge_parts`) streams: it reads the sorted part files in step, one object of each at a time,
 so its memory grows with the number of sources, not with their nodes, and it writes what
 `osmium.MergeInputReader`'s simplifying merge of them would, byte for byte, a negative id never
@@ -31,6 +39,7 @@ on.
 
 import heapq
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -40,6 +49,7 @@ import osmium
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from worst_route.config import RESTRICTION_EXCEPT_CARS, RESTRICTION_NO, RESTRICTION_ONLY
 from worst_route.pipeline.exclusions import RoadClass, Tags, kept_class
 
 type BBox = tuple[float, float, float, float]  # (min_lon, min_lat, max_lon, max_lat)
@@ -64,6 +74,16 @@ POI_SCHEMA = pa.schema(
         ("name", pa.string()),
     ]
 )
+RESTRICTION_SCHEMA = pa.schema(
+    [
+        ("relation_id", pa.int64()),
+        ("restriction", pa.string()),  # a RESTRICTION_NO or RESTRICTION_ONLY value
+        ("from_ways", pa.list_(pa.int64())),
+        ("via_node", pa.int64()),
+        ("to_ways", pa.list_(pa.int64())),
+        ("except", pa.string()),  # the tag as it is, null when absent
+    ]
+)
 
 
 @dataclass
@@ -77,6 +97,8 @@ class FilterStats:
     ways_duplicate: int = 0  # already taken from an earlier source
     ways_kept: int = 0
     pois: dict[str, int] = field(default_factory=dict)  # rows per kind
+    # turn restrictions: "kept", and those left out by reason (`restriction_skip`), none at 0
+    restrictions: dict[str, int] = field(default_factory=dict)
 
 
 def poi_kinds(tags: Tags) -> list[str]:
@@ -87,19 +109,41 @@ def poi_kinds(tags: Tags) -> list[str]:
     return kinds
 
 
+def restriction_skip(tags: Mapping[str, str], members: list[tuple[str, int, str]]) -> str | None:
+    """Why a restriction relation is left out whatever roads are kept, or None: its tags and its
+    members as (type, ref, role)."""
+    if "restriction:conditional" in tags:
+        return "conditional"
+    value = tags.get("restriction")
+    if value is None:
+        return "vehicle"  # only `restriction:<vehicle>` values, none for every vehicle
+    if value not in RESTRICTION_NO | RESTRICTION_ONLY:
+        return "other_value"
+    if RESTRICTION_EXCEPT_CARS & {v.strip() for v in tags.get("except", "").split(";")}:
+        return "except"
+    if any(kind == "w" and role == "via" for kind, _, role in members):
+        return "via_way"
+    roles = Counter((kind, role) for kind, _, role in members)
+    if roles["n", "via"] != 1 or not roles["w", "from"] or not roles["w", "to"]:
+        return "incomplete"
+    return None
+
+
 def filter_roads(
     sources: list[Path],
     roads_out: Path,
     pois_out: Path,
+    restrictions_out: Path,
     bbox: BBox | None,
     classes: frozenset[RoadClass] | None = None,
 ) -> FilterStats:
-    """Write the kept roads of `sources` to `roads_out` and their POIs to `pois_out`; with
-    `classes`, only the roads of those classes."""
+    """Write the kept roads of `sources` to `roads_out`, their POIs to `pois_out` and their turn
+    restrictions to `restrictions_out`; with `classes`, only the roads of those classes."""
     stats = FilterStats()
     box = osmium.osm.Box(*bbox) if bbox is not None else None
     roads_out.parent.mkdir(parents=True, exist_ok=True)
     pois_out.parent.mkdir(parents=True, exist_ok=True)
+    restrictions_out.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=roads_out.parent) as tmp:
         parts = [Path(tmp, f"roads.{i}.osm.pbf") for i in range(len(sources))]
         taken = osmium.index.IdSet()  # way ids
@@ -117,6 +161,11 @@ def filter_roads(
         pois_tmp = Path(tmp, "pois.parquet")
         pq.write_table(table, pois_tmp)
         pois_tmp.replace(pois_out)
+
+        restrictions = _collect_restrictions(sources, taken, stats)
+        restrictions_tmp = Path(tmp, "restrictions.parquet")
+        pq.write_table(restrictions, restrictions_tmp)
+        restrictions_tmp.replace(restrictions_out)
     return stats
 
 
@@ -238,6 +287,44 @@ def _collect_pois(
                 kinds_seen[kind] += 1
     stats.pois = dict(sorted(kinds_seen.items()))
     return pa.table(columns, schema=POI_SCHEMA)
+
+
+def _collect_restrictions(
+    sources: list[Path], kept: osmium.index.IdSet, stats: FilterStats
+) -> pa.Table:
+    """The restriction rows of `sources` whose `from` and `to` ways are all `kept`, each relation
+    once (from the first source holding it), sorted by relation id."""
+    rows: dict[int, tuple[str, list[int], int, list[int], str | None]] = {}
+    counts: Counter[str] = Counter()
+    for source in sources:
+        processor = osmium.FileProcessor(source, osmium.osm.RELATION)
+        processor.with_filter(osmium.filter.TagFilter(("type", "restriction")))
+        for entity in processor:
+            relation = cast(osmium.osm.Relation, entity)  # the file is read for relations only
+            if relation.id in rows:
+                counts["duplicate"] += 1
+                continue
+            tags = dict(relation.tags)
+            members = [(m.type, m.ref, m.role) for m in relation.members]
+            reason = restriction_skip(tags, members)
+            ways = {
+                role: [ref for kind, ref, r in members if kind == "w" and r == role]
+                for role in ("from", "to")
+            }
+            if reason is None and not all(w in kept for w in ways["from"] + ways["to"]):
+                reason = "outside"
+            if reason is not None:
+                counts[reason] += 1
+                continue
+            (via,) = (ref for kind, ref, role in members if kind == "n" and role == "via")
+            value, excepted = tags["restriction"], tags.get("except")
+            rows[relation.id] = (value, ways["from"], via, ways["to"], excepted)
+            counts["kept"] += 1
+    stats.restrictions = dict(sorted(counts.items()))
+    ids = sorted(rows)
+    names = RESTRICTION_SCHEMA.names
+    columns = {name: [rows[i][k] for i in ids] for k, name in enumerate(names[1:])}
+    return pa.table({names[0]: ids, **columns}, schema=RESTRICTION_SCHEMA)
 
 
 def source_timestamp(path: Path) -> str | None:

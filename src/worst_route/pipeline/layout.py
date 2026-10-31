@@ -1,8 +1,9 @@
 """Where the pipeline's files live, all under `settings().data_dir` (`docs/reference/pipeline.md`).
 
 Raw extracts are `raw/<state>-latest.osm.pbf`, each with the `.md5` file Geofabrik publishes
-beside it; a region's filtered roads and POIs are `filtered/<region>.roads.osm.pbf` and
-`filtered/<region>.pois.parquet`. A build is `graphs/<region>/<build_id>/`, its intermediate
+beside it; a region's filtered roads, POIs and turn restrictions are
+`filtered/<region>.roads.osm.pbf`, `filtered/<region>.pois.parquet` and
+`filtered/<region>.restrictions.parquet`. A build is `graphs/<region>/<build_id>/`, its intermediate
 stages under `stages/` and its QA report under `qa/` (the build's own files, written by
 `graph.store`, sit beside them), and `graphs/<region>/latest` holds the id of the region's
 current build.
@@ -55,6 +56,11 @@ def roads_pbf(region: str) -> Path:
 def pois_parquet(region: str) -> Path:
     """The region's POI table."""
     return settings().data_dir / "filtered" / f"{region}.pois.parquet"
+
+
+def restrictions_parquet(region: str) -> Path:
+    """The region's turn restrictions."""
+    return settings().data_dir / "filtered" / f"{region}.restrictions.parquet"
 
 
 def build_dir(region: str, build_id: str) -> Path:

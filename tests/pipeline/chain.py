@@ -27,7 +27,8 @@ def cleaned(source: Path, *, allow_fragmented: bool = False) -> nx.MultiDiGraph:
 
 def pois_of(source: Path, tmp: Path) -> pa.Table:
     """The POI table `filter` writes for an OSM file."""
-    filter_roads([source], tmp / f"{source.stem}.roads.pbf", tmp / f"{source.stem}.pois", None)
+    roads, pois = tmp / f"{source.stem}.roads.pbf", tmp / f"{source.stem}.pois"
+    filter_roads([source], roads, pois, tmp / f"{source.stem}.restrictions", None)
     return pq.read_table(tmp / f"{source.stem}.pois")
 
 

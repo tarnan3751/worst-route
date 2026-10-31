@@ -27,7 +27,8 @@ def run(
     classes: frozenset[str] | None = None,
 ):
     roads, pois = tmp_path / "roads.osm.pbf", tmp_path / "pois.parquet"
-    stats = filter_roads([FIXTURES / f"{n}.osm" for n in names], roads, pois, bbox, classes)
+    sources = [FIXTURES / f"{n}.osm" for n in names]
+    stats = filter_roads(sources, roads, pois, tmp_path / "restrictions.parquet", bbox, classes)
     return stats, roads, pq.read_table(pois).to_pylist()
 
 
@@ -200,7 +201,11 @@ def test_the_merge_keeps_each_node_s_newest_version_as_one_extract_would(tmp_pat
     for out, sources in ((merged, ["south", "north"]), (union, ["union"])):
         out.mkdir()
         filter_roads(
-            [tmp_path / f"{s}.osm" for s in sources], out / "r.osm.pbf", out / "p.parquet", None
+            [tmp_path / f"{s}.osm" for s in sources],
+            out / "r.osm.pbf",
+            out / "p.parquet",
+            out / "t.parquet",
+            None,
         )
     versions = {
         n.id: (n.version, n.location.lat, n.location.lon)
@@ -354,7 +359,8 @@ def test_outputs_replace_earlier_ones(tmp_path: Path) -> None:
     stats, roads, rows = run(tmp_path, "culdesac")
     assert contents(roads)[1] == [400, 401, 402, 403]
     assert rows == []
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["pois.parquet", "roads.osm.pbf"]
+    names = sorted(p.name for p in tmp_path.iterdir())
+    assert names == ["pois.parquet", "restrictions.parquet", "roads.osm.pbf"]
 
 
 @pytest.mark.parametrize(

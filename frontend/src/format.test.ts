@@ -5,6 +5,7 @@ import {
   formatDuration,
   formatDurationInput,
   formatElapsed,
+  formatItems,
   formatLatLon,
   formatRatio,
   parseDuration,
@@ -52,6 +53,14 @@ describe("the other numbers", () => {
     expect(formatCount(82841)).toBe("82,841");
     expect(formatElapsed(11.83)).toBe("11.8 s");
     expect(formatLatLon(45.5231, -122.6765)).toBe("45.523100, -122.676500");
+  });
+
+  it("counts items, one and many", () => {
+    expect(formatItems(1, "bridge")).toBe("1 bridge");
+    expect(formatItems(24, "bridge")).toBe("24 bridges");
+    expect(formatItems(0, "toll_booth")).toBe("0 toll booths");
+    expect(formatItems(1211, "level_crossing")).toBe("1,211 level crossings");
+    expect(formatItems(1, "roundabout")).toBe("1 roundabout");
   });
 });
 

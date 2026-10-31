@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeView, json, stubFetch } from "../__fixtures__/http";
 import { loadStream } from "../__fixtures__/stream";
-import { JobRunner } from "../run/controls";
-import { DEFAULT_SETTINGS, IDLE_RUN, Store, type AppState } from "../state";
+import type { RouteDocument } from "../api/types";
+import { JobRunner, statLines } from "../run/controls";
+import { DEFAULT_SETTINGS, IDLE_RUN, ITEMS, Store, type AppState, type Settings } from "../state";
 import { round6 } from "../util/geo";
 import {
   UrlSync,
@@ -12,6 +13,7 @@ import {
   settingsFrom,
   shareImageUrl,
   urlStateOf,
+  type UrlMode,
   type UrlState,
 } from "./share";
 
@@ -217,5 +219,156 @@ describe("a ratio-target route opened by its link", () => {
 describe("the share image", () => {
   it("is the API's share.png of the route, through the /api proxy", () => {
     expect(shareImageUrl("5ea844bffd40")).toBe("/api/routes/5ea844bffd40/share.png");
+  });
+});
+
+describe("the mode and the turns in the URL", () => {
+  const modes: UrlMode[] = [
+    { objective: "distance" },
+    { objective: "time" },
+    ...ITEMS.map((item): UrlMode => ({ objective: "collect", item })),
+  ];
+
+  it("round-trips every mode and turn setting", () => {
+    for (const mode of modes) {
+      for (const turns of [null, "no_left", "no_right"] as const) {
+        for (const strict of turns === null ? [null] : [null, true as const]) {
+          const state = { ...nothing, mode, turns, strict };
+          expect(decodeUrlState(encodeUrlState(state))).toEqual(state);
+        }
+      }
+    }
+    const collecting = { objective: "collect", item: "toll_booth" } as const;
+    expect(encodeUrlState({ ...nothing, mode: collecting, turns: "no_right", strict: true })).toBe(
+      "?mode=collect:toll_booth&turns=right&strict=1",
+    );
+    expect(encodeUrlState({ ...nothing, mode: { objective: "time" }, turns: "no_left" })).toBe(
+      "?mode=time&turns=left",
+    );
+  });
+
+  it("ignores what it cannot use", () => {
+    for (const mode of [
+      "collect",
+      "collect:",
+      "collect:bridges",
+      "collect:bridge:2",
+      "time:bridge",
+      "distance:",
+      "brand",
+      "alphabet",
+      "slowest",
+      "",
+    ]) {
+      expect(decodeUrlState(`?mode=${mode}`).mode).toBeNull();
+    }
+    for (const turns of ["no_left", "Left", "both", "", "1"]) {
+      expect(decodeUrlState(`?turns=${turns}`).turns).toBeNull();
+    }
+    expect(decodeUrlState("?strict=1").strict).toBeNull(); // strict needs a side
+    for (const strict of ["true", "0", "yes", ""]) {
+      expect(decodeUrlState(`?turns=left&strict=${strict}`).strict).toBeNull();
+    }
+  });
+
+  it("reads a ratio target beside a collect mode as as bad as possible", () => {
+    const url = decodeUrlState("?target=ratio:20&mode=collect:bridge");
+    expect(url).toMatchObject({ target: { kind: "max" }, mode: { objective: "collect" } });
+    expect(settingsFrom(url, DEFAULT_SETTINGS)).toMatchObject({
+      objective: "collect",
+      target: "max",
+    });
+    const ratio = { kind: "ratio", value: 20 };
+    expect(decodeUrlState("?target=ratio:20&mode=time").target).toEqual(ratio);
+    expect(decodeUrlState("?target=ratio:20&mode=collect").target).toEqual(ratio); // no mode
+    expect(decodeUrlState("?target=duration:3600&mode=collect:bridge").target).toEqual({
+      kind: "duration",
+      seconds: 3600,
+    });
+  });
+
+  it("is what the app shows, without the defaults, and gives the settings back", () => {
+    const shown = (patch: Partial<Settings>): AppState => ({
+      region: null,
+      stops: [],
+      settings: { ...DEFAULT_SETTINGS, ...patch },
+      run: IDLE_RUN,
+      route: null,
+      error: null,
+    });
+    const settings: Settings = {
+      ...DEFAULT_SETTINGS,
+      objective: "collect",
+      item: "roundabout",
+      turns: "no_right",
+      strict: true,
+    };
+    const query = encodeUrlState(urlStateOf(shown(settings)));
+    expect(query).toContain("&target=max&mode=collect:roundabout&turns=right&strict=1");
+    expect(settingsFrom(decodeUrlState(query), DEFAULT_SETTINGS)).toEqual(settings);
+    const slowest = { ...DEFAULT_SETTINGS, objective: "time", turns: "no_left" } as const;
+    const back = settingsFrom(decodeUrlState(encodeUrlState(urlStateOf(shown(slowest)))), {
+      ...DEFAULT_SETTINGS,
+      item: "toll_booth", // the URL leaves the item alone under another mode
+    });
+    expect(back).toEqual({ ...slowest, item: "toll_booth" });
+    expect(urlStateOf(shown({}))).toMatchObject({ mode: null, turns: null, strict: null });
+    expect(urlStateOf(shown({ strict: true })).strict).toBeNull(); // no side, no strict
+  });
+});
+
+describe("a route of another mode opened by its link", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** Open `route` by its link, from settings of another mode; the store. */
+  async function open(route: RouteDocument): Promise<Store> {
+    stubFetch((call) =>
+      call.url.endsWith("/geojson")
+        ? json({ type: "FeatureCollection", features: [] })
+        : json(route),
+    );
+    const store = new Store({
+      region: null,
+      stops: [],
+      settings: { ...DEFAULT_SETTINGS, objective: "collect", item: "roundabout", turns: "no_left" },
+      run: IDLE_RUN,
+      route: null,
+      error: null,
+    });
+    const runner = new JobRunner(store, fakeView(), () => {});
+    expect(await openRoute(route.route_id, store, runner)).toBe(true);
+    return store;
+  }
+
+  it("takes a slowest-time route's mode into the settings, the URL and the stat line", async () => {
+    const store = await open(loadStream("portland-time-stream").route);
+    expect(store.state.settings).toMatchObject({
+      objective: "time",
+      item: "roundabout", // kept for the next collect run
+      turns: "any",
+      strict: false,
+    });
+    expect(encodeUrlState(urlStateOf(store.state))).toContain("&target=max&mode=time&stops=");
+    const [ratio, , , , drive, items, turns] = statLines(store.state);
+    expect([ratio, drive, items, turns]).toEqual([
+      "16.9× slower",
+      "drive 4 h 8 min + delays 1 h 59 min",
+      "",
+      "277 left · 282 right",
+    ]);
+  });
+
+  it("takes a collecting route's item, and a route's turn constraint", async () => {
+    const { route } = loadStream("portland-collect-stream");
+    const store = await open(route);
+    expect(store.state.settings).toMatchObject({ objective: "collect", item: "bridge" });
+    expect(encodeUrlState(urlStateOf(store.state))).toContain("&mode=collect:bridge&stops=");
+    expect(statLines(store.state)[5]).toBe("18 bridges");
+    const constraints = { no_left: false, no_right: true, strict: true };
+    const strict = await open({ ...route, request: { ...route.request, constraints } });
+    expect(strict.state.settings).toMatchObject({ turns: "no_right", strict: true });
+    expect(encodeUrlState(urlStateOf(strict.state))).toContain("&turns=right&strict=1&");
   });
 });

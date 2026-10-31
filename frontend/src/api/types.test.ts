@@ -2,7 +2,7 @@
 // holds to the type's (`object<T>` needs exactly T's keys); the specs are checked against the
 // shapes docs/reference/api.md writes down (its JSON request example, and the field lists of
 // the events, /regions, the 202, the job status, the route document and /geocode) and against
-// every payload of the stream recorded from the server.
+// every payload of the streams recorded from the server.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { RECORDINGS, loadStream } from "../__fixtures__/stream";
@@ -544,6 +544,35 @@ describe("what the recordings say", () => {
     expect(done.data.metrics.target).toMatchObject(target);
     expect(route.metrics.target).toMatchObject(target);
     expect(route.request.target).toMatchObject({ kind: "ratio", value: 25 });
+    expect(refused.body).toMatchObject({ code: "INVALID_REQUEST", field: "target" });
+  });
+
+  it("reports a slowest-time route's time ratio, delays and turns, in done and the document", () => {
+    const { events, route, refused } = loadStream("portland-time-stream");
+    const done = events.at(-1);
+    if (done?.event !== "done") throw new Error("no done");
+    expect(route.request).toMatchObject({ objective: "time", item: null });
+    const turns = { left: 277, right: 282, straight: 809, u_turn: 2 };
+    for (const metrics of [done.data.metrics, route.metrics]) {
+      expect(metrics).toMatchObject({ delay_s: 7140, turns });
+      expect(metrics.time_ratio).toBeCloseTo(16.9, 1);
+    }
+    expect(route.metrics.baseline_delay_s).toBe(520);
+    expect(refused.body).toMatchObject({ code: "INVALID_REQUEST", field: "constraints" });
+  });
+
+  it("counts a collecting route's bridges in every progress, in done and the document", () => {
+    const { events, route, refused } = loadStream("portland-collect-stream");
+    const counts = events.flatMap((e) =>
+      e.event === "progress" ? [[e.data.metrics.item, e.data.metrics.items?.bridge]] : [],
+    );
+    expect(counts.every(([item, n]) => item === "bridge" && typeof n === "number")).toBe(true);
+    expect([counts[0][1], counts.at(-1)?.[1]]).toEqual([5, 18]);
+    const done = events.at(-1);
+    if (done?.event !== "done") throw new Error("no done");
+    expect(done.data.metrics).toMatchObject({ item: "bridge", items: { bridge: 18 } });
+    expect(route.metrics.items).toEqual(done.data.metrics.items);
+    expect(route.request).toMatchObject({ objective: "collect", item: "bridge" });
     expect(refused.body).toMatchObject({ code: "INVALID_REQUEST", field: "target" });
   });
 });

@@ -1,7 +1,7 @@
 # Worst Route — project overview
 
-Last updated: 2026-10-30. Snapshot taken after the share image landed, on the collect
-mode: the plan is written; the project scaffolding, every pipeline step, the graph
+Last updated: 2026-10-30. Snapshot taken after the frontend's controls for the modes landed,
+on the share image: the plan is written; the project scaffolding, every pipeline step, the graph
 package, the engine, the API and the frontend are built, and of the presentation the
 geocoding proxy, the places index, the comparison lines and the share image; Portland has
 a saved build, and the M1 acceptance run on it passes (§2.2): M1 is built, and M3's first
@@ -45,14 +45,15 @@ Claude: Python for the pipeline, engine, API and rendering; TypeScript + MapLibr
   the collect mode since M3; the other modes are later milestones.
 - **API and frontend** (In progress): FastAPI jobs with Server-Sent Events progress, a MapLibre map
   that shows the route getting worse live, settings, reroll, make it worse. `docs/PLAN.md` §4–5.
-  The API and the frontend are built for the distance mode and its targets
-  (`docs/reference/api.md`, `docs/reference/frontend.md`); M2's acceptance is next.
+  The API and the frontend are built for the distance, slowest-time and collect modes, the
+  turn constraints and the targets (`docs/reference/api.md`, `docs/reference/frontend.md`);
+  M2's acceptance is next.
 - **Modes** (In progress): longest distance, slowest time, never/only turn left, collect toll
   booths / rail crossings / roundabouts / bridges, brand pilgrimage, alphabet route, hard mode.
   Built: longest distance, slowest time, and never turn left / right as constraints on either
   (soft: each such turn costs a kilometre; strict: none), with targets by ratio or duration, and
   collecting toll booths, level crossings, roundabouts or bridges (targets by duration); the
-  frontend offers the distance mode only so far.
+  frontend offers each of them (its Mode and Turns rows).
 - **Presentation** (In progress): directions, stat toasts, comparisons, states and towns, share
   image. Built: the states and towns a route passes through (the Census places index), the
   comparison lines and the share image (`docs/reference/presentation.md`).
@@ -140,13 +141,17 @@ Portland, Powell's → Reed streams to 62.4× in 11.8 s through it, the engine's
 that seed; a 9 h target from the same 13-minute drive ends within ±2 % in 1.8 s.
 The frontend is built (`docs/reference/frontend.md`, M2 step 3): a Vite + TypeScript app
 without a framework on MapLibre GL JS, in which the user clicks a start, an end and stops along
-the way on the region's map, picks a target (as bad as possible, a ratio or a drive time), runs
-a job and watches the route grow from the stream (each splice applied and flashed, a colour
-gradient from start to end, reconnecting with `Last-Event-ID`), cancels, rerolls, makes the
-route worse, and opens a stored route by its `?route=` link; the settings and stops live in the
-URL, every API error shows in a banner, and leaving the page cancels a running job. On
-Portland, Powell's → Reed grows to 60.0× in 12 s on the map; its tests replay streams recorded
-from the server, node for node.
+the way on the region's map, picks a mode (the longest, the slowest, or collecting an item),
+turns to avoid (left or right, soft or strict) and a target (as bad as possible, a ratio or a
+drive time), runs a job and watches the route grow from the stream (each splice applied and
+flashed, a colour gradient from start to end, reconnecting with `Last-Event-ID`), cancels,
+rerolls, makes the route worse, and opens a stored route by its `?route=` link; the settings
+and stops live in the URL, every API error shows in a banner (a strict turn constraint's with
+a button to try without strict), and leaving the page cancels a running job. The stat line shows the slowest time's
+ratio of experienced times with the drive and the delays, the items collected (live), and the
+turns. On Portland, Powell's → Reed grows to 60.0× in 12 s on the map, and to "40.1× slower"
+in 8 s under the slowest time; its tests replay streams recorded from the server, node for
+node.
 The geocoding proxy is built (M4's first piece; `docs/reference/api.md`, **Geocoding**): a
 place search in the stop list (a field and a button, no type-ahead) asks `GET /geocode`, which
 answers up to five places in the region from Nominatim behind a 30-day sqlite cache and a limit
@@ -177,7 +182,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 |---|---|---|
 | M1 — Portland, distance mode, CLI | Built | bootstrap, every pipeline step (download to qa; Portland's build passes QA), the graph package and the engine (snapping, seed route, transition-aware searches, splice loop, distance objective, validator, `worst-route plan` / `validate`). The acceptance run (`docs/PLAN.md` §7 M1 step 9; `uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` on build e4b3b4ad90db, `graph_version` 45f650e868fa, the reference backend: 20 random Portland pairs 3–15 km apart): all 20 plan and the validator passes all 20; the median ratio is 21.5× (3.3–45.2×); seeds 1 and 2 share 10–16% of their edges (Jaccard on 5 pairs, all < 0.3); the cul-de-sac via moves 86 m to the nearest through street with its note. Powell's → Reed gives 58–62×, PDX → Beaverton 7.3× (`docs/reference/engine.md`, **On Portland**) |
 | M2 — API + map, live growth | In progress | CSR + Numba backend built, its transition-aware kernels included (the default on every build; byte-identical to the reference: on Portland the acceptance's 20 routes and Powell's → Reed reproduce exactly, at 7,200–8,200 attempts/s); the API built (jobs in worker processes, SSE progress, the route store, make it worse, `worst-route serve`); targets by ratio and duration built (engine, CLI `--target`/`--base`, API), a 13-minute Portland drive to 9 h within ±2 % in 1.8 s over the API; the MapLibre frontend built (stops by click, the route growing live, run controls, settings with the targets, links); remaining: the acceptance |
-| M3 — Modes and constraints | In progress | built: the turn classes, never turn left / right (soft by default, `strict` for none; engine, CLI, API), the kernels refusing banned turn classes, slowest time (engine, CLI, API), collectibles (the collect objective for toll booths, level crossings, roundabouts and bridges in the engine, `plan --objective collect --item` and the API; `node_roundabouts` in the build; on Portland 24–30 bridges where the distance route passes 16–17); on Portland strict no-left plans 4 of the 20 acceptance pairs and soft no-left 20 at a median of 5.33× (§2.3; on a build re-enriched at pipeline version 2, whose bearings describe the roads, not cleanup's stubs); the search honouring stage B transitions was built at M1. Remaining: brands; hard mode; alphabet search; the frontend's controls for the new modes; the acceptance |
+| M3 — Modes and constraints | In progress | built: the turn classes, never turn left / right (soft by default, `strict` for none; engine, CLI, API), the kernels refusing banned turn classes, slowest time (engine, CLI, API), collectibles (the collect objective for toll booths, level crossings, roundabouts and bridges in the engine, `plan --objective collect --item` and the API; `node_roundabouts` in the build; on Portland 24–30 bridges where the distance route passes 16–17); the frontend's controls for them (the Mode and Turns rows, the request, the URL, the stat line's time ratio, delays, items and turns, the strict refusal's retry); on Portland strict no-left plans 4 of the 20 acceptance pairs and soft no-left 20 at a median of 5.33× (§2.3; on a build re-enriched at pipeline version 2, whose bearings describe the roads, not cleanup's stubs); the search honouring stage B transitions was built at M1. Remaining: brands; hard mode; alphabet search; the acceptance |
 | M4 — Presentation | In progress | directions, stats, toasts, comparisons, share image, geocoding proxy, share links; built: the geocoding proxy (`GET /geocode`, Nominatim behind a cache and 1 request/s) and the place search in the stop list; the Census places index (`tools/fetch_census.sh`, `worst-route aux places`: the states and towns a route passes through), the comparison lines, and the share image (`GET /routes/{id}/share.png`, linked from the share section) |
 | M5 — Scaling up | Planned | Oregon; array-based simplify/consolidate; US at T1; the national decision gate; public-hosting prep |
 | M6 — Stretch | Planned | certified worst (CP-SAT), turn restrictions, stop reordering, portfolio runs |
@@ -398,7 +403,18 @@ brief):
   Once the targets landed: the panel's ratio (20× by default) and drive time (9 h, typed as
   `9h`, `90m`, `2h30m` or minutes) are sent as the request's target and shown with what was
   achieved, within ±2 %; the URL carries `target=max|ratio:<x>|duration:<seconds>`; the
-  max-mode recording is kept and a smaller ratio-target recording added.
+  max-mode recording is kept and a smaller ratio-target recording added. Once the modes
+  landed (at their brief): a Mode row of radios (Longest, Slowest, Collect with its item,
+  bridges by default) and a Turns row (Any, Avoid left turns, Avoid right turns, a strict
+  checkbox only with a side, and its hint) replace the objective's list; the request sends the
+  `item` only under collect and the `constraints` only with a side; no ratio target under
+  collect; the URL carries `mode=distance|time|collect:<item>`, `turns=left|right` and
+  `strict=1`, and a `?route=` link restores them; the stat line shows the time ratio ("× slower")
+  with the drive and the delays, the items collected live, and the turns ("no lefts" when none);
+  `INFEASIBLE_TURN_CONSTRAINT` offers "Try without strict", which sends the refused Go, Reroll
+  or Make it worse again without strict; an error's `field` highlights its row; a slowest-time
+  and a collect recording are added. At the review (same day): "no lefts" needs no U-turn
+  either; a ratio target beside `mode=collect` in a link reads as as bad as possible.
 - **Collect as built for M3** (2026-10-30, at its brief): one `Collect` objective, `objective:
   "collect"` with `item` ∈ toll_booth, level_crossing, roundabout, bridge, scoring items × 10⁶ +
   length in its own terms (toll booths and crossings as edge terms, roundabouts as node terms from

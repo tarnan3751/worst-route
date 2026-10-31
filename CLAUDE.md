@@ -29,8 +29,8 @@ route streamed over Server-Sent Events, the route store and "make it worse". So 
 inefficiency targets (M2's fourth step): a ratio or a duration, reached within ±2 %, from
 `plan --target` and the API. So are M3's first three modes: the slowest time (`--objective
 time`), the turn constraints (`--no-left`, `--no-right`, soft unless `--strict`) and collecting
-toll booths, level crossings, roundabouts or bridges (`--objective collect --item`), from `plan`
-and the API. So is the frontend (`docs/reference/frontend.md`, M2's third
+toll booths, level crossings, roundabouts or bridges (`--objective collect --item`), from `plan`,
+the API and the frontend's settings. So is the frontend (`docs/reference/frontend.md`, M2's third
 step): a MapLibre map on which stops are clicked, the route drawn growing live from the stream,
 the run controls, the settings (the targets among them) and links. So is the geocoding proxy
 (M4's first piece): a place search in the stop list, answered by `GET /geocode` from Nominatim

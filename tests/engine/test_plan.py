@@ -21,7 +21,7 @@ from worst_route.graph.spatial import Snap, SpatialIndex
 
 from .graphs import at, at_node, lattice, left_only, two_rings
 
-GRID = lattice(8, 8, rounded_lonlat=True)
+GRID = lattice(8, 8)
 PYTHON = PythonBackend(GRID)
 
 

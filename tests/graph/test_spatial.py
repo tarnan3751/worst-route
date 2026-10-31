@@ -35,6 +35,12 @@ def at_node(v: int) -> tuple[float, float]:
     return float(TOWN.node_lat[v]), float(TOWN.node_lon[v])
 
 
+def reported(v: int) -> tuple[float, float]:
+    """Node v's position as a `Snap` reports it: 7 decimals."""
+    lat, lon = at_node(v)
+    return round(lat, 7), round(lon, 7)
+
+
 def without(*nodes: int) -> np.ndarray:
     mask = np.ones(TOWN.n, dtype=bool)
     mask[list(nodes)] = False
@@ -56,7 +62,7 @@ def test_cul_de_sac_serves_start_and_end_but_not_via() -> None:
     assert via.node == 5
     assert via.moved_m == pytest.approx(100.0, abs=1e-6)
     assert via.note == "moved 100 m to the nearest through street"
-    assert (via.lat, via.lon) == at_node(5)
+    assert (via.lat, via.lon) == reported(5)
 
 
 def test_one_way_stubs() -> None:
@@ -73,7 +79,7 @@ def test_nearest_node_wins_without_a_note() -> None:
     snap = INDEX.snap(*at(130.0, 100.0), "via")
     assert snap.node == 4 and snap.note is None
     assert snap.moved_m == pytest.approx(30.0, abs=1e-6)
-    assert (snap.lat, snap.lon) == at_node(4)
+    assert (snap.lat, snap.lon) == reported(4)
 
 
 def test_equal_distances_go_to_the_lower_node_id() -> None:

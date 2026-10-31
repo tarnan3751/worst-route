@@ -15,7 +15,7 @@ from worst_route.graph.spatial import SpatialIndex
 
 from .graphs import at_node, lattice
 
-GRID = lattice(8, 8, rounded_lonlat=True)
+GRID = lattice(8, 8)
 
 
 def planned(stops: list[int], seed: int = 2) -> PlanResult:
@@ -36,6 +36,9 @@ def test_route_json_round_trips(tmp_path: Path) -> None:
     assert saved.engine_version == ENGINE_VERSION
     assert saved.request == result.request
     assert saved.stops == result.snaps
+    for stop in doc["stops"]:  # the node's position, at most 7 decimals as OSM writes them
+        assert stop["lat"] == round(stop["lat"], 7) and stop["lon"] == round(stop["lon"], 7)
+        assert len(repr(stop["lon"]).split(".")[1]) <= 7
     assert saved.nodes.tobytes() == result.route.nodes.tobytes()
     assert saved.edges.tobytes() == result.route.edges.tobytes()
     assert saved.stop_idx == result.route.stop_idx

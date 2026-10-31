@@ -11,7 +11,7 @@ from worst_route.presentation.geojson import feature_collection, line_coordinate
 
 from ..engine.graphs import at_node, lattice
 
-GRID = lattice(8, 8, rounded_lonlat=True)
+GRID = lattice(8, 8)
 
 
 def planned(stops: list[int], seed: int = 2) -> PlanResult:

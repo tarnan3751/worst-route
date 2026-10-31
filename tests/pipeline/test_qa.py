@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from tests.pipeline.chain import FIXTURES, UTM_10N, pois_of
+from worst_route.graph.data import FORMAT_VERSION
 from worst_route.pipeline import PIPELINE_VERSION, cleanup, enrich, tiers
 from worst_route.pipeline.build import build_raw_graph
 from worst_route.pipeline.qa import LAYERS, parameters, run_qa
@@ -16,6 +17,7 @@ META: dict[str, Any] = {
     "crs_epsg": UTM_10N,
     "created": "2026-10-30T00:00:00+00:00",
     "pipeline_version": PIPELINE_VERSION,
+    "format": FORMAT_VERSION,
     "params": {},
     "sources": [],
 }

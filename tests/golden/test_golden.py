@@ -1,8 +1,9 @@
 """Golden routes: a fixed build, request and seed give the same route, byte for byte.
 
-The build is a 20 × 20 lattice of 100 m streets whose lon/lat are rounded to 1e-7 degrees, so its
-bytes, and its pinned graph_version, do not depend on PROJ's last bits on the machine running
-the test. Every backend must reproduce it, byte for byte. Two more freeze target runs from the
+The build is a 20 × 20 lattice of 100 m streets, its node positions whole metres, so its bytes,
+and its pinned graph_version, do not depend on PROJ's last bits on the machine running the test;
+its stops are its nodes' lon/lat rounded to 1e-7 degrees (`at_node`), for the same reason.
+Every backend must reproduce it, byte for byte. Two more freeze target runs from the
 same stops and seed (a ratio and a duration target, each stopping within it), and two more the
 modes, with the same seed: the slowest time from the same stops on the lattice with a primary
 road every fourth row and column (signals where two cross, stop signs along them), and the
@@ -69,7 +70,7 @@ Backend = type[PythonBackend] | type[CsrBackend]
 
 @pytest.mark.parametrize("backend_type", [PythonBackend, CsrBackend], ids=["python", "csr"])
 def test_grid_route_is_golden(backend_type: Backend) -> None:
-    g = lattice(20, 20, rounded_lonlat=True)
+    g = lattice(20, 20)
     stops = [at_node(g, v) for v in (0, 210, 399)]
     request = RouteRequest(stops=stops, seed=7, max_iterations=400, budget_s=120)
     result = plan_route(g, request, backend=backend_type(g), check_delta=True)
@@ -79,7 +80,7 @@ def test_grid_route_is_golden(backend_type: Backend) -> None:
 @pytest.mark.parametrize("name", sorted(TARGETS))
 @pytest.mark.parametrize("backend_type", [PythonBackend, CsrBackend], ids=["python", "csr"])
 def test_grid_target_route_is_golden(backend_type: Backend, name: str) -> None:
-    g = lattice(20, 20, rounded_lonlat=True)
+    g = lattice(20, 20)
     stops = [at_node(g, v) for v in (0, 210, 399)]
     request = RouteRequest(stops=stops, seed=7, budget_s=120, target=TARGETS[name])
     result = plan_route(g, request, backend=backend_type(g), check_delta=True)
@@ -94,7 +95,7 @@ def test_grid_target_route_is_golden(backend_type: Backend, name: str) -> None:
 @pytest.mark.parametrize("backend_type", [PythonBackend, CsrBackend], ids=["python", "csr"])
 def test_grid_mode_route_is_golden(backend_type: Backend, name: str) -> None:
     fields, nodes, primary_every = MODES[name]
-    g = lattice(20, 20, rounded_lonlat=True, primary_every=primary_every)
+    g = lattice(20, 20, primary_every=primary_every)
     stops = [at_node(g, v) for v in nodes]
     request = RouteRequest(stops=stops, seed=7, max_iterations=400, budget_s=120, **fields)
     result = plan_route(g, request, backend=backend_type(g), check_delta=True)
@@ -107,7 +108,7 @@ def test_grid_mode_route_is_golden(backend_type: Backend, name: str) -> None:
 
 @pytest.mark.parametrize("backend_type", [PythonBackend, CsrBackend], ids=["python", "csr"])
 def test_grid_collect_route_is_golden(backend_type: Backend) -> None:
-    g = lattice(20, 20, rounded_lonlat=True, roads=BRIDGES)
+    g = lattice(20, 20, roads=BRIDGES)
     stops = [at_node(g, v) for v in (0, 210, 399)]
     request = RouteRequest(
         stops=stops,
@@ -125,7 +126,7 @@ def test_grid_collect_route_is_golden(backend_type: Backend) -> None:
 
 @pytest.mark.parametrize("backend_type", [PythonBackend, CsrBackend], ids=["python", "csr"])
 def test_grid_brand_route_is_golden(backend_type: Backend) -> None:
-    g = lattice(20, 20, rounded_lonlat=True, brands=BRANDS)
+    g = lattice(20, 20, brands=BRANDS)
     stops = [at_node(g, v) for v in (0, 210, 399)]
     request = RouteRequest(
         stops=stops, seed=7, max_iterations=400, budget_s=120, objective="brand", brand=1
@@ -138,7 +139,7 @@ def test_grid_brand_route_is_golden(backend_type: Backend) -> None:
 
 @pytest.mark.parametrize("backend_type", [PythonBackend, CsrBackend], ids=["python", "csr"])
 def test_grid_alphabet_route_is_golden(backend_type: Backend) -> None:
-    g = lattice(20, 20, rounded_lonlat=True, roads=LETTERED)
+    g = lattice(20, 20, roads=LETTERED)
     stops = [at_node(g, v) for v in (0, 399)]
     request = RouteRequest(
         stops=stops, seed=7, max_iterations=20, budget_s=120, objective="alphabet"
@@ -182,7 +183,7 @@ def compare(path: Path, actual: dict[str, Any]) -> None:
 
 @pytest.mark.parametrize("backend_type", [PythonBackend, CsrBackend], ids=["python", "csr"])
 def test_grid_hard_route_is_golden(backend_type: Backend) -> None:
-    g = lattice(20, 20, rounded_lonlat=True, named=True)
+    g = lattice(20, 20, named=True)
     stops = [at_node(g, v) for v in (0, 210, 399)]
     request = RouteRequest(
         stops=stops, seed=7, max_iterations=400, budget_s=120, constraints={"hard": True}

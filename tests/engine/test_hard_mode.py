@@ -488,7 +488,7 @@ def long_main_street() -> GraphData:
 def test_the_cli_plans_under_hard_mode_and_validate_proves_it(
     data_dir: Path, tmp_path: Path
 ) -> None:
-    g = save(data_dir, lattice(10, 10, rounded_lonlat=True, named=True), "named")
+    g = save(data_dir, lattice(10, 10, named=True), "named")
     trip = ("--from", latlon(g, 22), "--to", latlon(g, 77), "--seed", "3")
     out = tmp_path / "hard.json"
     code, stdout, stderr = plan(*trip, "--hard", "--no-left", "--out", str(out))

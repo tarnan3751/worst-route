@@ -15,7 +15,7 @@ from worst_route.graph.spatial import SpatialIndex
 
 from ..engine.graphs import at_node, lattice
 
-GRID = lattice(8, 8, rounded_lonlat=True)
+GRID = lattice(8, 8)
 
 
 def planned(seed: int = 3) -> PlanResult:

@@ -7,14 +7,14 @@ tier_nodes, meta)` turns the enriched graph into `GraphData`:
   (u, v, original order): each node's out-edges are one run of ascending ids, and its in-edges
   are listed in ascending id. A unit's id is the id of its key (`enrich`: the smaller of the
   two directions of a road).
-- **Nodes**: position, `kind` as `NodeKind`, `node_state` −1 (a route's states come from the
-  Census polygons at presentation time, `presentation/places.py`, so it stays −1),
-  `pass_through`, `delay_s`, and `members`.
+- **Nodes**: position (projected x, y; the build derives lon/lat from them), `kind` as
+  `NodeKind`, `pass_through`, `delay_s`, and `members`.
 - **Edges**: the enriched attributes; `edge_highway` as `HighwayClass`; `edge_tier` the first
   tier whose classes hold the class; `edge_name` and `edge_ref` index the raw tags and
-  `edge_identity` the identities, each table sorted; `way_osm_ids` from `osmids`,
-  `osmnode_ids` from `osm_nodes`, and `coords` the projected geometry turned back into
-  (lon, lat), float32.
+  `edge_identity` the identities, each table sorted; `speed_kmh` the distinct speeds, ascending,
+  as float32, and `edge_speed` each edge's index among them (more than `MAX_SPEEDS` distinct
+  speeds raise `TooManySpeedsError`); `osmnode_ids` from `osm_nodes`, and `coords` the projected
+  geometry turned back into (lon, lat), float32. The way ids (`osmids`) stay in the stages.
 - **Twins** and **transitions**: the cleaned graph's tables with keys turned into ids, rows
   sorted.
 - **Tiers**: `tier_node_mask[t]` the nodes `tiers` kept; `tier_edge_mask[t]` the edges of the
@@ -55,7 +55,14 @@ import shapely
 from numpy.typing import NDArray
 
 from worst_route.config import TIERS, HighwayClass, Region
-from worst_route.graph.data import ARRAY_SPECS, GraphData, NodeKind, Strings
+from worst_route.graph.data import (
+    ARRAY_SPECS,
+    FORMAT_VERSION,
+    MAX_SPEEDS,
+    GraphData,
+    NodeKind,
+    Strings,
+)
 from worst_route.graph.store import read_build, write_build
 from worst_route.pipeline import PIPELINE_VERSION, layout
 
@@ -68,6 +75,10 @@ STEP_OUTPUTS = (("cleanup", "cleanup.pkl"), ("enrich", "enrich.pkl"), ("tiers", 
 
 class EmptyTransitionsError(ValueError):
     """A super-node allows no turn, which the build format cannot express."""
+
+
+class TooManySpeedsError(ValueError):
+    """More distinct speeds than the build's uint8 `edge_speed` can index."""
 
 
 class SourcesChangedError(ValueError):
@@ -115,6 +126,12 @@ def graph_data(
         for table in ("names", "refs", "identities")
     }
     highway = np.array([HighwayClass[d["highway"].upper()] for d in edges], dtype=np.uint8)
+    speeds = np.array([d["speed_kmh"] for d in edges], dtype=np.float32)
+    speed_kmh = np.unique(speeds)
+    if len(speed_kmh) > MAX_SPEEDS:
+        raise TooManySpeedsError(
+            f"{len(speed_kmh)} distinct speeds, more than the {MAX_SPEEDS} a build can index"
+        )
     edge_u = np.array([u for u, _, _ in keys], dtype=np.int32)
     edge_v = np.array([v for _, v, _ in keys], dtype=np.int32)
 
@@ -150,12 +167,9 @@ def graph_data(
         "superjunctions": len(records),
     }
     data = GraphData(
-        node_lon=np.array([d["lon"] for d in nodes], dtype=np.float64),
-        node_lat=np.array([d["lat"] for d in nodes], dtype=np.float64),
         node_x=np.array([d["x"] for d in nodes], dtype=np.float64),
         node_y=np.array([d["y"] for d in nodes], dtype=np.float64),
         node_kind=np.array([NodeKind[d["kind"].upper()] for d in nodes], dtype=np.uint8),
-        node_state=np.full(n, -1, dtype=np.int16),
         node_pass_through=np.array([d["pass_through"] for d in nodes], dtype=np.bool_),
         node_delay_s=np.array([d["delay_s"] for d in nodes], dtype=np.float32),
         member_indptr=_indptr([len(d["members"]) for d in nodes]),
@@ -163,7 +177,8 @@ def graph_data(
         edge_u=edge_u,
         edge_v=edge_v,
         edge_length_m=np.array([d["length"] for d in edges], dtype=np.float32),
-        edge_speed_kmh=np.array([d["speed_kmh"] for d in edges], dtype=np.float32),
+        edge_speed=np.searchsorted(speed_kmh, speeds).astype(np.uint8),
+        speed_kmh=speed_kmh,
         edge_time_s=np.array([d["time_s"] for d in edges], dtype=np.float32),
         edge_highway=highway,
         edge_tier=np.array([tier_of[c] for c in highway.tolist()], dtype=np.uint8),
@@ -176,8 +191,6 @@ def graph_data(
         edge_level_crossings=np.array([d["level_crossings"] for d in edges], dtype=np.uint8),
         edge_bearing_in=np.array([d["bearing_in"] for d in edges], dtype=np.int16),
         edge_bearing_out=np.array([d["bearing_out"] for d in edges], dtype=np.int16),
-        way_indptr=_indptr([len(d["osmids"]) for d in edges]),
-        way_osm_ids=_concat([d["osmids"] for d in edges]),
         out_indptr=_indptr(np.bincount(edge_u, minlength=n).tolist()),
         out_edges=np.arange(len(keys), dtype=np.int32),
         in_indptr=_indptr(np.bincount(edge_v, minlength=n).tolist()),
@@ -267,6 +280,7 @@ def build_meta(
         "crs_epsg": region.crs_epsg,
         "created": datetime.now(UTC).isoformat(timespec="seconds"),
         "pipeline_version": PIPELINE_VERSION,
+        "format": FORMAT_VERSION,
         "params": params,
         "sources": sources,
     }

@@ -17,7 +17,7 @@ from ..engine.graphs import at_node, lattice
 from .support import write_fixture_places
 
 runner = CliRunner()
-GRID = lattice(10, 10, rounded_lonlat=True)
+GRID = lattice(10, 10)
 
 
 def planned(data_dir: Path, tmp_path: Path) -> tuple[GraphData, Path]:

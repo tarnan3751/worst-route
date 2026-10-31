@@ -52,11 +52,10 @@ def test_bearings_from_coordinates() -> None:
         assert g.edge_bearing_out[e] == g.edge_bearing_in[e] == bearing
 
 
-def test_edge_ids_sorted_and_ways_keep_input_order() -> None:
+def test_edge_ids_sorted_keeping_input_order() -> None:
     g = make_graph([(0.0, 0.0), (30.0, 40.0)], [(1, 0, 7.0), (0, 1, 9.0), (0, 1, 8.0)])
     assert g.edge_u.tolist() == [0, 0, 1]
     assert g.edge_length_m.tolist() == [9.0, 8.0, 7.0]
-    assert g.way_osm_ids.tolist() == [2, 3, 1]
     assert g.member_osm_ids.tolist() == [1, 2]
     assert g.osmnode_ids.tolist() == [1, 2, 1, 2, 2, 1]
     with pytest.raises(ValueError, match="2 edges match"):
@@ -68,11 +67,12 @@ def test_edge_defaults() -> None:
     g = make_graph([(0.0, 0.0), (30.0, 40.0)], [Edge(0, 1), Edge(1, 0, 10.0, speed_kmh=36.0)])
     assert g.edge_length_m.tolist() == [50.0, 10.0]
     assert g.edge_speed_kmh.tolist() == [40.0, 36.0]
+    assert g.speed_kmh.tolist() == [36.0, 40.0] and g.edge_speed.tolist() == [1, 0]
     assert g.edge_time_s.tolist() == pytest.approx([4.5, 1.0])
     assert np.all(g.edge_highway == HighwayClass.RESIDENTIAL)
     assert np.all(g.edge_tier == 4)
     assert g.edge_unit.tolist() == [0, 1]
-    assert np.all(g.node_state == -1) and np.all(g.node_kind == 0)
+    assert np.all(g.node_kind == 0)
     assert g.coords.shape == (4, 2) and g.coord_indptr.tolist() == [0, 2, 4]
     assert g.tier_edge_mask.tolist() == [[False] * 2] * 4 + [[True] * 2]
     assert g.tier_node_mask.tolist() == [[False] * 2] * 4 + [[True] * 2]
@@ -151,17 +151,17 @@ def test_twins_and_transitions_name_one_edge(kwargs: dict, message: str) -> None
         make_graph([(0.0, 0.0), (10.0, 0.0)], edges, **kwargs)
 
 
-def test_lonlat_inverse_projection_or_given() -> None:
+def test_lonlat_is_the_inverse_projection() -> None:
     g = grid_graph(2, 2, 100.0)
     to_xy = Transformer.from_crs("EPSG:4326", "EPSG:32610", always_xy=True)
     x, y = to_xy.transform(g.node_lon, g.node_lat)
     assert np.allclose(x, g.node_x, atol=1e-6) and np.allclose(y, g.node_y, atol=1e-6)
     assert -122.7 < g.node_lon[0] < -122.6 and 45.5 < g.node_lat[0] < 45.6
-    given = make_graph(
-        [(0.0, 0.0), (1.0, 0.0)], [(0, 1, 1.0)], lonlat=[(-122.0, 45.0), (-121.0, 46.0)]
-    )
-    assert given.node_lon.tolist() == [-122.0, -121.0]
-    assert given.coords.tolist() == [[-122.0, 45.0], [-121.0, 46.0]]
+    to_lonlat = Transformer.from_crs("EPSG:32610", "EPSG:4326", always_xy=True)
+    assert np.array_equal(g.node_lon, to_lonlat.transform(g.node_x, g.node_y)[0])
+    assert g.node_lon is g.node_lon  # worked out once
+    with pytest.raises(ValueError, match="read-only"):
+        g.node_lat[0] = 0.0
 
 
 def test_arrays_are_read_only() -> None:

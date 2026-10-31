@@ -146,10 +146,7 @@ def cases(
     n = draw(st.integers(2, max_nodes))
     node = st.integers(0, n - 1)
     pairs = draw(st.lists(st.tuples(node, node), min_size=n, max_size=max_edges))
-    lonlat = [(-122.0 + 0.001 * i, 45.0) for i in range(n)]
-    g = make_graph(
-        [(100.0 * i, 0.0) for i in range(n)], [(u, v, 1.0) for u, v in pairs], lonlat=lonlat
-    )
+    g = make_graph([(100.0 * i, 0.0) for i in range(n)], [(u, v, 1.0) for u, v in pairs])
     if rows:
         table: list[tuple[int, int, int]] = []
         for v in range(n):

@@ -97,10 +97,7 @@ def cases(
     node = st.integers(0, n - 1)
     at_least = min(edges_per_node * n, max_edges)
     pairs = draw(st.lists(st.tuples(node, node), min_size=at_least, max_size=max_edges))
-    lonlat = [(-122.0 + 0.001 * i, 45.0) for i in range(n)]
-    g = make_graph(
-        [(100.0 * i, 0.0) for i in range(n)], [(u, v, 1.0) for u, v in pairs], lonlat=lonlat
-    )
+    g = make_graph([(100.0 * i, 0.0) for i in range(n)], [(u, v, 1.0) for u, v in pairs])
     weights = np.array(draw(st.lists(weight, min_size=g.m, max_size=g.m)), dtype=np.float64)
     src = draw(node)
     return Case(

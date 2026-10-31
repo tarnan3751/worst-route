@@ -12,13 +12,12 @@ from worst_route.graph.testing import Edge, grid_graph, make_graph
 
 
 def small_build() -> GraphData:
-    """Three nodes, four edges, a twin pair and a transition, with lon/lat given."""
+    """Three nodes, four edges, a twin pair and a transition."""
     return make_graph(
         [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0)],
         [(0, 1, 100.0), (1, 2, 100.0), (2, 0, 141.0), (1, 0, 100.0)],
         twins=[((0, 1), (1, 0))],
         transitions=[((0, 1), (1, 2))],
-        lonlat=[(-122.0, 45.0), (-121.99875, 45.0), (-121.99875, 45.0009)],
     )
 
 
@@ -55,7 +54,7 @@ def assert_same_build(a: GraphData, b: GraphData) -> None:
 def test_graph_version_is_pinned() -> None:
     # Freezes the version definition and the array order (docs/reference/graph.md): this
     # literal changes only under a tier A brief that changes the build format.
-    expected = "281d156d6db24a54f6e4b3140b720d21b15c55f51865b2139f51cce42d29d68f"
+    expected = "e9f1191c0c7a816f0985c90e65609b5782025afce6f405cff4bd76d8470b78f8"
     assert small_build().meta["graph_version"] == expected
 
 
@@ -333,6 +332,28 @@ def test_a_build_without_an_array_names_its_remedy(tmp_path: Path, version: str)
         )
 
 
+def test_a_build_of_an_earlier_format_is_rebuilt(tmp_path: Path) -> None:
+    # A version-3 build has no format in its meta and every array it had then: it is refused
+    # before its arrays are read, with the rebuild from filter.
+    g = small_build()
+    write_build(g, tmp_path / "b")
+    meta = json.loads((tmp_path / "b" / "meta.json").read_text())
+    del meta["format"]
+    meta["pipeline_version"] = "3"
+    (tmp_path / "b" / "meta.json").write_text(json.dumps(meta))
+    with pytest.raises(MissingArray) as missing:
+        read_build(tmp_path / "b")
+    assert str(missing.value) == (
+        f"the build at {tmp_path / 'b'} was written by pipeline 3 (now {PIPELINE_VERSION}): "
+        "rebuild the region with `worst-route pipeline filter --region test` and the steps "
+        "after it"
+    )
+    meta["pipeline_version"] = PIPELINE_VERSION  # this pipeline's, another format: saved again
+    (tmp_path / "b" / "meta.json").write_text(json.dumps(meta))
+    with pytest.raises(MissingArray, match="is format None .now 4.: rebuild it with `worst-route "):
+        read_build(tmp_path / "b")
+
+
 def test_read_rejects_a_wrong_dtype(tmp_path: Path) -> None:
     g = small_build()
     write_build(g, tmp_path / "b")
@@ -344,6 +365,6 @@ def test_read_rejects_a_wrong_dtype(tmp_path: Path) -> None:
 def test_read_rejects_a_wrong_shape(tmp_path: Path) -> None:
     g = small_build()
     write_build(g, tmp_path / "b")
-    np.save(tmp_path / "b" / "arrays" / "node_x.npy", g.node_x[:-1])
-    with pytest.raises(ValueError, match="node_x: shape"):
+    np.save(tmp_path / "b" / "arrays" / "node_kind.npy", g.node_kind[:-1])
+    with pytest.raises(ValueError, match="node_kind: shape"):
         read_build(tmp_path / "b", mmap=False)

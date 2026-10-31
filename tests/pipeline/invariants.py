@@ -209,8 +209,9 @@ def check_saved(graph: nx.MultiDiGraph, data: GraphData) -> None:
     edge_id = {key: e for e, key in enumerate(keys)}
     assert (data.n, data.m) == (graph.number_of_nodes(), len(keys))
     for v, d in graph.nodes(data=True):
-        position = (data.node_x[v], data.node_y[v], data.node_lon[v], data.node_lat[v])
-        assert position == (d["x"], d["y"], d["lon"], d["lat"])
+        assert (data.node_x[v], data.node_y[v]) == (d["x"], d["y"])
+        # lon/lat are derived from x/y: the stored ones' up to PROJ's round trip
+        assert abs(data.node_lon[v] - d["lon"]) < 1e-9 and abs(data.node_lat[v] - d["lat"]) < 1e-9
         assert _run(data.member_indptr, data.member_osm_ids, v) == list(d["members"])
         assert NodeKind(data.node_kind[v]).name.lower() == d["kind"]
         assert data.node_delay_s[v] == np.float32(d["delay_s"])
@@ -225,7 +226,6 @@ def check_saved(graph: nx.MultiDiGraph, data: GraphData) -> None:
         d = graph.edges[u, v, k]
         assert (data.edge_u[e], data.edge_v[e]) == (u, v)
         assert _run(data.osmnode_indptr, data.osmnode_ids, e) == list(d["osm_nodes"])
-        assert _run(data.way_indptr, data.way_osm_ids, e) == list(d["osmids"])
         for name, attribute in (
             ("edge_length_m", "length"),
             ("edge_speed_kmh", "speed_kmh"),

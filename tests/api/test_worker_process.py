@@ -26,7 +26,7 @@ pytestmark = pytest.mark.slow
 
 @pytest.mark.anyio
 async def test_jobs_run_cancel_and_die_in_spawned_processes(data: Path) -> None:
-    huge = lattice(40, 40, rounded_lonlat=True)  # a run of a few seconds
+    huge = lattice(40, 40)  # a run of a few seconds
     save_build(data, huge, "huge", latest=False)
     async with manager(data, inline_workers=False) as m:
         job = submit(m, loaded(data), request(GRID, [0, 45, 99], max_iterations=300))
@@ -97,7 +97,7 @@ if __name__ == "__main__":
 
 
 def test_a_worker_exits_when_its_api_process_dies(data: Path) -> None:
-    vast = lattice(80, 80, rounded_lonlat=True)  # about 6 s of splices corner to corner
+    vast = lattice(80, 80)  # about 6 s of splices corner to corner
     save_build(data, vast, "vast", latest=False)
     req = request(vast, [0, 6399], max_iterations=1_000_000)
     root = Path(__file__).resolve().parents[2]

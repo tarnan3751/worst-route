@@ -20,7 +20,7 @@ from worst_route.graph.testing import make_graph
 from .graphs import TREES, X0, Y0, at, at_node, avenue, lattice, left_only, named_roads
 
 runner = CliRunner()
-GRID = lattice(10, 10, rounded_lonlat=True)
+GRID = lattice(10, 10)
 
 
 def save(data_dir: Path, g: GraphData, build_id: str, latest: bool = True) -> GraphData:
@@ -156,7 +156,7 @@ def test_on_a_build_with_turn_tables_both_backends_plan_the_same_route(
         ((35, 45), (45, 55)),
         ((55, 45), (45, 35)),
     ]
-    g = save(data_dir, lattice(10, 10, transitions=straight, rounded_lonlat=True), "b1")
+    g = save(data_dir, lattice(10, 10, transitions=straight), "b1")
     trip = ["--from", latlon(g, 0), "--to", latlon(g, 99), "--seed", "4"]
     code, stdout, stderr = plan(*trip, "--max-iterations", "20")
     assert code == 0, stderr
@@ -258,7 +258,7 @@ def test_validate_catches_a_tampered_route(data_dir: Path, tmp_path: Path) -> No
 
 def test_plan_reads_the_named_build(data_dir: Path) -> None:
     save(data_dir, GRID, "b1")
-    other = save(data_dir, lattice(4, 4, rounded_lonlat=True), "small", latest=False)
+    other = save(data_dir, lattice(4, 4), "small", latest=False)
     code, stdout, _ = plan(
         "--build-id",
         "small",
@@ -462,7 +462,7 @@ def test_base_takes_its_stops_and_scale_from_its_file(data_dir: Path, tmp_path: 
 
 def test_a_collecting_plan_prints_and_records_its_items(data_dir: Path, tmp_path: Path) -> None:
     roads = {(a, a + 1): {"flags": EdgeFlag.BRIDGE} for a in range(10, 90, 7) if a % 10 < 9}
-    bridged = save(data_dir, lattice(10, 10, rounded_lonlat=True, roads=roads), "b1")
+    bridged = save(data_dir, lattice(10, 10, roads=roads), "b1")
     out = tmp_path / "route.json"
     trip = ["--from", latlon(bridged, 0), "--to", latlon(bridged, 9), "--seed", "1"]
     collect = ["--objective", "collect", "--item", "bridge"]
@@ -535,7 +535,6 @@ def test_an_objective_s_item_and_target_must_fit(data_dir: Path, tmp_path: Path)
 BRANDED = lattice(
     10,
     10,
-    rounded_lonlat=True,
     brands={"Pilgrim Coffee": [12, 27, 45, 63, 78, 86], "Acme": [55, 95], "ACME": [33, 66]},
 )
 
@@ -605,7 +604,6 @@ def test_a_brand_must_fit_the_objective_and_the_build(data_dir: Path) -> None:
 NUMBERED = lattice(
     10,
     10,
-    rounded_lonlat=True,
     brands={"76": [12, 45, 78], **{f"Brand {k:02d}": [10 + k % 80] for k in range(80)}},
 )
 
@@ -791,7 +789,6 @@ def test_validate_proves_a_strict_constraint(data_dir: Path, tmp_path: Path) -> 
 LETTERED = lattice(
     10,
     10,
-    rounded_lonlat=True,
     roads=named_roads(
         10, 10, [f"{t} Street" for t in TREES[:10]], [avenue(k) for k in range(1, 11)]
     ),

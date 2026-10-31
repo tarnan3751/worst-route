@@ -220,8 +220,8 @@ def test_under_slowest_time_a_target_measures_the_experienced_time(
 
 # The loop toward a target ------------------------------------------------------------------
 
-LOOP_GRID = lattice(20, 20, rounded_lonlat=True)
-TOWN = lattice(5, 5, rounded_lonlat=True)
+LOOP_GRID = lattice(20, 20)
+TOWN = lattice(5, 5)
 
 
 def plan(
@@ -358,7 +358,7 @@ def test_a_target_run_is_the_same_bytes_on_both_backends_and_twice(target: Targe
     assert shrunk[0].run.attempts == shrunk[1].run.attempts
 
 
-SLOW_GRID = lattice(20, 20, rounded_lonlat=True, primary_every=4)
+SLOW_GRID = lattice(20, 20, primary_every=4)
 
 
 @pytest.mark.parametrize("seed", range(3))

@@ -22,7 +22,7 @@ from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import SpatialIndex
 from worst_route.graph.testing import Edge, make_graph
 
-from .graphs import X0, Y0, at_node, lattice
+from .graphs import X0, Y0, at_node, exactly_at_node, lattice
 
 PORTLAND = [(45.5231, -122.6765), (45.4817, -122.6263)]
 
@@ -208,7 +208,7 @@ def test_auto_leash() -> None:
 
 def test_masks_of_a_short_trip_cover_the_grid() -> None:
     g = lattice(5, 5)
-    request = RouteRequest(stops=[at_node(g, 0), at_node(g, 24)], seed=0)
+    request = RouteRequest(stops=[exactly_at_node(g, 0), exactly_at_node(g, 24)], seed=0)
     masks = request_masks(SpatialIndex(g), g, request)
     assert masks.tier == "T4"
     assert masks.trip_m == pytest.approx(400 * 2**0.5, abs=1e-6)

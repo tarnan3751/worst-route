@@ -2,34 +2,45 @@
 
 `GraphData` holds every array of a build as a NumPy array (read-only, and memory-mapped when
 read from disk), plus `strings`, the name, ref and identity tables the edges index into and the
-brand tables the brand ids index into, and `meta`. `ARRAY_SPECS` is the format: each array's
-name, dtype and shape, in the order the build lists its files and `graph_version` hashes them. n
-is the node count, m the edge count, T the number of tiers, b the number of brands. Edge ids are
-sorted by (u, v, original order), so each node's out-edges are a contiguous run of ascending
-ids. Brand k's nodes are `brand_nodes[brand_indptr[k]:brand_indptr[k + 1]]` (`nodes_of_brand`),
-ascending, with the POIs snapped to each in `brand_locations`.
+brand tables the brand ids index into, and `meta`. `ARRAY_SPECS` is the format (`FORMAT_VERSION`
+4): each array's name, dtype and shape, in the order the build lists its files and
+`graph_version` hashes them. n is the node count, m the edge count, T the number of tiers, b the
+number of brands. Edge ids are sorted by (u, v, original order), so each node's out-edges are a
+contiguous run of ascending ids. Brand k's nodes are
+`brand_nodes[brand_indptr[k]:brand_indptr[k + 1]]` (`nodes_of_brand`), ascending, with the POIs
+snapped to each in `brand_locations`.
+
+Three arrays are derived, not stored, each worked out once per `GraphData` on first use and
+read-only: `node_lon` and `node_lat`, the inverse projection of `node_x` and `node_y` from
+`meta["crs_epsg"]` (the engine reads x/y, the presentation lon/lat), and `edge_speed_kmh`,
+`speed_kmh[edge_speed]` (a build's speeds are few: `edge_speed` is each edge's index into its
+table of distinct speeds).
 
 `validate()` checks a build against the format and raises `ValueError` naming the array.
 `deep=False` checks only what is cheap without reading the arrays' contents (dtypes, shapes,
 the meta keys and counts, and `meta["params"]` JSON-native with string keys, so that its JSON,
 which `graph_version` hashes, is the params); that is what `read_build` runs. The default also
-checks contents: indptr runs, id and enum ranges, each original OSM node id a member of one
-node only, the edge order, both adjacency lists, twins symmetric, transitions sorted,
-roundabout rings counted at super-junctions only, and each brand's nodes in range, strictly
-ascending, each with at least one location.
+checks contents: indptr runs, id and enum ranges, the speed table, each original OSM node id a
+member of one node only, the edge order, both adjacency lists, twins symmetric, transitions
+sorted, roundabout rings counted at super-junctions only, and each brand's nodes in range,
+strictly ascending, each with at least one location.
 """
 
 import json
 from dataclasses import dataclass, field
 from enum import IntEnum, IntFlag
+from functools import cached_property
 from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
+from pyproj import Transformer
 
 from worst_route.config import TIERS, HighwayClass
 
 N_TIERS = len(TIERS)
+FORMAT_VERSION = 4  # meta["format"]: ARRAY_SPECS and the build's files (`graph/store.py`)
+MAX_SPEEDS = 256  # the distinct speeds a build's uint8 edge_speed can index
 
 
 class NodeKind(IntEnum):
@@ -52,16 +63,14 @@ class EdgeFlag(IntFlag):
 
 
 # name -> (dtype, shape). Shape symbols: "n" nodes, "m" edges, "k" transition rows (the length
-# of trans_node), "T" tiers, "r" brand rows (the length of brand_nodes), "*" any length; "n+1",
-# "m+1" and "b+1" (b brands: the length of strings.brands) for indptr arrays.
+# of trans_node), "T" tiers, "r" brand rows (the length of brand_nodes), "s" speeds (the length
+# of speed_kmh, at most MAX_SPEEDS), "*" any length; "n+1", "m+1" and "b+1" (b brands: the
+# length of strings.brands) for indptr arrays.
 ARRAY_SPECS: dict[str, tuple[np.dtype[Any], tuple[str | int, ...]]] = {
     # nodes
-    "node_lon": (np.dtype(np.float64), ("n",)),
-    "node_lat": (np.dtype(np.float64), ("n",)),
     "node_x": (np.dtype(np.float64), ("n",)),
     "node_y": (np.dtype(np.float64), ("n",)),
     "node_kind": (np.dtype(np.uint8), ("n",)),
-    "node_state": (np.dtype(np.int16), ("n",)),
     "node_pass_through": (np.dtype(np.bool_), ("n",)),
     "node_delay_s": (np.dtype(np.float32), ("n",)),
     "member_indptr": (np.dtype(np.int64), ("n+1",)),
@@ -70,7 +79,8 @@ ARRAY_SPECS: dict[str, tuple[np.dtype[Any], tuple[str | int, ...]]] = {
     "edge_u": (np.dtype(np.int32), ("m",)),
     "edge_v": (np.dtype(np.int32), ("m",)),
     "edge_length_m": (np.dtype(np.float32), ("m",)),
-    "edge_speed_kmh": (np.dtype(np.float32), ("m",)),
+    "edge_speed": (np.dtype(np.uint8), ("m",)),
+    "speed_kmh": (np.dtype(np.float32), ("s",)),
     "edge_time_s": (np.dtype(np.float32), ("m",)),
     "edge_highway": (np.dtype(np.uint8), ("m",)),
     "edge_tier": (np.dtype(np.uint8), ("m",)),
@@ -83,8 +93,6 @@ ARRAY_SPECS: dict[str, tuple[np.dtype[Any], tuple[str | int, ...]]] = {
     "edge_level_crossings": (np.dtype(np.uint8), ("m",)),
     "edge_bearing_in": (np.dtype(np.int16), ("m",)),
     "edge_bearing_out": (np.dtype(np.int16), ("m",)),
-    "way_indptr": (np.dtype(np.int64), ("m+1",)),
-    "way_osm_ids": (np.dtype(np.int64), ("*",)),
     # adjacency
     "out_indptr": (np.dtype(np.int64), ("n+1",)),
     "out_edges": (np.dtype(np.int32), ("m",)),
@@ -119,6 +127,7 @@ META_KEYS = (
     "crs_epsg",
     "created",
     "pipeline_version",
+    "format",
     "graph_version",
     "counts",
     "params",
@@ -143,12 +152,9 @@ class GraphData:
     """Every array of one build; the fields are `ARRAY_SPECS` in order, then strings and meta."""
 
     # nodes
-    node_lon: NDArray[np.float64]
-    node_lat: NDArray[np.float64]
     node_x: NDArray[np.float64]  # projected metres in meta["crs_epsg"]
     node_y: NDArray[np.float64]
     node_kind: NDArray[np.uint8]  # NodeKind
-    node_state: NDArray[np.int16]  # state FIPS, −1 unknown
     node_pass_through: NDArray[np.bool_]  # exists u→v→w with u ≠ w
     node_delay_s: NDArray[np.float32]
     member_indptr: NDArray[np.int64]
@@ -157,7 +163,8 @@ class GraphData:
     edge_u: NDArray[np.int32]
     edge_v: NDArray[np.int32]
     edge_length_m: NDArray[np.float32]
-    edge_speed_kmh: NDArray[np.float32]
+    edge_speed: NDArray[np.uint8]  # index into speed_kmh
+    speed_kmh: NDArray[np.float32]  # the build's distinct speeds, ascending
     edge_time_s: NDArray[np.float32]
     edge_highway: NDArray[np.uint8]  # HighwayClass
     edge_tier: NDArray[np.uint8]  # the first tier whose classes contain the edge's class
@@ -170,8 +177,6 @@ class GraphData:
     edge_level_crossings: NDArray[np.uint8]
     edge_bearing_in: NDArray[np.int16]  # degrees clockwise from north, arriving at v
     edge_bearing_out: NDArray[np.int16]  # degrees clockwise from north, leaving u
-    way_indptr: NDArray[np.int64]
-    way_osm_ids: NDArray[np.int64]
     # adjacency
     out_indptr: NDArray[np.int64]
     out_edges: NDArray[np.int32]  # each node's out-edges, ascending edge id
@@ -206,12 +211,40 @@ class GraphData:
     @property
     def n(self) -> int:
         """The number of nodes."""
-        return int(self.node_lon.shape[0])
+        return int(self.node_x.shape[0])
 
     @property
     def m(self) -> int:
         """The number of edges."""
         return int(self.edge_u.shape[0])
+
+    @cached_property
+    def node_lon(self) -> NDArray[np.float64]:
+        """Each node's longitude: `node_x`, `node_y` projected back to EPSG:4326."""
+        return self._lonlat[0]
+
+    @cached_property
+    def node_lat(self) -> NDArray[np.float64]:
+        """Each node's latitude: `node_x`, `node_y` projected back to EPSG:4326."""
+        return self._lonlat[1]
+
+    @cached_property
+    def _lonlat(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        to_lonlat = Transformer.from_crs(
+            f"EPSG:{self.meta['crs_epsg']}", "EPSG:4326", always_xy=True
+        )
+        lon, lat = to_lonlat.transform(np.asarray(self.node_x), np.asarray(self.node_y))
+        lonlat = (np.asarray(lon, dtype=np.float64), np.asarray(lat, dtype=np.float64))
+        for a in lonlat:
+            a.flags.writeable = False
+        return lonlat
+
+    @cached_property
+    def edge_speed_kmh(self) -> NDArray[np.float32]:
+        """Each edge's speed: `speed_kmh[edge_speed]`."""
+        speeds: NDArray[np.float32] = self.speed_kmh[self.edge_speed]
+        speeds.flags.writeable = False
+        return speeds
 
     def nodes_of_brand(self, brand: int) -> NDArray[np.int32]:
         """Brand `brand`'s nodes, ascending."""
@@ -236,16 +269,21 @@ class GraphData:
         sizes: dict[str | int, str | int] = {"n": n, "n+1": n + 1, "m": m, "m+1": m + 1}
         sizes.update({"k": len(self.trans_node), "T": N_TIERS, "*": "*", 2: 2})
         sizes.update({"b+1": len(self.strings.brands) + 1, "r": len(self.brand_nodes)})
+        sizes["s"] = len(self.speed_kmh)
         for name, (_, shape) in ARRAY_SPECS.items():
             actual = getattr(self, name).shape
             expected = tuple(sizes[s] for s in shape)
             if any(e not in ("*", a) for e, a in zip(expected, actual, strict=True)):
                 raise ValueError(f"{name}: shape {actual}, expected {expected}")
+        if len(self.speed_kmh) > MAX_SPEEDS:
+            raise ValueError(f"speed_kmh: {len(self.speed_kmh)} speeds, at most {MAX_SPEEDS}")
         if len(self.strings.brand_wikidata) != len(self.strings.brands):
             raise ValueError("strings: brand_wikidata must list one entry per brand")
         missing = [key for key in META_KEYS if key not in self.meta]
         if missing:
             raise ValueError(f"meta: missing keys {missing}")
+        if self.meta["format"] != FORMAT_VERSION:
+            raise ValueError(f"meta: format {self.meta['format']}, expected {FORMAT_VERSION}")
         counts = self.meta["counts"]
         if counts.get("nodes") != n or counts.get("edges") != m:
             raise ValueError(f"meta: counts {counts} do not match {n} nodes and {m} edges")
@@ -262,7 +300,6 @@ class GraphData:
         _check_indptr("member_indptr", self.member_indptr, len(self.member_osm_ids), 1)
         if len(np.unique(self.member_osm_ids)) != len(self.member_osm_ids):
             raise ValueError("member_osm_ids: an original OSM node id is a member twice")
-        _check_indptr("way_indptr", self.way_indptr, len(self.way_osm_ids), 1)
         _check_indptr("coord_indptr", self.coord_indptr, len(self.coords), 2)
         _check_indptr("osmnode_indptr", self.osmnode_indptr, len(self.osmnode_ids), 2)
         _check_indptr("twin_indptr", self.twin_indptr, len(self.twin_edges), 0)
@@ -271,7 +308,6 @@ class GraphData:
         _check_indptr("brand_indptr", self.brand_indptr, len(self.brand_nodes), 1)
 
         _check_range("node_kind", self.node_kind, 0, len(NodeKind))
-        _check_range("node_state", self.node_state, -1, 1 << 15)
         _check_range("edge_u", self.edge_u, 0, n)
         _check_range("edge_v", self.edge_v, 0, n)
         _check_range("edge_highway", self.edge_highway, 0, len(HighwayClass))
@@ -280,6 +316,7 @@ class GraphData:
         _check_range("edge_ref", self.edge_ref, -1, len(self.strings.refs))
         _check_range("edge_identity", self.edge_identity, -1, len(self.strings.identities))
         _check_range("edge_unit", self.edge_unit, 0, m)
+        _check_range("edge_speed", self.edge_speed, 0, len(self.speed_kmh))
         _check_range("edge_flags", self.edge_flags, 0, 1 << len(EdgeFlag))
         _check_range("edge_bearing_in", self.edge_bearing_in, 0, 360)
         _check_range("edge_bearing_out", self.edge_bearing_out, 0, 360)
@@ -296,6 +333,9 @@ class GraphData:
             values = getattr(self, name)
             if not (np.isfinite(values).all() and (values >= 0).all()):
                 raise ValueError(f"{name}: values must be finite and non-negative")
+        speeds = self.speed_kmh
+        if not (np.isfinite(speeds).all() and (speeds > 0).all() and (np.diff(speeds) > 0).all()):
+            raise ValueError("speed_kmh: speeds must be finite, positive and strictly ascending")
 
         key = self.edge_u.astype(np.int64) * n + self.edge_v
         if (np.diff(key) < 0).any():

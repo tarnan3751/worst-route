@@ -23,9 +23,9 @@ from worst_route.graph.store import write_build
 
 from ..engine.graphs import at_node, lattice
 
-GRID = lattice(10, 10, rounded_lonlat=True)
-BIG = lattice(20, 20, rounded_lonlat=True)
-SLOW = lattice(10, 10, rounded_lonlat=True, primary_every=3)  # GRID's nodes, with delays
+GRID = lattice(10, 10)
+BIG = lattice(20, 20)
+SLOW = lattice(10, 10, primary_every=3)  # GRID's nodes, with delays
 # The grid build's region: 0.1° around its nodes, so a stop can be inside it and still more
 # than the 5 km snapping reaches from every node.
 GRID_BBOX = [

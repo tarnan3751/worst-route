@@ -1,9 +1,9 @@
 """Small hand-built graphs for tests (`docs/reference/graph.md`, **Test builders**).
 
-`make_graph(nodes, edges, ...)` turns node coordinates (x, y in metres in `crs_epsg`) and an
-edge list into a valid, read-only `GraphData`, filling every array the pipeline would with a
-plain default: lengths as given (Euclidean when omitted), bearings from the coordinates, one
-OSM member per node (id = node index + 1), one way per edge (id = input position + 1), class
+`make_graph(nodes, edges, ...)` turns node coordinates (x, y in metres in `crs_epsg`; lon/lat
+are derived from them, as in every build) and an edge list into a valid, read-only `GraphData`,
+filling every array the pipeline would with a plain default: lengths as given (Euclidean when
+omitted), bearings from the coordinates, one OSM member per node (id = node index + 1), class
 residential (tier 4), speed 40 km/h, the unit id = the edge id, pass-through from the topology,
 tier masks from the edge tiers (no SCC), every node plain (no roundabout rings), no brands
 unless `brands` names some, and meta["graph_version"] as `write_build` would compute it. Edge
@@ -28,7 +28,14 @@ from numpy.typing import NDArray
 from pyproj import Transformer
 
 from worst_route.config import PIPELINE_VERSION, TIERS, HighwayClass
-from worst_route.graph.data import ARRAY_SPECS, N_TIERS, EdgeFlag, GraphData, Strings
+from worst_route.graph.data import (
+    ARRAY_SPECS,
+    FORMAT_VERSION,
+    N_TIERS,
+    EdgeFlag,
+    GraphData,
+    Strings,
+)
 from worst_route.graph.store import graph_version
 
 GRID_ORIGIN = (525_000.0, 5_040_000.0)
@@ -60,25 +67,20 @@ def make_graph(
     twins: Sequence[EdgePair] = (),
     transitions: Sequence[EdgePair] = (),
     crs_epsg: int = 32610,
-    lonlat: Sequence[tuple[float, float]] | None = None,
     brands: Mapping[str, Sequence[int]] | None = None,
 ) -> GraphData:
     """A valid `GraphData` from node coordinates and edges, every other array defaulted.
 
     `twins` pairs edges, each named by its (u, v): the symmetric closure is stored.
     `transitions` lists allowed ((a, v), (v, b)) pairs at node v.
-    `lonlat` overrides the inverse projection of the node coordinates.
     `brands` maps a brand's name to its nodes: ids in name order, no wikidata, one location at
     each node.
     """
     n = len(nodes)
     xy = np.array(nodes, dtype=np.float64).reshape(n, 2)
-    if lonlat is None:
-        to_lonlat = Transformer.from_crs(f"EPSG:{crs_epsg}", "EPSG:4326", always_xy=True)
-        lon, lat = to_lonlat.transform(xy[:, 0], xy[:, 1])
-        ll = np.column_stack([lon, lat]).astype(np.float64)
-    else:
-        ll = np.array(lonlat, dtype=np.float64).reshape(n, 2)
+    # the geometry's lon/lat, rounded to 1e-7 degrees so its bytes do not depend on PROJ's last bits
+    to_lonlat = Transformer.from_crs(f"EPSG:{crs_epsg}", "EPSG:4326", always_xy=True)
+    ll = np.round(np.column_stack(to_lonlat.transform(xy[:, 0], xy[:, 1])), 7)
 
     given = [e if isinstance(e, Edge) else Edge(e[0], e[1], e[2]) for e in edges]
     order = sorted(range(len(given)), key=lambda k: (given[k].u, given[k].v, k))
@@ -116,6 +118,7 @@ def make_graph(
     edge_u = np.array([s.u for s in specs], dtype=np.int32)
     edge_v = np.array([s.v for s in specs], dtype=np.int32)
     speeds = [s.speed_kmh for s in specs]
+    speed_kmh = np.unique(np.array(speeds, dtype=np.float32))
     edge_tier = np.array(tiers, dtype=np.uint8)
     bearing = np.array(bearings, dtype=np.int16)
     osm_ids = np.arange(1, n + 1, dtype=np.int64)
@@ -156,12 +159,9 @@ def make_graph(
         tier_node_mask[t, edge_v[tier_edge_mask[t]]] = True
 
     data = GraphData(
-        node_lon=ll[:, 0].copy(),
-        node_lat=ll[:, 1].copy(),
         node_x=xy[:, 0].copy(),
         node_y=xy[:, 1].copy(),
         node_kind=np.zeros(n, dtype=np.uint8),
-        node_state=np.full(n, -1, dtype=np.int16),
         node_pass_through=np.array(pass_through, dtype=np.bool_).reshape(n),
         node_delay_s=np.zeros(n, dtype=np.float32),
         member_indptr=np.arange(n + 1, dtype=np.int64),
@@ -169,7 +169,8 @@ def make_graph(
         edge_u=edge_u,
         edge_v=edge_v,
         edge_length_m=np.array(lengths, dtype=np.float32),
-        edge_speed_kmh=np.array(speeds, dtype=np.float32),
+        edge_speed=np.searchsorted(speed_kmh, np.array(speeds, dtype=np.float32)).astype(np.uint8),
+        speed_kmh=speed_kmh,
         edge_time_s=np.array(
             [x / (v / 3.6) for x, v in zip(lengths, speeds, strict=True)], dtype=np.float32
         ),
@@ -184,8 +185,6 @@ def make_graph(
         edge_level_crossings=np.array([s.level_crossings for s in specs], dtype=np.uint8),
         edge_bearing_in=bearing,
         edge_bearing_out=bearing.copy(),
-        way_indptr=np.arange(m + 1, dtype=np.int64),
-        way_osm_ids=np.array(order, dtype=np.int64) + 1,
         out_indptr=_indptr(edge_u, n),
         out_edges=np.arange(m, dtype=np.int32),
         in_indptr=_indptr(edge_v, n),
@@ -220,6 +219,7 @@ def make_graph(
             "crs_epsg": crs_epsg,
             "created": "1970-01-01T00:00:00+00:00",
             "pipeline_version": PIPELINE_VERSION,
+            "format": FORMAT_VERSION,
             "graph_version": "",
             "counts": {"nodes": n, "edges": m},
             "params": {},

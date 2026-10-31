@@ -11,7 +11,7 @@ from worst_route.presentation.document import present, with_presentation
 
 from ..engine.graphs import at_node, lattice
 
-GRID = lattice(8, 8, rounded_lonlat=True)
+GRID = lattice(8, 8)
 
 
 def test_a_planned_route_and_its_file_present_the_same(tmp_path: Path) -> None:

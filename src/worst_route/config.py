@@ -69,8 +69,9 @@ REGIONS: dict[str, Region] = {
 # `graph.store` reads it to name the remedy for a build another version wrote. 2: bearings
 # exclude stubs, node_roundabouts; 3: brand arrays; 4: stage A places each cluster from its
 # own buffers; 5: stage B joins the clusters a carriageway leaves and comes back to, and its
-# pockets follow a road by its name as well as its refs.
-PIPELINE_VERSION = "5"
+# pockets follow a road by its name as well as its refs; 6: the compact format (graph/data.py
+# FORMAT_VERSION 4).
+PIPELINE_VERSION = "6"
 
 
 @cache

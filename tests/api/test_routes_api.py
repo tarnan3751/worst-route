@@ -23,7 +23,18 @@ from worst_route.graph.data import EdgeFlag
 from worst_route.graph.testing import Edge, make_graph
 from worst_route.presentation.geojson import feature_collection
 
-from ..engine.graphs import TREES, X0, Y0, at, at_node, avenue, lattice, named_roads, two_rings
+from ..engine.graphs import (
+    TREES,
+    X0,
+    Y0,
+    at,
+    at_node,
+    avenue,
+    exactly_at_node,
+    lattice,
+    named_roads,
+    two_rings,
+)
 from .support import GRID, GRID_BBOX, SLOW, save_build, slow_splices, until
 
 pytestmark = pytest.mark.anyio
@@ -229,7 +240,8 @@ async def test_a_stored_route_through_a_parallel_edge_comes_as_a_snapshot(tmp_pa
     line = make_graph(xy, [Edge(0, 1, 100.0), Edge(0, 1, 300.0), Edge(1, 2, 100.0)])
     save_build(data, line, "line")
     async with serving(data) as (client, _):
-        stops = [{"lat": lat, "lon": lon} for lat, lon in (at_node(line, 0), at_node(line, 2))]
+        ends = (exactly_at_node(line, 0), exactly_at_node(line, 2))
+        stops = [{"lat": lat, "lon": lon} for lat, lon in ends]
         body = {
             "region": "portland",
             "stops": stops,
@@ -447,7 +459,7 @@ async def test_an_item_or_target_that_does_not_fit_the_objective_names_its_field
 async def test_a_collecting_job_counts_its_item_as_it_grows(tmp_path: Path) -> None:
     roads = {(a, a + 1): {"flags": EdgeFlag.BRIDGE} for a in range(10, 90, 7) if a % 10 < 9}
     root = tmp_path / "data"  # the same lattice as GRID, with bridges off its bottom row
-    save_build(root, lattice(10, 10, rounded_lonlat=True, roads=roads), "bridged", bbox=GRID_BBOX)
+    save_build(root, lattice(10, 10, roads=roads), "bridged", bbox=GRID_BBOX)
     async with serving(root) as (client, _):
         body = job_body(objective="collect", item="bridge", stops=[stop(0), stop(9)])
         _, events = await finished(client, body)
@@ -476,7 +488,7 @@ BRANDS = {"Pilgrim Coffee": [12, 27, 45, 63, 78, 86], "Acme": [55, 95], "Zed Mar
 def branded(tmp_path: Path) -> Path:
     """A data directory whose latest build is GRID's lattice with BRANDS."""
     root = tmp_path / "data"
-    g = lattice(10, 10, rounded_lonlat=True, brands=BRANDS)
+    g = lattice(10, 10, brands=BRANDS)
     save_build(root, g, "branded", bbox=GRID_BBOX)
     return root
 
@@ -546,7 +558,7 @@ def lettered(tmp_path: Path) -> Path:
     names = named_roads(
         10, 10, [f"{t} Street" for t in TREES[:10]], [avenue(k) for k in range(1, 11)]
     )
-    save_build(root, lattice(10, 10, rounded_lonlat=True, roads=names), "lettered", bbox=GRID_BBOX)
+    save_build(root, lattice(10, 10, roads=names), "lettered", bbox=GRID_BBOX)
     return root
 
 
@@ -910,7 +922,7 @@ async def test_a_strict_constraint_refuses_a_base_that_breaks_it(data: Path) -> 
 
 async def test_a_hard_mode_job_keeps_each_road_one_stretch(tmp_path: Path) -> None:
     root = tmp_path / "data"  # GRID's lattice with its rows and columns named
-    named = lattice(10, 10, rounded_lonlat=True, named=True)
+    named = lattice(10, 10, named=True)
     save_build(root, named, "named", bbox=GRID_BBOX)
     async with serving(root) as (client, app):
         trip = {"stops": [stop(22), stop(77)], "max_iterations": 200}

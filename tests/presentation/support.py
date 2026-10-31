@@ -21,7 +21,7 @@ STATES_FILE = CENSUS / "states.geojson"
 PLACES = {"91": CENSUS / "places_91.geojson", "92": CENSUS / "places_92.geojson"}
 WIDE = (-122.8, 45.4, -122.5, 45.6)  # every fixture place
 
-GRID = lattice(10, 10, rounded_lonlat=True)
+GRID = lattice(10, 10)
 EAST_THEN_NORTH = [*range(10, 20), *range(29, 100, 10)]
 EAST_THEN_NORTH_EDGES = edges_of(GRID, EAST_THEN_NORTH)
 

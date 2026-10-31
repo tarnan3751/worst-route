@@ -25,7 +25,6 @@ def lattice(
     *,
     twins: Sequence[EdgePair] = (),
     transitions: Sequence[EdgePair] = (),
-    rounded_lonlat: bool = False,
     primary_every: int = 0,
     roads: Mapping[tuple[int, int], Mapping[str, int | str | None]] | None = None,
     brands: Mapping[str, Sequence[int]] | None = None,
@@ -33,9 +32,7 @@ def lattice(
 ) -> GraphData:
     """`grid_graph`'s two-way lattice (node r * cols + c), with twins and transitions.
 
-    `rounded_lonlat` rounds the inverse projection to 1e-7 degrees, so the build's bytes and
-    its graph_version do not depend on PROJ's last bits on this platform. With
-    `primary_every` = k, the rows and columns 0, k, 2k, ... are primary roads at 72 km/h (the
+    With `primary_every` = k, the rows and columns 0, k, 2k, ... are primary roads at 72 km/h (the
     rest residential at 40 km/h), with a 30 s signal where two of them cross and a 10 s stop
     sign at their other nodes. `roads` gives `Edge` fields (`flags`, `toll_booths`,
     `level_crossings`, `name`) to both directions of the road a–b, keyed by (a, b) with a < b.
@@ -67,11 +64,7 @@ def lattice(
     for c in range(cols):
         for r in range(rows - 1):
             edges += street(r * cols + c, (r + 1) * cols + c, on_primary(c), f"Col {c}")
-    lonlat = None
-    if rounded_lonlat:
-        lon, lat = TO_LONLAT.transform([p[0] for p in xy], [p[1] for p in xy])
-        lonlat = list(zip(np.round(lon, 7).tolist(), np.round(lat, 7).tolist(), strict=True))
-    g = make_graph(xy, edges, twins=twins, transitions=transitions, lonlat=lonlat, brands=brands)
+    g = make_graph(xy, edges, twins=twins, transitions=transitions, brands=brands)
     if primary_every == 0:
         return g
     delays = [
@@ -134,7 +127,14 @@ def route_on(data: GraphData, nodes: Sequence[int], stop_idx: Sequence[int] | No
 
 
 def at_node(data: GraphData, v: int) -> tuple[float, float]:
-    """(lat, lon) of node v."""
+    """(lat, lon) of node v, rounded to 1e-7 degrees, so a request's stops do not depend on
+    PROJ's last bits on this platform."""
+    return float(np.round(data.node_lat[v], 7)), float(np.round(data.node_lon[v], 7))
+
+
+def exactly_at_node(data: GraphData, v: int) -> tuple[float, float]:
+    """(lat, lon) of node v unrounded, for a stop that must lie on the node itself: a tie
+    between nodes as far from it, a node on the edge of the region."""
     return float(data.node_lat[v]), float(data.node_lon[v])
 
 

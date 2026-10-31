@@ -12,8 +12,10 @@ candidates are the nodes in the mask and not in `exclude` within `max_radius_m`,
 within the mask, self-loops ignored: a start needs an out-neighbour in the mask, an end an
 in-neighbour, a via stop an in-neighbour u and an out-neighbour w with u ≠ w, so the route can
 pass through it without turning back (the build-wide `node_pass_through` flag is not used here).
-Excluded nodes are never chosen but still count as neighbours. The `Snap` carries a `note` when
-a nearer candidate was rejected for its role ("moved 140 m to the nearest through street");
+Excluded nodes are never chosen but still count as neighbours. The `Snap` carries the node's
+lat/lon rounded to 7 decimals (the build derives them from x/y, so the last bits are the
+projection's; OSM's own positions have 7), and a `note` when a nearer candidate was rejected for
+its role ("moved 140 m to the nearest through street");
 when none qualifies, `SnapError`. A caller that needs the next candidate (a leg that cannot be
 built, `docs/PLAN.md` §3.2) snaps again with the nodes it has tried as `exclude`.
 
@@ -61,7 +63,8 @@ class SnapError(Exception):
 
 @dataclass(frozen=True)
 class Snap:
-    """Where a stop went: the node, how far it moved, the node's position, and why if moved."""
+    """Where a stop went: the node, how far it moved, the node's position (7 decimals), and why
+    if moved."""
 
     node: int
     moved_m: float
@@ -113,7 +116,8 @@ class SpatialIndex:
             if self._plays(v, role, node_mask):
                 moved = float(distance[i])
                 note = None if rank == 0 else f"moved {moved:.0f} m to {_WHERE[role]}"
-                lat_v, lon_v = float(self.data.node_lat[v]), float(self.data.node_lon[v])
+                lat_v = round(float(self.data.node_lat[v]), 7)
+                lon_v = round(float(self.data.node_lon[v]), 7)
                 return Snap(node=v, moved_m=moved, lat=lat_v, lon=lon_v, note=note)
         raise SnapError(
             f"no node within {max_radius_m:.0f} m of ({lat}, {lon}) can be "

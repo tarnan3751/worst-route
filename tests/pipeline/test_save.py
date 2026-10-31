@@ -10,11 +10,13 @@ from tests.pipeline.chain import FIXTURES, brand_pois, cleaned, east_of, enriche
 from tests.pipeline.invariants import check_build, check_saved
 from tests.pipeline.osm import write_osm
 from worst_route.config import PIPELINE_VERSION, TIERS
-from worst_route.graph.data import NodeKind
+from worst_route.graph.data import FORMAT_VERSION, NodeKind
 from worst_route.graph.store import graph_version, read_build
+from worst_route.pipeline import save
 from worst_route.pipeline.enrich import run_enrich
 from worst_route.pipeline.save import (
     EmptyTransitionsError,
+    TooManySpeedsError,
     graph_data,
     remove_build,
     save_build,
@@ -26,6 +28,7 @@ META: dict[str, Any] = {
     "crs_epsg": 32610,
     "created": "2026-10-30T00:00:00+00:00",
     "pipeline_version": PIPELINE_VERSION,
+    "format": FORMAT_VERSION,
     "params": {"bbox": None},
     "sources": [],
 }
@@ -84,7 +87,10 @@ def test_the_build_holds_the_enriched_values(tmp_path: Path) -> None:
     assert "OR 10" in data.strings.identities
     assert int(data.edge_toll_booths.sum()) == 2 and int(data.edge_level_crossings.sum()) == 2
     assert sorted(data.node_delay_s[data.node_delay_s > 0].tolist()) == [10.0, 30.0]
-    assert (data.node_state == -1).all()
+    keys = sorted(graph.edges(keys=True))
+    speeds = [np.float32(graph.edges[k]["speed_kmh"]) for k in keys]
+    assert data.speed_kmh.tolist() == sorted(set(speeds))
+    assert data.edge_speed_kmh.tolist() == speeds
     two_way = data.edge_unit != np.arange(data.m)
     assert int(two_way.sum()) == 50  # the later edge of each of the 50 two-way pairs
 
@@ -155,6 +161,16 @@ def test_a_super_junction_with_no_allowed_turn_is_refused(tmp_path: Path) -> Non
         graph_data(graph, tier_nodes(graph), META)
     assert str(refusal.value).startswith(f"super-junction {node} (roundabout, at 45.")
     assert "allows no turn through it" in str(refusal.value)
+
+
+def test_more_speeds_than_a_build_can_index_are_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graph = enriched(FIXTURES / "grid.osm", tmp_path)
+    speeds = len({np.float32(d["speed_kmh"]) for *_, d in graph.edges(data=True)})
+    monkeypatch.setattr(save, "MAX_SPEEDS", speeds - 1)
+    with pytest.raises(TooManySpeedsError, match=f"{speeds} distinct speeds"):
+        graph_data(graph, tier_nodes(graph), META)
 
 
 def test_the_same_graph_gives_the_same_version(tmp_path: Path) -> None:

@@ -12,7 +12,7 @@ from worst_route.engine.snap import (
 from worst_route.graph.spatial import SpatialIndex
 from worst_route.graph.testing import make_graph
 
-from .graphs import X0, Y0, at_node
+from .graphs import X0, Y0, at_node, exactly_at_node
 
 
 def town():
@@ -47,7 +47,10 @@ def test_a_cul_de_sac_via_moves_to_the_through_street() -> None:
 
 def test_a_via_on_another_stop_moves() -> None:
     snaps = snap_stops(
-        INDEX, TOWN, [at_node(TOWN, 4), at_node(TOWN, 4), at_node(TOWN, 8)], EVERYWHERE
+        INDEX,
+        TOWN,
+        [exactly_at_node(TOWN, 4), exactly_at_node(TOWN, 4), exactly_at_node(TOWN, 8)],
+        EVERYWHERE,
     )
     assert [s.node for s in snaps] == [4, 1, 8]
     assert snaps[1].note == "moved 100 m: another stop is at the nearest node"
@@ -57,7 +60,10 @@ def test_an_end_on_the_start_is_a_round_trip_but_not_on_a_via() -> None:
     snaps = snap_stops(INDEX, TOWN, [at_node(TOWN, 4), at_node(TOWN, 4)], EVERYWHERE)
     assert [s.node for s in snaps] == [4, 4] and snaps[1].note is None
     snaps = snap_stops(
-        INDEX, TOWN, [at_node(TOWN, 0), at_node(TOWN, 4), at_node(TOWN, 4)], EVERYWHERE
+        INDEX,
+        TOWN,
+        [exactly_at_node(TOWN, 0), exactly_at_node(TOWN, 4), exactly_at_node(TOWN, 4)],
+        EVERYWHERE,
     )
     assert [s.node for s in snaps] == [0, 4, 1]
     assert apart_from(snaps, 2, 3, round_trip=False) == [0, 4]

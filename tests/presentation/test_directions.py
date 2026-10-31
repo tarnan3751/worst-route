@@ -278,7 +278,7 @@ def test_the_roundabout_from_the_pipeline(tmp_path: Path) -> None:
 
 
 def test_a_planned_route_s_steps_add_up_to_its_length_and_time() -> None:
-    g = lattice(10, 10, rounded_lonlat=True, primary_every=3)  # signals and stop signs
+    g = lattice(10, 10, primary_every=3)  # signals and stop signs
     for stops in ((0, 45, 99), (27, 27)):  # three stops; a round trip
         request = RouteRequest(
             stops=[at_node(g, v) for v in stops], seed=4, max_iterations=150, budget_s=120

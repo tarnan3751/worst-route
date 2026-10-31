@@ -138,7 +138,7 @@ def test_distances_in_miles_and_kilometres_or_feet_and_metres() -> None:
 
 
 def test_route_directions_tells_jokes_unless_asked_not_to() -> None:
-    g = lattice(10, 10, rounded_lonlat=True)
+    g = lattice(10, 10)
     request = RouteRequest(stops=[at_node(g, 0), at_node(g, 99)], seed=2, max_iterations=300)
     route = plan_route(g, request).route
 

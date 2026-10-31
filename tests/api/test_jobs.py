@@ -183,7 +183,7 @@ async def test_cancel_stores_the_route_so_far_which_its_attempts_reproduce(
 # Every corner-to-corner path of a 5 × 5 town is 800 m + a multiple of 200 m, and a 2.1 ×
 # target (1,646-1,714 m) holds none: a run grows to 1,600 m, overshoots to 1,800 m after a cycle
 # with nothing smaller, cannot shrink back into the band, and keeps 1,600 m as its best.
-TOWN = lattice(5, 5, rounded_lonlat=True)
+TOWN = lattice(5, 5)
 OVERSHOOT = Target(kind="ratio", value=2.1)
 
 
@@ -364,7 +364,7 @@ async def test_a_worker_that_raises_ends_its_job_in_an_error(
 async def test_a_worker_refuses_a_brand_its_request_s_area_does_not_hold(tmp_path: Path) -> None:
     # Planning repeats the pre-flight's check: a job that skipped it ends INVALID_REQUEST.
     root = tmp_path / "data"
-    save_build(root, lattice(10, 10, rounded_lonlat=True, brands={"Acme": [55]}), "branded")
+    save_build(root, lattice(10, 10, brands={"Acme": [55]}), "branded")
     out: queue.Queue[worker_module.Message] = queue.Queue()
     req = request(GRID, [0, 2], objective="brand", brand=0, leash_km=0.05)
     worker_module.run_job(JobSpec(root, "portland", "branded", "python", req), out)

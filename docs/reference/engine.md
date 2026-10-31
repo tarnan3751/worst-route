@@ -1568,6 +1568,76 @@ converged): `GET /routes/{id}` 0.18 s (0.53 MB), `GET /routes/{id}/share.png` 3.
 render (0.41 MB; it drew every T1 road in the route's bounding box, which the drawing now caps:
 `docs/reference/presentation.md`, **Share image**), then cached.
 
+**Long trips** (engine version 5, the long trips brief, 2026-10-31; the same build; `CsrBackend`;
+seed 1, `--budget 60 --max-iterations 1000000`; other runs beside them, load average 3–12, so a
+rate compares only within a table). Why engine version 4 refused at its automatic tier (T0, a
+150 km leash), from its searches instrumented: Portland → Chicago (2,826 km straight) for the
+leash, no motorway or trunk path lying within 150 km of the line (3,498 km without the leash);
+New York → Los Angeles (3,913 km) for the seed's rounds, the end reachable in the masks (4,657 km
+turn-blind) but the cheapest legal walk entering 13 super-junctions twice (Newark, I-78 near
+Clinton NJ, the Pennsylvania Turnpike, I-70 and I-79 at Washington PA, Kansas City, Durango ...)
+and driving 9 twin pairs, which the chain of rounds, dropping its bans at each twin ban, never
+got through in any of the 21 builds the fallback makes (198 searches); Miami → Seattle (4,395
+km) for the leash on T0 and T1, and on T0 at a tenth or a fifth of the trip for the rounds;
+Chicago → Miami (1,920 km) planned, its end moved 75 m, the rounds' bans cutting off every walk
+at the snapped one. Planned at T0 and T1 with a leash of 150 km, a tenth and a fifth of the trip
+(the plan's runs, the seed by the tree, the windows widened by the plan's prototype, which
+counted neighbours over the whole build), the trips made (ratio; "conv" converged, else the
+budget stopped the run):
+
+| Trip | T0, 150 km | T0, a tenth | T0, a fifth | T1, 150 km | T1, a tenth | T1, a fifth |
+|---|---|---|---|---|---|---|
+| Portland → Chicago | refused | 1.02× conv | 2.78× conv | 3.36× conv | 4.87× | 8.55× conv |
+| New York → Los Angeles | 1.20× conv | 2.17× | 2.75× | 4.26× | 8.56× | 10.14× |
+| Chicago → Miami | 1.44× conv | 1.36× conv | 1.99× conv | 6.31× | 7.01× conv | 11.06× |
+| Miami → Seattle | refused | 1.07× conv | 2.43× conv | refused | 5.23× | 9.87× |
+
+With engine version 4's windows every one of them converged in 1–47 s at 1.00–2.66×. So the
+automatic tier is T1 from 800 km and the leash a fifth of the trip from 750 km (**Requests**).
+At those settings, as built:
+
+| Trip | Leash | Baseline | Worst | Ratio | Time ratio | Attempts (accepted) | Stopped | Peak memory |
+|---|---|---|---|---|---|---|---|---|
+| Portland → Chicago | 565.2 km | 3,384.45 km | 28,946.48 km | 8.55× | 8.90× | 18,950 (106) | converged in 41.3 s | 0.56 GB |
+| New York → Los Angeles | 782.6 km | 4,462.99 km | 27,623.80 km | 6.19× | 7.07× | 150 (10) | budget | 0.68 GB |
+| Chicago → Miami | 384.0 km | 2,228.90 km | 22,204.72 km | 9.96× | 10.41× | 31,353 (158) | budget | 0.58 GB |
+| Miami → Seattle | 879.0 km | 5,363.66 km | 55,009.38 km | 10.26× | 11.47× | 17,116 (116) | budget | 0.62 GB |
+
+Every route validates, and again with `worst-route validate` (1.1–3.5 s). New York → Los Angeles
+with seeds 2 and 3 makes 9.93× (5,105 attempts) and 11.21× (5,727): seed 1's run met attempts
+at a 783 km radius that made dozens of continental searches each (**Limitations**, Continental
+radii). Chicago → Miami's end still moves 75 m, the twin rule's (**Limitations**, Twins within
+a leg). Portland → Chicago with `--max-iterations 500` gives the same route document on both
+backends but for `run.elapsed_s` and `run.backend` (5.89×; 2.7 s on `csr`, 11.1 s on `python`).
+A request's masks take 8–13 ms (median of five; the leash 4–5 ms of it). The seed's tree takes
+3 searches a build for New York → Los Angeles at these settings and 9 for Miami → Seattle; on
+T0, where the chain refused them, 31–33 and 19.
+
+The national acceptance run, ten random pairs of the places index's towns 800–4,500 km apart
+(`tools/acceptance.py --region us-t1 --places --pairs 10 --min-km 800 --max-km 4500 --near-m
+5000 --budget 60 --seed 1 --jaccard 2`, the places index written by `worst-route aux places
+--region us-t1`), plans 9 of 10, the validator passing all 9, at a median of 11.77× (4.33–14.70×)
+on T1, 288–1,017 attempts a second, six runs stopping on the budget and three converging in
+24–34 s; no transition refused a candidate or a pair; the second seed's routes' edges have a
+Jaccard of 0.13 and 0.07 with the first's. The tenth, a town east of Jamestown, North Dakota (46.92378, −97.67424),
+to one by Waterville, Maine (44.79999, −69.89532), 2,164 km apart, is refused for its leash:
+the straight line crosses Lake Superior and Canada, which the build does not hold, and the
+shortest path on the whole build (2,979 km) goes round Lake Michigan at Gary, Indiana, 579 km
+from the line, past the 433 km leash; no turn-blind path lies inside it.
+
+| # | From → to | km | Baseline km | Worst km | Ratio | Attempts / time |
+|---|---|---|---|---|---|---|
+| 00 | 26.93249, −98.09218 → 33.46989, −82.50108 | 1,662.6 | 2,000.45 | 14,680.21 | 7.34× | 33,487 / 33.9 s, converged |
+| 01 | 34.90171, −114.57391 → 46.26091, −97.45724 | 1,912.9 | 2,515.20 | 10,900.96 | 4.33× | 32,050 / 31.5 s, converged |
+| 02 | 39.07600, −76.96443 → 40.05087, −94.52548 | 1,496.9 | 1,697.19 | 24,737.24 | 14.58× | 53,172 / 60.0 s |
+| 03 | 46.92378, −97.67424 → 44.79999, −69.89532 | 2,164.4 | – | – | refused (the leash) | – |
+| 04 | 35.20556, −88.19773 → 37.10737, −113.48459 | 2,257.7 | 2,706.32 | 32,467.94 | 12.00× | 53,332 / 60.0 s |
+| 05 | 44.19065, −121.18327 → 33.53858, −83.08126 | 3,456.9 | 4,158.68 | 43,496.83 | 10.46× | 17,279 / 60.0 s |
+| 06 | 28.69317, −99.17826 → 41.11775, −80.98248 | 2,148.9 | 2,523.16 | 33,182.47 | 13.15× | 37,805 / 60.0 s |
+| 07 | 34.55711, −117.95450 → 31.04044, −84.87916 | 3,088.1 | 3,506.79 | 41,260.81 | 11.77× | 26,934 / 60.0 s |
+| 08 | 40.06306, −80.03141 → 37.39849, −102.61799 | 1,963.1 | 2,133.97 | 31,379.03 | 14.70× | 46,591 / 60.0 s |
+| 09 | 36.11879, −86.43286 → 26.22868, −81.72796 | 1,186.2 | 1,364.50 | 8,224.21 | 6.03× | 22,025 / 23.6 s, converged |
+
 ## Limitations
 
 - **Transitions.** The searches see the transition tables (**Searches**), and a part of a
@@ -1603,6 +1673,27 @@ render (0.41 MB; it drew every T1 road in the route's bounding box, which the dr
 - **Speed.** `CsrBackend`'s searches are 8–13× the reference's on large searches, but most of a
   run's searches are small: a whole run is about 1.2× faster on Portland (**On Portland with
   `CsrBackend`**) and 1.5–1.9× on a build without tables (**The loop**, Measured).
+- **Continental radii.** A detour's search is bounded by 8 × the radius, which on a
+  cross-country trip grows to the leash (783 km from New York to Los Angeles), and its chains of
+  rounds (up to 9 twin rounds of 9 searches for each of the waypoint's two legs) can make
+  dozens of such searches in one attempt: in a run of that trip the slowest attempt made 102
+  searches in 6.96 s, the median one in 7 ms, and seed 1 made 150 attempts in its 60 s (6.19×)
+  where seeds 2 and 3 made 5,105 and 5,727 (9.93×, 11.21×; **On the national T1 build**). The
+  detours keep the chain, which the long trips brief left as it was.
+- **Set-up per call.** A search allocates its work arrays and combines its node masks, O(n) and
+  O(m) a call (`docs/reference/graph.md`, **The CSR backend**), and an attempt of the loop copies
+  the route's masks, the waypoint's and the random weights, O(n) and O(m) too. On the national
+  T1 build (887,737 nodes, 1,324,013 edges) a search to a neighbour costs 48 µs (`dijkstra`
+  120 µs), an attempt's copies about 0.7 ms, against searches of about 100 ms at a continental
+  radius; at 17 M nodes and 42 M edges the same operations would cost about 1.4–3 ms a search
+  and 5–20 ms an attempt, which would bound a city trip's attempts on an all-roads national
+  build. Reusing work arrays per backend is left to the all-roads engine brief, with the loop's
+  copies; they would have to be per thread, since the API process runs `resolve_stops` in a
+  thread pool. Two set-ups of engine version 5 grow with the build too: the leash measures every
+  node, each request (`docs/reference/graph.md`, **Spatial**), its NumPy temporaries about 56 B a
+  node at once (about 1 GB at 17 M nodes; a bounding-box prefilter ahead of it is the later
+  fix), and `detour_ends`, once a run, about 61 B an edge (0.2–0.7 s on the national T1 build,
+  0.46 s with the whole country active; about 2.6 GB at 42 M edges).
 - **Time budgets.** A run that stops on time is reproducible only through its recorded attempt
   count.
 - **The strategy mix.** Random weight found a path other than the removed run in 3 of 64

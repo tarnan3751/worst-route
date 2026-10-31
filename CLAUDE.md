@@ -54,7 +54,9 @@ automatic tier now is below 800 km (engine version 3; `docs/reference/engine.md`
 So is the national build at T1 (M5.3's validation, `docs/reference/pipeline.md`, **Regions of
 several states**): regions of several states merged at `filter`, a class ceiling, and the 48
 contiguous states and DC at primary roads and above, its numbers the decision gate's
-(`docs/project_overview.md` §3.2).
+(`docs/project_overview.md` §3.2); since engine version 5 it plans cross-country trips at the
+automatic tier, T1 with a fifth of the trip as leash (`docs/reference/engine.md`, **On the
+national T1 build**).
 So is the public-hosting preparation (M5's fourth step, `docs/reference/hosting.md`): a container
 image serving the built frontend and the API (under `/api`) from one process (`serve
 --frontend`), Protomaps' vector basemap from a file the API serves (`WORST_ROUTE_BASEMAP=pmtiles`,

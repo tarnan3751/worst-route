@@ -555,7 +555,7 @@ STATES: dict[str, tuple[str, str]] = {
 # Regions of several states (M5.3; `docs/reference/pipeline.md`, **Regions of several states**):
 # their extracts are read in this order and merged at `filter`. `us-t1` is the 48 contiguous
 # states and DC at T1, the national build that validated the pipeline; `us-t3` the same states at
-# T3, the national build the server serves (the owner, 2026-11-01); `us` is the same states at
+# T3, the national build the server serves (the owner, 2026-10-31); `us` is the same states at
 # every road class, the all-roads master graph M5.3's decision weighed, which this machine cannot
 # build as the steps stand; `west-coast` (California,
 # Oregon and Washington, about eight times Oregon) is the intermediate scale between a state and

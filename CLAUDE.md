@@ -60,11 +60,12 @@ national T1 build**). So is serving several builds at once (`serve --region oreg
 us-t1`): the server picks the smallest that holds a trip's stops (`POST /regions/pick`,
 `docs/reference/api.md`, **Picking a build**), which the frontend names over the stop list and
 plans on, a region pinnable in its settings.
-The national build to serve is at T3 (`us-t3`, the owner, 2026-11-01); all-roads builds of every
-contiguous state and DC were made once by `tools/build_regions.py --states` in 47 minutes, a
-measurement of the array pipeline at state scale, not served (`docs/reference/pipeline.md`, **The
-state builds**), and the all-roads national build does not fit this machine as the steps stand
-(**The all-roads national build**).
+The national build to serve is at T3 (`us-t3`, the owner, 2026-10-31), built in 21.5 minutes with
+99.1% of the towns within 5 km of it (`docs/reference/pipeline.md`, **The national T3 build**);
+all-roads builds of every contiguous state and DC were made once by `tools/build_regions.py
+--states` in 47 minutes, a measurement of the array pipeline at state scale, not served
+(**The state builds**), and the all-roads national build does not fit this machine as the steps
+stand (**The all-roads national build**).
 So is the public-hosting preparation (M5's fourth step, `docs/reference/hosting.md`): a container
 image serving the built frontend and the API (under `/api`) from one process (`serve
 --frontend`), Protomaps' vector basemap from a file the API serves (`WORST_ROUTE_BASEMAP=pmtiles`,

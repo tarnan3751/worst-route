@@ -1196,7 +1196,7 @@ sitting (`download --force`).
 `filter` on, so the national T1 build never reads a residential street into memory; the steps after
 `build` are unchanged, and on such a build the tiers above the ceiling hold the same roads as it.
 `us-t3` (secondary and tertiary roads too) is the national build the server serves (the owner,
-2026-11-01, with Portland and Oregon as the development regions); `us-t1` stays the measured
+2026-10-31, with Portland and Oregon as the development regions); `us-t1` stays the measured
 reference. `us` is the all-roads national region, the master graph M5.3's decision weighed, defined
 but not built here (**The all-roads national build**), and `west-coast` (about eight times Oregon)
 the scale between a state and the country at which its memory is measured. The regions of one state
@@ -1402,7 +1402,61 @@ It did not get past `build`:
   west-coast, 45–50 GB nationally: the all-roads country needs leaner steps before it can be
   built on this machine, and `cleanup` a way of working through the graph in parts.
 
-**The state builds** (2026-11-01), a one-off measurement of the array pipeline at state scale
+**The national T3 build** (`us-t3`, build 281a455e3d15 at `graph_version` ace6eb86b9c7, pipeline
+version 7, format 4), the national build the server serves (the owner's design;
+`docs/project_overview.md` §3.2), from the same 49 extracts, on the dev machine on 2026-10-31 from
+14:56:05 to 15:17:34 CDT at load averages of 3.7–4.3 (the gate ran beside the filter for about five
+minutes):
+
+```
+uv run python tools/bench_build.py --region us-t3 --allow-fragmented --max-mem-gb 18 \
+    --min-free-gb 15
+```
+
+| Step | Wall | CPU (user + sys) | Peak memory | Peak RSS | Writes |
+|---|---|---|---|---|---|
+| filter | 695 s | 1,029 s | 4.68 GB | 2.67 GB | roads 570.9 MB, POIs 61.6 MB |
+| build | 127 s | 128 s | 9.68 GB | 3.83 GB | `stages/build/` 1,590.6 MB |
+| cleanup | 251 s | 220 s | 16.84 GB | 4.35 GB | `stages/cleanup/` 4,146.5 MB |
+| enrich | 76 s | 59 s | 11.72 GB | 5.88 GB | `stages/enrich/` 299.9 MB |
+| tiers | 9 s | 9 s | 1.89 GB | 2.13 GB | `tiers.json` 89.5 MB |
+| save | 67 s | 60 s | 12.08 GB | 6.47 GB | the build, 485.2 MB of arrays and strings and 101.4 MB of geometry (586.6 MB) |
+| qa | 64 s | 63 s | 4.02 GB | 4.30 GB | `qa/` 431.0 MB; every threshold passes |
+| all | 1,288 s (21.5 min) | | 16.84 GB | 6.47 GB | |
+
+- **The filter** keeps 4,194,946 of the 51,971,904 highway ways at T3 (motorway to tertiary, with
+  their links), drops 10,085,919 above it and excludes 37,674,756; 16,283 were in two extracts. Its
+  POIs are the other national builds', 2,593,833.
+- **The graph.** The raw graph has 4,054,628 nodes and 7,378,939 edges (4,988,487 segments).
+  Simplify removes 728,305 nodes; stage A makes 333,516 clusters of 814,819 nodes; twins pair
+  1,389,109 of 1,530,624 candidate edges (motorway and trunk coverage 0.984); stage B makes 159,474
+  super-junctions (149,144 interchanges, 10,330 roundabouts); connectivity keeps 2,154,537 of
+  2,165,386 nodes (99.50%), dropping 6,880 components, the largest of 99 nodes, and 12
+  super-junctions with no allowed turn. The build has 2,154,537 nodes and 4,412,885 edges, 823,485
+  twin pairs and 1,539,304 transitions at 159,063 super-junctions, about 110 B an edge of arrays and
+  strings: 2.4 times the T1 build's nodes and 3.3 times its edges. Brands: 328,589 of the 712,781
+  brand POIs snap, and 3,194 of 12,036 brands are kept, on 192,172 nodes.
+- **QA** passes every threshold: twin coverage 0.9845, SCC retained 0.9950, largest dropped
+  component 99 nodes; the tiers keep T0 99.37% of their nodes (1,855 components), T1 99.81% (1,144),
+  T2 99.91% (912) and T3 and T4 all.
+- **Memory.** Its cleanup came within 1.2 GB of the watchdog's 18 GB, the build's other steps at
+  9.7–12.1 GB: a national build with more classes than T3 needs the leaner steps (**The all-roads
+  national build**).
+- **Towns.** Of the places index's 31,540 towns (`docs/reference/presentation.md`, **Places**),
+  31,259 (99.1%; incorporated places 99.8%) have a node a trip can start from within 5 km of a point
+  inside them, the snap moving a median 363 m (p90 1,246 m), where the T1 build reaches 81.8% (a
+  median 782 m, p90 3,089 m); the lowest states are Montana (87%), Nevada (96%), New Mexico and
+  Arizona (97%), and Massachusetts, Oklahoma, South Dakota and Idaho (98%).
+- **Trips** at the automatic tier (T1 beyond 800 km, a fifth of the trip as leash; seed 1,
+  `--budget 60 --max-iterations 1000000`, `CsrBackend`), both passing the validator and `worst-route
+  validate` (1.2–2.1 s):
+
+  | Trip | Leash | Baseline | Worst | Ratio | Attempts | Peak RSS |
+  |---|---|---|---|---|---|---|
+  | New York (40.7128, −74.0060) → Los Angeles (34.0522, −118.2437) | 782.6 km | 4,430.75 km | 26,515.72 km | 5.98× | 7,327 (90 accepted), 60 s | 1.71 GB |
+  | Pioneer Courthouse Square (45.5189, −122.6793) → Chicago (41.8781, −87.6298) | 565.2 km | 3,362.50 km | 31,807.84 km | 9.46× | 24,893 (159), 60 s | 1.44 GB |
+
+**The state builds** (2026-10-31), a one-off measurement of the array pipeline at state scale
 and an inventory of the regions one may build, not served (the owner's design is the national
 build at T3, `us-t3`; `docs/project_overview.md` §3.2): each of the 48 contiguous states and DC as
 a region of its own (above), from its own extract of 2026-10-29 at pipeline version 7, all roads,
@@ -1478,10 +1532,12 @@ rerun, whose other steps were up to date (**Oregon** has its own).
 - **QA.** 32 builds pass. 17 were too fragmented for `cleanup` or `tiers` and were run again with
   `--allow-fragmented`. 14 of them fail only the connectivity rule's thresholds (the share kept
   below 98%, a dropped component above 200 nodes) and are pruned like those that pass. Three fail
-  other rules too and keep their stages (1.08 GB): DC (twin coverage 0.927, T0 retained 0.936),
+  other rules too and keep their stages (1.13 GB): DC (twin coverage 0.927, T0 retained 0.936),
   West Virginia (T0 retained 0.909) and Washington (T0 retained 0.947).
-- **Disk.** 82 GB were free before the batch and 64 GB after it; the pruning pass (the batch run
-  again, 40 s, every region done before and offered to `prune`) gave 12 GB back, leaving 76 GB.
+- **Disk.** 88.7 GB were free before the batch (the bench tool's `free_gb`) and 68.7 GB after it;
+  the pruning pass (the batch run again, 40 s, every region done before and offered to `prune`)
+  gave 12.9 GB back, leaving 81.6 GB (the last three read with `df -g` in GiB, 64, 12 and 76, and
+  given here in GB).
 - **Places.** Every state's index is written (`aux places`: the towns within the state's bounding
   box, its neighbours' included), with no state missing its Census file.
 - **Plans** on three of the builds (seed 1, 30 s, `CsrBackend`), each passing the validator and

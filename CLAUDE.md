@@ -56,7 +56,7 @@ image serving the built frontend and the API (under `/api`) from one process (`s
 --frontend`), Protomaps' vector basemap from a file the API serves (`WORST_ROUTE_BASEMAP=pmtiles`,
 `tools/fetch_basemap.sh`) on MapLibre GL JS 6, each client's share of the jobs and the place
 searches on a public server (`serve --public`), JSON logs with request ids, `/ready`, and the
-attribution.
+attribution with its notices page (`notices.html`).
 The compact build format (format 4, pipeline version 6) is built too: a build's `arrays/`
 hold only what the engine and the validator read, and the roads' shapes, simplified to 2 m,
 sit apart in `geometry/`, which only the drawing of a route reads (`docs/reference/graph.md`,
@@ -64,12 +64,17 @@ sit apart in `geometry/`, which only the drawing of a route reads (`docs/referen
 M5.2's array pipeline has begun: `build` and cleanup's simplification,
 stage A, twins and stage B run on arrays under `--engine arrays` (`docs/reference/pipeline.md`, **The arrays engine**), to
 the networkx engine's build byte for byte.
+The engine is at version 4: when the cheapest legal walk the transition-aware search finds
+passes a node twice, it searches again with the edge that comes back to it banned, up to 8
+times (`docs/reference/engine.md`, **Searches**).
 The plan (`docs/PLAN.md`,
 2026-10-30) is written and its open questions answered as far as `docs/project_overview.md` §3
 records. **M1 is built**: in the acceptance run on the
 Portland build (`uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20
 --seed 1 --budget 30`) all 20 pairs plan, the validator passes all 20, and the median ratio is
-21.5× (`docs/project_overview.md` §2.2). The default backend (`auto`) is the CSR backend on
+21.5× (`docs/project_overview.md` §2.2). **M2 and M3 are built** too: a 13-minute Portland
+drive becomes a 9-hour route within ±2 % in 2 s, and each mode's invariant has its fixture
+tests (`docs/project_overview.md` §2.2). The default backend (`auto`) is the CSR backend on
 every build, Portland's turn tables included; it plans the reference's routes byte for byte.
 `docs/project_overview.md` holds the roadmap (§2.2) and the decisions (§3).
 

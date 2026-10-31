@@ -239,9 +239,10 @@ So a server needs about 0.5 GB for the API, 0.2–0.4 GB a running worker (`--wo
 the cores less two: in a container that is the host's or the VM's cores), and room in the page
 cache for the build (and for the basemap file, which is read a range at a time). The plan's
 targets for the national step stand as estimates (`docs/PLAN.md` §7 M5.4): an 8–16 GB VPS for a
-T3 national build, 32 GB for all roads. Both are shrinking: the compact build format (version 4,
-its arrays about 38 % of today's) and the array-based pipeline are under way, so these numbers
-are today's.
+T3 national build, 32 GB for all roads. Both are shrinking: the compact build format (format 4,
+pipeline version 6; on Portland its arrays about 38 % of format 3's) landed after the format 3
+builds above were measured, and the array pipeline is landing stage by stage
+(`docs/reference/pipeline.md`, **The arrays engine**).
 
 ## The geocoder
 

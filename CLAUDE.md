@@ -61,6 +61,9 @@ The compact build format (format 4, pipeline version 6) is built too: a build's 
 hold only what the engine and the validator read, and the roads' shapes, simplified to 2 m,
 sit apart in `geometry/`, which only the drawing of a route reads (`docs/reference/graph.md`,
 **Geometry**).
+M5.2's array pipeline has begun: `build` and cleanup's simplification
+run on arrays under `--engine arrays` (`docs/reference/pipeline.md`, **The arrays engine**), to
+the networkx engine's build byte for byte.
 The plan (`docs/PLAN.md`,
 2026-10-30) is written and its open questions answered as far as `docs/project_overview.md` §3
 records. **M1 is built**: in the acceptance run on the
@@ -105,7 +108,7 @@ Every command below exists. One a later milestone adds is marked with that miles
 | Tests that need a built graph (skipped by the gate) | `uv run pytest -m data` |
 | Lint and format check | `uv run ruff check . && uv run ruff format --check .` |
 | Types | `uv run mypy src` |
-| Pipeline, one step (all eight are real, run in this order; `filter` and `build` also take `--source PATH`, `cleanup` and `tiers` take `--allow-fragmented`) | `uv run worst-route pipeline <download\|filter\|build\|cleanup\|enrich\|tiers\|save\|qa> --region portland` |
+| Pipeline, one step (all eight are real, run in this order; `filter` and `build` also take `--source PATH`, `cleanup` and `tiers` take `--allow-fragmented`, `build` and `cleanup` take `--engine networkx\|arrays`, the same build) | `uv run worst-route pipeline <download\|filter\|build\|cleanup\|enrich\|tiers\|save\|qa> --region portland` |
 | Fetch the Census boundary files (a person, never the gate or an agent; FIPS codes of the states whose places to fetch) | `tools/fetch_census.sh 41 53` |
 | Write the places index (states, outlines, the region's towns) from them | `uv run worst-route aux places --region portland` |
 | Plan a route from the CLI, validated (`--target ratio:20` or `duration:9h` aims for a target within ±2 %; `--base route.json` continues a saved route; `--objective time` the slowest; `--no-left` / `--no-right` such turns at a kilometre each, `--strict` none; `--hard` each road in one stretch, never driven again once left; `--objective collect --item bridge` collects bridges, or `toll_booth`, `level_crossing`, `roundabout`; `--objective brand --brand Starbucks` visits a brand's locations, by name or id; `--objective alphabet` drives roads A, B, C, … from `--from` to `--to`) | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
@@ -116,6 +119,7 @@ Every command below exists. One a later milestone adds is marked with that miles
 | Build a region's pipeline with each step's time, peak memory and output sizes (a heavy job for a state; writes `tools/out/`, never downloads; `--steps`, `--force`, `--allow-fragmented`) | `uv run python tools/bench_build.py --region oregon --source data/raw/oregon-latest.osm.pbf` |
 | Fetch the vector basemap (a person, never the gate or an agent; needs go-pmtiles; `--dry-run` for the size, `--assets` for the labels' fonts and icons) | `tools/fetch_basemap.sh portland --build 20261030 --bbox -123.05,45.25,-122.35,45.72 --assets` |
 | Build and run the image (the frontend and the API from one process; the data mounted, never inside; `docker compose up -d --build` from `compose.yaml`; bound to `127.0.0.1` it sits behind a reverse proxy, hence `--trust-proxy`, which the image's own command leaves out so a container exposed directly never trusts `X-Forwarded-For`) | `docker build -t worst-route .` / `docker run -p 127.0.0.1:8000:8000 -v "$PWD/data:/data:ro" -v worst-route-state:/state worst-route serve --region portland --host 0.0.0.0 --port 8000 --store /state/routes.sqlite --frontend /app/frontend --public --log-format json --trust-proxy` |
+| Compare the two pipeline engines on a region's filtered roads (a heavy job for a state) | `uv run python tools/parity.py --region portland` |
 | Land a delivered series | `tools/land_series.sh <patch-dir> <base-commit> <tree-hash>` |
 
 **Run the gate after every change.** The gate never downloads anything and never needs `data/`;
@@ -221,7 +225,8 @@ src/worst_route/ config, cli; pipeline/, graph/, engine/ (objectives/), presenta
 frontend/        Vite + TS app: src/{main,state,api,map,stops,settings,run,toasts,directions,share}
 tests/           fixtures/osm/*.osm, unit/, graph/, pipeline/, engine/, api/, property/, golden/, bench/
 tools/           gates.sh, land_series.sh, acceptance.py (the M1 acceptance run), fetch_census.sh,
-                 bench_build.py (a region's pipeline, measured), fetch_basemap.sh
+                 bench_build.py (a region's pipeline, measured), fetch_basemap.sh,
+                 parity.py (the two pipeline engines compared)
 Dockerfile       the image; compose.yaml, one machine's service (docs/reference/hosting.md)
 .claude/agents/  scout, researcher, developer, reviewer
 .github/         workflows/gate.yml: the gate on every push and pull request

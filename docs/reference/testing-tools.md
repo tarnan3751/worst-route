@@ -35,9 +35,10 @@ OSM XML that pyosmium reads directly, with no conversion (`docs/reference/pipeli
 each), so pytest's default import mode tolerates the same test file name in two folders and the
 `tests.*` mypy override applies; a new test folder gets an `__init__.py` too.
 The `data` and `slow` markers are registered in `pyproject.toml`, which runs pytest with
-`--strict-markers` and a 300 s timeout per test. `slow` marks a test that starts real worker
-processes (`tests/api/test_worker_process.py`, a few seconds); the gate still runs it, and
-`-m "not slow"` leaves it out of a quick local run.
+`--strict-markers` and a 300 s timeout per test. `slow` marks a test of a few seconds or more:
+one that starts real worker processes (`tests/api/test_worker_process.py`), or the two pipeline
+engines compared on random street lattices (`tests/pipeline/test_arrays_property.py`); the gate
+still runs them, and `-m "not slow"` leaves them out of a quick local run.
 The frontend's tests are vitest files beside its modules (`frontend/src/**/*.test.ts`), with
 streams recorded from the server under `frontend/src/__fixtures__/`; they run in Node with
 `npm test` and in the gate, never reach the network, and read nothing but the recordings and
@@ -87,6 +88,15 @@ the JSON report to `--out` (under `tools/out/`, which git ignores) and exits wit
 step's code, else 0. It needs real extracts under `WORST_ROUTE_DATA`, so the gate never runs it;
 it is a heavy job when the region is a state (`docs/reference/pipeline.md`, **Oregon**).
 `tests/pipeline/test_bench_build.py` runs it on the divided fixture.
+
+## Comparing the pipeline engines: `tools/parity.py`
+
+`uv run python tools/parity.py --region R` runs both pipeline engines on a region's filtered
+roads, each step in its own process, into a temporary directory, and reports each step's
+seconds and peak memory and whether the two builds are the same, array by array, the geometry's
+too, each written as `pipeline save` writes it
+(`docs/reference/pipeline.md`, **The arrays engine**). It reads `WORST_ROUTE_DATA` and writes
+under `tools/out/`. A state's run is a heavy job, arranged by the brief.
 
 ## Lanes
 

@@ -1190,6 +1190,7 @@ sitting (`download --force`).
 | `us-t3` | the same | T3 | EPSG:5070 |
 | `us` | the same | all | EPSG:5070 |
 | `west-coast` | california, oregon, washington | all | EPSG:5070 |
+| each of the 48 contiguous states and DC, by its slug (`california`, `district-of-columbia`, …) | that state | all | EPSG:5070 (`oregon`: EPSG:32610) |
 
 **The class ceiling.** A region's `classes` (`T0`–`T3`) keeps only that tier's road classes from
 `filter` on, so the national T1 build never reads a residential street into memory; the steps after
@@ -1198,7 +1199,9 @@ sitting (`download --force`).
 2026-11-01, with Portland and Oregon as the development regions); `us-t1` stays the measured
 reference. `us` is the all-roads national region, the master graph M5.3's decision weighed, defined
 but not built here (**The all-roads national build**), and `west-coast` (about eight times Oregon)
-the scale between a state and the country at which its memory is measured.
+the scale between a state and the country at which its memory is measured. The regions of one state
+each, generated from `STATES` (Oregon's keeping its own UTM zone and its build), are regions one may
+build; built once, they measure the array pipeline at state scale (**The state builds**).
 Alaska and Hawaii are left out of `us-t1`: no road reaches them, so connectivity would drop them,
 and CONUS Albers does not cover them; they would be regions of their own.
 
@@ -1398,6 +1401,116 @@ It did not get past `build`:
   edges, most of the 6 GB or so it holds. Even so `cleanup` would hold about 5.5 GB at
   west-coast, 45–50 GB nationally: the all-roads country needs leaner steps before it can be
   built on this machine, and `cleanup` a way of working through the graph in parts.
+
+**The state builds** (2026-11-01), a one-off measurement of the array pipeline at state scale
+and an inventory of the regions one may build, not served (the owner's design is the national
+build at T3, `us-t3`; `docs/project_overview.md` §3.2): each of the 48 contiguous states and DC as
+a region of its own (above), from its own extract of 2026-10-29 at pipeline version 7, all roads,
+built, checked, pruned and given its places index by `tools/build_regions.py --states`
+(`docs/reference/testing-tools.md`) on the dev machine at load averages of 3–9, smallest extract
+first, from 13:20:47 to 14:07:31 CDT: 46 min 44 s for all 49, of which the steps took 2,751 s.
+
+```
+uv run python tools/build_regions.py --states
+```
+
+No step came near the watchdog's 18 GB: the largest footprints were Texas's 8.51 GB and California's
+7.65 GB, then Florida's 5.18 GB, and every `filter` takes about 2.1 GB, even DC's. Together the
+builds hold 18.07 M nodes, 45.8 M edges and 7.95 M km of road in 4,208 MB of arrays and strings and
+586 MB of geometry (4.79 GB), about the all-roads national build's estimated size, a road crossing a
+state line held by both states. Oregon's is its build ea3b18096e8b (`graph_version` dd86410e515c):
+the batch found it written from a measurement run with `--allow-fragmented`, and saved again without
+the flag it has the main tree's build's `graph_version`; its row's time and peak are those of that
+rerun, whose other steps were up to date (**Oregon** has its own).
+
+| Region | Build | Nodes | Edges | Road km | Size | Time | Peak memory | QA |
+|---|---|---|---|---|---|---|---|---|
+| district-of-columbia | 73851ece91f8 | 16,707 | 47,729 | 2,651 | 4.7 MB | 11 s | 2.12 GB | failed: twin coverage 0.9268, T0 retained 0.935673 (fragmented) |
+| delaware | 9b72a6b216cd | 48,771 | 120,173 | 14,472 | 12.9 MB | 11 s | 2.12 GB | passed |
+| vermont | b1281748d02d | 53,743 | 123,505 | 28,007 | 14.8 MB | 14 s | 2.17 GB | passed |
+| south-dakota | 6dac884480b3 | 119,349 | 330,522 | 130,837 | 32.8 MB | 17 s | 2.15 GB | passed |
+| rhode-island | aca5c21ae0ff | 45,463 | 116,630 | 10,632 | 12.1 MB | 10 s | 2.15 GB | passed |
+| new-hampshire | ae95d1d4efd8 | 79,873 | 189,418 | 31,094 | 21.3 MB | 18 s | 2.16 GB | passed |
+| maine | ef0914ed661e | 116,341 | 266,333 | 57,954 | 30.3 MB | 22 s | 2.21 GB | fragmented: retained 0.964, largest 351 nodes, pruned |
+| mississippi | 9b22eb948fc5 | 269,463 | 654,216 | 149,665 | 71.6 MB | 34 s | 2.21 GB | passed |
+| wyoming | 6fe981ad059c | 77,481 | 199,857 | 70,274 | 22.6 MB | 18 s | 2.17 GB | fragmented: retained 0.966, pruned |
+| west-virginia | a20d4ff35324 | 165,681 | 386,830 | 80,100 | 45.8 MB | 32 s | 2.23 GB | failed: SCC retained 0.97282, T0 retained 0.908609 (fragmented) |
+| arkansas | 101db712188c | 298,843 | 744,655 | 162,768 | 80.4 MB | 39 s | 2.21 GB | passed |
+| montana | eca6b87425c3 | 152,451 | 392,091 | 143,207 | 44.3 MB | 29 s | 2.20 GB | fragmented: retained 0.977, pruned |
+| nebraska | e39eb036442a | 199,026 | 579,321 | 166,788 | 55.5 MB | 30 s | 2.19 GB | passed |
+| kansas | c8fcff2c93f6 | 335,853 | 941,952 | 243,813 | 90.2 MB | 37 s | 2.19 GB | passed |
+| nevada | d37ed76e9101 | 128,658 | 315,086 | 62,448 | 34.8 MB | 31 s | 2.21 GB | fragmented: retained 0.978, pruned |
+| north-dakota | 22a6418e46cd | 88,030 | 253,013 | 115,892 | 24.5 MB | 19 s | 2.23 GB | passed |
+| idaho | 8b892f2776ac | 177,541 | 452,213 | 112,225 | 52.6 MB | 37 s | 2.23 GB | fragmented: retained 0.979, pruned |
+| iowa | 43ad0da862b0 | 297,339 | 836,231 | 198,318 | 80.1 MB | 40 s | 2.28 GB | fragmented: largest 216 nodes, pruned |
+| new-mexico | feb7ef8baa43 | 226,583 | 583,309 | 166,338 | 64.0 MB | 38 s | 2.23 GB | fragmented: retained 0.967, largest 269 nodes, pruned |
+| louisiana | 082d6a13f940 | 322,629 | 796,825 | 140,083 | 83.2 MB | 37 s | 2.28 GB | passed |
+| alabama | 75e7cba98161 | 433,968 | 1,058,267 | 183,976 | 114.3 MB | 55 s | 2.83 GB | passed |
+| kentucky | 73a7cd003232 | 322,631 | 759,598 | 147,176 | 87.1 MB | 58 s | 2.68 GB | passed |
+| new-jersey | 51c8f806281d | 291,009 | 749,423 | 72,990 | 76.2 MB | 44 s | 2.49 GB | passed |
+| south-carolina | 16f47ad29f14 | 360,432 | 888,924 | 140,950 | 94.7 MB | 52 s | 2.26 GB | passed |
+| oklahoma | a56c47a39f88 | 421,722 | 1,087,132 | 221,228 | 108.6 MB | 45 s | 2.26 GB | passed |
+| utah | 9f7156d58174 | 168,027 | 421,590 | 76,560 | 45.4 MB | 27 s | 2.23 GB | passed |
+| tennessee | ebd6e403c532 | 423,312 | 1,027,089 | 181,062 | 113.1 MB | 54 s | 2.35 GB | passed |
+| missouri | 2a4adea0aed3 | 536,985 | 1,359,034 | 255,024 | 143.6 MB | 68 s | 3.15 GB | passed |
+| indiana | b8494f8699e3 | 463,364 | 1,245,563 | 182,611 | 122.7 MB | 54 s | 2.66 GB | passed |
+| maryland | 4f1d71aef9eb | 247,607 | 596,358 | 67,616 | 64.1 MB | 40 s | 2.22 GB | passed |
+| connecticut | 47fcaf17991f | 126,221 | 310,592 | 39,478 | 33.4 MB | 25 s | 2.21 GB | passed |
+| oregon | ea3b18096e8b | 237,469 | 593,325 | 118,557 | 66.6 MB | 9 s | 1.61 GB | passed |
+| minnesota | 20588e2c58f2 | 373,552 | 999,917 | 237,517 | 101.1 MB | 53 s | 2.50 GB | passed |
+| wisconsin | 5a5bc447f1f3 | 396,445 | 1,026,744 | 204,912 | 106.3 MB | 56 s | 2.43 GB | passed |
+| arizona | 2bc5b0c3fa73 | 421,036 | 1,045,757 | 143,829 | 108.5 MB | 64 s | 2.54 GB | fragmented: retained 0.980, largest 577 nodes, pruned |
+| massachusetts | 72d7a2c74db3 | 260,272 | 639,782 | 65,097 | 67.2 MB | 57 s | 2.45 GB | fragmented: retained 0.973, largest 3,587 nodes, pruned |
+| michigan | a6aa0863ba5b | 508,907 | 1,340,763 | 224,684 | 134.3 MB | 81 s | 2.95 GB | fragmented: largest 338 nodes, pruned |
+| ohio | 73624416c9aa | 574,119 | 1,505,672 | 221,178 | 152.6 MB | 85 s | 3.28 GB | passed |
+| pennsylvania | 672c14071c2b | 652,792 | 1,693,131 | 237,831 | 174.9 MB | 92 s | 3.82 GB | passed |
+| georgia | 4aa26981a165 | 583,656 | 1,397,883 | 238,543 | 153.0 MB | 79 s | 3.41 GB | passed |
+| illinois | 4bc42b30b07a | 690,754 | 1,858,899 | 264,375 | 180.6 MB | 79 s | 3.57 GB | passed |
+| washington | 23c411d51103 | 409,027 | 1,011,499 | 151,345 | 108.5 MB | 70 s | 2.55 GB | failed: SCC retained 0.977942, SCC largest dropped 1154, T0 retained 0.946596 (fragmented) |
+| colorado | f96dd61bf196 | 355,376 | 910,181 | 172,858 | 96.8 MB | 57 s | 2.68 GB | passed |
+| virginia | 1b3d950d8f18 | 446,988 | 1,039,460 | 166,628 | 118.3 MB | 85 s | 3.48 GB | passed |
+| north-carolina | 41e7dd574157 | 669,779 | 1,570,548 | 231,956 | 173.2 MB | 97 s | 3.89 GB | passed |
+| new-york | 262fe8765147 | 527,491 | 1,340,399 | 211,148 | 140.7 MB | 93 s | 3.18 GB | fragmented: largest 402 nodes, pruned |
+| florida | e1d010b6d5ef | 940,444 | 2,362,505 | 266,767 | 242.3 MB | 147 s | 5.18 GB | fragmented: largest 333 nodes, pruned |
+| texas | 4c57ba80f564 | 1,723,758 | 4,460,083 | 748,441 | 453.1 MB | 268 s | 8.51 GB | fragmented: largest 353 nodes, pruned |
+| california | f2a5e6a17dbe | 1,284,788 | 3,193,540 | 386,224 | 334.3 MB | 235 s | 7.65 GB | fragmented: largest 612 nodes, pruned |
+
+- **QA.** 32 builds pass. 17 were too fragmented for `cleanup` or `tiers` and were run again with
+  `--allow-fragmented`. 14 of them fail only the connectivity rule's thresholds (the share kept
+  below 98%, a dropped component above 200 nodes) and are pruned like those that pass. Three fail
+  other rules too and keep their stages (1.08 GB): DC (twin coverage 0.927, T0 retained 0.936),
+  West Virginia (T0 retained 0.909) and Washington (T0 retained 0.947).
+- **Disk.** 82 GB were free before the batch and 64 GB after it; the pruning pass (the batch run
+  again, 40 s, every region done before and offered to `prune`) gave 12 GB back, leaving 76 GB.
+- **Places.** Every state's index is written (`aux places`: the towns within the state's bounding
+  box, its neighbours' included), with no state missing its Census file.
+- **Plans** on three of the builds (seed 1, 30 s, `CsrBackend`), each passing the validator and
+  `worst-route validate`:
+
+  | Build | Trip | Baseline | Worst | Ratio | Search |
+  |---|---|---|---|---|---|
+  | `rhode-island` aca5c21ae0ff | Providence (41.8240, −71.4128) → Newport (41.4901, −71.3128) | 48.13 km | 598.06 km | 12.42× | 5,000 attempts in 2.9 s |
+  | `washington` 23c411d51103, an island state | Seattle (47.6062, −122.3321) → Olympia (47.0379, −122.9007) | 98.07 km | 1,341.73 km | 13.68× | 5,000 attempts in 13.4 s |
+  | `california` f2a5e6a17dbe | Los Angeles (34.0522, −118.2437) → San Diego (32.7157, −117.1611) | 199.90 km | 3,011.39 km | 15.06× | 1,328 attempts in 30 s, 0.91 GB |
+
+- **The single-state cut.** A region built from one extract holds that extract alone, so a road
+  network reached only through a neighbouring state falls off as a component of its own and is
+  dropped, and a divided road continuing across the line loses its twin there. Of the 17 states run
+  with `--allow-fragmented`, the largest dropped components are islands reached by ferry (Martha's
+  Vineyard in Massachusetts, 3,587 nodes; San Juan Island in Washington, 1,154; Shelter Island in
+  New York, 402; Vinalhaven in Maine, 351; Drummond Island in Michigan, 338) or land reached only
+  across a state line (the Arizona Strip, 577 nodes at 36.865, −113.952, reached through Utah and
+  Nevada; Carter Lake, Iowa's exclave in Omaha, 216; Alta, Wyoming, reached through Idaho, 122; the
+  Montana end of the Beartooth Highway near Cooke City, reached through Wyoming, 111), and the
+  shares kept fall to 0.964–0.980 in Maine, Wyoming, New Mexico, West Virginia, Massachusetts,
+  Montana, Nevada, Washington, Idaho and Arizona. DC's twin coverage (0.927) and the T0 shares of
+  DC, West Virginia and Washington are most likely the motorways and divided roads the line cuts
+  (not examined one by one).
+- **Later item: regions with their borders.** A region near a state line, a city's bbox region
+  included, names the neighbouring states' extracts too and is clipped to its bbox grown by a
+  margin (`filter` already merges several extracts and `Region.bbox` already clips), so that a
+  network reached through a neighbour and a divided road across the line come whole, which would
+  also give the build the bubbles at its edge; the figures above are its evidence.
 
 ## Fixtures
 

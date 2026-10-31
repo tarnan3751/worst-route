@@ -326,7 +326,10 @@ brief and one review.
 **Lanes.** The main working tree is the coordinator's and stays at `HEAD`: no agent writes to
 it, its index, its `.venv` or its `data/`. A developer or a reviewer works in a `git clone` of
 its own under its scratch directory; `uv sync` there builds the virtualenv from the lockfile
-(the uv cache makes it seconds) and `npm ci` under `frontend/` when the frontend exists. Up to
+(the uv cache makes it seconds) and `npm ci` under `frontend/` when the frontend exists. Every
+scratch directory of a lane (its clone, its patch series, its gate clone, its probes) carries the
+lane's name as a prefix, and a lane never deletes a path it did not create: the scratchpad is
+shared, and a bare `patches/` is another lane's delivery. Up to
 five developers may run at once on disjoint areas, under these rules: a lane reads built graphs
 through `WORST_ROUTE_DATA` pointing at the main tree's `data/` (builds are immutable unless
 `pipeline save --force` replaces one, which changes its `graph_version`) and writes pipeline

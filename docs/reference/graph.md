@@ -534,9 +534,14 @@ time, so one tree serves every request.
   the nearest, so its `note` is None unless a role rejects it; the caller says why the stop
   moved.
 - `leash_mask(stops_xy, leash_m) -> bool[n]`: the nodes within `leash_m` of the polyline
-  through the stops (consecutive duplicate stops dropped; a single stop is a point). Nodes
-  outside the stops' bounding box grown by `leash_m` are skipped before shapely measures the
-  rest against one geometry.
+  through the stops (consecutive duplicate stops dropped; a single stop is a point), as
+  shapely measures them against one geometry, to the last bit. NumPy measures every node's
+  distance to each segment (to its nearest point, one pass over the nodes a segment), and the
+  nodes whose distance lies within `LEASH_BAND_M` (1 m) of the leash are measured again by
+  shapely, which decides them; the two formulas differ by nanometres. On the national T1 build
+  (887,737 nodes) a two-stop leash takes 4–5 ms where shapely over the stops' bounding box grown
+  by the leash took 22–159 ms, a three-stop one 8–10 ms; on Oregon 1 ms against 24–38 ms, the
+  same masks on every request measured.
 - `bubble_mask(stops_xy, radius_m) -> bool[n]`: the nodes within `radius_m` of any stop.
 - `nodes_within(center, radius_m, node_mask) -> intp[]` and `edges_from_within(center,
   radius_m, node_mask) -> intp[]`: the detours' balls, the nodes of the mask within `radius_m`
@@ -595,7 +600,8 @@ round trip to the metre, ends exact; long steps split on their segment; the ends
 the nodes'; straight edges; refused lines and malformed geometries; the files beside the
 arrays and outside `graph_version`; the digest's pin; a build read and loaded without its
 geometry, which is asked for only on use), `test_backends.py`, `test_edge_search.py`,
-`test_spatial.py` (snapping roles, masks, `exclude` and notes; leash and bubble masks; the
+`test_spatial.py` (snapping roles, masks, `exclude` and notes; leash and bubble masks, the leash
+shapely's at its boundary, nodes 1 µm either side of it included; the
 masked balls against `bubble_mask`, radii on lattice nodes included), and `test_loader.py`
 (`latest`, the two builds kept, memory-mapped arrays, missing builds, a build missing an array,
 the geometry read on first use and kept).

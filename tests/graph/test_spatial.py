@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import shapely
 from pyproj import Transformer
 
 from worst_route.graph.data import GraphData
@@ -200,6 +201,42 @@ def test_leash_follows_the_polyline() -> None:
     expected = {0, 1, 2, 3, 4, 9, 14, 19, 24}
     assert members(GRID_INDEX.leash_mask(xy(0, 4, 24), 50.0)) == expected
     assert members(GRID_INDEX.leash_mask(xy(0, 4, 0), 50.0)) == {0, 1, 2, 3, 4}
+
+
+def test_leash_is_shapelys_to_the_last_bit() -> None:
+    # random nodes, and nodes at exactly the leash's distance from a segment's side, from its
+    # end, and 1 mm and 1 µm either side, and leashes of exactly a node's distance: the mask is
+    # shapely's measure of every node, for polylines of one point, two points, three (one
+    # doubling back) and a repeated stop
+    rng = np.random.default_rng(7)
+    leash = 250.0
+    polylines = [
+        [(0.0, 0.0)],
+        [(0.0, 0.0), (1000.0, 300.0)],
+        [(0.0, 0.0), (1000.0, 300.0), (200.0, 900.0)],
+        [(0.0, 0.0), (0.0, 0.0), (700.0, -400.0), (700.0, -400.0)],
+    ]
+    for stops in polylines:
+        line = np.array(stops) + (X0, Y0)
+        a, b = line[0], line[-1]
+        side = np.array([-(b - a)[1], (b - a)[0]])
+        side = side / (np.hypot(*side) or 1.0)
+        mid = (a + b) / 2
+        exact = [mid + side * (leash + d) for d in (0.0, -1e-3, 1e-3, -1e-6, 1e-6)]
+        exact += [b + (b - a) / (np.hypot(*(b - a)) or 1.0) * (leash + d) for d in (0.0, 1e-3)]
+        if np.hypot(*(b - a)) == 0:
+            exact += [a + (leash, 0.0), a + (0.0, leash + 1e-6)]
+        points = np.vstack([rng.uniform(-600, 1600, size=(2000, 2)) + (X0, Y0), exact])
+        g = make_graph([tuple(p) for p in points], [(0, 1, 1.0)])
+        index = SpatialIndex(g)
+        geometry = shapely.points(line[0]) if len(set(stops)) == 1 else shapely.linestrings(line)
+        distance = shapely.distance(shapely.points(points), geometry)
+        assert np.array_equal(index.leash_mask(line, leash), distance <= leash)
+        # a leash of exactly a node's distance as shapely measures it, which NumPy's formula
+        # can miss in the last bit: the node is in, and so is every other node shapely puts in
+        for k in rng.choice(len(points), size=200, replace=False):
+            mask = index.leash_mask(line, float(distance[k]))
+            assert mask[k] and np.array_equal(mask, distance <= distance[k])
 
 
 def test_bubbles_around_each_stop() -> None:

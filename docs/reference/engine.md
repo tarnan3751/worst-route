@@ -123,12 +123,12 @@ of the polyline through the projected stops.
 - **`extent_m`**: the diagonal of the active nodes' bounding box. The loop's radius bound is
   `r_max = min(leash, extent)`.
 
-The masks cost one pass over the build's nodes and edges per request; the leash's distances
-(shapely, on the nodes inside the stops' bounding box grown by the leash) are nearly all of it.
-On the Oregon build (237,581 nodes, 593,555 edges) a statewide request's masks take 83–166 ms at
-load averages of 15–40 (Astoria → Ontario: 133 ms for the leash, which holds 161,341 nodes, under
-3 ms for the bubbles, `active` and `banned`), so they are computed over the whole build, not
-restricted to the leash's bounding box.
+The masks cost one pass over the build's nodes and edges per request, computed over the whole
+build. The leash's distances are NumPy's, shapely deciding the nodes within a metre of the leash
+(`docs/reference/graph.md`, **Spatial**): 1 ms on the Oregon build (237,581 nodes, 593,555
+edges), where shapely over the stops' bounding box had taken 83–166 ms at load averages of 15–40
+(Astoria → Ontario: 133 ms for the leash, which holds 161,341 nodes, under 3 ms for the bubbles,
+`active` and `banned`), and 4–10 ms on the national T1 build (887,737 nodes) against 22–159 ms.
 
 ## Stops
 

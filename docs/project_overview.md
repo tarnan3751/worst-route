@@ -381,8 +381,9 @@ Found on the Oregon build (M5.1, 2026-10-31; the inputs to M5.2's decision):
   100–150 km leashes (Portland: thousands), so every trip over about 60 km stops on its 30 s and
   goes further with more. Stage A (OSMnx) is a third of the pipeline's time (133–178 s of 6–11
   min) and cleanup's networkx graphs its peak memory (2.6–3.9 GB): fine for a state, the reason
-  for M5.2 nationally. A request's masks are computed over the whole build (83–166 ms on
-  Oregon's 237,581 nodes), which a national build would make about a hundred times slower.
+  for M5.2 nationally. A request's masks are computed over the whole build, the leash's
+  distances by NumPy (1 ms on Oregon's 237,581 nodes, 4–10 ms on the national T1 build's 887,737,
+  where shapely's had taken 83–166 ms and 22–159 ms).
 - **The tiers above a state's span are untested on all roads**: T4 below 800 km and T0 beyond;
   T1–T3 are taken only when asked for. A rural stop's 3 km bubble seldom meets the T1 or T2
   network (a stop in the Ochoco National Forest is 7.1 km from it).
@@ -803,10 +804,10 @@ The plan's assumed defaults, each open until the owner confirms (`docs/PLAN.md` 
     in-memory merge would have held about 190 M nodes), the peak memory to be measured against the
     machine's 24 GB (the T1 build's arrays cleanup peaked at 3.7 GB, most of it the handover to
     networkx, which the steps after cleanup on arrays no longer need). The engine at 17 M nodes
-    would need the leash's distances in NumPy (0.16–0.3 µs a node measured: seconds for a
-    coast-to-coast trip) and searches whose set-up does not grow with the build (the kernels
-    allocate per-node or per-edge work arrays on each call; at 887,737 nodes runs still made
-    1,070–1,170 attempts a second).
+    has the leash's distances in NumPy (4–10 ms on the T1 build's 887,737 nodes, where shapely's
+    0.16–0.3 µs a node would have taken seconds for a coast-to-coast trip) and would need
+    searches whose set-up does not grow with the build (the kernels allocate per-node or per-edge
+    work arrays on each call; at 887,737 nodes runs still made 1,070–1,170 attempts a second).
   - (b) **T1 nationally plus all-roads builds per state.** The T1 build: 887,737 nodes, 1,324,013
     edges, 178.1 MB of arrays and strings (201.2 MB with the geometry), 22 minutes from the
     extracts with build and cleanup on arrays; the state builds together about (a)'s size (3.9 GB,

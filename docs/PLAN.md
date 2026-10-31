@@ -507,7 +507,7 @@ As built in M3 (`docs/reference/engine.md`, **Alphabet**; `engine/alphabet_searc
 
 ### 3.9 Request-time masks and stats
 
-- **Leash mask:** node allowed iff distance to the polyline through the stops ≤ `L`. `L` auto = `clamp(0.6 × straight-line trip length, 3 km, 150 km)`, user-adjustable. Computed vectorised with shapely 2 (`distance` of all active nodes to one LineString; ~0.5 s for 5M nodes).
+- **Leash mask:** node allowed iff distance to the polyline through the stops ≤ `L`. `L` auto = `clamp(0.6 × straight-line trip length, 3 km, 150 km)`, user-adjustable. Computed vectorised with shapely 2 (`distance` of all active nodes to one LineString; ~0.5 s for 5M nodes). As built: NumPy's distance to each segment, shapely deciding the nodes within 1 m of the leash, the same mask; 4–10 ms on the national T1 build's 887,737 nodes (`docs/reference/graph.md`, **Spatial**).
 - **Tier + bubbles:** §2.6.
 - **Towns passed through:** as built (M4, `presentation/places.py`), the Census place polygons (CDPs included) the route's LineString intersects, by an STRtree, in the order the route first meets each; the stats choose how many to list.
 - **States visited:** as built, the same over the 5m state polygons.

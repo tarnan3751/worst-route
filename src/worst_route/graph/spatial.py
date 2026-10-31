@@ -23,8 +23,11 @@ Masks here are bool arrays of length n (`ValueError` otherwise); uint8 masks are
 kernels' internal business.
 
 `leash_mask(stops_xy, leash_m)`: the nodes within `leash_m` of the polyline through the stops
-(a point for a single stop). `bubble_mask(stops_xy, radius_m)`: the nodes within `radius_m` of
-any stop. `active_mask(tier, leash, bubbles)` = leash & (tier | bubbles), a request's node mask.
+(a point for a single stop), shapely's answer to the last bit: NumPy measures every node's
+distance to each segment, and shapely measures again the few within `LEASH_BAND_M` of the leash,
+whose answer it decides (the two formulas differ by nanometres). `bubble_mask(stops_xy,
+radius_m)`: the nodes within `radius_m` of any stop. `active_mask(tier, leash, bubbles)` = leash &
+(tier | bubbles), a request's node mask.
 
 `nodes_within(center, radius_m, node_mask)` and `edges_from_within(...)` are the detours'
 balls: the nodes of a mask within `radius_m` of a point, and the edges leaving them, ascending.
@@ -38,6 +41,7 @@ covering the area makes cost a millisecond.
 """
 
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import Literal
 
 import numpy as np
@@ -49,6 +53,9 @@ from scipy.spatial import cKDTree
 from worst_route.graph.data import GraphData
 
 Role = Literal["start", "via", "end"]
+
+# Nodes whose NumPy distance lies within this of the leash are measured again by shapely.
+LEASH_BAND_M = 1.0
 
 _WHERE = {
     "start": "the nearest street you can leave by",
@@ -130,11 +137,21 @@ class SpatialIndex:
         moved = np.ones(len(stops), dtype=np.bool_)
         moved[1:] = (np.diff(stops, axis=0) != 0).any(axis=1)
         stops = stops[moved]
-        path = shapely.points(stops[0]) if len(stops) == 1 else shapely.linestrings(stops)
-        lo, hi = stops.min(axis=0) - leash_m, stops.max(axis=0) + leash_m
-        near = np.flatnonzero(((self._xy >= lo) & (self._xy <= hi)).all(axis=1))
-        mask = np.zeros(self.data.n, dtype=np.bool_)
-        mask[near] = shapely.distance(shapely.points(self._xy[near]), path) <= leash_m
+        x, y = self.data.node_x, self.data.node_y
+        if len(stops) == 1:
+            distance = np.hypot(x - stops[0, 0], y - stops[0, 1])
+        else:
+            distance = np.full(self.data.n, np.inf)
+        for (ax, ay), (bx, by) in pairwise(stops):  # each node to its nearest point of a segment
+            dx, dy = bx - ax, by - ay
+            rx, ry = x - ax, y - ay
+            t = np.clip((rx * dx + ry * dy) / (dx * dx + dy * dy), 0.0, 1.0)
+            np.minimum(distance, np.hypot(rx - t * dx, ry - t * dy), out=distance)
+        mask: NDArray[np.bool_] = distance <= leash_m
+        unsure = np.flatnonzero(np.abs(distance - leash_m) < LEASH_BAND_M)
+        if len(unsure):
+            path = shapely.points(stops[0]) if len(stops) == 1 else shapely.linestrings(stops)
+            mask[unsure] = shapely.distance(shapely.points(self._xy[unsure]), path) <= leash_m
         return mask
 
     def bubble_mask(self, stops_xy: NDArray[np.float64], radius_m: float) -> NDArray[np.bool_]:

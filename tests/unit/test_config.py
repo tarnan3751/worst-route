@@ -73,6 +73,19 @@ def test_the_all_roads_national_region_and_its_intermediate_scale() -> None:
     assert west.classes is None and west.bbox is None and west.crs_epsg == 5070
 
 
+def test_the_national_t3_region() -> None:
+    region = REGIONS["us-t3"]
+    assert region.states == REGIONS["us-t1"].states and region.classes == "T3"
+    assert region.display == "United States"
+    assert region.bbox is None and region.crs_epsg == 5070
+    assert region.road_classes == REGIONS["us-t1"].road_classes | {
+        "secondary",
+        "secondary_link",
+        "tertiary",
+        "tertiary_link",
+    }
+
+
 def test_every_contiguous_state_and_dc_has_an_all_roads_region() -> None:
     conus = [state for state in STATES if state not in ("alaska", "hawaii")]
     assert len(conus) == 49 and "district-of-columbia" in conus
@@ -102,6 +115,7 @@ def test_a_region_s_display_name_and_states() -> None:
         "oregon-washington": "Oregon and Washington",
         "oregon-washington-t1": "Oregon and Washington",
         "us-t1": "United States",
+        "us-t3": "United States",
         "us": "United States",
         "west-coast": "West Coast",
     }

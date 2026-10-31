@@ -554,8 +554,10 @@ STATES: dict[str, tuple[str, str]] = {
 
 # Regions of several states (M5.3; `docs/reference/pipeline.md`, **Regions of several states**):
 # their extracts are read in this order and merged at `filter`. `us-t1` is the 48 contiguous
-# states and DC at T1, the national build that validated the pipeline; `us` is the same states at
-# every road class, the all-roads master graph M5.3's decision weighs; `west-coast` (California,
+# states and DC at T1, the national build that validated the pipeline; `us-t3` the same states at
+# T3, the national build the server serves (the owner, 2026-11-01); `us` is the same states at
+# every road class, the all-roads master graph M5.3's decision weighed, which this machine cannot
+# build as the steps stand; `west-coast` (California,
 # Oregon and Washington, about eight times Oregon) is the intermediate scale between a state and
 # the country that its measurements are taken at. Alaska and Hawaii have no road to them and lie
 # outside CONUS Albers (EPSG:5070), so they would be regions of their own.
@@ -575,6 +577,9 @@ REGIONS["oregon-washington-t1"] = Region(
 )
 REGIONS["us-t1"] = Region(
     name="us-t1", display="United States", states=_CONUS, crs_epsg=5070, classes="T1"
+)
+REGIONS["us-t3"] = Region(
+    name="us-t3", display="United States", states=_CONUS, crs_epsg=5070, classes="T3"
 )
 REGIONS["us"] = Region(name="us", display="United States", states=_CONUS, crs_epsg=5070)
 REGIONS["west-coast"] = Region(

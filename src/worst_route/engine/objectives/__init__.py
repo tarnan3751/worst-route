@@ -4,7 +4,9 @@
 `time`, `collect`, `brand`). `OBJECTIVES` maps a request's objective key to its class, and
 `make_objective` builds one for a build, the request's baseline (its `Metrics`) and the radius
 bound; `collect` also takes the request's item and its area (the active nodes), `brand` the
-request's brand and its area.
+request's brand and its area. `OBJECTIVE_KEYS` are every objective a request may ask for: those
+and `"alphabet"`, the alphabet route, which is no `Objective` but a search of its own
+(`engine/alphabet_search.py`) scored on the distance.
 """
 
 from worst_route.engine.objectives.base import BaseObjective, BoolArray, Objective
@@ -21,6 +23,7 @@ OBJECTIVES: dict[str, type[BaseObjective]] = {
     "collect": Collect,
     "brand": Brand,
 }
+OBJECTIVE_KEYS: tuple[str, ...] = (*OBJECTIVES, "alphabet")
 
 
 def make_objective(

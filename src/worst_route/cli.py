@@ -15,16 +15,18 @@ never overwrites one without `--force`; `qa` prints its thresholds, also when it
 do not load the geo stack.
 
 `plan` plans a route on a saved build (`docs/reference/engine.md`, **The CLI**), on the
-`--objective` (distance, time, collect with an `--item`, or brand with a `--brand`, an id or a
-name of the build's brand index), with `--no-left` or `--no-right` (such turns cost a kilometre
-each; none with `--strict`) and `--hard` (each road in one stretch): it prints the objective and
-constraints when not the default, the snapped stops, the baseline, the worst route, the ratio
-and the time ratio (of the experienced time, with its drive and delays), its turns and delays,
-the target and what was achieved (for `--target ratio:<x>` or `duration:<time>`), the search,
-the backend it searched with and the validator's report, with a progress line on stderr on an
-accepted splice, at most one every 2 s, and writes `route.json` (with its directions, toasts and
-extra metrics, `presentation.document`) and GeoJSON when asked; a stop that cannot be snapped or
-reached (under `--strict` or `--hard` when either is why, saying to try without it), or a
+`--objective` (distance, time, collect with an `--item`, brand with a `--brand`, an id or a
+name of the build's brand index, or alphabet, from `--from` to `--to` only, without a target or
+a base), with `--no-left` or `--no-right` (such turns cost a kilometre each; none with
+`--strict`) and `--hard` (each road in one stretch): it prints the objective and constraints
+when not the default, the snapped stops, the baseline, the worst route, the ratio and the time
+ratio (of the experienced time, with its drive and delays), its turns and delays, the target and
+what was achieved (for `--target ratio:<x>` or `duration:<time>`), an alphabet route's letters
+and first roads, the search, the backend it searched with and the validator's report, with a
+progress line on stderr on an accepted splice (an alphabet route's better route), at most one
+every 2 s, and writes `route.json` (with its directions, toasts and extra metrics,
+`presentation.document`) and GeoJSON when asked; a stop that cannot be snapped or reached
+(under `--strict` or `--hard` when either is why, saying to try without it), or a
 missing build (or one without an array of the format, which names its remedy: the rebuild from
 `filter` when another pipeline version wrote it, which a plain `save` names too; `validate`,
 `serve` and `qa` say the same), is one line and exit 1, and a route that fails the validator is
@@ -751,6 +753,18 @@ def _mode_line(request: "RouteRequest") -> str:
     return "objective: " + ", ".join(parts)
 
 
+def _letters_line(letters: dict[str, Any]) -> str:
+    """`letters: 14 (A–N): Alder Street, Burnside Street, …`, the first five roads: one letter
+    `(A)`, and past Z each lap of the alphabet, `(A–Z, A–C)` or `(A–Z, A)`."""
+    n, roads = letters["letters"], letters["roads"]
+    if n == 0:
+        return "letters: 0"
+    last = letters["sequence"][-1]
+    laps = ["A–Z"] * ((n - 1) // 26) + ["A" if last == "A" else f"A–{last}"]
+    shown = ", ".join(roads[:5]) + (", …" if n > 5 else "")
+    return f"letters: {n} ({', '.join(laps)}): {shown}"
+
+
 @app.command()
 def plan(
     ctx: typer.Context,
@@ -778,7 +792,9 @@ def plan(
     target: Annotated[
         str, typer.Option(help="max, ratio:<x> (× the baseline) or duration:<time> (9h, 2h30m).")
     ] = "max",
-    objective: Annotated[str, typer.Option(help="distance, time, collect or brand.")] = "distance",
+    objective: Annotated[
+        str, typer.Option(help="distance, time, collect, brand or alphabet.")
+    ] = "distance",
     item: Annotated[
         str | None,
         typer.Option(
@@ -828,7 +844,7 @@ def plan(
 
     from worst_route.engine import ENGINE_VERSION
     from worst_route.engine.io import SavedRoute, read_route, route_document, route_geojson
-    from worst_route.engine.objectives import OBJECTIVES
+    from worst_route.engine.objectives import OBJECTIVE_KEYS
     from worst_route.engine.objectives.brand import BrandRefused
     from worst_route.engine.plan import BaseRouteMismatch, plan_route
     from worst_route.engine.request import RouteRequest, objective_problem
@@ -900,6 +916,8 @@ def plan(
             )
         if saved.region != region:
             _fail(f"{base} was planned on {saved.region}, not {region}")
+        if saved.request.objective == "alphabet":
+            _fail("invalid --base: the alphabet route cannot be continued", code=2)
         build_id = build_id or saved.build_id
         fields.update(
             stops=saved.request.stops,
@@ -912,14 +930,19 @@ def plan(
         )
     if fields["target"]["kind"] == "ratio" and is_round_trip(fields["stops"]):
         _fail("invalid --target: a round trip has no ratio target", code=2)
-    if fields["objective"] not in OBJECTIVES:  # before its item: the API refuses it first too
-        unknown, known = fields["objective"], ", ".join(OBJECTIVES)
+    if fields["objective"] not in OBJECTIVE_KEYS:  # before its item: the API refuses it first
+        unknown, known = fields["objective"], ", ".join(OBJECTIVE_KEYS)
         _fail(f"invalid --objective: unknown objective {unknown!r}; known: {known}", code=2)
     problem = objective_problem(
-        fields["objective"], fields["item"], fields["target"]["kind"], fields["brand"]
+        fields["objective"],
+        fields["item"],
+        fields["target"]["kind"],
+        fields["brand"],
+        len(fields["stops"]),
     )
     if problem is not None:
-        _fail(f"invalid --{problem[0]}: {problem[1]}", code=2)
+        option = "via" if problem[0] == "stops" else problem[0]  # the stops between: --via
+        _fail(f"invalid --{option}: {problem[1]}", code=2)
     try:
         request = RouteRequest(**fields)
     except ValidationError as error:
@@ -943,7 +966,13 @@ def plan(
             last = time.monotonic()
             km = event.metrics.length_m / 1000
             ratio = event.metrics.length_m / baseline.length_m if baseline.length_m else 0.0
-            typer.echo(f"iteration {event.iteration}: ratio {ratio:.2f}x, {km:.2f} km", err=True)
+            line = f"iteration {event.iteration}: ratio {ratio:.2f}x, {km:.2f} km"
+            if "alphabet" in event.metrics.counters:  # each event a better route, of a restart
+                letters = event.metrics.counters["alphabet"]["letters"]
+                line = (
+                    f"restart {event.iteration}: {letters} letters, ratio {ratio:.2f}x, {km:.2f} km"
+                )
+            typer.echo(line, err=True)
 
     try:
         result = plan_route(data, request, backend=engine, base=saved, on_progress=progress)
@@ -1015,6 +1044,8 @@ def plan(
     if "brand" in route.metrics.counters:
         b = route.metrics.counters["brand"]
         typer.echo(f"visited: {b['visits']} of {b['of']} {b['name']} (brand {b['id']})")
+    if "alphabet" in route.metrics.counters:
+        typer.echo(_letters_line(route.metrics.counters["alphabet"]))
     typer.echo(f"route: {len(route.nodes)} nodes, {len(route.edges)} edges")
     typer.echo(
         f"search: {run.attempts} attempts, {run.accepted} accepted, {run.elapsed_s:.1f} s, "
@@ -1098,6 +1129,7 @@ def validate(
         banned_edges=masks.banned,
         banned_turn_classes=saved.request.constraints.banned_turn_classes,
         hard=saved.request.constraints.hard,
+        alphabet=saved.request.objective == "alphabet",
     )
     typer.echo(f"{route_file}: {len(saved.nodes)} nodes on {saved.region}/{saved.build_id}")
     typer.echo(f"backend: {engine.name}")

@@ -11,11 +11,13 @@ raises `TooManyJobs` (the endpoint's 429).
 While a job runs, its follower task reads the worker's queue (in a thread, so the event loop
 never blocks) and keeps the job's own copy of the route: the route the loop started from
 (`Started`, which emits `baseline` and a `snapshot` of iteration 0), then every accepted splice
-applied in order, as a client would. It also keeps the best route so far apart, by the
-request's goal (`engine.target.Goal`): in a max mode every accepted splice raises the score, so
-the best is the copy; a target run's best is the route closest to its target, which after an
-overshoot may be an earlier one. Splices are sent as `progress` events at most once per
-`coalesce_s`, every `snapshot_every`-th followed by a `snapshot`. `Finished` stores the
+applied in order, as a client would. It also keeps the best route so far apart, by the request's
+goal (`engine.target.Goal`): in a max mode every accepted splice raises the score, so the best
+is the copy; a target run's best is the route closest to its target, which after an overshoot
+may be an earlier one. Splices are sent as `progress` events at most once per `coalesce_s`,
+every `snapshot_every`-th followed by a `snapshot`. The alphabet route's worker sends each
+better route whole (`Improved`) instead: it becomes the job's route and its best, sent at once
+as a `snapshot` and then a `progress` with its numbers and no splice. `Finished` stores the
 worker's validated route (the engine's best) and emits `done`; `Failed` emits `error`. Whenever
 the route a job stores is not the copy its clients have drawn, a `snapshot` of it comes just
 before `done`.
@@ -86,6 +88,7 @@ from worst_route.api.store import RouteStore
 from worst_route.api.worker import (
     Failed,
     Finished,
+    Improved,
     JobSpec,
     Message,
     RouteArrays,
@@ -111,6 +114,7 @@ from worst_route.engine import ENGINE_VERSION
 from worst_route.engine.objectives import OBJECTIVES
 from worst_route.engine.objectives.brand import BrandRefused, brand_problem
 from worst_route.engine.objectives.collect import count_items
+from worst_route.engine.objectives.distance import Distance
 from worst_route.engine.request import RequestMasks, RouteRequest, request_masks
 from worst_route.engine.route import IntArray, Metrics
 from worst_route.engine.seed_route import resolve_stops
@@ -462,6 +466,8 @@ class JobManager:
                         self._started(job, message)
                     elif isinstance(message, Spliced):
                         self._spliced(job, message)
+                    elif isinstance(message, Improved):
+                        self._improved(job, message)
                     else:
                         self._flush(job)
                         if isinstance(message, Finished):
@@ -486,7 +492,8 @@ class JobManager:
         job.baseline_edges, job.baseline_delay_s = m.baseline_edges, m.baseline_delay_s
         data = job.loaded.data
         baseline = Metrics(m.baseline_length_m, m.baseline_time_s, delay_s=m.baseline_delay_s)
-        primary = OBJECTIVES[job.request.objective].primary  # no objective to make for it
+        # no objective to make for it; the alphabet route's ratio is its length's, as distance's
+        primary = OBJECTIVES.get(job.request.objective, Distance).primary
         job.goal = Goal(job.request.target, data, primary=primary, baseline=baseline)
         job.best, job.best_value = m.route, job.goal.value(m.score, m.route.metrics)
         self._emit(
@@ -512,6 +519,27 @@ class JobManager:
             job.best, job.best_value = job.route, value
         job.accepted += 1
         job.pending.append(sse.splice_out(job.loaded.data, m.i, m.j, m.nodes, m.edges))
+
+    def _improved(self, job: Job, m: Improved) -> None:
+        """A better alphabet route: the job's route and its best, sent as a `snapshot` and then
+        a `progress` with its numbers and no splice."""
+        goal = job.goal
+        if job.route is None or goal is None:
+            raise RuntimeError("a better route before the start")
+        job.route = job.best = m.route
+        job.score, job.iteration, job.elapsed_s = m.score, m.iteration, m.elapsed_s
+        job.best_value = goal.value(m.score, m.route.metrics)
+        job.accepted += 1
+        self._emit(job, "snapshot", self._snapshot(job))
+        progress = Progress(
+            iteration=job.iteration,
+            elapsed_s=job.elapsed_s,
+            score=job.score,
+            metrics=self._metrics(job),
+            splices=[],
+        )
+        self._emit(job, "progress", progress)
+        job.last_flush = time.monotonic()
 
     def _flush(self, job: Job) -> None:
         """Send the splices not sent yet, and a snapshot every `snapshot_every` sends."""
@@ -580,6 +608,7 @@ class JobManager:
             banned_edges=masks.banned,
             banned_turn_classes=job.request.constraints.banned_turn_classes,
             hard=job.request.constraints.hard,
+            alphabet=job.request.objective == "alphabet",
         )
         if not report.ok:
             failed = "; ".join(line for line in report.lines() if "FAILED" in line)

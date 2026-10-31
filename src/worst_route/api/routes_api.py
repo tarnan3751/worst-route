@@ -13,8 +13,9 @@
     POST   /routes/{id}/validate       the validator's report on it
 
 `POST /jobs` refuses before a job exists: a ratio target for a round trip first, then the
-objective (one not built yet, an unknown one, or one whose item, brand or target does not fit
-it: `request.objective_problem`; a brand the build does not have) and the budget (the target's
+objective (an unknown one; the alphabet route to continue from a base route; one whose item,
+brand, target or stops do not fit it: `request.objective_problem`; a brand the build does not
+have) and the budget (the target's
 bounds are the body's), then the job
 limit, then for "make it worse" (`base_route_id`) the base route (its build, engine and stops,
 tier and leash, which the request may leave out; a ratio target for a base round trip too),
@@ -26,7 +27,7 @@ errors are
 `ApiError`s, answered as `ErrorBody`: 422 `INVALID_REQUEST`, `UNKNOWN_REGION`,
 `STOP_OUTSIDE_REGION`, `NO_NODE_NEAR`, `STOP_UNREACHABLE_WITHOUT_REPEAT`,
 `INFEASIBLE_TURN_CONSTRAINT`, `BUDGET_TOO_LARGE`,
-`NOT_YET`, `UNKNOWN_ROUTE`, `BUILD_MISMATCH` (also `/validate` on a route another engine version
+`UNKNOWN_ROUTE`, `BUILD_MISMATCH` (also `/validate` on a route another engine version
 made), `BASE_ROUTE_MISMATCH`; 429 `TOO_MANY_JOBS`; 404
 `NOT_FOUND`; 409 `BUILD_UNAVAILABLE` (a stored route whose build is no longer on disk at its
 graph_version).
@@ -35,7 +36,8 @@ A route's document adds what the presentation says about it (`presentation.docum
 its directions, its toasts, and its fuel, states, towns and share of the roads), worked out
 again on every request from its build, its request, its seed and the region's places index
 (`presentation_of`); `directions_of` gives its directions alone, the same ones, for
-`GET /routes/{id}/directions` (`directions_api`).
+`GET /routes/{id}/directions` (`directions_api`). An alphabet route's letters are recounted on
+every request too, from the build's edge letters, worked out once per build (`Api.letters`).
 
 `/snap` judges the stop in the tier's nodes and the nodes within `BUBBLE_KM` of it (as a job's
 masks would near a stop; `auto` is T4); a job's `snapped` event, which also keeps stops apart
@@ -56,7 +58,6 @@ from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from worst_route.api.jobs import Job, Prepared, TooManyJobs, prepare
 from worst_route.api.schemas import (
-    PLANNED_OBJECTIVES,
     BrandOut,
     BrandsOut,
     BuildOut,
@@ -85,8 +86,9 @@ from worst_route.api.store import StoredRoute
 from worst_route.api.worker import RouteArrays, unreachable
 from worst_route.config import BUBBLE_KM, BUDGET_MAX_S
 from worst_route.engine import ENGINE_VERSION
+from worst_route.engine.alphabet_search import alphabet_counts, edge_letters
 from worst_route.engine.io import feature_collection, line_coordinates
-from worst_route.engine.objectives import OBJECTIVES
+from worst_route.engine.objectives import OBJECTIVE_KEYS
 from worst_route.engine.objectives.base import route_delay_s
 from worst_route.engine.objectives.brand import BrandRefused, brand_counts, brand_problem
 from worst_route.engine.objectives.collect import count_items
@@ -257,13 +259,14 @@ async def create_job(body: RouteRequestIn, request: Request) -> JobCreated:
     if body.stops is not None:
         _check_round_trip(body, [(s.lat, s.lon) for s in body.stops])
     loaded = region_of(api, body.region)
-    if body.objective in PLANNED_OBJECTIVES:
-        message = f"the {body.objective} objective is not built yet; built: {', '.join(OBJECTIVES)}"
-        raise ApiError(422, "NOT_YET", message, field="objective")
-    if body.objective not in OBJECTIVES:
-        message = f"unknown objective {body.objective!r}; known: {', '.join(OBJECTIVES)}"
+    if body.objective not in OBJECTIVE_KEYS:
+        message = f"unknown objective {body.objective!r}; known: {', '.join(OBJECTIVE_KEYS)}"
         raise ApiError(422, "INVALID_REQUEST", message)
-    problem = objective_problem(body.objective, body.item, body.target.kind, body.brand)
+    if body.objective == "alphabet" and body.base_route_id is not None:
+        message = "the alphabet route cannot be continued"
+        raise ApiError(422, "INVALID_REQUEST", message, field="base_route_id")
+    count = len(body.stops) if body.stops is not None else 2
+    problem = objective_problem(body.objective, body.item, body.target.kind, body.brand, count)
     if problem is not None:
         raise ApiError(422, "INVALID_REQUEST", problem[1], field=problem[0])
     if body.brand is not None and (unknown := brand_problem(loaded.data, body.brand)) is not None:
@@ -447,6 +450,7 @@ def route(route_id: str, request: Request) -> RouteDocument:
         "turns": count_turns(data, stored.edges),
         "items": count_items(data, stored.nodes, stored.edges),
         "brand": _brand_visits(loaded, stored),
+        "alphabet": _alphabet_letters(api, data, stored),
     }
     presented = presentation_of(api, loaded, stored, asked, metrics)
     return RouteDocument(
@@ -526,6 +530,19 @@ def _brand_visits(loaded: Loaded, stored: StoredRoute) -> dict[str, Any] | None:
     return brand_counts(loaded.data, stored.request.brand, stored.nodes, masks.active)
 
 
+def _alphabet_letters(api: "Api", data: GraphData, stored: StoredRoute) -> dict[str, Any] | None:
+    """An alphabet route's letters, recounted on the stored route up to its free last leg, with
+    the build's letters worked out once (`Api.letters`)."""
+    if stored.request.objective != "alphabet":
+        return None
+    version = str(data.meta["graph_version"])
+    letters = api.letters.get(version)
+    if letters is None:
+        letters = api.letters[version] = edge_letters(data)
+    free_from = int(stored.metrics_json["alphabet"]["free_from"])
+    return alphabet_counts(data, stored.edges, free_from, letters)
+
+
 @router.get("/brands")
 def brands(region: str, request: Request) -> BrandsOut:
     """The region's brands, the most located first, then by name."""
@@ -580,6 +597,7 @@ def validate(route_id: str, request: Request) -> ValidationOut:
         banned_edges=masks.banned,
         banned_turn_classes=stored.request.constraints.banned_turn_classes,
         hard=stored.request.constraints.hard,
+        alphabet=stored.request.objective == "alphabet",
     )
     return ValidationOut(
         route_id=stored.route_id,

@@ -1,7 +1,9 @@
 """The alphabet route: the letters, the counts and the constructive search."""
 
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -16,7 +18,9 @@ from worst_route.engine.alphabet_search import (
     edge_letters,
 )
 from worst_route.engine.constraints import NO_CONSTRAINTS, Constraints, constrain, returning
+from worst_route.engine.io import SavedRoute, read_route, route_document
 from worst_route.engine.objectives.distance import Distance
+from worst_route.engine.plan import PlanResult, plan_route
 from worst_route.engine.request import RouteRequest, request_masks
 from worst_route.engine.route import Route, check_route
 from worst_route.engine.seed_route import baseline_route, resolve_stops, seed_route
@@ -333,3 +337,63 @@ def test_turn_tables_are_kept() -> None:
     r = run(town(6, transitions=straight), (0, 35), restarts=20)
     assert r.result.refused_transitions == 0
     assert letters_of(r.result.best)["letters"] >= 2
+
+
+# Planning -------------------------------------------------------------------------------------
+
+
+def planned(backend_type: Backend, seed: int = 5) -> PlanResult:
+    request = RouteRequest(
+        stops=[at_node(SHUFFLED, 0), at_node(SHUFFLED, 399)],
+        seed=seed,
+        objective="alphabet",
+        max_iterations=25,
+        budget_s=120,
+    )
+    return plan_route(SHUFFLED, request, backend=backend_type(SHUFFLED))
+
+
+def test_planning_an_alphabet_route_is_the_same_on_both_backends() -> None:
+    reference, ours = planned(PythonBackend), planned(CsrBackend)
+    assert ours.route.edges.tobytes() == reference.route.edges.tobytes()
+    assert ours.route.metrics == reference.route.metrics
+    assert (ours.run.attempts, ours.run.accepted) == (
+        reference.run.attempts,
+        reference.run.accepted,
+    )
+    assert [c.name for c in ours.report.checks][-1] == "alphabet" and ours.report.ok
+    assert letters_of(ours.route)["letters"] >= 5
+
+
+def test_an_alphabet_route_json_is_read_back_and_validated(tmp_path: Path) -> None:
+    result = planned(CsrBackend)
+    document = route_document(SHUFFLED, result)
+    assert document["metrics"]["alphabet"] == letters_of(result.route)
+    path = tmp_path / "route.json"
+    path.write_text(json.dumps(document))
+    saved = read_route(path)
+    assert saved.metrics.counters["alphabet"] == letters_of(result.route)
+    stops = [s.node for s in result.snaps]
+    masks = result.masks
+
+    def report(route: SavedRoute) -> list[str]:
+        checked = validate_route(
+            SHUFFLED,
+            route,
+            stop_nodes=stops,
+            node_mask=masks.active,
+            banned_edges=masks.banned,
+            alphabet=route.request.objective == "alphabet",
+        )
+        return [c.name for c in checked.checks if not c.ok]
+
+    assert report(saved) == []
+    document["metrics"]["alphabet"]["sequence"] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    path.write_text(json.dumps(document))
+    assert report(read_route(path)) == ["metrics"]
+
+
+def test_an_alphabet_route_cannot_be_continued() -> None:
+    result = planned(CsrBackend)
+    with pytest.raises(ValueError, match="the alphabet route cannot be continued"):
+        plan_route(SHUFFLED, result.request, backend=CsrBackend(SHUFFLED), base=result.route)

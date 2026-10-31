@@ -1,7 +1,7 @@
 """The API's request and response shapes (`docs/reference/api.md`; `docs/PLAN.md` §4).
 
 `RouteRequestIn`, the body of `POST /jobs`, mirrors `engine.request.RouteRequest` field for
-field under the engine's names (the objective as any string, so a planned one is `NOT_YET`, the
+field under the engine's names (the objective as any string, which the endpoint checks, the
 item `collect` collects and the brand `brand` visits), with the stops as `{lat, lon, label}`
 objects, the target as
 `{kind: "max"}`, `{kind: "ratio", value}` or `{kind: "duration", seconds}` (the engine's
@@ -13,14 +13,15 @@ request. `SnapIn` is the body of `POST /snap`.
 
 The responses: `Health`, `RegionOut`, `SnapOut`, `JobCreated`, `JobStatus`, `RouteDocument`
 (its metrics with `TargetMetrics` for a ratio or duration target, `ItemCounts`, the route's
-collectibles, and `BrandVisits` for a pilgrimage), `ValidationOut`, `BrandsOut` (`GET /brands`,
-with its `BrandOut`s), and `ErrorBody` (`{code, message}` and the error's own fields) for every
-error. The document's metrics count the route's turns (`Turns`), its delays and its
-collectibles, and with the presentation's numbers (fuel, states and towns, the share of the
-roads) it carries its directions (`DirectionStep`s) and toasts; the metrics of a route while it
-grows (`RouteMetrics`: `progress`, `snapshot`, the job status) carry its delays, and `Done`'s
-(`DoneMetrics`) the target and the turns too, and the stored route's other metrics (its item
-counts, a collecting route's item, a pilgrimage's brand) as extra fields.
+collectibles, `BrandVisits` for a pilgrimage and `AlphabetLetters` for an alphabet route),
+`ValidationOut`, `BrandsOut` (`GET /brands`, with its `BrandOut`s), and `ErrorBody` (`{code,
+message}` and the error's own fields) for every error. The document's metrics count the route's
+turns (`Turns`), its delays and its collectibles, and with the presentation's numbers (fuel,
+states and towns, the share of the roads) it carries its directions (`DirectionStep`s) and
+toasts; the metrics of a route while it grows (`RouteMetrics`: `progress`, `snapshot`, the job
+status) carry its delays, and `Done`'s (`DoneMetrics`) the target and the turns too, and the
+stored route's other metrics (its item counts, a collecting route's item, a pilgrimage's brand,
+an alphabet route's letters) as extra fields.
 The SSE events' payloads are `Snapped`, `BaselineOut`, `Progress` (with `SpliceOut`s),
 `Snapshot`, `Done` and `ErrorBody`. Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in
 requests; every number is metric.
@@ -41,8 +42,6 @@ from worst_route.engine.request import ObjectiveKey, RouteRequest, TierChoice
 from worst_route.engine.target import Target as EngineTarget
 from worst_route.presentation.directions import StepKind
 
-# Modes the plan describes that the engine does not have yet: asked for, they are NOT_YET.
-PLANNED_OBJECTIVES = ("alphabet",)
 StopReason = Literal["budget", "converged", "target", "cancelled", "timeout"]
 JobState = Literal["queued", "running", "done", "error"]
 
@@ -371,6 +370,18 @@ class BrandVisits(_Out):
     of: int
 
 
+class AlphabetLetters(_Out):
+    """An alphabet route's letters (`alphabet_search.alphabet_counts`): how many, in order, the
+    first road of each, and where its alphabet part starts and ends (edge positions: its first
+    A road's first edge, and the first edge of its free last leg)."""
+
+    letters: int
+    sequence: str
+    roads: list[str]
+    alpha_from: int
+    free_from: int
+
+
 class DocumentMetrics(_Out):
     length_m: float
     baseline_length_m: float
@@ -386,6 +397,7 @@ class DocumentMetrics(_Out):
     turns: Turns
     items: ItemCounts
     brand: BrandVisits | None = None  # a pilgrimage's; null for every other objective
+    alphabet: AlphabetLetters | None = None  # an alphabet route's; null for every other one
     # the presentation's (`presentation.stats`), null where they cannot be known
     extra_fuel_gal: float | None
     extra_cost_usd: float | None

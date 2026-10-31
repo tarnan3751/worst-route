@@ -5,13 +5,17 @@ pilgrimage, refuses a brand the build does not have or the area does not hold (`
 `objectives.brand.brand_problem`), makes one
 `numpy.random.Generator(PCG64(request.seed))` for every random draw that follows, settles the
 stops (`resolve_stops`: snapping and its fallback, which may move stops), builds the seed route
-and the baseline on them, makes the request's objective with the baseline's metrics and
+and the baseline on them, makes the request's objective (the distance for the alphabet route)
+with the baseline's metrics and
 the radius bound r_max = min(leash, the active area's extent), a collecting one also with the
 request's item and active nodes, a pilgrimage with its brand and active nodes, with the
 request's constraints (`constraints.constrain`; a strict turn constraint and hard mode
 constrain the seed too), and its goal (`target.Goal`, the request's target against that
 baseline), and runs the worsen loop toward that goal within the request's budget,
-handing each accepted splice and the baseline to `on_progress`. It searches with the backend it
+handing each accepted splice and the baseline to `on_progress`. The alphabet route runs its own
+search instead (`alphabet_search.alphabet_route`, from the seed scored with its letters), whose
+events each replace the whole route by a better one, and is validated with its `alphabet` check;
+it cannot be continued from a base route (`ValueError`). It searches with the backend it
 is given, else `make_backend`'s default (`config.DEFAULT_BACKEND`); every backend gives the same
 route, and the result records which one searched. The best
 route is then validated against the request's masks and the resolved stops; a route that fails
@@ -41,6 +45,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from worst_route.engine.alphabet_search import alphabet_route, alphabet_scored, edge_letters
 from worst_route.engine.constraints import Constraints, constrain, returning
 from worst_route.engine.objectives import make_objective
 from worst_route.engine.objectives.brand import BrandRefused, brand_problem
@@ -91,6 +96,9 @@ def plan_route(
 ) -> PlanResult:
     """Plan, worsen and validate the route `request` asks for on this build (from `base` if
     given)."""
+    alphabet = request.objective == "alphabet"
+    if alphabet and base is not None:
+        raise ValueError("the alphabet route cannot be continued")
     backend = backend if backend is not None else make_backend(data)
     spatial = spatial if spatial is not None else SpatialIndex(data)
     masks = request_masks(spatial, data, request)
@@ -125,7 +133,7 @@ def plan_route(
     baseline = baseline_route(backend, data, stop_nodes, masks.active, masks.banned)
     objective = constrain(
         make_objective(
-            request.objective,
+            "distance" if alphabet else request.objective,
             data,
             baseline=baseline.metrics,
             r_max=r_max,
@@ -137,7 +145,11 @@ def plan_route(
         data,
     )
     goal = Goal(request.target, data, primary=objective.primary, baseline=baseline.metrics)
-    score, metrics = objective.evaluate(nodes, edges)
+    letters = edge_letters(data) if alphabet else None  # the build's, once for the run
+    if letters is not None:
+        score, metrics = alphabet_scored(objective, data, letters, nodes, edges, 0)
+    else:
+        score, metrics = objective.evaluate(nodes, edges)
     try:
         route = Route.new(
             data,
@@ -160,21 +172,37 @@ def plan_route(
         if on_progress is not None:
             on_progress(event, baseline)
 
-    run = run_worsen(
-        backend,
-        spatial,
-        data,
-        route,
-        objective,
-        Budget(seconds=request.budget_s, max_iterations=request.max_iterations),
-        rng,
-        masks.active,
-        r_max=r_max,
-        banned_edges=masks.banned,
-        goal=goal,
-        check_delta=check_delta,
-        on_event=progress,
-    )
+    budget = Budget(seconds=request.budget_s, max_iterations=request.max_iterations)
+    if alphabet:
+        run = alphabet_route(
+            backend,
+            data,
+            route,
+            objective,
+            budget,
+            rng,
+            masks.active,
+            r_max=r_max,
+            banned_edges=masks.banned,
+            letters=letters,
+            on_event=progress,
+        )
+    else:
+        run = run_worsen(
+            backend,
+            spatial,
+            data,
+            route,
+            objective,
+            budget,
+            rng,
+            masks.active,
+            r_max=r_max,
+            banned_edges=masks.banned,
+            goal=goal,
+            check_delta=check_delta,
+            on_event=progress,
+        )
     report = validate_route(
         data,
         run.best,
@@ -183,6 +211,7 @@ def plan_route(
         banned_edges=masks.banned,
         banned_turn_classes=request.constraints.banned_turn_classes,
         hard=request.constraints.hard,
+        alphabet=alphabet,
     )
     if not report.ok:
         raise ValidationFailed(report)

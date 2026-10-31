@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { RECORDINGS, loadStream } from "../__fixtures__/stream";
 import type {
+  AlphabetLetters,
   Baseline,
   BrandEntry,
   BrandList,
@@ -135,8 +136,15 @@ const brandVisits = object<BrandVisits>({
   visits: "integer",
   of: "integer",
 });
-// A collecting route's item and counts, a pilgrimage's brand; absent for every other objective.
-// The delays: optional, the recordings predate them.
+const alphabetLetters = object<AlphabetLetters>({
+  letters: "integer",
+  sequence: "string",
+  roads: array("string"),
+  alpha_from: "integer",
+  free_from: "integer",
+});
+// A collecting route's item and counts, a pilgrimage's brand, an alphabet route's letters;
+// absent for every other objective. The delays: optional, the recordings predate them.
 const metrics = object<Metrics>(
   {
     length_m: "number",
@@ -146,6 +154,7 @@ const metrics = object<Metrics>(
     item: optional(collectItem),
     items: optional(itemCounts),
     brand: optional(brandVisits),
+    alphabet: optional(alphabetLetters),
   },
   nullable("number"),
 );
@@ -175,6 +184,7 @@ const doneMetrics = object<DoneMetrics>(
     item: optional(collectItem),
     items: optional(itemCounts),
     brand: optional(brandVisits),
+    alphabet: optional(alphabetLetters),
   },
   nullable("number"),
 );
@@ -345,6 +355,7 @@ const routeDocument = object<RouteDocument>({
     turns: optional(turns),
     items: optional(itemCounts),
     brand: optional(nullable(brandVisits)), // the recordings predate it
+    alphabet: optional(nullable(alphabetLetters)), // the recordings predate it
     // the recordings predate the presentation's numbers, directions and toasts
     extra_fuel_gal: optional(nullable("number")),
     extra_cost_usd: optional(nullable("number")),

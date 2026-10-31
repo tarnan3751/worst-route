@@ -10,14 +10,14 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
-from worst_route.cli import _seconds, app
+from worst_route.cli import _letters_line, _seconds, app
 from worst_route.config import PIPELINE_VERSION
 from worst_route.engine import ENGINE_VERSION
 from worst_route.graph.data import EdgeFlag, GraphData
 from worst_route.graph.store import write_build
 from worst_route.graph.testing import make_graph
 
-from .graphs import X0, Y0, at, at_node, lattice, left_only
+from .graphs import TREES, X0, Y0, at, at_node, avenue, lattice, left_only, named_roads
 
 runner = CliRunner()
 GRID = lattice(10, 10, rounded_lonlat=True)
@@ -505,7 +505,8 @@ def test_an_objective_s_item_and_target_must_fit(data_dir: Path, tmp_path: Path)
     ):
         assert plan(*trip, *args) == (2, "", f"{line}\n")
     unknown = (
-        "invalid --objective: unknown objective 'bogus'; known: distance, time, collect, brand"
+        "invalid --objective: unknown objective 'bogus'; known: distance, time, collect, brand, "
+        "alphabet"
     )
     assert plan(*trip, "--objective", "bogus", "--item", "bridge") == (2, "", f"{unknown}\n")
     for args in (["--objective", "collect", "--item", "ufo"], ["--objective", "brand"]):
@@ -781,3 +782,74 @@ def test_validate_proves_a_strict_constraint(data_dir: Path, tmp_path: Path) -> 
         line.startswith("constraints: FAILED at ") and "left turn" in line
         for line in result.stdout.splitlines()
     ), result.output
+
+
+# The 10 × 10 lattice with its rows named after trees, A (south) to J, and its columns numbered
+# avenues.
+LETTERED = lattice(
+    10,
+    10,
+    rounded_lonlat=True,
+    roads=named_roads(
+        10, 10, [f"{t} Street" for t in TREES[:10]], [avenue(k) for k in range(1, 11)]
+    ),
+)
+
+
+def test_an_alphabet_route_is_planned_printed_and_proven(data_dir: Path, tmp_path: Path) -> None:
+    save(data_dir, LETTERED, "b1")
+    out = tmp_path / "route.json"
+    trip = ["--from", latlon(LETTERED, 0), "--to", latlon(LETTERED, 99), "--seed", "3"]
+    code, stdout, stderr = plan(
+        *trip, "--objective", "alphabet", "--max-iterations", "20", "--out", str(out)
+    )
+    assert code == 0, stdout + stderr
+    lines = stdout.splitlines()
+    assert "objective: alphabet" in lines
+    assert (
+        "letters: 10 (A–J): Alder Street, Birch Street, Cedar Street, Dogwood Street, Elm Street, …"
+        in lines
+    )
+    assert any(line.startswith("search: 20 attempts, ") for line in lines)
+    assert lines[-2].endswith(", metrics, alphabet)") and lines[-2].startswith("validator: ok")
+    doc = json.loads(out.read_text())
+    assert doc["request"]["objective"] == "alphabet"
+    letters = doc["metrics"]["alphabet"]
+    assert letters["sequence"] == "ABCDEFGHIJ" and letters["alpha_from"] == 0
+    result = runner.invoke(app, ["validate", str(out)])
+    assert result.exit_code == 0 and "alphabet: ok" in result.stdout, result.output
+
+    tampered = tmp_path / "tampered.json"
+    letters["roads"][2] = "Cypress Street"
+    tampered.write_text(json.dumps(doc))
+    result = runner.invoke(app, ["validate", str(tampered)])
+    assert result.exit_code == 1 and "metrics: FAILED" in result.stdout
+
+    for args, line in (
+        (
+            ["--via", latlon(LETTERED, 45)],
+            "invalid --via: the alphabet route takes a start and an end",
+        ),
+        (
+            ["--target", "duration:2h"],
+            "invalid --target: the alphabet route takes no target: it counts letters",
+        ),
+    ):
+        assert plan(*trip, "--objective", "alphabet", *args) == (2, "", f"{line}\n")
+    refused = "invalid --base: the alphabet route cannot be continued\n"
+    assert plan("--base", str(out), "--target", "max") == (2, "", refused)
+
+
+def test_the_letters_line_names_one_letter_and_laps_past_z() -> None:
+    def line(sequence: str) -> str:
+        roads = [f"{TREES[ord(c) - 65]} Street" for c in sequence]
+        return _letters_line({"letters": len(sequence), "sequence": sequence, "roads": roads})
+
+    assert line("") == "letters: 0"
+    assert line("A") == "letters: 1 (A): Alder Street"
+    assert line("ABC") == "letters: 3 (A–C): Alder Street, Birch Street, Cedar Street"
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    assert line(alphabet).startswith("letters: 26 (A–Z): Alder Street, ")
+    assert line(alphabet + "A").startswith("letters: 27 (A–Z, A): ")
+    assert line(alphabet + "ABC").startswith("letters: 29 (A–Z, A–C): ")
+    assert line(alphabet * 2 + "AB").startswith("letters: 54 (A–Z, A–Z, A–B): ")

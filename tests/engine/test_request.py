@@ -7,13 +7,14 @@ from pydantic import ValidationError
 
 from worst_route.config import HighwayClass
 from worst_route.engine.constraints import NO_CONSTRAINTS
-from worst_route.engine.objectives import OBJECTIVES
+from worst_route.engine.objectives import OBJECTIVE_KEYS, OBJECTIVES
 from worst_route.engine.objectives.collect import ITEMS
 from worst_route.engine.request import (
     ObjectiveKey,
     RouteRequest,
     auto_leash_m,
     auto_tier,
+    objective_problem,
     request_masks,
 )
 from worst_route.engine.target import Target
@@ -144,6 +145,32 @@ def test_a_pilgrimage_round_trips_through_json_and_others_leave_the_brand_out() 
     assert plain.brand is None
 
 
+def test_the_alphabet_route_takes_a_start_and_an_end_and_no_target() -> None:
+    request = RouteRequest(stops=PORTLAND, seed=1, objective="alphabet")
+    assert RouteRequest.model_validate(request.model_dump(mode="json")) == request
+    loop = [PORTLAND[0], PORTLAND[0]]
+    assert RouteRequest(stops=loop, seed=1, objective="alphabet").objective == "alphabet"
+    via = [PORTLAND[0], (45.5, -122.65), PORTLAND[1]]
+    with pytest.raises(ValidationError, match="the alphabet route takes a start and an end"):
+        RouteRequest(stops=via, seed=1, objective="alphabet")
+    for target in (Target(kind="duration", value=600), Target(kind="ratio", value=3)):
+        with pytest.raises(ValidationError, match="the alphabet route takes no target"):
+            RouteRequest(stops=PORTLAND, seed=1, objective="alphabet", target=target)
+    assert objective_problem("alphabet", None, "max", None, 3) == (
+        "stops",
+        "the alphabet route takes a start and an end",
+    )
+    assert objective_problem("alphabet", None, "ratio") == (
+        "target",
+        "the alphabet route takes no target: it counts letters",
+    )
+    assert objective_problem("alphabet", "bridge", "max") == (
+        "item",
+        "only the collect objective takes an item",
+    )
+    assert objective_problem("distance", None, "max", None, 3) is None
+
+
 def test_round_trips_through_json() -> None:
     request = RouteRequest(
         stops=PORTLAND,
@@ -237,7 +264,7 @@ def test_a_tier_bans_lower_classes_outside_the_bubbles() -> None:
 
 
 def test_the_objective_and_the_turn_constraints() -> None:
-    assert set(get_args(ObjectiveKey)) == set(OBJECTIVES)
+    assert set(get_args(ObjectiveKey)) == set(OBJECTIVE_KEYS) == {*OBJECTIVES, "alphabet"}
     assert RouteRequest(stops=PORTLAND, seed=1, objective="time").objective == "time"
     with pytest.raises(ValidationError, match="unknown objective 'slowest'; known: distance, time"):
         RouteRequest(stops=PORTLAND, seed=1, objective="slowest")

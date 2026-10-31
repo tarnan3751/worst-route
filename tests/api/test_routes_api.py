@@ -23,7 +23,7 @@ from worst_route.engine.snap import StopUnreachable
 from worst_route.graph.data import EdgeFlag
 from worst_route.graph.testing import Edge, make_graph
 
-from ..engine.graphs import X0, Y0, at, at_node, lattice, two_rings
+from ..engine.graphs import TREES, X0, Y0, at, at_node, avenue, lattice, named_roads, two_rings
 from .support import GRID, GRID_BBOX, SLOW, save_build, slow_splices, until
 
 pytestmark = pytest.mark.anyio
@@ -381,7 +381,7 @@ async def test_a_departure_gives_an_arrival(data: Path) -> None:
         ({"constraints": {"strict": True}}, "INVALID_REQUEST"),
         ({"objective": "nonsense"}, "INVALID_REQUEST"),
         ({"region": "atlantis"}, "UNKNOWN_REGION"),
-        ({"objective": "alphabet"}, "NOT_YET"),
+        ({"objective": "alphabet"}, "INVALID_REQUEST"),  # a via (job_body's stop 45)
         ({"objective": "brand"}, "INVALID_REQUEST"),
         ({"brand": 0}, "INVALID_REQUEST"),
         ({"objective": "brand", "brand": -1}, "INVALID_REQUEST"),
@@ -429,6 +429,16 @@ async def test_an_item_or_target_that_does_not_fit_the_objective_names_its_field
                 {"objective": "collect", "item": "bridge", "target": {"kind": "ratio", "value": 3}},
                 "target",
             ),
+            ({"objective": "alphabet"}, "stops"),
+            (
+                {
+                    "objective": "alphabet",
+                    "stops": [stop(0), stop(99)],
+                    "target": {"kind": "duration", "seconds": 600},
+                },
+                "target",
+            ),  # fmt: skip
+            ({"objective": "alphabet", "base_route_id": "000000000000"}, "base_route_id"),
         ):
             r = await client.post("/jobs", json=job_body(**fields))
             assert r.status_code == 422 and r.json()["field"] == field, r.text
@@ -527,6 +537,59 @@ async def test_a_brand_the_build_lacks_or_the_area_does_not_hold_names_its_field
             r = await client.post("/jobs", json=job_body(objective="brand", **fields))
             assert r.status_code == 422, r.text
             assert r.json() == {"code": "INVALID_REQUEST", "message": message, "field": "brand"}
+
+
+def lettered(tmp_path: Path) -> Path:
+    """A data directory whose latest build is GRID's lattice with its rows named after trees, A
+    (south) to J, and its columns numbered avenues."""
+    root = tmp_path / "data"
+    names = named_roads(
+        10, 10, [f"{t} Street" for t in TREES[:10]], [avenue(k) for k in range(1, 11)]
+    )
+    save_build(root, lattice(10, 10, rounded_lonlat=True, roads=names), "lettered", bbox=GRID_BBOX)
+    return root
+
+
+async def test_an_alphabet_job_sends_each_better_route_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with serving(lettered(tmp_path)) as (client, app):
+        body = job_body(objective="alphabet", stops=[stop(0), stop(99)], max_iterations=20)
+        _, events = await finished(client, body)
+        names = [e["event"] for e in events]
+        assert names[:3] == ["snapped", "baseline", "snapshot"] and names[-1] == "done"
+        # after the seed's snapshot, each better route: a snapshot, then a progress without splices
+        assert names[3:-1] == ["snapshot", "progress"] * ((len(names) - 4) // 2)
+        progress = [e["data"] for e in events if e["event"] == "progress"]
+        assert progress and all(p["splices"] == [] for p in progress)
+        letters = [p["metrics"]["alphabet"]["letters"] for p in progress]
+        assert letters == sorted(letters) and letters[-1] == 10
+        scores = [p["score"] for p in progress]
+        assert scores == sorted(scores) and len(set(scores)) == len(scores)
+        snapshots = [e["data"] for e in events if e["event"] == "snapshot"][1:]
+        assert [s["metrics"] for s in snapshots] == [p["metrics"] for p in progress]
+        done = events[-1]["data"]
+        assert done["metrics"]["alphabet"] == progress[-1]["metrics"]["alphabet"]
+        assert done["metrics"]["alphabet"]["sequence"] == "ABCDEFGHIJ"
+        made = []
+        real = routes_api.edge_letters
+        monkeypatch.setattr(routes_api, "edge_letters", lambda g: made.append(1) or real(g))
+        doc = (await client.get(f"/routes/{done['route_id']}")).json()
+        assert doc["request"]["objective"] == "alphabet"
+        assert doc["metrics"]["alphabet"] == done["metrics"]["alphabet"]
+        again = (await client.get(f"/routes/{done['route_id']}")).json()
+        assert again["metrics"]["alphabet"] == doc["metrics"]["alphabet"]
+        assert made == [1]  # the build's letters, worked out once (`Api.letters`)
+        assert list(app.state.api.letters) == [doc["graph_version"]]
+        assert doc["run"]["stopped_because"] == "budget" and doc["run"]["attempts"] == 20
+        report = (await client.post(f"/routes/{done['route_id']}/validate")).json()
+        assert report["ok"] is True and report["checks"][-1]["name"] == "alphabet"
+
+        _, events = await finished(client, job_body(stops=[stop(0), stop(99)]))  # distance
+        doc = (await client.get(f"/routes/{events[-1]['data']['route_id']}")).json()
+        assert (
+            doc["metrics"]["alphabet"] is None and "alphabet" not in events[-1]["data"]["metrics"]
+        )
 
 
 async def test_stops_outside_the_region_or_far_from_roads_are_named(data: Path) -> None:
@@ -652,6 +715,23 @@ async def test_cancel_stores_the_route_so_far(data: Path, monkeypatch: pytest.Mo
         doc = (await client.get(f"/routes/{status['route_id']}")).json()
         assert doc["run"]["stopped_because"] == "cancelled"
         assert (await client.post(f"/routes/{status['route_id']}/validate")).json()["ok"] is True
+
+
+async def test_cancel_stores_the_best_alphabet_route_so_far(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    slow_splices(monkeypatch, delay_s=0.2)
+    async with serving(lettered(tmp_path)) as (client, app):
+        body = job_body(objective="alphabet", stops=[stop(0), stop(99)], max_iterations=1000)
+        created = (await client.post("/jobs", json=body)).json()
+        job = app.state.api.jobs.jobs[created["job_id"]]
+        await until(lambda: job.accepted >= 3)
+        status = (await client.delete(f"/jobs/{created['job_id']}")).json()
+        assert status["stopped_because"] == "cancelled"
+        doc = (await client.get(f"/routes/{status['route_id']}")).json()
+        assert 3 <= doc["metrics"]["alphabet"]["letters"] < 10
+        report = (await client.post(f"/routes/{status['route_id']}/validate")).json()
+        assert report["ok"] is True and report["checks"][-1]["name"] == "alphabet"
 
 
 async def test_closing_the_stream_cancels_the_job(

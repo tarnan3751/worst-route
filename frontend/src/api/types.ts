@@ -117,9 +117,20 @@ export interface BrandVisits {
   of: number;
 }
 
+/** An alphabet route's letters: how many, in order, the first road of each, and where its
+ * alphabet part starts and ends (edge positions: its first A road's first edge, and the first
+ * edge of its free last leg). */
+export interface AlphabetLetters {
+  letters: number;
+  sequence: string;
+  roads: string[];
+  alpha_from: number;
+  free_from: number;
+}
+
 /** A route's numbers while it grows, its delays so far among them (absent from servers older than
  * them); the objective's counters ride along (a collecting route's `item` and `items`, a
- * pilgrimage's `brand`). */
+ * pilgrimage's `brand`, an alphabet route's `alphabet`). */
 export interface Metrics {
   length_m: number;
   time_s: number;
@@ -128,6 +139,7 @@ export interface Metrics {
   item?: CollectItem;
   items?: ItemCounts;
   brand?: BrandVisits;
+  alphabet?: AlphabetLetters;
   [counter: string]: unknown;
 }
 
@@ -208,6 +220,7 @@ export interface DocumentMetrics {
   turns?: Turns;
   items?: ItemCounts; // absent from servers older than the collectibles
   brand?: BrandVisits | null; // a pilgrimage's; null for other objectives, absent from older servers
+  alphabet?: AlphabetLetters | null; // an alphabet route's; null for others, absent from older servers
   // The presentation's, absent from servers older than it; null where unknown: the fuel
   // without the request's vehicle, the states and towns without the places index (the share
   // of the roads is always known).

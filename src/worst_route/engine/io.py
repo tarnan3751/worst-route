@@ -11,13 +11,14 @@
                 baseline is 0 m), turns: {left, right, straight, u_turn}, items: {toll_booth,
                 level_crossing, roundabout, bridge} (`count_items`, whatever the mode), the
                 objective's own numbers (a collecting route's item, a pilgrimage's brand: {id,
-                name, visits, of}), and for a ratio or duration target, target: {kind, value,
-                achieved, within_tolerance}},
+                name, visits, of}, an alphabet route's alphabet: {letters, sequence, roads,
+                alpha_from, free_from}), and for a ratio or duration target, target: {kind,
+                value, achieved, within_tolerance}},
      run:      {attempts, accepted, stopped_because, elapsed_s, backend}}
 
 `read_route(path)` reads one back as a `SavedRoute`, which the validator reads like a `Route`
-(its metrics' counters hold the file's `items` and a pilgrimage's `brand`, which the validator
-recounts):
+(its metrics' counters hold the file's `items`, a pilgrimage's `brand` and an alphabet route's
+`alphabet`, which the validator recounts):
 `worst-route validate` re-checks it against the build it names. A run that stopped on time is
 replayed exactly with `max_iterations` set to its `run.attempts` and a budget in seconds at
 least as large as the first run's.
@@ -135,7 +136,7 @@ def read_route(path: Path) -> SavedRoute:
         metrics=Metrics(
             float(doc["metrics"]["length_m"]),
             float(doc["metrics"]["time_s"]),
-            {k: doc["metrics"][k] for k in ("items", "brand") if k in doc["metrics"]},
+            {k: doc["metrics"][k] for k in ("items", "brand", "alphabet") if k in doc["metrics"]},
         ),
         document=doc,
     )

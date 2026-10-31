@@ -20,7 +20,8 @@ the graph_version, the node and edge ids as int32 little-endian bytes and the st
 JSON, so the same route on the same build has one id whichever run found it; `put` keeps the
 row stored first. `RouteStore(path)` creates the file and its table when missing, and opens a
 connection per call, so it may be used from any thread. `get` returns a `StoredRoute`, which the
-validator reads like a `Route`.
+validator reads like a `Route` (its metrics' counters an alphabet route's `alphabet`, which the
+validator's alphabet check needs).
 """
 
 import hashlib
@@ -160,7 +161,11 @@ class RouteStore:
             edges=_ids(values["edges"]),
             stop_idx=tuple(json.loads(values["stop_idx"])),
             baseline_edges=_ids(values["baseline_edges"]),
-            metrics=Metrics(float(metrics["length_m"]), float(metrics["time_s"])),
+            metrics=Metrics(
+                float(metrics["length_m"]),
+                float(metrics["time_s"]),
+                {"alphabet": metrics["alphabet"]} if "alphabet" in metrics else {},
+            ),
             metrics_json=metrics,
             run=json.loads(values["run_json"]),
         )

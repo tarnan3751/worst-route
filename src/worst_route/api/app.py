@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -73,6 +74,9 @@ class Api:
     places: PlaceIndex | None  # None when the region has no places index
     share_dir: Path  # the share images' cache
     share_locks: dict[str, asyncio.Lock] = field(default_factory=dict)  # by route, while rendering
+    # each build's edge letters (`alphabet_search.edge_letters`), by graph_version, worked out
+    # once for the alphabet routes' documents
+    letters: dict[str, np.ndarray] = field(default_factory=dict)
 
 
 def geocoder_user_agent(settings: ApiSettings) -> str:

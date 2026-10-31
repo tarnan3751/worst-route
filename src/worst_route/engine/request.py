@@ -2,18 +2,19 @@
 
 `RouteRequest` is what a caller asks for: the stops as (lat, lon) in order (the first the start,
 the last the end; the same point first and last makes a round trip), the objective's key
-(`"distance"`, `"time"`, `"collect"` or `"brand"`, the keys of `objectives.OBJECTIVES`), the item
+(`"distance"`, `"time"`, `"collect"`, `"brand"` or `"alphabet"`, `objectives.OBJECTIVE_KEYS`;
+the alphabet route takes a start and an end only, and no target), the item
 it collects (`collect` only, which needs one), the brand it visits (`brand` only, which needs
 one: its id in the build's brand index), the turn constraints (`constraints.Constraints`:
 none by default), the tier (`"auto"` or `"T0"`..`"T4"`), the leash in km (`"auto"` or a number,
 at most 150), the budget in seconds (at most 120) and iterations, the seed, and the target
 (`target.Target`: max by default; a ratio target is refused for a round trip, whose baseline is
 0 m, and for `collect` and `brand`, which count items and visits rather than metres;
-`objective_problem` names what is wrong with an objective, its item, its brand and its target
-kind, for the API to refuse it as early). Every number is finite, so it round-trips through
-JSON (`model_dump(mode="json")`) without `Infinity`; its JSON leaves the constraints out when
-there are none, and the brand when there is none, so a request without them reads as it did
-before they existed.
+`objective_problem` names what is wrong with an objective, its item, its brand, its target kind
+and its number of stops, for the API to refuse it as early). Every number is finite, so it
+round-trips through JSON (`model_dump(mode="json")`) without `Infinity`; its JSON leaves the
+constraints out when there are none, and the brand when there is none, so a request without them
+reads as it did before they existed.
 
 `request_masks(spatial, data, request)` turns it into `RequestMasks`, from the request alone,
 so the validator can recompute them from a saved route. The stops are projected and the trip
@@ -59,7 +60,7 @@ from worst_route.config import (
     TIER_AUTO_KM,
 )
 from worst_route.engine.constraints import NO_CONSTRAINTS, Constraints
-from worst_route.engine.objectives import OBJECTIVES
+from worst_route.engine.objectives import OBJECTIVE_KEYS
 from worst_route.engine.objectives.collect import ITEMS, CollectItem
 from worst_route.engine.snap import is_round_trip
 from worst_route.engine.target import Target, TargetKind
@@ -67,7 +68,7 @@ from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import SpatialIndex, active_mask
 
 TierChoice = Literal["auto", "T0", "T1", "T2", "T3", "T4"]
-ObjectiveKey = Literal["distance", "time", "collect", "brand"]  # the keys of OBJECTIVES
+ObjectiveKey = Literal["distance", "time", "collect", "brand", "alphabet"]  # OBJECTIVE_KEYS
 
 
 class RouteRequest(BaseModel):
@@ -91,8 +92,9 @@ class RouteRequest(BaseModel):
     @field_validator("objective", mode="before")
     @classmethod
     def _known(cls, objective: object) -> object:
-        if isinstance(objective, str) and objective not in OBJECTIVES:
-            raise ValueError(f"unknown objective {objective!r}; known: {', '.join(OBJECTIVES)}")
+        if isinstance(objective, str) and objective not in OBJECTIVE_KEYS:
+            known = ", ".join(OBJECTIVE_KEYS)
+            raise ValueError(f"unknown objective {objective!r}; known: {known}")
         return objective
 
     @field_validator("stops")
@@ -111,7 +113,9 @@ class RouteRequest(BaseModel):
 
     @model_validator(mode="after")
     def _item_fits(self) -> "RouteRequest":
-        problem = objective_problem(self.objective, self.item, self.target.kind, self.brand)
+        problem = objective_problem(
+            self.objective, self.item, self.target.kind, self.brand, len(self.stops)
+        )
         if problem is not None:
             raise ValueError(problem[1])
         return self
@@ -127,11 +131,16 @@ class RouteRequest(BaseModel):
 
 
 def objective_problem(
-    objective: str, item: str | None, target: TargetKind, brand: int | None = None
+    objective: str,
+    item: str | None,
+    target: TargetKind,
+    brand: int | None = None,
+    stops: int = 2,
 ) -> tuple[str, str] | None:
-    """What is wrong with this objective, item, kind of target and brand, as (the field at fault,
-    a sentence), or None: `collect` needs an item, only it takes one, and it takes no ratio; the
-    same for `brand` and its brand."""
+    """What is wrong with this objective, item, kind of target, brand and number of stops, as
+    (the field at fault, a sentence), or None: `collect` needs an item, only it takes one, and it
+    takes no ratio; the same for `brand` and its brand; the alphabet route takes no via and no
+    target."""
     if objective == "collect" and item is None:
         return "item", f"the collect objective needs an item: {', '.join(ITEMS)}"
     if objective != "collect" and item is not None:
@@ -144,6 +153,10 @@ def objective_problem(
         return "brand", "only the brand objective takes a brand"
     if objective == "brand" and target == "ratio":
         return "target", "the brand objective takes no ratio target: it counts visits, not metres"
+    if objective == "alphabet" and stops > 2:
+        return "stops", "the alphabet route takes a start and an end"
+    if objective == "alphabet" and target != "max":
+        return "target", "the alphabet route takes no target: it counts letters"
     return None
 
 

@@ -6,7 +6,9 @@ request with `plan_route` (from `spec.base` for "make it worse") and puts on `ou
 - `Started`, once, before the loop: the route the loop starts from (the seed, or the base
   route), its score and metrics, and the baseline;
 - `Spliced`, for every accepted splice: the window, the detour's nodes and edges, and the
-  route's attempt count, elapsed time, score and metrics after it;
+  route's attempt count, elapsed time, score and metrics after it; for the alphabet route,
+  `Improved` instead, for every better route its search finds: the whole route, its restart
+  count, elapsed time, score and metrics;
 - then `Finished` (the validated route as its `route.json` document, and the baseline's edges)
   or `Failed` (an error code, a one-line message, the error's fields and a traceback for the
   log).
@@ -94,6 +96,14 @@ class Spliced:
 
 
 @dataclass(frozen=True, eq=False)
+class Improved:
+    iteration: int
+    elapsed_s: float
+    score: float
+    route: RouteArrays
+
+
+@dataclass(frozen=True, eq=False)
 class Finished:
     document: dict[str, Any]
     baseline_edges: IntArray
@@ -107,7 +117,7 @@ class Failed:
     trace: str = ""
 
 
-Message = Started | Spliced | Finished | Failed
+Message = Started | Spliced | Improved | Finished | Failed
 
 
 class Outbox(Protocol):
@@ -188,6 +198,10 @@ def run_job(
     def progress(event: ProgressEvent, baseline: Baseline) -> None:
         check()
         s = event.splice
+        if spec.request.objective == "alphabet":  # each event a whole better route
+            route = RouteArrays(s.nodes, s.edges, (0, len(s.nodes) - 1), event.metrics)
+            out.put(Improved(event.iteration, event.elapsed_s, event.score, route))
+            return
         out.put(
             Spliced(
                 event.iteration,

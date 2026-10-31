@@ -35,6 +35,8 @@ function store(route: RouteDocument | null = null): Store {
     route,
     error: null,
     brands: null,
+    regions: null,
+    pick: null,
   });
 }
 
@@ -205,6 +207,8 @@ describe("targets", () => {
 describe("modes and turn constraints", () => {
   const time = loadStream("portland-time-stream");
   const collect = loadStream("portland-collect-stream");
+  const pilgrimage = loadStream("portland-brand-stream");
+  const letters = loadStream("portland-alphabet-stream");
 
   it("sends the objective, its item and the turn constraints as set, no more", async () => {
     const calls = stubFetch((call) => created(call, "j"));
@@ -294,29 +298,31 @@ describe("modes and turn constraints", () => {
     expect(awaitingBrand(s.state)).toBe(false); // only Brand waits
   });
 
-  it("makes nothing worse under Alphabet, which continues no route, and says why", () => {
-    const s = store(collect.route);
-    s.updateSettings({ objective: "alphabet" });
-    expect(worseRefused(s.state)).toBe(
-      "the alphabet route cannot be continued; pick another mode to make it worse",
-    );
-    for (const objective of ["distance", "time", "collect", "brand"] as const) {
-      s.updateSettings({ objective }); // another mode may continue any route
-      expect(worseRefused(s.state)).toBeNull();
+  it("makes no alphabet route worse, whatever the mode set, and says why", () => {
+    const s = store(letters.route);
+    for (const objective of ["distance", "time", "collect", "brand", "alphabet"] as const) {
+      s.updateSettings({ objective }); // a continuation keeps its route's objective
+      expect(worseRefused(s.state)).toBe("the alphabet route cannot be continued");
     }
+    s.update({ route: collect.route });
+    s.updateSettings({ objective: "alphabet" });
+    expect(worseRefused(s.state)).toBeNull(); // the panel's mode is the next Go's
+    expect(worseRefused({ ...s.state, route: null })).toBeNull();
   });
 
-  it("makes a route worse on a brand's pilgrimage under hard mode", async () => {
+  it("makes a pilgrimage worse with its own brand, on its own build, under hard mode", async () => {
+    // The region trips run on has changed since: the panel's brand is another build's id.
     const calls = stubFetch((call) => created(call, "jb"));
-    const s = store(collect.route);
-    s.updateSettings({ objective: "brand", brand: 229, hard: true });
+    const s = store(pilgrimage.route);
+    s.update({ brands: [{ id: 1991, name: "Starbucks", wikidata: "Q37158", locations: 3721 }] });
+    s.updateSettings({ objective: "brand", brand: 1991, hard: true });
     await new JobRunner(s, fakeView(), () => {}).worse();
     expect(calls[0].body).toEqual({
       region: "portland",
-      base_route_id: collect.route.route_id,
+      base_route_id: pilgrimage.route.route_id,
       seed: 2,
       objective: "brand",
-      brand: 229,
+      brand: 229, // the route's own, Starbucks on Portland's build
       constraints: { no_left: false, no_right: false, strict: false, hard: true },
       budget_s: 20,
       target: { kind: "max" },
@@ -325,23 +331,32 @@ describe("modes and turn constraints", () => {
     });
   });
 
-  it("makes a route worse in the mode set", async () => {
+  it("makes a route worse in its own mode, with the turns and target set", async () => {
     const calls = stubFetch((call) => created(call, "jw"));
     const s = store(collect.route);
-    s.updateSettings({ objective: "collect", item: "bridge", turns: "no_left" });
+    s.updateSettings({ objective: "brand", brand: 1991, turns: "no_left", target: "duration" });
     await new JobRunner(s, fakeView(), () => {}).worse();
     expect(calls[0].body).toEqual({
       region: "portland",
       base_route_id: collect.route.route_id,
       seed: 2,
-      objective: "collect",
+      objective: "collect", // the route's, with its item; no brand
       item: "bridge",
       constraints: { no_left: true, no_right: false, strict: false },
       budget_s: 20,
-      target: { kind: "max" },
+      target: { kind: "duration", seconds: 9 * 3600 },
       vehicle: { mpg: 24, gas_price_usd: 3.89 },
       departure: expect.any(String),
     });
+    const ratio = store(collect.route); // a collect run takes no ratio: as bad as possible
+    ratio.updateSettings({ target: "ratio" });
+    await new JobRunner(ratio, fakeView(), () => {}).worse();
+    expect(calls[1].body).toMatchObject({ objective: "collect", target: { kind: "max" } });
+    const plain = store(time.route); // a slowest-time route: no item, no brand
+    plain.updateSettings({ objective: "collect", item: "roundabout" });
+    await new JobRunner(plain, fakeView(), () => {}).worse();
+    expect(calls[2].body).not.toHaveProperty("item");
+    expect(calls[2].body).toMatchObject({ objective: "time", target: { kind: "max" } });
   });
 
   it("shows a slowest-time route's time ratio, its drive and delays, and its turns", async () => {
@@ -391,7 +406,7 @@ describe("modes and turn constraints", () => {
     ]);
   });
 
-  it("shows the run's mode when Make it worse in another finds nothing", async () => {
+  it("shows the route's own mode when Make it worse, the panel in another, finds nothing", async () => {
     stubFetch((call) => created(call, "jn"));
     const s = store(time.route); // a slowest-time route, with 10 bridges
     s.updateSettings({ objective: "collect", item: "bridge" });
@@ -400,7 +415,11 @@ describe("modes and turn constraints", () => {
     await settle();
     expect(s.state.route).toBe(time.route);
     const [ratio, , , , drive, items] = statLines(s.state);
-    expect([ratio, drive, items]).toEqual(["17.2×", "", "10 bridges"]);
+    expect([ratio, drive, items]).toEqual([
+      "16.9× slower",
+      "drive 4 h 8 min + delays 1 h 59 min",
+      "",
+    ]);
   });
 
   it("says no lefts (or rights) when the side avoided has none", () => {

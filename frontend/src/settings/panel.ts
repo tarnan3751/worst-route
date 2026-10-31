@@ -1,17 +1,19 @@
 // The settings (docs/reference/frontend.md, **Settings**): the request's seed (empty: random,
-// picked by the server), time budget, tier and leash (empty: auto, with what auto became once a
-// job has said), the mode (the longest, the slowest, collecting an item, picked under it, a
-// brand's pilgrimage, the brand picked under it from the region's GET /brands, or the alphabet
-// route), the turns (any, or left or right turns avoided, `strict` for none at all; and hard
-// mode, each road in one stretch), the inefficiency target (as bad as possible, a ratio to the
-// sensible route, or a drive time typed as `9h`, `90m`, `2h30m` or minutes; typing a number
-// picks its kind; no ratio under collect or brand, none under the alphabet route), the vehicle
-// (its mpg and the gas price, for the route's extra fuel and its cost), the departure (empty:
-// now; for the route's arrival), and the units the panel shows. Locked while a job runs, except
-// the units. The setting an error names (`field`: the target, the item, the brand, the
-// constraints, the vehicle or the departure) is highlighted.
+// picked by the server), time budget, tier and leash (empty: auto, with what auto became once a job
+// has said), the region (picked by the server from the stops, or one of those it serves pinned; the
+// row only when it serves several), the mode (the longest, the slowest, collecting an item, picked
+// under it, a brand's pilgrimage, the brand picked under it from the GET /brands of the region
+// trips run on, asked again whenever that region changes, or the alphabet route), the turns (any,
+// or left or right turns avoided, `strict` for none at all; and hard mode, each road in one
+// stretch), the inefficiency target (as bad as possible, a ratio to the sensible route, or a drive
+// time typed as `9h`, `90m`, `2h30m` or minutes; typing a number picks its kind; no ratio under
+// collect or brand, none under the alphabet route), the vehicle (its mpg and the gas price, for the
+// route's extra fuel and its cost), the departure (empty: now; for the route's arrival), and the
+// units the panel shows. Locked while a job runs, except the units. The setting an error names
+// (`field`: the target, the item, the brand, the constraints, the vehicle or the departure) is
+// highlighted.
 import { errorBody, getBrands } from "../api/client";
-import type { BrandEntry, CollectItem, TargetKind, Tier } from "../api/types";
+import type { BrandEntry, CollectItem, Region, TargetKind, Tier } from "../api/types";
 import {
   ITEM_NAMES,
   formatCount,
@@ -37,6 +39,7 @@ import {
   type Store,
   type TurnSetting,
 } from "../state";
+import { regionLabel } from "../stops/pick";
 import { busy } from "../stops/stopList";
 import { el } from "../util/dom";
 
@@ -125,14 +128,71 @@ export function brandOptions(brands: BrandEntry[]): [string, string, boolean][] 
   ]);
 }
 
-/** The brands of `region` (GET /brands), into the store; the settings' brand becomes the first
- * of them when it is none the region has (none yet, or one a link named that the build lacks). */
-export async function loadBrands(store: Store, region: string): Promise<BrandEntry[]> {
+/** The region picker's options: the server's pick, then each region it serves by its name and
+ * roads, "United States · primary roads and up", in its order. */
+export function regionOptions(regions: Region[]): [string, string, boolean][] {
+  return [
+    ["", "Picked from the stops", true],
+    ...regions.map((r): [string, string, boolean] => [r.region, regionLabel(r), true]),
+  ];
+}
+
+/** The brand of `brands` that stands for brand id `brand`: when it is one of `previous`, another
+ * build's list (a brand's id is its build's), the same brand by its wikidata id, else its name;
+ * else the same id; else the first. */
+function brandIn(brands: BrandEntry[], previous: BrandEntry[] | null, brand: number | null) {
+  const was = previous?.find(({ id }) => id === brand);
+  const same =
+    was === undefined
+      ? brands.find(({ id }) => id === brand)
+      : brands.find((b) =>
+          was.wikidata !== null ? b.wikidata === was.wikidata : b.name === was.name,
+        );
+  return (same ?? brands[0]).id;
+}
+
+/** The brands of `region` (GET /brands), into the store, unless trips have moved on to another
+ * region meanwhile; the settings' brand becomes the same brand when it was one of `previous`
+ * (the last region's), else stays when the region has it, else becomes the first (none yet, or
+ * one a link named that the build lacks). */
+export async function loadBrands(
+  store: Store,
+  region: string,
+  previous: BrandEntry[] | null = null,
+): Promise<BrandEntry[]> {
   const { brands } = await getBrands(region);
-  const { settings } = store.state;
-  const kept = brands.length === 0 || brands.some(({ id }) => id === settings.brand);
-  store.update({ brands, settings: kept ? settings : { ...settings, brand: brands[0].id } });
+  const { settings, region: now } = store.state;
+  if (now !== null && now.region !== region) return brands;
+  const brand = brands.length === 0 ? settings.brand : brandIn(brands, previous, settings.brand);
+  store.update({ brands, settings: { ...settings, brand } });
   return brands;
+}
+
+/** Ask for the brands of the region trips run on whenever it changes (`loadBrands`, the brand
+ * picked carried over from the last brands loaded), `show` putting "loading…" in the picker
+ * meanwhile, or "brands unavailable" when the request fails (its error in the banner), unless the
+ * trips have moved on to another region since. A failure lets the next change of region ask
+ * again, to the same region too, so the picker is never left waiting. */
+export function followBrands(store: Store, show: (text: string) => void): void {
+  let asked: string | null = null; // the region whose brands were asked for last
+  let known: BrandEntry[] | null = null; // the last brands loaded, whichever region's
+  store.watch(["brands"], ({ brands }) => {
+    known = brands ?? known;
+  });
+  store.watch(["region"], ({ region: on, brands }) => {
+    if (on === null || on.region === asked) return;
+    const region = on.region;
+    asked = region;
+    show("loading…");
+    if (brands !== null) store.update({ brands: null });
+    loadBrands(store, region, known).catch((error: unknown) => {
+      if (asked === region) asked = null;
+      const now = store.state.region;
+      if (now !== null && now.region !== region) return;
+      show("brands unavailable");
+      store.update({ error: errorBody(error) });
+    });
+  });
 }
 
 export function mountSettings(root: HTMLElement, store: Store): void {
@@ -142,6 +202,8 @@ export function mountSettings(root: HTMLElement, store: Store): void {
   const tierNote = el("span", "resolved");
   const leash = numberInput("auto", 0.1, LEASH_MAX_KM, "0.1");
   const leashNote = el("span", "resolved");
+  const region = select<string>(regionOptions([]));
+  const regionNote = el("span", "resolved", "the smallest the server has that holds every stop");
   const target = radios("target", TARGETS);
   const ratio = numberInput("20", 1, Number.MAX_SAFE_INTEGER, "any");
   const duration = el("input", "duration");
@@ -193,6 +255,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     UNITS.map(([u, text]): [Units, string, boolean] => [u, text, true]),
   );
 
+  const regionRow = field("Region", region, regionNote);
   const modeRow = field("Mode", mode.group);
   const turnsRow = field("Turns", turns.group, strictNote);
   turnsRow.append(hardNote);
@@ -206,6 +269,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     field("Time budget (s)", budget),
     field("Road tier", tier, tierNote),
     field("Leash (km)", leash, leashNote),
+    regionRow,
     modeRow,
     turnsRow,
     targetRow,
@@ -221,6 +285,8 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     budget.value = String(settings.budgetS);
     tier.value = settings.tier;
     leash.value = settings.leashKm === "auto" ? "" : String(settings.leashKm);
+    region.value = settings.region ?? "";
+    regionNote.hidden = settings.region !== null;
     for (const input of target.inputs) input.checked = input.value === settings.target;
     ratio.value = String(settings.ratio);
     duration.value = formatDurationInput(settings.durationS);
@@ -249,6 +315,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     else set({ budgetS: value });
   });
   tier.addEventListener("change", () => set({ tier: tier.value as Tier }));
+  region.addEventListener("change", () => set({ region: region.value || null }));
   leash.addEventListener("change", () => {
     const value = typed(leash, 0.1, LEASH_MAX_KM, false);
     if (value === undefined) render();
@@ -322,10 +389,6 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     const errored = fieldRows.get(error?.field);
     for (const row of fieldRows.values()) row.classList.toggle("has-error", row === errored);
   });
-  // The region's brands, asked for once the region is known: the picker's options once GET /brands
-  // has answered ("loading…" until then, the picker disabled); a region without any has no Brand
-  // mode.
-  let asked = false;
   let shown: unknown[] = [];
   const lock = (state: Readonly<AppState>) => {
     const locked = busy(store);
@@ -344,7 +407,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     ];
     if (key.every((value, k) => value === shown[k])) return;
     shown = key;
-    for (const control of [seed, budget, tier, leash, item, mpg, gasPrice, departure]) {
+    for (const control of [seed, budget, tier, leash, region, item, mpg, gasPrice, departure]) {
       control.disabled = locked;
     }
     brand.disabled = locked || brands === null;
@@ -377,12 +440,13 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     if (brands !== null) brand.replaceChildren(...select(brandOptions(brands)).options);
     render();
   });
-  store.watch(["region"], ({ region }) => {
-    if (region === null || asked) return;
-    asked = true;
-    loadBrands(store, region.region).catch((error: unknown) => {
-      brand.replaceChildren(...select<string>([["", "brands unavailable", true]]).options);
-      store.update({ error: errorBody(error) });
-    });
+  // The brands of the region trips run on: the picker's options once GET /brands has answered
+  // ("loading…" until then, the picker disabled, and under Brand Go waits); a region without any
+  // has no Brand mode.
+  followBrands(store, (text) => brand.replaceChildren(...select([["", text, true]]).options));
+  store.watch(["regions"], ({ regions }) => {
+    region.replaceChildren(...select(regionOptions(regions ?? [])).options);
+    regionRow.hidden = (regions?.length ?? 0) < 2;
+    render();
   });
 }

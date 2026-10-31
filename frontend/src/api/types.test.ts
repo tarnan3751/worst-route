@@ -1,8 +1,9 @@
 // The hand-written types against the API: each type has a runtime spec whose keys the compiler
 // holds to the type's (`object<T>` needs exactly T's keys); the specs are checked against the
 // shapes docs/reference/api.md writes down (its JSON request example, and the field lists of
-// the events, /regions, the 202, the job status, the route document, its directions, /geocode
-// and /config) and against every payload of the streams recorded from the server.
+// the events, /regions, /regions/pick, the 202, the job status, the route document, its
+// directions, /geocode and /config) and against every payload of the streams recorded from the
+// server.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { RECORDINGS, loadStream } from "../__fixtures__/stream";
@@ -30,6 +31,7 @@ import type {
   Metrics,
   Progress,
   Region,
+  RegionPick,
   RouteDocument,
   RouteRequest,
   RouteStop,
@@ -236,6 +238,7 @@ const region = object<Region>({
   counts: { record: "integer" },
   tiers: array(object<TierCount>({ tier: "string", nodes: "integer", edges: "integer" })),
 });
+const regionPick = object<RegionPick>({ region: "string", build_id: "string", reason: "string" });
 const jobCreated = object<JobCreated>({ job_id: "string", events_url: "string", seed: "integer" });
 
 const snapped = object<Snapped>({
@@ -556,6 +559,13 @@ describe("the types against docs/reference/api.md", () => {
     const status = /\*\*The job status\*\*[^`]*`[^`]*`[^`]*`(\{[^`]*\})`/.exec(reference)?.[1];
     expect(status).toBeDefined();
     expect(differences(parseFields(status!), jobStatus, "status")).toEqual([]);
+  });
+
+  it("has the fields of /regions/pick", () => {
+    const row = documentedOn("| POST | `/regions/pick` |", 1); // after the request's
+    expect(differences(row, regionPick, "pick")).toEqual([]);
+    const example = { region: "oregon", build_id: "ea3b18096e8b", reason: "all stops in Oregon" };
+    expect(problems(example, regionPick)).toEqual([]);
   });
 
   it("has the fields of /brands", () => {

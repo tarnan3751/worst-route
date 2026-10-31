@@ -7,12 +7,13 @@
 // snapped the stops; once a job has run, the list shows each stop's node, how far it moved and
 // the API's note. The stop an error names (`stop_index`) is highlighted, here and on the map, and
 // every stop along the way for an error on `field: "stops"` (the alphabet route takes a start and
-// an end only, which the list's hint says under it). The place search (search.ts) sits under the
-// list's heading.
+// an end only, which the list's hint says under it). Under the list's heading, the build the stops
+// run on (pick.ts, `pickLine`: "Oregon · all roads", and why), then the place search (search.ts).
 import { formatDistance, formatLatLon, type Units } from "../format";
 import type { Stop, Store } from "../state";
 import { el } from "../util/dom";
 import { round6 } from "../util/geo";
+import { pickLine } from "./pick";
 
 export type Role = "start" | "via" | "end";
 
@@ -90,8 +91,8 @@ function snapLine(stop: Stop, units: Units): string | null {
   return parts.join(" · ");
 }
 
-/** The stop list in `root`, the place search (`search`) under its heading; `edit` applies a
- * change to the stops. */
+/** The stop list in `root`, the build the stops run on and the place search (`search`) under its
+ * heading; `edit` applies a change to the stops. */
 export function mountStopList(
   root: HTMLElement,
   store: Store,
@@ -107,7 +108,16 @@ export function mountStopList(
     "hint",
     "start and end only: the alphabet route takes no stops along the way",
   );
-  root.replaceChildren(el("h2", "", "Stops"), search, el("p", "hint", hint), ends, list);
+  const build = el("p", "region-pick");
+  const why = el("span", "hint");
+  root.replaceChildren(el("h2", "", "Stops"), build, search, el("p", "hint", hint), ends, list);
+
+  store.watch(["region", "pick", "settings"], (state) => {
+    const { text, reason } = pickLine(state);
+    why.textContent = reason;
+    build.replaceChildren(text, ...(reason ? [el("br"), why] : []));
+    build.hidden = text === "";
+  });
 
   let shown: unknown[] = [];
   store.watch(["stops", "error", "run", "settings"], (state) => {

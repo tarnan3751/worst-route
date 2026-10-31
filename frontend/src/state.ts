@@ -10,6 +10,7 @@ import type {
   ErrorBody,
   Metrics,
   Region,
+  RegionPick,
   RouteDocument,
   RouteRequest,
   StopReason,
@@ -66,16 +67,18 @@ export type Mode = (typeof MODES)[number];
  * `strict`, none at all. */
 export type TurnSetting = "any" | "no_left" | "no_right";
 
-/** The request's settings; null seed is a random one, picked by the server. The target is
- * `target`, with `ratio` (×, more than 1) or `durationS` as its number; each keeps its value
- * while another kind is chosen. `item` is what `collect` collects, kept while another objective
- * is chosen, and `brand` (a brand's id from GET /brands, null until the region's brands are known)
+/** The request's settings; null seed is a random one, picked by the server, and null region the one
+ * the server picks for the stops (`POST /regions/pick`), else the served region pinned. The target
+ * is `target`, with `ratio` (×, more than 1) or `durationS` as its number; each keeps its value
+ * while another kind is chosen. `item` is what `collect` collects, kept while another objective is
+ * chosen, and `brand` (a brand's id from GET /brands, null until the region's brands are known)
  * what `brand` visits, kept the same way; `strict` counts only with a side to avoid, and `hard`
  * (hard mode: each road in one stretch) with or without one. `mpg` and `gasPriceUsd` are the
- * vehicle, for the route's extra fuel and its cost; `departure` an ISO 8601 time with its
- * offset, null for now. */
+ * vehicle, for the route's extra fuel and its cost; `departure` an ISO 8601 time with its offset,
+ * null for now. */
 export interface Settings {
   seed: number | null;
+  region: string | null;
   budgetS: number;
   tier: Tier;
   leashKm: number | "auto";
@@ -96,6 +99,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   seed: null,
+  region: null,
   budgetS: 20,
   tier: "auto",
   leashKm: "auto",
@@ -206,7 +210,9 @@ export const IDLE_RUN: RunView = {
 };
 
 export interface AppState {
-  region: Region | null;
+  regions: Region[] | null; // the served ones, once GET /regions has answered, in its order
+  region: Region | null; // the one trips plan on: the pinned one, else the pick's; null till known
+  pick: RegionPick | "picking" | null; // the server's pick for the stops, or being asked
   stops: Stop[];
   settings: Settings;
   run: RunView;

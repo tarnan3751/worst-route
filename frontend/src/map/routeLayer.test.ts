@@ -234,6 +234,8 @@ describe("the alphabet route's better routes on the map", () => {
       route: null,
       error: null,
       brands: null,
+      regions: null,
+      pick: null,
     });
     const layer = new RouteLayer(map);
     await new JobRunner(store, layer, () => {}).go();

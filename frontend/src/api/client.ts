@@ -22,6 +22,7 @@ import type {
   JobStatus,
   Progress,
   Region,
+  RegionPick,
   RouteDocument,
   RouteFeatureCollection,
   RouteRequest,
@@ -84,6 +85,15 @@ export function errorBody(error: unknown): ErrorBody {
 
 export function getRegions(): Promise<Region[]> {
   return call("/regions");
+}
+
+/** The served region a trip with `stops` runs on (the server picks: the smallest holding them). */
+export function pickRegion(stops: { lat: number; lon: number }[]): Promise<RegionPick> {
+  return call("/regions/pick", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stops }),
+  });
 }
 
 /** What the server tells the app: its basemap, whether it is public, its limits. */

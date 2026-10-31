@@ -31,6 +31,7 @@ const full: UrlState = {
   hard: null,
   vehicle: null,
   departure: null,
+  region: null,
   stops: [
     { lat: 45.5231, lon: -122.6765 },
     { lat: 45.519368, lon: -122.662765 },
@@ -51,6 +52,7 @@ const nothing: UrlState = {
   hard: null,
   vehicle: null,
   departure: null,
+  region: null,
   stops: null,
 };
 
@@ -75,6 +77,32 @@ describe("the URL state", () => {
     expect(decodeUrlState(encodeUrlState(big))).toEqual(big);
     expect(encodeUrlState(nothing)).toBe("");
     expect(decodeUrlState("")).toEqual(nothing);
+  });
+
+  it("carries a pinned region, and none when the server picks it", () => {
+    const pinned = { ...nothing, region: "us-t1", stops: full.stops };
+    const query = encodeUrlState(pinned);
+    expect(query).toBe(
+      "?region=us-t1&stops=45.5231,-122.6765;45.519368,-122.662765;45.4817,-122.6263",
+    );
+    expect(decodeUrlState(query)).toEqual(pinned);
+    expect(settingsFrom(decodeUrlState(query), DEFAULT_SETTINGS).region).toBe("us-t1");
+    for (const region of ["", "../x", "US", "us t1", "-us"]) {
+      expect(decodeUrlState(`?region=${encodeURIComponent(region)}`).region).toBeNull();
+    }
+    const state = {
+      regions: null,
+      region: null,
+      pick: null,
+      stops: [],
+      settings: { ...DEFAULT_SETTINGS, region: "oregon" },
+      run: IDLE_RUN,
+      route: null,
+      error: null,
+      brands: null,
+    };
+    expect(urlStateOf(state).region).toBe("oregon");
+    expect(urlStateOf({ ...state, settings: DEFAULT_SETTINGS }).region).toBeNull();
   });
 
   it("keeps clicked coordinates exactly", () => {
@@ -125,6 +153,8 @@ describe("the URL state", () => {
       route: null,
       error: null,
       brands: null,
+      regions: null,
+      pick: null,
     };
     const url = decodeUrlState(encodeUrlState(urlStateOf(state)));
     expect(url).toEqual({ ...full, route: null });
@@ -151,6 +181,8 @@ describe("opening a ?route= link at startup", () => {
       route: null,
       error: null,
       brands: null,
+      regions: null,
+      pick: null,
     });
     const writes: string[] = [];
     const sync = new UrlSync(store, (q) => writes.push(q));
@@ -216,6 +248,8 @@ describe("a ratio-target route opened by its link", () => {
       route: null,
       error: null,
       brands: null,
+      regions: null,
+      pick: null,
     });
     expect(await openRoute(route.route_id, store, new JobRunner(store, fakeView(), () => {}))).toBe(
       true,
@@ -346,6 +380,8 @@ describe("the mode and the turns in the URL", () => {
       route: null,
       error: null,
       brands: null,
+      regions: null,
+      pick: null,
     });
     const settings: Settings = {
       ...DEFAULT_SETTINGS,
@@ -423,6 +459,8 @@ describe("a route of another mode opened by its link", () => {
       route: null,
       error: null,
       brands: null,
+      regions: null,
+      pick: null,
     });
     const runner = new JobRunner(store, fakeView(), () => {});
     expect(await openRoute(route.route_id, store, runner)).toBe(true);
@@ -536,6 +574,8 @@ describe("the vehicle in the URL", () => {
     route: null,
     error: null,
     brands: null,
+    regions: null,
+    pick: null,
   });
 
   it("round-trips a vehicle, and leaves the default out", () => {
@@ -592,6 +632,8 @@ describe("a route's vehicle opened by its link", () => {
       route: null,
       error: null,
       brands: null,
+      regions: null,
+      pick: null,
     });
     expect(await openRoute(route.route_id, store, new JobRunner(store, fakeView(), () => {}))).toBe(
       true,
@@ -691,5 +733,7 @@ function emptyApp(): AppState {
     route: null,
     error: null,
     brands: null,
+    regions: null,
+    pick: null,
   };
 }

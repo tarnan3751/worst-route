@@ -6,8 +6,9 @@
 // `collect:<item>`, `brand:<id>` or `alphabet` and the turns as `left` or `right`, with `strict=1`
 // (both written only when not the default), hard mode as `hard=1` (only when on), the vehicle as
 // `<mpg>,<gas price>` (only when not the default), the departure
-// as an ISO 8601 time with its offset (only when set), the stops as `lat,lon;lat,lon;...` at 6
-// decimals, as they were clicked), so a link reproduces a request;
+// as an ISO 8601 time with its offset (only when set), the region the settings pin as `region=<id>`
+// (only when pinned: otherwise the server picks it from the stops, as it did), the stops as
+// `lat,lon;lat,lon;...` at 6 decimals, as they were clicked), so a link reproduces a request;
 // `?route=<id>` opens a stored route without running anything, its own request then giving the
 // stops and settings. `UrlSync` keeps the URL in step with what the app shows once it is
 // started, which is after a `?route=` link has been opened, or has failed to open (the parameter
@@ -64,6 +65,7 @@ export interface UrlState {
   hard: true | null;
   vehicle: Vehicle | null;
   departure: string | null;
+  region: string | null;
   stops: { lat: number; lon: number }[] | null;
 }
 
@@ -129,6 +131,7 @@ export function decodeUrlState(search: string): UrlState {
   const budget = number("budget");
   const leash = number("leash");
   const stops = params.get("stops");
+  const region = params.get("region");
   const side = params.get("turns");
   const turns = side === "left" || side === "right" ? SIDES[side] : null;
   const mode = parseMode(params.get("mode"));
@@ -149,6 +152,7 @@ export function decodeUrlState(search: string): UrlState {
     hard: params.get("hard") === "1" ? true : null,
     vehicle: parseVehicle(params.get("vehicle")),
     departure: parseIsoTime(params.get("departure") ?? ""),
+    region: region !== null && /^[a-z0-9][a-z0-9-]*$/.test(region) ? region : null, // an id
     stops: stops ? parseStops(stops) : null,
   };
 }
@@ -182,6 +186,7 @@ export function encodeUrlState(state: UrlState): string {
     params.push(`vehicle=${state.vehicle.mpg},${state.vehicle.gas_price_usd}`);
   }
   if (state.departure !== null) params.push(`departure=${encodeURIComponent(state.departure)}`);
+  if (state.region !== null) params.push(`region=${state.region}`);
   if (state.stops !== null && state.stops.length > 0) {
     params.push(`stops=${state.stops.map(({ lat, lon }) => `${lat},${lon}`).join(";")}`);
   }
@@ -198,7 +203,7 @@ function urlModeOf({ objective, item, brand }: Settings): UrlMode | null {
 }
 
 /** What the app shows, as a URL carries it: the mode, the turns and the vehicle only when not
- * the default, hard mode only when on. */
+ * the default, hard mode only when on, the region only when pinned. */
 export function urlStateOf(state: Readonly<AppState>): UrlState {
   const { settings } = state;
   const { turns, mpg, gasPriceUsd } = settings;
@@ -216,6 +221,7 @@ export function urlStateOf(state: Readonly<AppState>): UrlState {
     hard: settings.hard ? true : null,
     vehicle: usual ? null : vehicleOf(settings),
     departure: settings.departure,
+    region: settings.region,
     stops: state.stops.map(({ lat, lon }) => ({ lat, lon })),
   };
 }
@@ -249,6 +255,7 @@ export function settingsFrom(url: UrlState, defaults: Settings): Settings {
     mpg: url.vehicle?.mpg ?? defaults.mpg,
     gasPriceUsd: url.vehicle?.gas_price_usd ?? defaults.gasPriceUsd,
     departure: url.departure ?? defaults.departure,
+    region: url.region ?? defaults.region,
   };
 }
 

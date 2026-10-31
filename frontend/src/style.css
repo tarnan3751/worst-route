@@ -110,6 +110,15 @@ body {
   color: var(--muted);
 }
 
+.region-pick {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+
+.region-pick .hint {
+  font-weight: normal;
+}
+
 .stop-list {
   margin: 0;
   padding: 0;

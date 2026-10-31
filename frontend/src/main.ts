@@ -1,9 +1,11 @@
 // Bootstrap and wiring (docs/reference/frontend.md): the store, from the URL's state; the map
 // and the panel's parts (the directions, which highlight their steps on the route layer, among
-// them); the toasts under the map; the region's bbox from /regions; a stored route when the URL
-// names one, the URL left alone until it has opened; clicks on the map and a place search's
-// picks add stops, the same way (placeStop); leaving the page cancels a running job. The basemap
-// the server names (GET /config) goes under the route's layers once the map has loaded.
+// them); the toasts under the map; the served regions from /regions, the map fitted to all their
+// bboxes, and the build each trip runs on picked from its stops (RegionPicker); a stored route
+// when the URL names one, the URL left alone until it has opened; clicks on the map and a place
+// search's picks add stops, the same way (placeStop); leaving the page cancels a running job.
+// The basemap the server names (GET /config) goes under the route's layers once the map has
+// loaded.
 import "./style.css";
 import { API_BASE, errorBody, getConfig, getRegions } from "./api/client";
 import { mountBanner } from "./banner";
@@ -16,16 +18,19 @@ import { JobRunner, mountRunControls } from "./run/controls";
 import { mountSettings } from "./settings/panel";
 import { UrlSync, decodeUrlState, mountShare, openRoute, settingsFrom } from "./share/share";
 import { DEFAULT_SETTINGS, IDLE_RUN, Store, type Stop } from "./state";
+import { RegionPicker } from "./stops/pick";
 import { PlaceSearch, mountPlaceSearch } from "./stops/search";
 import { mountStopList, placeStop } from "./stops/stopList";
 import { Toasts, mountToasts } from "./toasts";
-import { bboxBounds } from "./util/geo";
+import { bboxBounds, unionBbox } from "./util/geo";
 
 const byId = (id: string): HTMLElement => document.getElementById(id) as HTMLElement;
 
 const url = decodeUrlState(location.search);
 const store = new Store({
+  regions: null,
   region: null,
+  pick: null,
   stops: (url.stops ?? []).map(({ lat, lon }) => ({ lat, lon, snapped: null })),
   settings: settingsFrom(url, DEFAULT_SETTINGS),
   run: IDLE_RUN,
@@ -57,6 +62,7 @@ mountSettings(byId("settings"), store);
 mountShare(byId("share"), store);
 mountToasts(byId("toasts"), new Toasts(store));
 new StopsLayer(map, store, edit);
+new RegionPicker(store);
 const urlSync = new UrlSync(store, (query) => {
   if (query !== location.search) history.replaceState(null, "", location.pathname + query);
 });
@@ -83,9 +89,10 @@ map.once("load", () => {
 });
 
 getRegions()
-  .then(([region]) => {
-    store.update({ region });
-    if (store.state.route === null) fitTo(map, bboxBounds(region.bbox)); // a route fits itself
+  .then((regions) => {
+    store.update({ regions });
+    const all = unionBbox(regions.map(({ bbox }) => bbox));
+    if (store.state.route === null && all) fitTo(map, bboxBounds(all)); // a route fits itself
   })
   .catch((error: unknown) => store.update({ error: errorBody(error) }));
 

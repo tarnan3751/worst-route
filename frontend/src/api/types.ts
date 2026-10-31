@@ -95,6 +95,14 @@ export interface Region {
   tiers: TierCount[];
 }
 
+/** `POST /regions/pick`: the served region a trip with the stops sent runs on, its build, and why
+ * ("all stops in Oregon", "stops in Oregon and Illinois"). */
+export interface RegionPick {
+  region: string;
+  build_id: string;
+  reason: string;
+}
+
 /** `POST /jobs`, 202. */
 export interface JobCreated {
   job_id: string;

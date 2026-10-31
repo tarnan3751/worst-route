@@ -7,7 +7,7 @@ import { json, stubFetch } from "../__fixtures__/http";
 import type { GeocodeCandidate, GeocodeResult, Region } from "../api/types";
 import { DEFAULT_SETTINGS, IDLE_RUN, Store, type Stop } from "../state";
 import { round6 } from "../util/geo";
-import { PlaceSearch } from "./search";
+import { PlaceSearch, searchRegion } from "./search";
 import { placeStop, withStopAdded } from "./stopList";
 
 const REGION: Region = {
@@ -42,15 +42,21 @@ const BUSY = {
   retry_after_s: 2,
 };
 
-function setup(stops: Stop[] = [], region: Region | null = REGION) {
+function setup(
+  stops: Stop[] = [],
+  regions: Region[] | null = [REGION],
+  settings = DEFAULT_SETTINGS,
+) {
   const store = new Store({
-    region,
+    region: null,
     stops,
-    settings: DEFAULT_SETTINGS,
+    settings,
     run: IDLE_RUN,
     route: null,
     error: null,
     brands: null,
+    regions,
+    pick: null,
   });
   const edit = (next: Stop[]): void => store.update({ stops: next });
   const search = new PlaceSearch(store, (lat, lon) => placeStop(store, edit, lat, lon));
@@ -80,7 +86,7 @@ describe("the place search", () => {
     ]);
   });
 
-  it("sends nothing for a blank text or before the region is known", async () => {
+  it("sends nothing for a blank text or before /regions has answered", async () => {
     const calls = stubFetch(() => json(ANSWER));
     const { search } = setup();
     search.setText("  \t ");
@@ -91,6 +97,22 @@ describe("the place search", () => {
     expect(early.canSearch).toBe(false);
     await early.search();
     expect(calls).toHaveLength(0);
+  });
+
+  it("asks in the region pinned, else the served region with the largest bbox", async () => {
+    // Not the region the stops so far are picked onto: a stop searched for may lie beyond it.
+    const calls = stubFetch(() => json(ANSWER));
+    const oregon: Region = { ...REGION, region: "oregon", bbox: [-124.6, 41.5, -116.7, 46.3] };
+    const us: Region = { ...REGION, region: "us-t1", bbox: [-124.5, 24.6, -67.1, 49.2] };
+    const regions = [REGION, oregon, us];
+    expect(searchRegion(setup([], regions).store.state)).toBe(us);
+    const pinned = { ...DEFAULT_SETTINGS, region: "oregon" };
+    expect(searchRegion(setup([], regions, pinned).store.state)).toBe(oregon);
+    expect(searchRegion(setup([], null).store.state)).toBeNull();
+    const { search } = setup([stop(45.5, -122.7)], regions);
+    search.setText("Chicago");
+    await search.search();
+    expect(calls.map((call) => call.url)).toEqual(["/api/geocode?q=Chicago&region=us-t1"]);
   });
 
   it("lists the candidates of an answer, and says when there are none", async () => {

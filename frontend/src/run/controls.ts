@@ -8,12 +8,14 @@
 //
 // Go posts the stops (each stop along the way labelled as its marker is numbered, "Stop 2") and
 // settings (the target, the objective with its item or brand, the turn constraints and hard
-// mode, the vehicle and the
-// departure, now when none is set, among them), and Reroll the same without a seed,
-// so the server picks one; the 202's seed goes into the settings. Make it worse posts the shown route as `base_route_id`
-// with the seed after the last one tried on it (its own at first), the base route giving the
-// stops, tier and leash; the settings' seed follows the route shown, so it changes only when a
-// worse route is found. Then the job's events: `snapped` says where the stops went, `baseline`
+// mode, the vehicle and the departure, now when none is set, among them) to the region trips run
+// on (the server's pick for the stops, or the one pinned: stops/pick.ts; Go and Reroll wait for
+// it), and Reroll the same without a seed, so the server picks one; the 202's seed goes into the
+// settings. Make it worse posts the shown route as `base_route_id` to the route's own region, with
+// the seed after the last one tried on it (its own at first), the base route giving the stops,
+// tier and leash and its recorded request the objective with its item or brand (a brand's id is
+// its build's), the panel the rest; the settings' seed follows the route shown, so it changes only
+// when a worse route is found. Then the job's events: `snapped` says where the stops went, `baseline`
 // draws the sensible route, each `snapshot` replaces the route and each `progress` applies its
 // splices in order (the alphabet route sends each better route as a snapshot, then a progress
 // without splices); `done` shows the stored route whole, and for a ratio or duration target
@@ -24,8 +26,8 @@
 // `error`. Every error ends the run with its code in the banner and the controls unlocked: the
 // API's, or CLIENT_ERROR for one of the app's own (a running job is then cancelled). Leaving the
 // page cancels a running job, or a job whose POST is in flight as soon as it is answered. Under
-// Brand, Go, Reroll and Make it worse wait for the region's brands (`awaitingBrand`); under
-// Alphabet, Make it worse is off (`worseRefused`).
+// Brand, Go, Reroll and Make it worse wait for the region's brands (`awaitingBrand`); an alphabet
+// route cannot be made worse (`worseRefused`).
 import {
   cancelJob,
   cancelJobOnLeave,
@@ -64,6 +66,7 @@ import {
   TARGET_TOLERANCE,
   departureOf,
   modeOf,
+  takesTarget,
   targetOf,
   vehicleOf,
   type AppState,
@@ -102,19 +105,30 @@ function jobRequest(state: Readonly<AppState>, seed: number | null): RouteReques
   return request;
 }
 
-/** The request Make it worse makes from the shown route, with `seed`. */
+/** The request Make it worse makes from the shown route, with `seed`, on the route's own build: a
+ * continuation keeps its route's objective, with its item or brand, from its recorded request (a
+ * brand's id is its build's, and the panel's are the region's trips now run on); the turns and
+ * hard mode, the budget, the target (as bad as possible when the route's objective refuses the
+ * one set), the vehicle and the departure are the panel's. */
 function worseRequest(state: Readonly<AppState>, route: RouteDocument, seed: number): RouteRequest {
   const { settings } = state;
-  return {
+  const objective = route.request.objective ?? "distance";
+  const { constraints } = modeOf(settings);
+  const target = targetOf(settings);
+  const request: RouteRequest = {
     region: route.region,
     base_route_id: route.route_id,
     seed,
-    ...modeOf(settings),
+    objective,
     budget_s: settings.budgetS,
-    target: targetOf(settings),
+    target: takesTarget(objective, target.kind) ? target : { kind: "max" },
     vehicle: vehicleOf(settings),
     departure: departureOf(settings),
   };
+  if (objective === "collect") request.item = route.request.item;
+  if (objective === "brand") request.brand = route.request.brand;
+  if (constraints !== undefined) request.constraints = constraints;
+  return request;
 }
 
 /** A target worth showing: null for max (or none). */
@@ -352,12 +366,10 @@ export function awaitingBrand({ settings, brands }: Readonly<AppState>): boolean
   return settings.objective === "brand" && !brands?.some(({ id }) => id === settings.brand);
 }
 
-/** Why Make it worse cannot run in the panel's mode, or null: the API continues no route under the
- * alphabet route (another mode may continue any route, an alphabet route too). */
-export function worseRefused({ settings }: Readonly<AppState>): string | null {
-  return settings.objective === "alphabet"
-    ? "the alphabet route cannot be continued; pick another mode to make it worse"
-    : null;
+/** Why the route shown cannot be made worse, or null: a continuation keeps its route's objective,
+ * and the API continues no route under the alphabet route. */
+export function worseRefused({ route }: Readonly<AppState>): string | null {
+  return route?.request.objective === "alphabet" ? "the alphabet route cannot be continued" : null;
 }
 
 /** The run section in `root`: the buttons, which drive `runner`, and the stat line. */

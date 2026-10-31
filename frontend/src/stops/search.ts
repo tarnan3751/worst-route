@@ -5,15 +5,27 @@
 // as a click on the map does (the `place` it is given: stopList.ts, placeStop), then clears the
 // field. An error goes to the banner like every API error (RATE_LIMITED's message is the
 // server's: "the geocoder is busy, try again in a few seconds"), and a search closes the banner
-// first. Locked, like the stops, while a job runs, and until /regions has named the region.
+// first. It searches in the region pinned in the settings, else in the served region with the
+// largest bbox (`searchRegion`: the national one, which holds the others when it is served), not
+// the one the stops so far are picked onto: a stop searched for may take the trip beyond it.
+// Locked, like the stops, while a job runs, and until /regions has answered.
 //
 // `PlaceSearch` holds the logic and no DOM, so the tests drive it (search.test.ts);
 // `mountPlaceSearch` draws it and wires the form.
 import { errorBody, geocode } from "../api/client";
-import type { GeocodeCandidate } from "../api/types";
-import type { Store } from "../state";
+import type { GeocodeCandidate, Region } from "../api/types";
+import type { AppState, Store } from "../state";
 import { el } from "../util/dom";
 import { busy } from "./stopList";
+
+/** The region a place search asks in: the pinned one, else the served region with the largest
+ * bbox; null until /regions has answered. */
+export function searchRegion({ regions, settings }: Readonly<AppState>): Region | null {
+  if (regions === null || regions.length === 0) return null;
+  const pinned = regions.find(({ region }) => region === settings.region);
+  const area = ({ bbox: [west, south, east, north] }: Region) => (east - west) * (north - south);
+  return pinned ?? regions.reduce((widest, r) => (area(r) > area(widest) ? r : widest));
+}
 
 export class PlaceSearch extends EventTarget {
   text = "";
@@ -32,7 +44,7 @@ export class PlaceSearch extends EventTarget {
 
   /** Whether the Search button would send anything now. */
   get canSearch(): boolean {
-    const { region } = this.#store.state;
+    const region = searchRegion(this.#store.state);
     return this.text.trim() !== "" && !this.searching && region !== null && !busy(this.#store);
   }
 
@@ -44,7 +56,7 @@ export class PlaceSearch extends EventTarget {
 
   /** Ask the server for the places the text may mean (the button, or Enter). */
   async search(): Promise<void> {
-    const { region } = this.#store.state;
+    const region = searchRegion(this.#store.state);
     if (!this.canSearch || region === null) return;
     this.searching = true;
     this.searched = false;
@@ -102,7 +114,7 @@ export function mountPlaceSearch(root: HTMLElement, store: Store, search: PlaceS
 
   let shown: unknown[] = [];
   const render = (): void => {
-    const locked = busy(store) || store.state.region === null;
+    const locked = busy(store) || searchRegion(store.state) === null;
     const key = [search.text, search.candidates, search.searching, search.searched, locked];
     if (key.every((value, k) => value === shown[k])) return;
     shown = key;
@@ -126,5 +138,5 @@ export function mountPlaceSearch(root: HTMLElement, store: Store, search: PlaceS
     );
   };
   search.addEventListener("change", render);
-  store.watch(["region", "run"], render);
+  store.watch(["regions", "settings", "run"], render);
 }

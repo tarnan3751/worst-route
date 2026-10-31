@@ -16,6 +16,17 @@ export function bboxBounds([west, south, east, north]: Bbox): Bounds {
   ];
 }
 
+/** The bbox holding every one of `boxes`, or null for none. */
+export function unionBbox(boxes: Bbox[]): Bbox | null {
+  if (boxes.length === 0) return null;
+  return boxes.reduce(([w, s, e, n], [west, south, east, north]) => [
+    Math.min(w, west),
+    Math.min(s, south),
+    Math.max(e, east),
+    Math.max(n, north),
+  ]);
+}
+
 /** The bounds of a line, or null for an empty one. */
 export function lineBounds(coordinates: LonLat[]): Bounds | null {
   if (coordinates.length === 0) return null;

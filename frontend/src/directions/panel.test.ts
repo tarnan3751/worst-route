@@ -27,6 +27,8 @@ function store(): Store {
     route: null,
     error: null,
     brands: null,
+    regions: null,
+    pick: null,
   });
 }
 

@@ -1,7 +1,7 @@
 # Powell's Books → Reed College on Portland's latest build, read through WORST_ROUTE_DATA: on both
-# backends, then the slowest time, the turn constraints and hard mode, collecting each item, and a
-# pilgrimage to the brand with the most locations. Run on demand with `uv run pytest -m data`;
-# skipped when there is no build.
+# backends, then the slowest time, the turn constraints and hard mode, collecting each item, a
+# pilgrimage to the brand with the most locations, and an alphabet route on both backends. Run on
+# demand with `uv run pytest -m data`; skipped when there is no build.
 import numpy as np
 import pytest
 
@@ -174,3 +174,22 @@ def test_a_pilgrimage_visits_more_of_its_brand_than_distance(portland: GraphData
     counts = result.route.metrics.counters["brand"]
     assert counts == brand_counts(portland, brand, result.route.nodes, result.masks.active)
     assert counts["visits"] > brand_counts(portland, brand, distance.nodes)["visits"]
+
+
+def test_an_alphabet_route_is_the_same_on_both_backends_on_portland(portland: GraphData) -> None:
+    # on build ffe2e7c881ca, seed 1, 100 restarts: A to I, from SE Ankeny Street to NE Irving Street
+    request = RouteRequest(
+        stops=[POWELLS, REED], objective="alphabet", seed=1, max_iterations=100, budget_s=120
+    )
+    one, two = (
+        plan_route(portland, request, backend=b(portland)) for b in (PythonBackend, CsrBackend)
+    )
+    assert one.route.edges.tobytes() == two.route.edges.tobytes()
+    assert one.route.metrics.counters == two.route.metrics.counters
+    assert one.run.attempts == two.run.attempts == 100
+    assert one.run.accepted == two.run.accepted > 0
+    assert one.run.refused_transitions == two.run.refused_transitions == 0
+    assert two.report.ok and two.report.checks[-1].name == "alphabet"
+    letters = two.route.metrics.counters["alphabet"]
+    assert letters["letters"] >= 5
+    assert letters["sequence"] == "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[: letters["letters"]]

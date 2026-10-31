@@ -113,7 +113,8 @@ is most of it), 300 kB gzipped.
   checkbox (none at all), enabled only when a side is chosen, with the hint "strict rarely
   finds a route on a street grid: the route may not exist"; picking "Any" unticks it. The
   brand pilgrimage, which the API plans (`brand`, from `GET /brands`), is not shown until its
-  control is built; the alphabet route not until the API plans it.
+  control is built, and neither is the alphabet route, which the API plans too (`objective:
+  "alphabet"`; the types know its `metrics.alphabet`).
 - **Run.** Go posts the stops, each stop along the way with the `label` its marker's number
   gives it ("Stop 2", "Stop 3", …, which the directions say: "Arrive at Stop 2; continue"; the
   start and the end go without one, so the API keeps its own "Arrive at your destination" and

@@ -158,6 +158,16 @@ move a stop where a legal route exists, and says only that it found no way: "try
 --hard"), and the validator proves the rule from the build's identities. On
 Portland, Powell's → Reed reaches 9.68–11.97× under it (against 57.9–62.4× without), and 19 of
 the 20 acceptance pairs plan. An eighth golden route freezes a hard-mode run.
+The alphabet route is built (M3 step 6; `docs/reference/engine.md`, **Alphabet**):
+`objective: "alphabet"` drives named roads whose letters run A, B, C, … (wrapping Z → A), the
+first leg up to the first A road and the last leg to the destination free, equal letters in a
+row counted once, through `plan --objective alphabet` and the API, which streams each better
+route whole. It is a constructive search of its own beside the worsen loop: restarts from the
+seed, each growing the route a letter a step by one `Route.splice`, over a new tree search on
+both backends (`GraphBackend.dijkstra_edges_tree`); the validator recounts the letters and
+proves their order. On Portland (seed 1, 30 s) Powell's → Reed rides A to M and Powell's → PDX
+the NW Alphabet District, A to W; the 20 acceptance pairs all plan and validate, at a median of
+1 letter (1–9). A ninth golden route freezes one.
 The API is built (`docs/reference/api.md`, M2 step 2): `worst-route serve` runs a FastAPI app
 that plans each request as a job in a worker process of its own, streams the route as it grows
 over Server-Sent Events (splices, periodic snapshots, resumable with `Last-Event-ID`), stores
@@ -228,7 +238,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 |---|---|---|
 | M1 — Portland, distance mode, CLI | Built | bootstrap, every pipeline step (download to qa; Portland's build passes QA), the graph package and the engine (snapping, seed route, transition-aware searches, splice loop, distance objective, validator, `worst-route plan` / `validate`). The acceptance run (`docs/PLAN.md` §7 M1 step 9; `uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` on build e4b3b4ad90db, `graph_version` 45f650e868fa, the reference backend: 20 random Portland pairs 3–15 km apart): all 20 plan and the validator passes all 20; the median ratio is 21.5× (3.3–45.2×); seeds 1 and 2 share 10–16% of their edges (Jaccard on 5 pairs, all < 0.3); the cul-de-sac via moves 86 m to the nearest through street with its note. Powell's → Reed gives 58–62×, PDX → Beaverton 7.3× (`docs/reference/engine.md`, **On Portland**) |
 | M2 — API + map, live growth | In progress | CSR + Numba backend built, its transition-aware kernels included (the default on every build; byte-identical to the reference: on Portland the acceptance's 20 routes and Powell's → Reed reproduce exactly, at 7,200–8,200 attempts/s); the API built (jobs in worker processes, SSE progress, the route store, make it worse, `worst-route serve`); targets by ratio and duration built (engine, CLI `--target`/`--base`, API), a 13-minute Portland drive to 9 h within ±2 % in 1.8 s over the API; the MapLibre frontend built (stops by click, the route growing live, run controls, settings with the targets, links); remaining: the acceptance |
-| M3 — Modes and constraints | In progress | built: the turn classes, never turn left / right (soft by default, `strict` for none; engine, CLI, API), the kernels refusing banned turn classes, slowest time (engine, CLI, API), collectibles (the collect objective for toll booths, level crossings, roundabouts and bridges in the engine, `plan --objective collect --item` and the API; `node_roundabouts` in the build; on Portland 24–30 bridges where the distance route passes 16–17); the frontend's controls for them (the Mode and Turns rows, the request, the URL, the stat line's time ratio, delays, items and turns, the strict refusal's retry); the brand pilgrimage (the brand index at `enrich`, saved as build arrays at pipeline version 3; `plan --objective brand --brand`, the API's `brand` and `GET /brands`; on Portland 17 of the 19 Starbucks in reach); on Portland strict no-left plans 4 of the 20 acceptance pairs and soft no-left 20 at a median of 5.33× (§2.3; on a build re-enriched at pipeline version 2, whose bearings describe the roads, not cleanup's stubs); hard mode (engine, CLI, API; on Portland 19 of the 20 acceptance pairs plan under it, at a median of 4.73×); the search honouring stage B transitions was built at M1. Remaining: alphabet search; the brand and hard-mode controls in the frontend; the acceptance |
+| M3 — Modes and constraints | In progress | built: the turn classes, never turn left / right (soft by default, `strict` for none; engine, CLI, API), the kernels refusing banned turn classes, slowest time (engine, CLI, API), collectibles (the collect objective for toll booths, level crossings, roundabouts and bridges in the engine, `plan --objective collect --item` and the API; `node_roundabouts` in the build; on Portland 24–30 bridges where the distance route passes 16–17); the frontend's controls for them (the Mode and Turns rows, the request, the URL, the stat line's time ratio, delays, items and turns, the strict refusal's retry); the brand pilgrimage (the brand index at `enrich`, saved as build arrays at pipeline version 3; `plan --objective brand --brand`, the API's `brand` and `GET /brands`; on Portland 17 of the 19 Starbucks in reach); on Portland strict no-left plans 4 of the 20 acceptance pairs and soft no-left 20 at a median of 5.33× (§2.3; on a build re-enriched at pipeline version 2, whose bearings describe the roads, not cleanup's stubs); hard mode (engine, CLI, API; on Portland 19 of the 20 acceptance pairs plan under it, at a median of 4.73×); the alphabet route (its own search, a new tree search on both backends, `plan --objective alphabet` and the API; on Portland Powell's → Reed A to M, Powell's → PDX A to W, the acceptance pairs a median of 1 letter); the search honouring stage B transitions was built at M1. Remaining: the brand, hard-mode and alphabet controls in the frontend; the acceptance |
 | M4 — Presentation | Built | directions, stats, toasts, comparisons, share image, geocoding proxy, share links; built: the geocoding proxy (`GET /geocode`, Nominatim behind a cache and 1 request/s) and the place search in the stop list; the Census places index (`tools/fetch_census.sh`, `worst-route aux places`: the states and towns a route passes through), the comparison lines, and the share image (`GET /routes/{id}/share.png`, linked from the share section); the directions with deadpan jokes and the stats and toasts in the route documents (`GET /routes/{id}`, `GET /routes/{id}/directions`, route.json, `worst-route directions`); the frontend's directions panel (a step's edges highlighted on the map), toasts under the map, extra stat rows and vehicle setting; the departure setting with the arrival time, and the GeoJSON download |
 | M5 — Scaling up | Planned | Oregon; array-based simplify/consolidate; US at T1; the national decision gate; public-hosting prep |
 | M6 — Stretch | Planned | certified worst (CP-SAT), turn restrictions, stop reordering, portfolio runs |
@@ -292,6 +302,13 @@ The risks the plan anticipates are `docs/PLAN.md` §8.3. Found on the Portland b
   129.96× against distance's 176.93× over 30,000 attempts). Where an item is common, a long
   distance route can pass about as many by chance (level crossings, seed 2: 45 collecting
   against 52).
+- **Most alphabet routes stop at A or B**: a road of the next letter must be reached over free
+  connectors (unnamed edges, ramps, numbered streets: 29% of Portland's edges, in scattered
+  pieces) and roads of the letter just completed, which outside the grids of numbered avenues it
+  seldom is. On the 20 acceptance pairs (seed 1, 30 s) the median is 1 letter (1–9); the named
+  trips through the alphabet streets carry the joke (Powell's → PDX A to W, Powell's → Reed A to
+  M). Loosening the connectors further (a short stretch of any road, say) is a later option
+  (`docs/reference/engine.md`, **Alphabet**, **Limitations**).
 - **A possible stage B over-restriction**: the I-84 / NE Halsey super-junction (node 65437 of
   the 2026-10-30 Portland build) forbids NE 42nd Ave → NE Sandy Blvd, a turn that looks
   drivable; to investigate in the next cleanup fold.
@@ -417,7 +434,15 @@ brief):
   uniformly in the ball, each kept for raising the acceptance median. `auto` took the
   reference on a build with transition tables until the CSR edge-state kernels landed (M2);
   `validate` refuses a route made by another engine version.
-- **Alphabet mode is a constructive search**, not a splice objective.
+- **Alphabet mode is a constructive search**, not a splice objective. As built (M3, the
+  coordinator's ruling at its plan, after the first Portland measurements left 18 of 22 trips
+  without a letter): the first leg, up to the route's first A road, is free like the last;
+  consecutive roads of one letter count as one letter, so a connector may drive free edges and
+  roads of the letter just completed; the route records `alpha_from` and `free_from`, which the
+  validator recounts; a start and an end only, no target and no "make it worse"; scored letters
+  first, then the length under the request's turn constraints. With it the API's `NOT_YET`
+  went: every objective the plan names is built, and any future objective lands with its own
+  code, refused as unknown until then.
 - **SSE for progress, not WebSockets.**
 - **The API as built for M2** (2026-10-30, at the API plan): the job request mirrors the
   engine's `RouteRequest` field for field, stops as `{lat, lon, label}`, with a default
@@ -582,7 +607,8 @@ The plan's assumed defaults, each open until the owner confirms (`docs/PLAN.md` 
 
 - Compute budget defaults: 20 s default, 120 s max locally, 60 s max public.
 - "Only turn left" means "never turn right"; straights allowed.
-- Alphabet mode: unnamed roads and ramps are free connectors; wrap Z→A; the final leg is free.
+- Alphabet mode: unnamed roads, ramps and numbered streets are free connectors; wrap Z→A; the
+  first and final legs are free; one letter's roads in a row count once (built so, §3.1).
 - National end state: one US all-roads master graph if the array pipeline is fast enough,
   otherwise T3 national plus per-state all-roads builds.
 - Alaska and Hawaii in national builds.

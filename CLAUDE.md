@@ -33,7 +33,9 @@ toll booths, level crossings, roundabouts or bridges (`--objective collect --ite
 the API and the frontend's settings, and so is the fourth, the brand pilgrimage (`--objective
 brand --brand`, the API's `brand` and `GET /brands`, not yet in the frontend; its index built at
 `enrich`, pipeline version 3), and so is hard mode, each road in one stretch (`--hard`, the API's
-`constraints.hard`, not yet in the frontend). So is the frontend (`docs/reference/frontend.md`,
+`constraints.hard`, not yet in the frontend), and the alphabet route (`--objective alphabet`,
+named roads whose letters run A, B, C, ..., its own constructive search; the API's `objective:
+"alphabet"`, not yet in the frontend). So is the frontend (`docs/reference/frontend.md`,
 M2's third step): a MapLibre map on which stops are clicked, the route drawn growing live from the
 stream, the run controls, the settings (the targets among them) and links. So is the geocoding proxy
 (M4's first piece): a place search in the stop list, answered by `GET /geocode` from Nominatim
@@ -93,7 +95,7 @@ Every command below exists. One a later milestone adds is marked with that miles
 | Pipeline, one step (all eight are real, run in this order; `filter` and `build` also take `--source PATH`, `cleanup` and `tiers` take `--allow-fragmented`) | `uv run worst-route pipeline <download\|filter\|build\|cleanup\|enrich\|tiers\|save\|qa> --region portland` |
 | Fetch the Census boundary files (a person, never the gate or an agent; FIPS codes of the states whose places to fetch) | `tools/fetch_census.sh 41 53` |
 | Write the places index (states, outlines, the region's towns) from them | `uv run worst-route aux places --region portland` |
-| Plan a route from the CLI, validated (`--target ratio:20` or `duration:9h` aims for a target within ±2 %; `--base route.json` continues a saved route; `--objective time` the slowest; `--no-left` / `--no-right` such turns at a kilometre each, `--strict` none; `--hard` each road in one stretch, never driven again once left; `--objective collect --item bridge` collects bridges, or `toll_booth`, `level_crossing`, `roundabout`; `--objective brand --brand Starbucks` visits a brand's locations, by name or id) | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
+| Plan a route from the CLI, validated (`--target ratio:20` or `duration:9h` aims for a target within ±2 %; `--base route.json` continues a saved route; `--objective time` the slowest; `--no-left` / `--no-right` such turns at a kilometre each, `--strict` none; `--hard` each road in one stretch, never driven again once left; `--objective collect --item bridge` collects bridges, or `toll_booth`, `level_crossing`, `roundabout`; `--objective brand --brand Starbucks` visits a brand's locations, by name or id; `--objective alphabet` drives roads A, B, C, … from `--from` to `--to`) | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
 | Validate a saved route | `uv run worst-route validate route.json` |
 | Print a saved route's turn-by-turn directions (`--no-jokes` without the jokes) | `uv run worst-route directions route.json` |
 | API server (the coordinator only; agents use `--port 0` or a port of their own, `--store` in their own tree, and `--geocoder none` or `--nominatim-url` pointed at a local stub: no agent calls Nominatim) | `uv run worst-route serve --region portland` |
@@ -117,7 +119,7 @@ first built and listed here when it exists.
 | Pipeline: download, filter, build, exclusions, simplify, consolidate (stages A and B), carriageway twins, connectivity, enrich, tiers, save (to the graph package's build format), qa | `src/worst_route/pipeline/` | §2 | `docs/reference/pipeline.md` |
 | Graph: a build's arrays and on-disk format, the backend protocol, the reference and CSR backends, Numba kernels, spatial (snapping, leash, bubbles), test builders, loader | `src/worst_route/graph/` | §2.7, §3.5, §3.9, §3.10 | `docs/reference/graph.md` |
 | Engine: `Route`, snapping, the seed route, detours, the worsen loop, the validator, exact mode | `src/worst_route/engine/` | §3.1–3.4, §3.11–3.13 | `docs/reference/engine.md` |
-| Objectives and constraints: the interface, each mode, turns and the turn constraints, the alphabet search | `src/worst_route/engine/objectives/`, `turns.py`, `constraints.py`, `alphabet_search.py` | §3.6–3.8 | `docs/reference/engine.md` (**Objectives**, **Turns**, **Constraints**) |
+| Objectives and constraints: the interface, each mode, turns and the turn constraints, the alphabet search | `src/worst_route/engine/objectives/`, `turns.py`, `constraints.py`, `alphabet_search.py` | §3.6–3.8 | `docs/reference/engine.md` (**Objectives**, **Turns**, **Constraints**, **Alphabet**) |
 | API: jobs, SSE, routes, geocode proxy, workers | `src/worst_route/api/`, `geocode/` | §4 | `docs/reference/api.md` |
 | Presentation: places (states, towns), directions, stats, comparisons, share image, jokes | `src/worst_route/presentation/`, `api/share_api.py`, `api/directions_api.py` | §4.3, M4 | `docs/reference/presentation.md` |
 | Frontend: map, stops, settings, run controls, toasts, directions, share | `frontend/src/` | §5 | `docs/reference/frontend.md` |

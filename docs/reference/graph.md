@@ -12,10 +12,10 @@ Code: `src/worst_route/graph/`. The design it implements is `docs/PLAN.md` §2.6
 |---|---|
 | `data.py` | `GraphData`, `Strings`, `ARRAY_SPECS` (the format), `NodeKind`, `EdgeFlag`, `validate()` |
 | `store.py` | `write_build`, `read_build`, `graph_version` |
-| `backend.py` | the `GraphBackend` protocol, the `Path` type, and what every backend shares: `check_ends`, `WeightCheck`, `as_cost`, `as_limits`, `enterable`, `banned_mask`, `largest_scc_mask`, the turn classes (`TURN_CLASS`, `as_turn_classes`, `check_turn_edges`) |
+| `backend.py` | the `GraphBackend` protocol, the `Path` and `EdgeTree` types, and what every backend shares: `check_ends`, `WeightCheck`, `as_cost`, `as_limits`, `enterable`, `banned_mask`, `final_mask`, `largest_scc_mask`, the turn classes (`TURN_CLASS`, `as_turn_classes`, `check_turn_edges`) |
 | `python_backend.py` | `PythonBackend`, the reference implementation |
 | `csr_backend.py` | `CsrBackend`, the production implementation, over `kernels.py` |
-| `kernels.py` | the Numba kernels `dijkstra_masked`, `simple_paths_dfs`, `dijkstra_edges_masked`, `simple_paths_dfs_turns` and their turn checks `turn_allowed` and `turn_class_allowed` |
+| `kernels.py` | the Numba kernels `dijkstra_masked`, `simple_paths_dfs`, `dijkstra_edges_masked`, `dijkstra_edges_tree`, `simple_paths_dfs_turns` and their turn checks `turn_allowed` and `turn_class_allowed` |
 | `backends.py` | `make_backend` |
 | `loader.py` | `load_build`, `Loaded`, `BuildNotFound` |
 | `spatial.py` | `SpatialIndex` (`project`, `snap`, `leash_mask`, `bubble_mask`), `Snap`, `SnapError`, `active_mask` |
@@ -155,7 +155,8 @@ on x/y and lengths), but a golden test should record the version of the build it
 ## Backends
 
 `GraphBackend` (`backend.py`) is what the engine programs against; M1's surface is four calls
-and a `name` (`"python"`, `"csr"`), which a planned route records. Every backend must give
+and a `name` (`"python"`, `"csr"`), which a planned route records, and the alphabet route (M3)
+added a fifth, the tree search (**The tree search**). Every backend must give
 identical results on identical inputs; `PythonBackend` is the reference, `CsrBackend` the
 production one (**The CSR backend**), and networkx the oracle the tests check both against.
 
@@ -183,6 +184,8 @@ included, raises `TypeError`) and clamps them to the int64 range (a huge limit i
   so a negative `max_cost` returns None even when `src == dst`.
 - `dijkstra_edges(src, dst, weights, *, entry_edge=-1, exit_edge=-1, node_mask, forbid_nodes, banned_edges, max_cost=inf) -> Path | None`:
   the transition-aware search, below.
+- `dijkstra_edges_tree(src, weights, *, entry_edge=-1, node_mask, forbid_nodes, banned_edges, final_edges=None, max_cost=inf, banned_turn_classes=0) -> EdgeTree`:
+  the same search without a destination, below (**The tree search**).
 - `simple_paths_dfs(src, dst, *, entry_edge=-1, exit_edge=-1, node_mask, forbid_nodes, banned_edges, max_depth, max_paths) -> list[Path]`:
   the simple paths of at most `max_depth` edges whose every turn the transition table allows
   (from `entry_edge` into the first edge and from the last edge into `exit_edge` included, when
@@ -229,6 +232,30 @@ The engine calls it on builds that have rows, and on any build when a turn const
 or avoids a class of turns (`docs/reference/engine.md`, **Searches**), so on every other build,
 without constraints, the backends' node-state results stay what they were.
 
+**The tree search** (`dijkstra_edges_tree`; the alphabet route's, `docs/reference/engine.md`,
+**Alphabet**) is the transition-aware search from `src` with no destination: the same start
+states (from `entry_edge` when given), moves, turn checks, masks and turn classes, run until no
+state is left. It answers an `EdgeTree`, `(edges, costs, parents)`: every state it settles, in
+the order it settles them (int32), each one's cost (float64), and each one's parent, the
+position in these arrays of the state before it on its path (int32, −1 for a start state). A
+state is settled after its parent, so a path is read back by following the parents.
+
+- **Ties**, as `dijkstra_edges`'s: the heap orders entries by (cost, edge id), out-edges are
+  relaxed in ascending edge id, and only a strictly smaller cost replaces a state's parent. So
+  the settle order is ascending (cost, edge id), and of two equal-cost ways into a state the
+  one whose last state settled first keeps it.
+- **`max_cost`** is inclusive: a state costing exactly `max_cost` is settled, one costing more
+  is never kept; a negative `max_cost` settles nothing. A start state is kept at its own
+  weight within `max_cost`, an infinite one included, as `dijkstra_edges` keeps it.
+- **`final_edges`** (a bool mask over edges, default none): a final state is settled, with its
+  cost and parent, but never expanded. The search may end on it, and never goes on from it.
+- No state enters `src`, and none is a self-loop. A path may still enter another node twice (a
+  state is an edge; a cheapest way into an edge can come back through its head), so a caller
+  that needs a simple path checks.
+- An empty tree when `src` may not be entered. The same `ValueError`s as `dijkstra_edges`
+  (`entry_edge` must end at `src`), and one for a `final_edges` of the wrong dtype or length
+  (`final_mask`, shared).
+
 **Turn classes.** `dijkstra_edges` and `simple_paths_dfs` take `banned_turn_classes`, a set of
 class bits (default 0, which changes nothing): a turn from e into f whose class is in the set is
 refused like one the table does not list, the turn from `entry_edge` and into `exit_edge`
@@ -260,7 +287,8 @@ Each call runs the shared checks in the reference's order, answers the trivial c
 reference does (a negative `max_cost`, an end that may not be entered, `max_paths <= 0`,
 `src == dst`, where both turn edges given must make an allowed turn), then hands the kernel the
 arrays, the weights, and the masks as zero-copy uint8 views (`mask.view(np.uint8)`).
-`dijkstra_edges` is always the edge-state kernel; `simple_paths_dfs` is the turn kernel on a
+`dijkstra_edges` is always the edge-state kernel, and `dijkstra_edges_tree` its kernel without a
+destination; `simple_paths_dfs` is the turn kernel on a
 build with transition rows or when a turn edge is given, and the plain kernel otherwise, where
 every turn is allowed and the two give the same paths. `largest_scc_mask` is the shared scipy
 call.
@@ -292,6 +320,12 @@ call.
   a relaxed state only on a strictly smaller cost. The first end state popped is the answer,
   unless its path enters a node twice (found by sorting a copy of the path's nodes): then nothing
   is found.
+- `dijkstra_edges_tree(out_indptr, out_edges, edge_v, weights, enter_u8, banned_u8, final_u8,
+  trans_indptr, trans_key, bearing_in, bearing_out, turn_class, banned_turns, src, entry_edge,
+  max_cost) -> (edges, costs, parents)`: the tree search exactly (**The tree search**), with the
+  same heap and state array as `dijkstra_edges_masked`. Its answer and a slot per edge (each
+  settled state's position, read only for settled states, so never filled) are O(m) buffers
+  left uninitialised; the answer is copied out at its length.
 - `simple_paths_dfs_turns(out_indptr, out_edges, edge_v, enter_u8, banned_u8, trans_indptr,
   trans_key, bearing_in, bearing_out, turn_class, banned_turns, src, dst, entry_edge, exit_edge,
   max_depth, max_paths) -> (offsets, nodes, edges)`: `simple_paths_dfs` with every turn
@@ -320,9 +354,9 @@ tests, which run on both backends.
 signature whose arrays are read-only and of any layout. Memory-mapped builds, read-only cached
 weights and fresh writeable masks therefore share one specialization. `cache=True` keeps it in
 `src/worst_route/graph/__pycache__/` (gitignored). The first import after a change to
-`kernels.py`, or in a fresh clone or CI run, compiles its seven functions (the four kernels,
-the two turn checks and the heap's push): about 3 s on the dev machine (1.4 s for the two
-node-state kernels alone). Every later process loads them from the cache in about 0.3 s.
+`kernels.py`, or in a fresh clone or CI run, compiles its eight functions (the five kernels,
+the two turn checks and the heap's push): about 3 s on the dev machine before the tree kernel
+was added (1.4 s for the two node-state kernels alone). Every later process loads them from the cache in about 0.3 s.
 `NUMBA_DISABLE_JIT=1` runs the kernels as plain Python for debugging: slow on a real build, but
 the whole test suite passes that way. `NUMBA_BOUNDSCHECK=1` turns an out-of-range index into an
 `IndexError`, but only with a `NUMBA_CACHE_DIR` of its own: the cache index does not key on
@@ -511,6 +545,15 @@ parity tests compare the two backends byte for byte:
   and random sets, classed by the rule written out in the test; 300 hypothesis cases of both
   searches compared byte for byte, a set of 0 against the call without it; 300 searches on the
   one-way town with tables and a set drawn per search, the DFS compared too; a crafted junction
-  driven round by three rights, a U-turn refused, bad sets refused.
+  driven round by three rights, a U-turn refused, bad sets refused;
+- the tree search: on hypothesis graphs with transition tables, random bearings and classes,
+  final edges and budgets, the exact answer (states, costs, parents) against a heap-free
+  implementation of its tie rule, each state a legal move from its parent, and every state
+  settled at its least cost within the budget, against networkx over the edge states; 300
+  hypothesis cases compared byte for byte, with and without tables; 100 trees on the one-way
+  town with tables, final edges, turn edges, masks, budgets and classes (trees of a few states
+  to over 500); a final state settled and not expanded (and a path through the ring entering a
+  node twice), a tree turning only where the table allows, empty trees, `max_cost` inclusive,
+  bad arguments.
 
 Run them with `uv run pytest tests/graph`.

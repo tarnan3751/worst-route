@@ -1,6 +1,7 @@
 """The `GraphBackend` protocol: the graph searches the engine programs against.
 
-`docs/reference/graph.md`, **Backends**; `docs/PLAN.md` §3.10. M1's surface is four calls.
+`docs/reference/graph.md`, **Backends**; `docs/PLAN.md` §3.10. M1's surface is four calls; the
+alphabet route (M3) added a fifth, `dijkstra_edges_tree`.
 `PythonBackend` is the reference implementation; `CsrBackend`, over Numba kernels, is the
 production one and returns the same results on the same inputs of the declared types, byte for
 byte.
@@ -50,6 +51,17 @@ edge states never repeats a node when every turn is allowed); the path itself is
 whenever the two tie rules pick the same one. `ValueError` for a turn edge outside [−1, m) or
 not meeting its end, and for `banned_turn_classes` outside [0, 7].
 
+`dijkstra_edges_tree` is the same transition-aware search without a destination: the same start
+states, moves, turn checks, `max_cost` (inclusive; negative finds nothing) and tie rule, run
+until no state is left. It returns every state it settles, in the order it settles them (by
+(cost, edge id)), with its cost and its parent: the position, in these same arrays, of the state
+before it on its path (−1 for a start state); a state is settled after its parent, so its path
+is read back by following the parents. A state in `final_edges` (default none) is settled but
+never expanded: the search may end on it and never goes on from it. A path in the tree may
+enter a node twice (a state is an edge, not a node); a caller that needs a simple path checks.
+An empty tree when `src` may not be entered. `ValueError` as for `dijkstra_edges` (`entry_edge`
+must end at `src`), and for a `final_edges` mask of the wrong dtype or length.
+
 `simple_paths_dfs` lists the simple paths from `src` to `dst` of at most `max_depth` edges, in
 ascending edge-id order (lexicographic in their edge ids), and stops after `max_paths`. Every
 turn along a path is allowed (by the transition table and `banned_turn_classes`, as for
@@ -68,7 +80,7 @@ the SCC mask are the same whichever backend runs: `check_ends`; `check_turn_edge
 passed; `as_cost`, which makes `max_cost` a Python float, so it compares in float64 on every
 backend; `as_limits`, which makes `max_depth` and `max_paths` ints in the int64 range;
 `enterable` (the combined "may enter" mask, checking `node_mask` and `forbid_nodes`);
-`banned_mask`; `largest_scc_mask`.
+`banned_mask`; `final_mask`; `largest_scc_mask`.
 
 `TURN_CLASS` is the class of a turn by its change of bearing, the rule `engine/turns.py`
 describes: from edge e into edge f, `TURN_CLASS[(edge_bearing_out[f] − edge_bearing_in[e]) mod
@@ -91,6 +103,9 @@ from worst_route.config import TURN_STRAIGHT_DEG, TURN_UTURN_DEG
 from worst_route.graph.data import GraphData
 
 Path = tuple[NDArray[np.int32], NDArray[np.int32]]  # (nodes, edges); len(edges) == len(nodes) - 1
+# (edges, costs, parents): the settled states in settle order, their costs, each one's parent's
+# position in these arrays (−1 for a start state)
+EdgeTree = tuple[NDArray[np.int32], NDArray[np.float64], NDArray[np.int32]]
 
 TURN_STRAIGHT, TURN_LEFT, TURN_RIGHT, TURN_U = 0, 1, 2, 4
 
@@ -144,6 +159,23 @@ class GraphBackend(Protocol):
         banned_turn_classes: int = 0,
     ) -> Path | None:
         """A cheapest path src → dst whose every turn is allowed, within the masks, or None."""
+        ...
+
+    def dijkstra_edges_tree(
+        self,
+        src: int,
+        weights: NDArray[np.float64],
+        *,
+        entry_edge: int = -1,
+        node_mask: NDArray[np.bool_] | None = None,
+        forbid_nodes: NDArray[np.bool_] | None = None,
+        banned_edges: NDArray[np.bool_] | None = None,
+        final_edges: NDArray[np.bool_] | None = None,
+        max_cost: float = math.inf,
+        banned_turn_classes: int = 0,
+    ) -> EdgeTree:
+        """Every edge state the transition-aware search from src settles within `max_cost`, in
+        settle order, with its cost and its parent's position; `final_edges` are not expanded."""
         ...
 
     def simple_paths_dfs(
@@ -248,6 +280,13 @@ def banned_mask(data: GraphData, banned_edges: NDArray[np.bool_] | None) -> NDAr
     if banned_edges is None:
         return np.zeros(data.m, dtype=np.bool_)
     return _checked("banned_edges", banned_edges, data.m)
+
+
+def final_mask(data: GraphData, final_edges: NDArray[np.bool_] | None) -> NDArray[np.bool_]:
+    """`final_edges` checked, or no edge final."""
+    if final_edges is None:
+        return np.zeros(data.m, dtype=np.bool_)
+    return _checked("final_edges", final_edges, data.m)
 
 
 def largest_scc_mask(

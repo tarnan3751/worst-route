@@ -22,6 +22,7 @@ from numpy.typing import NDArray
 
 from worst_route.graph.backend import (
     TURN_CLASS,
+    EdgeTree,
     Path,
     WeightCheck,
     as_cost,
@@ -31,6 +32,7 @@ from worst_route.graph.backend import (
     check_ends,
     check_turn_edges,
     enterable,
+    final_mask,
     largest_scc_mask,
 )
 from worst_route.graph.data import GraphData
@@ -190,6 +192,91 @@ class PythonBackend:
                     heappush(heap, (c, f))
         return None
 
+    def dijkstra_edges_tree(
+        self,
+        src: int,
+        weights: NDArray[np.float64],
+        *,
+        entry_edge: int = -1,
+        node_mask: NDArray[np.bool_] | None = None,
+        forbid_nodes: NDArray[np.bool_] | None = None,
+        banned_edges: NDArray[np.bool_] | None = None,
+        final_edges: NDArray[np.bool_] | None = None,
+        max_cost: float = math.inf,
+        banned_turn_classes: int = 0,
+    ) -> EdgeTree:
+        """Every edge state the transition-aware search from src settles within `max_cost`, in
+        settle order, with its cost and its parent's position; `final_edges` are not expanded."""
+        self._check_weights(weights)
+        check_ends(self.data, src, src)
+        check_turn_edges(self.data, src, src, entry_edge, -1)
+        classes = as_turn_classes(banned_turn_classes)
+        enter = enterable(self.data, node_mask, forbid_nodes)
+        banned = banned_mask(self.data, banned_edges)
+        final = final_mask(self.data, final_edges)
+        max_cost = as_cost(max_cost)
+        settled_edges: list[int] = []
+        settled_costs: list[float] = []
+        parents: list[int] = []
+        if max_cost < 0 or not enter[src]:
+            return _as_tree(settled_edges, settled_costs, parents)
+        may_enter, is_banned, is_final, weight = enter.item, banned.item, final.item, weights.item
+        out_indptr, out_edges, head = self._out_indptr, self._out_edges, self._head
+        has_rows, turns, m = self._has_rows, self._turns, self.data.m
+        bearing_in, bearing_out, turn_class = self._bearing_in, self._bearing_out, self._turn_class
+
+        cost_of: dict[int, float] = {}
+        pred: dict[int, int] = {}
+        slot: dict[int, int] = {}  # a settled state's position in the answer
+        heap: list[tuple[float, int]] = []
+        entry_key = entry_edge * m if entry_edge >= 0 and has_rows[src] else -1
+        entry_classes = classes if entry_edge >= 0 else 0
+        for k in range(out_indptr[src], out_indptr[src + 1]):
+            f = out_edges[k]
+            w = head[f]
+            if w == src or is_banned(f) or not may_enter(w):
+                continue
+            if entry_key >= 0 and entry_key + f not in turns:
+                continue
+            if (
+                entry_classes
+                and turn_class[(bearing_out[f] - bearing_in[entry_edge]) % 360] & classes
+            ):
+                continue
+            c = weight(f)
+            if c <= max_cost:
+                cost_of[f] = c
+                pred[f] = -1
+                heappush(heap, (c, f))
+        while heap:
+            cost, e = heappop(heap)
+            if e in slot:
+                continue
+            slot[e] = len(settled_edges)
+            settled_edges.append(e)
+            settled_costs.append(cost)
+            parents.append(slot[pred[e]] if pred[e] >= 0 else -1)
+            if is_final(e):
+                continue
+            v = head[e]
+            key = e * m if has_rows[v] else -1
+            arriving = bearing_in[e]
+            for k in range(out_indptr[v], out_indptr[v + 1]):
+                f = out_edges[k]
+                w = head[f]
+                if w in (src, v) or f in slot or is_banned(f) or not may_enter(w):
+                    continue
+                if key >= 0 and key + f not in turns:
+                    continue
+                if classes and turn_class[(bearing_out[f] - arriving) % 360] & classes:
+                    continue
+                c = cost + weight(f)
+                if c <= max_cost and c < cost_of.get(f, math.inf):
+                    cost_of[f] = c
+                    pred[f] = e
+                    heappush(heap, (c, f))
+        return _as_tree(settled_edges, settled_costs, parents)
+
     def simple_paths_dfs(
         self,
         src: int,
@@ -300,3 +387,11 @@ class PythonBackend:
 
 def _as_path(nodes: list[int], edges: list[int]) -> Path:
     return np.array(nodes, dtype=np.int32), np.array(edges, dtype=np.int32)
+
+
+def _as_tree(edges: list[int], costs: list[float], parents: list[int]) -> EdgeTree:
+    return (
+        np.array(edges, dtype=np.int32),
+        np.array(costs, dtype=np.float64),
+        np.array(parents, dtype=np.int32),
+    )

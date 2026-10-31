@@ -10,7 +10,8 @@ as zero-copy uint8 views, to a kernel in `kernels.py`. `largest_scc_mask` is the
 scipy call. Nothing is copied at construction; the transition table is precomputed once into
 the two arrays the turn kernels read (`trans_indptr`, `trans_key`, `kernels.py`).
 
-`dijkstra_edges` is always the edge-state kernel. `simple_paths_dfs` is the turn kernel on a
+`dijkstra_edges` is always the edge-state kernel, and `dijkstra_edges_tree` its kernel without a
+destination. `simple_paths_dfs` is the turn kernel on a
 build with transition rows, when a turn edge is given or when turn classes are banned;
 otherwise every turn is allowed and the plain kernel answers, byte for byte the same. The turn
 kernels read the build's bearings and `TURN_CLASS` as they are, zero-copy.
@@ -24,6 +25,7 @@ from numpy.typing import NDArray
 from worst_route.graph import kernels
 from worst_route.graph.backend import (
     TURN_CLASS,
+    EdgeTree,
     Path,
     WeightCheck,
     as_cost,
@@ -33,6 +35,7 @@ from worst_route.graph.backend import (
     check_ends,
     check_turn_edges,
     enterable,
+    final_mask,
     largest_scc_mask,
 )
 from worst_route.graph.data import GraphData
@@ -143,6 +146,55 @@ class CsrBackend:
             max_cost,
         )
         return (nodes, edges) if found else None
+
+    def dijkstra_edges_tree(
+        self,
+        src: int,
+        weights: NDArray[np.float64],
+        *,
+        entry_edge: int = -1,
+        node_mask: NDArray[np.bool_] | None = None,
+        forbid_nodes: NDArray[np.bool_] | None = None,
+        banned_edges: NDArray[np.bool_] | None = None,
+        final_edges: NDArray[np.bool_] | None = None,
+        max_cost: float = math.inf,
+        banned_turn_classes: int = 0,
+    ) -> EdgeTree:
+        """Every edge state the transition-aware search from src settles within `max_cost`, in
+        settle order, with its cost and its parent's position; `final_edges` are not expanded."""
+        self._check_weights(weights)
+        check_ends(self.data, src, src)
+        check_turn_edges(self.data, src, src, entry_edge, -1)
+        classes = as_turn_classes(banned_turn_classes)
+        enter = enterable(self.data, node_mask, forbid_nodes)
+        banned = banned_mask(self.data, banned_edges)
+        final = final_mask(self.data, final_edges)
+        max_cost = as_cost(max_cost)
+        if max_cost < 0 or not enter[src]:
+            return (
+                np.zeros(0, dtype=np.int32),
+                np.zeros(0, dtype=np.float64),
+                np.zeros(0, dtype=np.int32),
+            )
+        g = self.data
+        return kernels.dijkstra_edges_tree(
+            g.out_indptr,
+            g.out_edges,
+            g.edge_v,
+            weights,
+            enter.view(np.uint8),
+            banned.view(np.uint8),
+            final.view(np.uint8),
+            self._trans_indptr,
+            self._trans_key,
+            g.edge_bearing_in,
+            g.edge_bearing_out,
+            TURN_CLASS,
+            classes,
+            src,
+            entry_edge,
+            max_cost,
+        )
 
     def simple_paths_dfs(
         self,

@@ -1,11 +1,13 @@
-"""The transition-aware searches: `dijkstra_edges` and the turn checks of `simple_paths_dfs`.
+"""The transition-aware searches: `dijkstra_edges`, its tree and the DFS's turn checks.
 
 Against the semantics in graph/backend.py: the node-state `dijkstra` on graphs without
 transition rows (same cost, a path whenever it finds one), a heap-free implementation of the
 edge-state tie rule on graphs with random transition tables (the exact path), a networkx search
 over the edge states (the cost), and a brute force over networkx's simple paths for the DFS.
 The same again with random bearings and a random set of banned turn classes, classed here by
-the rule written out (`Case.turn_class`). The tests of the semantics run on each backend
+the rule written out (`Case.turn_class`). The tree search (`dijkstra_edges_tree`) against a
+heap-free implementation of its tie rule (the exact states, costs and parents) and networkx over
+the edge states (every state at its least cost). The tests of the semantics run on each backend
 (`backend_type`); the parity tests then ask `CsrBackend` for the reference's exact bytes, ties
 and Nones included.
 """
@@ -823,3 +825,249 @@ def test_bad_banned_turn_classes_are_rejected(backend_type) -> None:
             b.dijkstra_edges(0, 2, lengths(g), banned_turn_classes=bad)
         with pytest.raises(ValueError, match="banned_turn_classes"):
             b.simple_paths_dfs(0, 2, max_depth=3, max_paths=1, banned_turn_classes=bad)
+
+
+# The tree search (`dijkstra_edges_tree`): the same states and moves without a destination, every
+# state settled in (cost, edge id) order, final states never expanded.
+
+
+def tree_moves(case: Case, final: np.ndarray) -> Iterator[tuple[int, int]]:
+    """`Case.state_moves` without a destination, a final state never moving on."""
+    g, enter, banned = case.g, case.enterable(), case.is_banned()
+    for f in case.out_edges(case.src):
+        w = int(g.edge_v[f])
+        if w == case.src or banned[f] or not enter[w]:
+            continue
+        if case.entry < 0 or case.turn_ok(case.entry, f):
+            yield -1, f
+    for e in range(g.m):
+        v = int(g.edge_v[e])
+        if final[e] or v == case.src or not enter[v] or banned[e]:
+            continue
+        for f in case.out_edges(v):
+            w = int(g.edge_v[f])
+            if w in (case.src, v) or banned[f] or not enter[w]:
+                continue
+            if case.turn_ok(e, f):
+                yield e, f
+
+
+def tree_reference(
+    case: Case, final: np.ndarray, max_cost: float
+) -> tuple[list[int], list[float], list[int]]:
+    """The tree's semantics without a heap: settle the open state of least (cost, edge id),
+    record its parent's position, relax its moves in ascending edge id (none for a final state),
+    replacing a predecessor only on a strictly smaller cost."""
+    if max_cost < 0 or not case.enterable()[case.src]:
+        return [], [], []
+    moves: dict[int, list[int]] = {}
+    for e, f in tree_moves(case, final):
+        moves.setdefault(e, []).append(f)
+    cost: dict[int, float] = {}
+    pred: dict[int, int] = {}
+    for f in moves.get(-1, []):
+        if case.weights[f] <= max_cost:
+            cost[f], pred[f] = float(case.weights[f]), -1
+    edges: list[int] = []
+    costs: list[float] = []
+    parents: list[int] = []
+    slot: dict[int, int] = {}
+    while True:
+        open_states = [(c, e) for e, c in cost.items() if e not in slot]
+        if not open_states:
+            return edges, costs, parents
+        c, e = min(open_states)
+        slot[e] = len(edges)
+        edges.append(e)
+        costs.append(c)
+        parents.append(slot[pred[e]] if pred[e] >= 0 else -1)
+        for f in moves.get(e, []):
+            through = c + float(case.weights[f])
+            if f not in slot and through <= max_cost and through < cost.get(f, math.inf):
+                cost[f], pred[f] = through, e
+
+
+def final_edges(size: int) -> st.SearchStrategy[np.ndarray | None]:
+    return optional_mask(size, default=False)
+
+
+@EXAMPLES
+@given(
+    st.booleans()
+    .flatmap(lambda classes: cases(rows=True, classes=classes))
+    .flatmap(lambda case: st.tuples(st.just(case), final_edges(case.g.m))),
+    st.sampled_from([-1.0, 0.0, 1.0, 1.5, 2.0, 3.0, math.inf]),
+)
+def test_dijkstra_edges_tree_follows_the_tie_rule(
+    backend_type, drawn: tuple[Case, np.ndarray | None], max_cost: float
+) -> None:
+    case, final = drawn
+    edges, costs, parents = backend_type(case.g).dijkstra_edges_tree(
+        case.src,
+        case.weights,
+        entry_edge=case.entry,
+        final_edges=final,
+        max_cost=max_cost,
+        banned_turn_classes=case.banned_turns,
+        **case.masks(),
+    )
+    finals = np.zeros(case.g.m, dtype=bool) if final is None else final
+    expected = tree_reference(case, finals, max_cost)
+    assert (edges.dtype, costs.dtype, parents.dtype) == (np.int32, np.float64, np.int32)
+    assert (edges.tolist(), costs.tolist(), parents.tolist()) == expected
+    for k, (e, p) in enumerate(zip(edges.tolist(), parents.tolist(), strict=True)):
+        assert costs[k] <= max_cost
+        if p < 0:  # a start state: leaves src, its cost its own weight
+            assert case.g.edge_u[e] == case.src and costs[k] == case.weights[e]
+        else:  # a move from its parent, settled before it, which is not final
+            assert p < k and not finals[edges[p]]
+            assert case.g.edge_v[edges[p]] == case.g.edge_u[e]
+            assert case.turn_ok(int(edges[p]), e)
+            assert costs[k] == costs[p] + case.weights[e]
+
+
+@EXAMPLES
+@given(
+    cases(rows=True, classes=True, weight=st.integers(1, 9).map(float)).flatmap(
+        lambda case: st.tuples(st.just(case), final_edges(case.g.m))
+    ),
+    st.sampled_from([4.0, 9.0, math.inf]),
+)
+def test_dijkstra_edges_tree_settles_every_state_at_its_least_cost(
+    backend_type, drawn: tuple[Case, np.ndarray | None], max_cost: float
+) -> None:
+    case, final = drawn
+    finals = np.zeros(case.g.m, dtype=bool) if final is None else final
+    edges, costs, _ = backend_type(case.g).dijkstra_edges_tree(
+        case.src,
+        case.weights,
+        entry_edge=case.entry,
+        final_edges=final,
+        max_cost=max_cost,
+        banned_turn_classes=case.banned_turns,
+        **case.masks(),
+    )
+    graph = nx.DiGraph()
+    graph.add_node(-1)
+    for e, f in tree_moves(case, finals):
+        graph.add_edge(e, f, weight=float(case.weights[f]))
+    least = (
+        {} if not case.enterable()[case.src] else nx.single_source_dijkstra_path_length(graph, -1)
+    )
+    expected = {e: c for e, c in least.items() if e >= 0 and c <= max_cost}
+    assert dict(zip(edges.tolist(), costs.tolist(), strict=True)) == expected
+
+
+@settings(max_examples=300, deadline=None)
+@given(
+    st.booleans()
+    .flatmap(
+        lambda rows: cases(
+            rows=rows,
+            max_nodes=10,
+            max_edges=40,
+            weight=st.sampled_from([0.0, 0.5, 1.0, 2.0, math.inf]),
+            classes=True,
+        )
+    )
+    .flatmap(lambda case: st.tuples(st.just(case), final_edges(case.g.m))),
+    st.sampled_from([-1.0, 0.0, 1.0, 1.5, 2.0, 3.0, math.inf]),
+)
+def test_the_backends_agree_on_edge_trees(
+    drawn: tuple[Case, np.ndarray | None], max_cost: float
+) -> None:
+    case, final = drawn
+    reference, ours = (
+        make(case.g).dijkstra_edges_tree(
+            case.src,
+            case.weights,
+            entry_edge=case.entry,
+            final_edges=final,
+            max_cost=max_cost,
+            banned_turn_classes=case.banned_turns,
+            **case.masks(),
+        )
+        for make in BACKENDS.values()
+    )
+    for a, b in zip(reference, ours, strict=True):
+        assert a.dtype == b.dtype and a.tobytes() == b.tobytes()
+
+
+def test_the_backends_agree_on_edge_trees_of_a_town_with_tables() -> None:
+    # larger trees (heaps that grow), with ties, turn edges, masks, final edges and classes
+    g = town_with_tables(4)
+    rng = np.random.default_rng(5)
+    weights = rng.integers(1, 4, size=g.m).astype(np.float64)
+    backends = [make(g) for make in BACKENDS.values()]
+    sizes = []
+    for _ in range(100):
+        src = int(rng.integers(g.n))
+        ins = g.in_edges[g.in_indptr[src] : g.in_indptr[src + 1]].tolist()
+        forbid = rng.random(g.n) < 0.05
+        forbid[src] = False
+        kwargs = {
+            "entry_edge": int(rng.choice([-1, *ins])),
+            "forbid_nodes": forbid,
+            "banned_edges": rng.random(g.m) < 0.05,
+            "final_edges": rng.random(g.m) < 0.2,
+            "max_cost": float(rng.choice([math.inf, 10.0, 30.0])),
+            "banned_turn_classes": int(rng.integers(8)),
+        }
+        reference, ours = (b.dijkstra_edges_tree(src, weights, **kwargs) for b in backends)
+        for a, b in zip(reference, ours, strict=True):
+            assert a.tobytes() == b.tobytes()
+        sizes.append(len(reference[0]))
+    assert max(sizes) > 500 and min(sizes) < 50  # big and small trees compared
+
+
+def test_a_final_state_is_settled_but_not_expanded(backend_type) -> None:
+    g = plus(False)
+    b = backend_type(g)
+    final = np.zeros(g.m, dtype=bool)
+    final[edge_id(g, 0, 1)] = True  # J → N ends there
+    edges, costs, parents = b.dijkstra_edges_tree(0, lengths(g), final_edges=final)
+    heads = [int(g.edge_v[e]) for e in edges.tolist()]
+    assert heads[:4] == [1, 2, 3, 4] and costs[:4].tolist() == [100.0] * 4
+    # N is reached from J and never left from there: no state's parent is J → N
+    assert 0 not in parents.tolist()
+    # N → E is reached through the ring instead, J → E → N → E at 700 m (E → N settles before
+    # W → N, an equal cost): a tree's path may enter a node twice
+    k = edges.tolist().index(edge_id(g, 1, 2))
+    assert costs[k] == 700.0 and edges[parents[k]] == edge_id(g, 2, 1)
+    assert edges[parents[parents[k]]] == edge_id(g, 0, 2)
+    # no state returns to J, the start
+    assert 0 not in heads
+
+
+def test_a_tree_turns_only_where_the_table_allows(backend_type) -> None:
+    g = plus()  # J allows only straight on
+    from_s = edge_id(g, 3, 0)
+    edges, _, parents = backend_type(g).dijkstra_edges_tree(0, lengths(g), entry_edge=from_s)
+    assert int(g.edge_v[edges[0]]) == 1  # arriving from S, only N
+    assert parents[0] == -1 and (parents[1:] >= 0).all()
+
+
+def test_an_empty_tree(backend_type) -> None:
+    g = plus()
+    b = backend_type(g)
+    forbid = np.zeros(g.n, dtype=bool)
+    forbid[0] = True
+    for kwargs in ({"forbid_nodes": forbid}, {"max_cost": -1.0}):
+        edges, costs, parents = b.dijkstra_edges_tree(0, lengths(g), **kwargs)
+        assert (len(edges), len(costs), len(parents)) == (0, 0, 0)
+        assert (edges.dtype, costs.dtype, parents.dtype) == (np.int32, np.float64, np.int32)
+    edges, costs, _ = b.dijkstra_edges_tree(0, lengths(g), max_cost=100.0)  # inclusive
+    assert costs.tolist() == [100.0] * 4
+
+
+def test_bad_tree_arguments_are_rejected(backend_type) -> None:
+    g = plus()
+    b = backend_type(g)
+    with pytest.raises(ValueError, match="entry_edge"):
+        b.dijkstra_edges_tree(0, lengths(g), entry_edge=edge_id(g, 0, 1))  # does not end at 0
+    with pytest.raises(ValueError, match="final_edges"):
+        b.dijkstra_edges_tree(0, lengths(g), final_edges=np.zeros(g.m, dtype=np.uint8))
+    with pytest.raises(ValueError, match="banned_turn_classes"):
+        b.dijkstra_edges_tree(0, lengths(g), banned_turn_classes=8)
+    with pytest.raises(ValueError, match="src"):
+        b.dijkstra_edges_tree(g.n, lengths(g))

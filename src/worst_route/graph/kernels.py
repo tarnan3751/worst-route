@@ -14,7 +14,10 @@ of rows (rows sorted by node), and `trans_key`, each row's `in_edge * m + out_ed
 within a node's run; `turn_allowed` answers a turn by a binary search in the run of the turn's
 node (a node without rows allows every turn). They also take the bearings, `TURN_CLASS` and a
 set of banned turn classes (`backend.py`): `turn_class_allowed` refuses a turn of a banned
-class, and with no class banned it answers at once.
+class, and with no class banned it answers at once. `dijkstra_edges_tree` is the same search
+without a destination: it returns every state it settles, in order, with its cost and the
+position of its parent among them (a slot per edge, read only for settled states), and does not
+expand the states its `final` mask names.
 
 Masks arrive as uint8: zero-copy views of the bool masks (`mask.view(np.uint8)`). Each kernel
 is compiled once, eagerly, for one signature whose arrays are read-only of any layout, so
@@ -57,6 +60,7 @@ _I8, _I4, _I2, _F8, _U1 = (
 _PATH = types.Tuple((types.boolean, types.int32[::1], types.int32[::1]))  # type: ignore[no-untyped-call]
 _PATHS = types.Tuple((types.int64[::1], types.int32[::1], types.int32[::1]))  # type: ignore[no-untyped-call]
 _HEAP = types.Tuple((types.float64[::1], types.int64[::1], types.int64))  # type: ignore[no-untyped-call]
+_TREE = types.Tuple((types.int32[::1], types.float64[::1], types.int32[::1]))  # type: ignore[no-untyped-call]
 
 I16 = NDArray[np.int16]
 I32 = NDArray[np.int32]
@@ -457,6 +461,135 @@ def dijkstra_edges_masked(
                 pred[f] = e
                 heap_cost, heap_edge, size = _heap_push(heap_cost, heap_edge, size, c, f)
     return False, np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)
+
+
+@_kernel(
+    _TREE(
+        _I8,
+        _I4,
+        _I4,
+        _F8,
+        _U1,
+        _U1,
+        _U1,
+        _I8,
+        _I8,
+        _I2,
+        _I2,
+        _U1,
+        types.int64,
+        types.int64,
+        types.int64,
+        types.float64,
+    )
+)
+def dijkstra_edges_tree(
+    out_indptr: I64,
+    out_edges: I32,
+    edge_v: I32,
+    weights: F64,
+    enter: U8,
+    banned: U8,
+    final: U8,
+    trans_indptr: I64,
+    trans_key: I64,
+    bearing_in: I16,
+    bearing_out: I16,
+    turn_class: U8,
+    banned_turns: int,
+    src: int,
+    entry_edge: int,
+    max_cost: float,
+) -> tuple[I32, F64, I32]:
+    """(edges, costs, parents): every edge state `dijkstra_edges_masked`'s search from src
+    settles, without a destination, in settle order; each one's cost, and its parent's position
+    in these arrays (−1 for a start state). A `final` state is settled but not expanded. src is
+    enterable and max_cost ≥ 0."""
+    m = out_edges.shape[0]
+    state = np.zeros(m, dtype=np.uint8)  # 0 not reached, 1 reached, 2 settled
+    dist = np.empty(m, dtype=np.float64)
+    pred = np.empty(m, dtype=np.int32)
+    slot = np.empty(m, dtype=np.int32)  # a settled state's position in the answer
+    settled_edges = np.empty(m, dtype=np.int32)
+    settled_costs = np.empty(m, dtype=np.float64)
+    parents = np.empty(m, dtype=np.int32)
+    count = 0
+    heap_cost = np.empty(64, dtype=np.float64)
+    heap_edge = np.empty(64, dtype=np.int64)
+    size = 0
+    for k in range(out_indptr[src], out_indptr[src + 1]):
+        f = out_edges[k]
+        w = edge_v[f]
+        if w == src or banned[f] or not enter[w]:
+            continue
+        if entry_edge >= 0 and not (
+            turn_allowed(trans_indptr, trans_key, edge_v, entry_edge, f)
+            and turn_class_allowed(bearing_in, bearing_out, turn_class, banned_turns, entry_edge, f)
+        ):
+            continue
+        c = weights[f]
+        if c <= max_cost:
+            state[f] = 1
+            dist[f] = c
+            pred[f] = -1
+            heap_cost, heap_edge, size = _heap_push(heap_cost, heap_edge, size, c, f)
+    while size > 0:
+        cost = heap_cost[0]
+        e = heap_edge[0]
+        size -= 1
+        if size > 0:  # the last entry to the root, then down while a child is less
+            last_cost = heap_cost[size]
+            last_edge = heap_edge[size]
+            i = 0
+            while True:
+                child = 2 * i + 1
+                if child >= size:
+                    break
+                right = child + 1
+                if right < size and (
+                    heap_cost[right] < heap_cost[child]
+                    or (
+                        heap_cost[right] == heap_cost[child] and heap_edge[right] < heap_edge[child]
+                    )
+                ):
+                    child = right
+                if heap_cost[child] < last_cost or (
+                    heap_cost[child] == last_cost and heap_edge[child] < last_edge
+                ):
+                    heap_cost[i] = heap_cost[child]
+                    heap_edge[i] = heap_edge[child]
+                    i = child
+                else:
+                    break
+            heap_cost[i] = last_cost
+            heap_edge[i] = last_edge
+        if state[e] == 2:
+            continue
+        state[e] = 2
+        slot[e] = count
+        settled_edges[count] = e
+        settled_costs[count] = cost
+        parents[count] = slot[pred[e]] if pred[e] >= 0 else -1
+        count += 1
+        if final[e]:
+            continue
+        v = edge_v[e]
+        for k in range(out_indptr[v], out_indptr[v + 1]):
+            f = out_edges[k]
+            w = edge_v[f]
+            if w == src or w == v or state[f] == 2 or banned[f] or not enter[w]:  # noqa: SIM109
+                continue
+            if not turn_allowed(trans_indptr, trans_key, edge_v, e, f):
+                continue
+            if not turn_class_allowed(bearing_in, bearing_out, turn_class, banned_turns, e, f):
+                continue
+            c = cost + weights[f]
+            if c <= max_cost and c < (dist[f] if state[f] == 1 else np.inf):
+                state[f] = 1
+                dist[f] = c
+                pred[f] = e
+                heap_cost, heap_edge, size = _heap_push(heap_cost, heap_edge, size, c, f)
+    return settled_edges[:count].copy(), settled_costs[:count].copy(), parents[:count].copy()
 
 
 @_kernel(

@@ -509,7 +509,7 @@ class GraphBackend(Protocol):
     def head(self, e) -> int; def tail(self, e) -> int
     def dijkstra(self, src, dst, weights, forbid_nodes, banned_edges, mask, max_cost) -> Path | None
     def dijkstra_edges(self, src, dst, weights, entry_edge, exit_edge, forbid_nodes, banned_edges, mask, max_cost, banned_turn_classes) -> Path | None   # transition-aware; M3's banned turn classes
-    def multi_target(self, src, targets_mask, weights, forbid_nodes, banned_edges, mask, max_cost) -> list[Path]
+    def dijkstra_edges_tree(self, src, weights, entry_edge, forbid_nodes, banned_edges, final_edges, mask, max_cost, banned_turn_classes) -> EdgeTree   # as built in M3 for the alphabet route, in place of a multi_target: every edge state settled, its cost and parent
     def simple_paths_dfs(self, src, dst, forbid_nodes, banned_edges, mask, max_depth, max_paths) -> list[Path]
     def scc_mask(self, edge_mask) -> node_mask
 ```

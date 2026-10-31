@@ -4,7 +4,8 @@
 // the turns (any, or left or right turns avoided, `strict` for none at all), the inefficiency
 // target (as bad as possible, a ratio to the sensible route, or a drive time typed as `9h`,
 // `90m`, `2h30m` or minutes; typing a number picks its kind; no ratio under collect), and the
-// units the panel shows. Locked while a job runs, except the units.
+// units the panel shows. Locked while a job runs, except the units. The setting an error names
+// (`field`: the target, the item or the constraints) is highlighted.
 import type { CollectItem, TargetKind, Tier } from "../api/types";
 import { ITEM_NAMES, formatDurationInput, parseDuration, type Units } from "../format";
 import {
@@ -206,6 +207,16 @@ export function mountSettings(root: HTMLElement, store: Store): void {
   }
 
   store.watch(["settings"], render);
+  // The row an error's `field` names, highlighted while the error is shown.
+  const fieldRows = new Map<unknown, HTMLElement>([
+    ["item", modeRow],
+    ["constraints", turnsRow],
+    ["target", targetRow],
+  ]);
+  store.watch(["error"], ({ error }) => {
+    const errored = fieldRows.get(error?.field);
+    for (const row of fieldRows.values()) row.classList.toggle("has-error", row === errored);
+  });
   let shown: unknown[] = [];
   store.watch(["run", "settings"], (state) => {
     const locked = busy(store);

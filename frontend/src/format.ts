@@ -58,6 +58,11 @@ export const ITEM_NAMES: Record<CollectItem, [string, string]> = {
   bridge: ["bridge", "bridges"],
 };
 
+/** A count of items: `1 bridge`, `24 bridges`. */
+export function formatItems(n: number, item: CollectItem): string {
+  return `${formatCount(n)} ${ITEM_NAMES[item][n === 1 ? 0 : 1]}`;
+}
+
 /** A coordinate as the stop list shows it. */
 export function formatLatLon(lat: number, lon: number): string {
   return `${lat.toFixed(6)}, ${lon.toFixed(6)}`;

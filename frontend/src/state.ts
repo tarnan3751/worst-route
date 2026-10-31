@@ -14,6 +14,7 @@ import type {
   TargetKind,
   TargetMetrics,
   Tier,
+  Turns,
 } from "./api/types";
 import type { Units } from "./format";
 
@@ -114,6 +115,14 @@ export function modeOf(settings: Settings): RequestMode {
 
 export type Phase = "idle" | "starting" | "running" | "done" | "failed";
 
+/** A route's numbers as the stat line shows them: while it grows (a collecting route's `items`
+ * among them), and once stored its experienced time's ratio, delays and turns. */
+export type RunMetrics = Pick<Metrics, "length_m" | "time_s" | "ratio" | "items"> & {
+  time_ratio?: number | null;
+  delay_s?: number;
+  turns?: Turns;
+};
+
 /** The job being run, or the last one, as the stat line shows it. */
 export interface RunView {
   phase: Phase;
@@ -121,11 +130,12 @@ export interface RunView {
   seed: number | null; // the job's, then the shown route's
   iteration: number; // the attempt of the last splice; a finished route's attempts
   elapsedS: number;
-  metrics: Pick<Metrics, "length_m" | "time_s" | "ratio"> | null;
+  metrics: RunMetrics | null;
   stoppedBecause: StopReason | null;
   resolved: { tier: string; leashKm: number } | null; // what `auto` became, from `snapped`
   goal: Target | null; // the run's target, null for max
   outcome: TargetMetrics | null; // what it achieved, once done
+  mode: RequestMode; // the run's objective, item and turn constraints
   connection: "open" | "reconnecting" | "lost";
   note: string | null;
 }
@@ -141,6 +151,7 @@ export const IDLE_RUN: RunView = {
   resolved: null,
   goal: null,
   outcome: null,
+  mode: {},
   connection: "open",
   note: null,
 };

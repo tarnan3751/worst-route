@@ -261,6 +261,16 @@ body {
   flex: 1;
 }
 
+#banner .retry {
+  padding: 2px 8px;
+  font: inherit;
+  border: 1px solid var(--error-ink);
+  border-radius: 6px;
+  background: #fff;
+  color: inherit;
+  cursor: pointer;
+}
+
 #banner .close {
   border: none;
   background: none;
@@ -294,6 +304,14 @@ body {
   grid-column: 2;
   font-size: 12px;
   color: var(--muted);
+}
+
+.field.has-error {
+  margin: -4px -4px 2px;
+  padding: 4px;
+  border-radius: 6px;
+  background: var(--error-bg);
+  outline: 1px solid var(--error-ink);
 }
 
 .radios {
@@ -355,6 +373,9 @@ body {
 }
 
 .stat-line,
+.stat-time,
+.stat-items,
+.stat-turns,
 .stat-target {
   font-variant-numeric: tabular-nums;
 }

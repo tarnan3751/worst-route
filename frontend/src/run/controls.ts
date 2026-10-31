@@ -1,6 +1,7 @@
 // Running a job (docs/reference/frontend.md, **Run**): `JobRunner`, a job's lifecycle, which the
 // tests drive without a DOM, and `mountRunControls`, the Go, Cancel, Reroll and Make it worse
-// buttons and the live stat line (ratio, length, drive time, attempts, elapsed).
+// buttons and the live stat line (ratio, length, drive time, attempts, elapsed; the drive and
+// the delays under the slowest time, the items collected, the turns).
 //
 // Go posts the stops and settings (the target, the objective with its item, and the turn
 // constraints among them), and Reroll the same without a seed,
@@ -10,7 +11,8 @@
 // worse route is found. Then the job's events: `snapped` says where the stops went, `baseline`
 // draws the sensible route, each `snapshot` replaces the route and each `progress` applies its
 // splices in order; `done` shows the stored route whole, and for a ratio or duration target
-// what it achieved; `error` shows its code and message.
+// what it achieved; `error` shows its code and message. The stat line follows the run's own
+// objective and constraints, or a stored route's request.
 // Cancel sends DELETE, and the stream then ends with `done` (the route so far, stored) or
 // `error`. Every error ends the run with its code in the banner and the controls unlocked: the
 // API's, or CLIENT_ERROR for one of the app's own (a running job is then cancelled). Leaving the
@@ -32,10 +34,26 @@ import type {
   StopReason,
   Target,
   TargetMetrics,
+  Turns,
 } from "../api/types";
-import { formatCount, formatDistance, formatDuration, formatElapsed, formatRatio } from "../format";
+import {
+  formatCount,
+  formatDistance,
+  formatDuration,
+  formatElapsed,
+  formatItems,
+  formatRatio,
+} from "../format";
 import type { RouteLayer } from "../map/routeLayer";
-import { IDLE_RUN, TARGET_TOLERANCE, modeOf, targetOf, type AppState, type Store } from "../state";
+import {
+  IDLE_RUN,
+  TARGET_TOLERANCE,
+  modeOf,
+  targetOf,
+  type AppState,
+  type RequestMode,
+  type Store,
+} from "../state";
 import { busy } from "../stops/stopList";
 import { el } from "../util/dom";
 import { lineBounds, type Bounds } from "../util/geo";
@@ -80,13 +98,19 @@ function goalOf(target: Target | undefined): Target | null {
   return target === undefined || target.kind === "max" ? null : target;
 }
 
-/** What is shown with a route: its baseline, a note, the run's target and what it achieved
- * (by default the route's own request's). */
+/** A request's objective, item and turn constraints. */
+function modeOfRequest({ objective, item, constraints }: RouteRequest): RequestMode {
+  return { objective, item, constraints };
+}
+
+/** What is shown with a route: its baseline, a note, the run's target and what it achieved,
+ * and its mode (by default the route's own request's). */
 interface Shown {
   baseline?: LineString | null;
   note?: string | null;
   goal?: Target | null;
   outcome?: TargetMetrics | null;
+  mode?: RequestMode;
 }
 
 export class JobRunner {
@@ -94,6 +118,7 @@ export class JobRunner {
   readonly #view: RouteView;
   readonly #fit: (bounds: Bounds) => void;
   readonly #tried = new Map<string, number>(); // the last seed Make it worse tried, by route
+  #sent: { request: RouteRequest; base: RouteDocument | null } | null = null; // the last request
   #leaving = false;
 
   constructor(store: Store, view: RouteView, fit: (bounds: Bounds) => void) {
@@ -108,6 +133,19 @@ export class JobRunner {
 
   reroll(): Promise<void> {
     return this.#start(jobRequest(this.#store.state, null), null);
+  }
+
+  /** Untick strict and send the last request again without it (a Go, a Reroll or a Make it
+   * worse, with its seed or none, and its base route): the banner's answer to
+   * INFEASIBLE_TURN_CONSTRAINT. */
+  withoutStrict(): Promise<void> {
+    if (this.#sent === null) return Promise.resolve();
+    const { request, base } = this.#sent;
+    this.#store.updateSettings({ strict: false });
+    return this.#start(
+      { ...request, constraints: { ...request.constraints, strict: false } },
+      base,
+    );
   }
 
   worse(): Promise<void> {
@@ -139,7 +177,7 @@ export class JobRunner {
     const { baseline, note = null } = shown;
     if (baseline !== undefined) this.#view.setBaseline(baseline);
     this.#view.setFinal(route.geometry);
-    const { length_m, time_s, ratio } = route.metrics;
+    const { length_m, time_s, ratio, items, time_ratio, delay_s, turns } = route.metrics;
     this.#store.updateSettings({ seed: route.seed });
     this.#store.update({
       route,
@@ -149,11 +187,12 @@ export class JobRunner {
         seed: route.seed,
         iteration: route.run.attempts,
         elapsedS: route.run.elapsed_s,
-        metrics: { length_m, time_s, ratio },
+        metrics: { length_m, time_s, ratio, items, time_ratio, delay_s, turns },
         stoppedBecause: route.run.stopped_because,
         resolved: this.#store.state.run.resolved,
         goal: shown.goal !== undefined ? shown.goal : goalOf(route.request.target),
         outcome: shown.outcome !== undefined ? shown.outcome : (route.metrics.target ?? null),
+        mode: shown.mode ?? modeOfRequest(route.request),
         note,
       },
     });
@@ -164,6 +203,7 @@ export class JobRunner {
   async #start(request: RouteRequest, base: RouteDocument | null): Promise<void> {
     const store = this.#store;
     const before = store.state.run;
+    this.#sent = { request, base };
     store.update({ error: null, run: { ...before, phase: "starting" } });
     let created;
     try {
@@ -180,7 +220,8 @@ export class JobRunner {
     this.#view.clear();
     if (base === null) store.updateSettings({ seed });
     const goal = goalOf(request.target);
-    store.update({ route: null, run: { ...IDLE_RUN, phase: "running", jobId, seed, goal } });
+    const mode = modeOfRequest(request);
+    store.update({ route: null, run: { ...IDLE_RUN, phase: "running", jobId, seed, goal, mode } });
     // An error of the app's own while following the job ends the run, and the job with it.
     const guard =
       <T>(handle: (data: T) => void) =>
@@ -221,7 +262,7 @@ export class JobRunner {
           metrics: data.metrics,
         });
       }),
-      done: guard((data) => void this.#finish(data, base, seed, goal)),
+      done: guard((data) => void this.#finish(data, base, seed, { goal, mode })),
       error: guard((data) => this.#fail(data)),
       connection: guard((state) => {
         store.updateRun({ connection: state });
@@ -239,7 +280,7 @@ export class JobRunner {
     done: Done,
     base: RouteDocument | null,
     seed: number,
-    goal: Target | null,
+    { goal, mode }: { goal: Target | null; mode: RequestMode },
   ): Promise<void> {
     const outcome = done.metrics.target ?? null;
     try {
@@ -251,9 +292,9 @@ export class JobRunner {
             ? "already within the target"
             : `no route nearer the target found with seed ${seed}; try again or Reroll`;
         }
-        this.showRoute(base, { note, goal, outcome });
+        this.showRoute(base, { note, goal, outcome, mode });
       } else {
-        this.showRoute(await getRoute(done.route_id), { goal, outcome });
+        this.showRoute(await getRoute(done.route_id), { goal, outcome, mode });
       }
     } catch (error) {
       this.#fail(errorBody(error));
@@ -279,10 +320,10 @@ export function mountRunControls(root: HTMLElement, store: Store, runner: JobRun
   const worse = button("Make it worse", "", () => runner.worse());
   const buttons = el("div", "buttons");
   buttons.append(go, cancel, reroll, worse);
-  const rows = ["stat-ratio", "stat-line", "stat-target", "stat-note"].map((name) =>
-    el("div", name),
-  );
-  root.replaceChildren(el("h2", "", "Run"), buttons, ...rows);
+  const names = ["ratio", "line", "target", "note", "time", "items", "turns"];
+  const rows = names.map((name) => el("div", `stat-${name}`));
+  const [ratio, line, target, note, time, items, turns] = rows;
+  root.replaceChildren(el("h2", "", "Run"), buttons, ratio, line, time, items, turns, target, note);
 
   store.watch(["region", "stops", "route", "run", "settings"], (state) => {
     const locked = busy(store);
@@ -318,18 +359,37 @@ function targetLine(goal: Target | null, outcome: TargetMetrics | null): string 
   return value == null ? "" : `target ${targetValue(goal.kind, value)}`;
 }
 
-/** The stat line's four rows: the ratio; the length and drive time; the target; and the run. */
-export function statLines(state: Readonly<AppState>): [string, string, string, string] {
+/** The turns row: the left and right turns, "no lefts" (rights) when the side avoided has none
+ * and no U-turn either, as the constraint counts them. */
+function turnsLine({ left, right, u_turn }: Turns, mode: RequestMode): string {
+  const none = (n: number, avoided?: boolean) => n === 0 && u_turn === 0 && avoided === true;
+  const lefts = none(left, mode.constraints?.no_left) ? "no lefts" : `${formatCount(left)} left`;
+  const rights = none(right, mode.constraints?.no_right)
+    ? "no rights"
+    : `${formatCount(right)} right`;
+  return `${lefts} · ${rights}`;
+}
+
+type StatLines = [string, string, string, string, string, string, string];
+
+/** The stat line's rows: the ratio (under the slowest time, of experienced times once stored);
+ * the length and drive time; the target; the run; and, shown between the second and the third,
+ * the drive and the delays (the slowest time, once stored), the items collected (live), and the
+ * turns (once stored). */
+export function statLines(state: Readonly<AppState>): StatLines {
   const { run, settings } = state;
-  if (run.phase === "starting") return ["", "Starting…", "", ""];
+  const only = (line: string): StatLines => ["", line, "", "", "", "", ""];
+  if (run.phase === "starting") return only("Starting…");
   if (run.metrics === null) {
-    if (run.phase === "running") return ["", "Planning the sensible route…", "", ""];
-    if (run.phase === "failed") return ["", "No route.", "", ""];
-    const prompt =
-      state.stops.length < 2 ? "Click the map to set a start and an end." : "Ready when you are.";
-    return ["", prompt, "", ""];
+    if (run.phase === "running") return only("Planning the sensible route…");
+    if (run.phase === "failed") return only("No route.");
+    return only(
+      state.stops.length < 2 ? "Click the map to set a start and an end." : "Ready when you are.",
+    );
   }
-  const { length_m, time_s, ratio } = run.metrics;
+  const { length_m, time_s, ratio, items, time_ratio, delay_s, turns } = run.metrics;
+  const { objective, item } = run.mode;
+  const slowest = objective === "time";
   const numbers = `${formatDistance(length_m, settings.units)} · ${formatDuration(time_s)}`;
   const attempts =
     run.phase === "done"
@@ -343,5 +403,17 @@ export function statLines(state: Readonly<AppState>): [string, string, string, s
   if (run.stoppedBecause) parts.push(STOPPED[run.stoppedBecause] ?? run.stoppedBecause);
   if (run.seed !== null) parts.push(`seed ${run.seed}`);
   if (run.note) parts.push(run.note);
-  return [formatRatio(ratio), numbers, targetLine(run.goal, run.outcome), parts.join(" · ")];
+  return [
+    slowest && typeof time_ratio === "number"
+      ? `${formatRatio(time_ratio)} slower`
+      : formatRatio(ratio),
+    numbers,
+    targetLine(run.goal, run.outcome),
+    parts.join(" · "),
+    slowest && delay_s !== undefined
+      ? `drive ${formatDuration(time_s)} + delays ${formatDuration(delay_s)}`
+      : "",
+    objective === "collect" && item && items ? formatItems(items[item], item) : "",
+    turns ? turnsLine(turns, run.mode) : "",
+  ];
 }

@@ -18,7 +18,7 @@ from numpy.typing import NDArray
 
 from worst_route.pipeline import layout
 
-MANIFEST = "manifest.json"
+MANIFEST = layout.STAGE_MANIFEST
 TABLES = "tables.json"
 
 

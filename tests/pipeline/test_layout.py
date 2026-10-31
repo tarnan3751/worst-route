@@ -73,3 +73,39 @@ def test_stale_stages(tmp_path: Path) -> None:
     assert layout.stale_stages(tmp_path, "qa") == ["cleanup", "enrich"]
     (stages / "cleanup.pkl").unlink()  # a recorded input gone
     assert layout.stale_stages(tmp_path, "qa") == ["cleanup", "enrich"]
+
+
+def _stage(build: Path, name: str, inputs: list[str]) -> None:
+    """Write a stage file and a sidecar recording `inputs` (stage names) with their md5s now."""
+    path = layout.stage_file(build, name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(name.encode())
+    recorded = [{"file": i, "md5": layout.file_md5(layout.stage_file(build, i))} for i in inputs]
+    layout.write_sidecar(path, {"step": name, "inputs": recorded, "params": {}})
+
+
+def test_cleanup_is_fresh_from_either_build_stage(tmp_path: Path) -> None:
+    for build_input in ("build.pkl", "build/manifest.json"):
+        build = tmp_path / build_input.replace("/", "-")
+        _stage(build, build_input, [])
+        _stage(build, "cleanup.pkl", [build_input])
+        assert layout.stale_stages(build, "enrich") == []
+        layout.stage_file(build, build_input).write_bytes(b"changed")
+        assert layout.stale_stages(build, "enrich") == ["cleanup"]
+
+
+def test_a_stage_recording_none_of_its_inputs_is_stale(tmp_path: Path) -> None:
+    _stage(tmp_path, "build.pkl", [])
+    _stage(tmp_path, "other.json", [])
+    _stage(tmp_path, "cleanup.pkl", ["other.json"])  # neither build stage
+    assert layout.stale_stages(tmp_path, "enrich") == ["cleanup"]
+
+
+def test_the_build_stage_cleanup_read(tmp_path: Path) -> None:
+    assert layout.build_stage(tmp_path) == layout.stage_file(tmp_path, "build.pkl")  # none yet
+    _stage(tmp_path, "build.pkl", [])
+    _stage(tmp_path, "build/manifest.json", [])
+    _stage(tmp_path, "cleanup.pkl", ["build/manifest.json"])
+    assert layout.build_stage(tmp_path) == layout.stage_file(tmp_path, "build")
+    _stage(tmp_path, "cleanup.pkl", ["build.pkl"])
+    assert layout.build_stage(tmp_path) == layout.stage_file(tmp_path, "build.pkl")

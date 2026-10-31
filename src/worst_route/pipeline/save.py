@@ -298,11 +298,11 @@ def build_sources(region: Region, build_dir: Path) -> list[dict[str, Any]]:
     """The extract `filter` read for this build: file, md5 and data date.
 
     Raises `SourcesChangedError` when the filtered roads are no longer the ones `build` read
-    (their md5 against the one `build.pkl`'s sidecar recorded): the filter's record then
+    (their md5 against the one the build stage's sidecar recorded): the filter's record then
     describes another build's extract.
     """
     roads = layout.roads_pbf(region.name)
-    built = json.loads(layout.sidecar(layout.stage_file(build_dir, "build.pkl")).read_text())
+    built = json.loads(layout.sidecar(layout.build_stage(build_dir)).read_text())
     if [source["md5"] for source in built["inputs"]] != [layout.file_md5(roads)]:
         raise SourcesChangedError(
             "the filtered extract changed since this build was built; rebuild"

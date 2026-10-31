@@ -72,6 +72,11 @@ REGIONS: dict[str, Region] = {
 # pockets follow a road by its name as well as its refs; 6: the compact format (graph/data.py
 # FORMAT_VERSION 4).
 PIPELINE_VERSION = "6"
+# The pipeline's engine (`docs/reference/pipeline.md`, **The arrays engine**): "networkx"
+# (networkx and OSMnx) or "arrays" (NumPy, scipy, shapely and Numba), for `pipeline build` and
+# `pipeline cleanup`. Both make the same build, byte for byte.
+PipelineEngine = Literal["networkx", "arrays"]
+DEFAULT_PIPELINE_ENGINE: PipelineEngine = "networkx"
 
 
 @cache

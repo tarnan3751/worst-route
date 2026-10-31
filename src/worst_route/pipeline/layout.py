@@ -15,6 +15,9 @@ inputs' md5s and its parameters in the sidecar `<output>.inputs.json`; the step 
 its output exists and the sidecar matches what it would record now. `stale_stages` walks a
 build's stages in order (`STAGE_CHAIN`) and names those whose recorded inputs no longer match
 the files there, so a step never reads a stage made from inputs that have since changed.
+The two engines' `build` stages differ (`BUILD_STAGES`): networkx's `build.pkl`, the arrays
+engine's `build/` directory, which its `manifest.json` stands for in a sidecar; `build_stage`
+names the one a build's cleanup read.
 """
 
 import hashlib
@@ -22,7 +25,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from worst_route.config import Region, settings
+from worst_route.config import PipelineEngine, Region, settings
 from worst_route.pipeline import PIPELINE_VERSION
 
 
@@ -63,6 +66,27 @@ def stage_file(build: Path, name: str) -> Path:
     return build / "stages" / name
 
 
+# The file an arrays engine stage directory is complete with, written last (`arrays/stage.py`).
+STAGE_MANIFEST = "manifest.json"
+# The stage each engine's `build` writes, and the file that stands for it in cleanup's sidecar.
+BUILD_STAGES: dict[PipelineEngine, tuple[str, str]] = {
+    "networkx": ("build.pkl", "build.pkl"),
+    "arrays": ("build", f"build/{STAGE_MANIFEST}"),
+}
+
+
+def build_stage(build: Path) -> Path:
+    """The build stage the build's cleanup read, as its sidecar records (`build.pkl` before
+    cleanup has run)."""
+    side = sidecar(stage_file(build, "cleanup.pkl"))
+    if side.exists():
+        read = {i["file"] for i in json.loads(side.read_text())["inputs"]}
+        for stage, recorded in BUILD_STAGES.values():
+            if recorded in read:
+                return stage_file(build, stage)
+    return stage_file(build, BUILD_STAGES["networkx"][0])
+
+
 def qa_file(build: Path, name: str) -> Path:
     """A file of a build's QA report, e.g. `qa.json`."""
     return build / "qa" / name
@@ -85,9 +109,9 @@ def sidecar(output: Path) -> Path:
 
 
 # A build's stages in order: each step, the stage file it writes, and the stage files its
-# sidecar records as its inputs.
+# sidecar may record as its inputs (cleanup reads one engine's build stage or the other's).
 STAGE_CHAIN: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    ("cleanup", "cleanup.pkl", ("build.pkl",)),
+    ("cleanup", "cleanup.pkl", tuple(recorded for _, recorded in BUILD_STAGES.values())),
     ("enrich", "enrich.pkl", ("cleanup.pkl",)),
     ("tiers", "tiers.json", ("enrich.pkl",)),
     ("save", "save.json", ("enrich.pkl", "tiers.json")),
@@ -97,9 +121,9 @@ STAGE_CHAIN: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 def stale_stages(build: Path, up_to: str) -> list[str]:
     """The stages before step `up_to`, in order, that were made from inputs since changed.
 
-    A stage is stale when its sidecar exists and an input it records is gone or has another md5
-    now; a stage not yet made is not stale (a step's own missing input is reported apart). A step
-    outside the chain checks every stage.
+    A stage is stale when its sidecar exists and a stage input it records is gone or has another
+    md5 now, or it records none; a stage not yet made is not stale (a step's own missing input is
+    reported apart). A step outside the chain checks every stage.
     """
     stale = []
     for step, output, inputs in STAGE_CHAIN:
@@ -109,9 +133,13 @@ def stale_stages(build: Path, up_to: str) -> list[str]:
         if not side.exists():
             continue
         recorded = {i["file"]: i["md5"] for i in json.loads(side.read_text())["inputs"]}
-        for name in inputs:
+        names = [name for name in inputs if name in recorded]
+        if not names:
+            stale.append(step)
+            continue
+        for name in names:
             path = stage_file(build, name)
-            if not path.exists() or recorded.get(name) != file_md5(path):
+            if not path.exists() or recorded[name] != file_md5(path):
                 stale.append(step)
                 break
     return stale

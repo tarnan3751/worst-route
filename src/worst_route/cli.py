@@ -4,7 +4,9 @@
 named region (`docs/PLAN.md` §2): download, filter, build, cleanup, enrich, tiers, save, qa.
 Every step takes `--region` (a key of `config.REGIONS`), `--build-id` and `--force`; `filter`
 and `build` also take `--source`, a file read instead of the step's usual input (fixtures,
-tests); `cleanup` and `tiers` also take `--allow-fragmented`. Each step
+tests); `cleanup` and `tiers` also take `--allow-fragmented`; `build` and `cleanup` take
+`--engine` (networkx or arrays, the same build; `docs/reference/pipeline.md`, **The arrays
+engine**). Each step
 (`docs/reference/pipeline.md`) prints what it wrote and its counts, or that its output is up to
 date and was skipped; a missing input, a failed download, a cleanup or tiers step whose graph
 is too fragmented, a step whose earlier stages are stale (`layout.stale_stages`), or a save that
@@ -86,11 +88,13 @@ from worst_route.config import (
     DEFAULT_BACKEND,
     DEFAULT_BUDGET_S,
     DEFAULT_MAX_ITERATIONS,
+    DEFAULT_PIPELINE_ENGINE,
     NOMINATIM_URL,
     REGIONS,
     TARGET_TOLERANCE,
     BackendName,
     GeocoderName,
+    PipelineEngine,
     settings,
 )
 from worst_route.pipeline import PIPELINE_VERSION, layout
@@ -121,6 +125,22 @@ RegionOption = Annotated[
 BuildIdOption = Annotated[str | None, typer.Option(help="Build id to write or reuse.")]
 ForceOption = Annotated[
     bool, typer.Option("--force", help="Redo the step even if its output exists.")
+]
+
+
+def _check_engine(value: str) -> str:
+    if value not in get_args(PipelineEngine):
+        known = ", ".join(get_args(PipelineEngine))
+        raise typer.BadParameter(f"unknown engine {value!r}; known: {known}")
+    return value
+
+
+EngineOption = Annotated[
+    str,
+    typer.Option(
+        help="Pipeline engine: networkx (networkx and OSMnx) or arrays (NumPy); the same build.",
+        callback=_check_engine,
+    ),
 ]
 SourceOption = Annotated[
     Path | None,
@@ -162,8 +182,21 @@ def _inputs(path: Path) -> list[dict[str, str]]:
     return [{"file": path.name, "md5": layout.file_md5(path)}]
 
 
+def _up_to_date(output: Path, record: dict[str, Any]) -> bool:
+    """Whether a step that records its engine (`build`, `cleanup`) is up to date: its output
+    written (an arrays stage once its manifest is) and its sidecar holding `record`. A sidecar
+    from before steps recorded their engine is the networkx engine's."""
+    if output.is_dir() and not (output / layout.STAGE_MANIFEST).exists():
+        return False
+    if layout.sidecar_matches(output, record):
+        return True
+    legacy = {key: value for key, value in record.items() if key != "engine"}
+    return record["engine"] == "networkx" and layout.sidecar_matches(output, legacy)
+
+
 def _size(path: Path) -> str:
-    return f"{path.stat().st_size / 1e6:.1f} MB"
+    files = path.iterdir() if path.is_dir() else [path]
+    return f"{sum(f.stat().st_size for f in files) / 1e6:.1f} MB"
 
 
 @app.command()
@@ -234,9 +267,11 @@ def build(
     build_id: BuildIdOption = None,
     force: ForceOption = False,
     source: SourceOption = None,
+    engine: EngineOption = DEFAULT_PIPELINE_ENGINE,
 ) -> None:
     """Turn the filtered extract into a raw directed graph."""
-    from worst_route.pipeline.build import build_raw_graph, save_stage
+    from worst_route.pipeline import build as networkx_build
+    from worst_route.pipeline.arrays import build as arrays_build
 
     spec = REGIONS[region]
     roads = source if source is not None else layout.roads_pbf(region)
@@ -244,9 +279,10 @@ def build(
     inputs = _inputs(roads)
     bid = build_id or layout.build_id_for(inputs[0]["md5"], spec)
     directory = layout.build_dir(region, bid)
-    output = layout.stage_file(directory, "build.pkl")
+    output = layout.stage_file(directory, layout.BUILD_STAGES[cast(PipelineEngine, engine)][0])
     record: dict[str, Any] = {
         "step": "build",
+        "engine": engine,
         "inputs": inputs,
         "params": {
             "region": region,
@@ -255,14 +291,18 @@ def build(
             "pipeline_version": PIPELINE_VERSION,
         },
     }
-    if not force and layout.sidecar_matches(output, record):
+    if not force and _up_to_date(output, record):
         typer.echo(f"skipped: build {bid} is up to date at {output} (--force to redo)")
     else:
         layout.sidecar(output).unlink(missing_ok=True)
-        graph, stats = build_raw_graph(roads, spec.crs_epsg)
-        save_stage(graph, stats, directory)
+        if engine == "arrays":
+            raw, stats = arrays_build.build_raw_arrays(roads, spec.crs_epsg)
+            arrays_build.save_stage(raw, stats, directory)
+        else:
+            graph, stats = networkx_build.build_raw_graph(roads, spec.crs_epsg)
+            networkx_build.save_stage(graph, stats, directory)
         layout.write_sidecar(output, record)
-        typer.echo(f"build {bid}: wrote {output} ({_size(output)})")
+        typer.echo(f"build {bid}: wrote {output} ({_size(output)}, {engine})")
         typer.echo(
             f"ways: read {stats.ways_read}, kept {stats.ways_kept}; segments {stats.segments}, "
             f"nodes {stats.nodes}, edges {stats.edges}"
@@ -286,30 +326,34 @@ def cleanup(
             "SCC_MAX_DROPPED_NODES.",
         ),
     ] = False,
+    engine: EngineOption = DEFAULT_PIPELINE_ENGINE,
 ) -> None:
     """Simplification, consolidation, carriageway twins, connectivity."""
     import pickle
 
     from worst_route.pipeline import cleanup as step
+    from worst_route.pipeline.arrays.build import RawGraph, load_stage
 
-    hint = f"run `worst-route pipeline build --region {region}` first"
+    hint = f"run `worst-route pipeline build --region {region} --engine {engine}` first"
     if build_id is None:
         _require(layout.latest_file(region), hint)
         build_id = layout.latest_file(region).read_text().strip()
     directory = layout.build_dir(region, build_id)
-    source = layout.stage_file(directory, "build.pkl")
+    _, recorded = layout.BUILD_STAGES[cast(PipelineEngine, engine)]
+    source = layout.stage_file(directory, recorded)
     _require(source, hint)
     output = layout.stage_file(directory, "cleanup.pkl")
     record: dict[str, Any] = {
         "step": "cleanup",
-        "inputs": _inputs(source),
+        "engine": engine,
+        "inputs": [{"file": recorded, "md5": layout.file_md5(source)}],
         "params": {
             "allow_fragmented": allow_fragmented,
             "config": step.parameters(),
             "pipeline_version": PIPELINE_VERSION,
         },
     }
-    if not force and layout.sidecar_matches(output, record):
+    if not force and _up_to_date(output, record):
         typer.echo(
             f"skipped: cleanup of build {build_id} is up to date at {output} (--force to redo)"
         )
@@ -317,8 +361,12 @@ def cleanup(
     layout.sidecar(output).unlink(missing_ok=True)
     output.unlink(missing_ok=True)
     layout.stage_file(directory, "cleanup.json").unlink(missing_ok=True)
-    with source.open("rb") as f:
-        raw = pickle.load(f)
+    raw: RawGraph | Any
+    if engine == "arrays":
+        raw = load_stage(directory)
+    else:
+        with source.open("rb") as f:
+            raw = pickle.load(f)
     try:
         graph, report = step.run_cleanup(raw, allow_fragmented=allow_fragmented)
     except step.FragmentedGraphError as error:
@@ -503,7 +551,7 @@ def save(region: RegionOption, build_id: BuildIdOption = None, force: ForceOptio
     reads = [  # (file, the step that writes it)
         (source, "enrich"),
         (tiers_json, "tiers"),
-        (layout.sidecar(layout.stage_file(directory, "build.pkl")), "build"),
+        (layout.sidecar(layout.build_stage(directory)), "build"),
         *((layout.sidecar(layout.stage_file(directory, out)), s) for s, out in step.STEP_OUTPUTS),
         (layout.roads_pbf(region), "filter"),
         (layout.sidecar(layout.roads_pbf(region)), "filter"),

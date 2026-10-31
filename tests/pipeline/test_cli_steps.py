@@ -325,6 +325,70 @@ def test_cleanup_needs_a_build(data_dir: Path) -> None:
     assert code == 1 and "nope" in output and "build.pkl" in output
 
 
+def test_the_arrays_engine_through_the_cli(data_dir: Path) -> None:
+    """`build` and `cleanup` with `--engine arrays` write and read their own stage, record the
+    engine outside the params, and the steps after them save the networkx engine's build."""
+    diamond = str(FIXTURES / "diamond.osm")
+    assert pipeline("filter", "--region", "portland", "--source", diamond)[0] == 0
+    versions = {}
+    for engine in ("networkx", "arrays"):
+        flags = ["--region", "portland", "--build-id", engine]
+        code, output = pipeline("build", *flags, "--engine", engine)
+        assert code == 0 and output.splitlines()[0].endswith(f", {engine})"), output
+        assert pipeline("cleanup", *flags, "--engine", engine)[0] == 0
+        assert pipeline("enrich", *flags)[0] == 0
+        assert pipeline("tiers", *flags, "--allow-fragmented")[0] == 0
+        code, output = pipeline("save", *flags)
+        assert code == 0, output
+        versions[engine] = json.loads(
+            (layout.build_dir("portland", engine) / "meta.json").read_text()
+        )
+    assert versions["arrays"]["graph_version"] == versions["networkx"]["graph_version"]
+    assert versions["arrays"]["params"] == versions["networkx"]["params"]
+
+    stages = layout.build_dir("portland", "arrays") / "stages"
+    assert {"build", "build.inputs.json", "build.json"} <= {p.name for p in stages.iterdir()}
+    assert not (stages / "build.pkl").exists() and (stages / "build" / "manifest.json").exists()
+    assert json.loads((stages / "build.inputs.json").read_text())["engine"] == "arrays"
+    sidecar = json.loads((stages / "cleanup.pkl.inputs.json").read_text())
+    manifest = stages / "build" / "manifest.json"
+    assert sidecar["engine"] == "arrays"
+    assert sidecar["inputs"] == [{"file": "build/manifest.json", "md5": layout.file_md5(manifest)}]
+    flags = ["--region", "portland", "--build-id", "arrays"]
+    code, output = pipeline("cleanup", *flags, "--engine", "arrays")
+    assert code == 0 and output.startswith("skipped: ")
+    code, output = pipeline("cleanup", *flags)  # networkx's input is not there
+    assert code == 1 and "build.pkl" in output and "--engine networkx" in output
+    manifest.write_text(manifest.read_text() + "\n")  # the build stage changed since cleanup
+    code, output = pipeline("enrich", *flags, "--force")
+    assert code == 1 and "stage cleanup is stale" in output
+
+
+def test_sidecars_from_before_the_engine_are_the_networkx_engines(data_dir: Path) -> None:
+    """A build and a cleanup whose sidecars do not record an engine, as the code before the
+    arrays engine wrote them, are up to date for the networkx engine, not for arrays."""
+    stages = cleaned_build(str(FIXTURES / "divided.osm"))
+    for sidecar in ("build.pkl.inputs.json", "cleanup.pkl.inputs.json"):
+        record = json.loads((stages / sidecar).read_text())
+        del record["engine"]
+        (stages / sidecar).write_text(json.dumps(record, indent=2) + "\n")
+    flags = ["--region", "portland", "--build-id", "b1"]
+    for step in ("build", "cleanup"):
+        code, output = pipeline(step, *flags)
+        assert code == 0 and output.startswith("skipped: "), output
+    code, output = pipeline("cleanup", *flags, "--engine", "arrays")
+    assert code == 1 and "build/manifest.json" in output  # its own build stage is not there
+
+
+def test_an_arrays_stage_without_its_manifest_is_rebuilt(data_dir: Path) -> None:
+    flags = ["--region", "portland", "--source", str(FIXTURES / "grid.osm"), "--build-id", "b1"]
+    assert pipeline("build", *flags, "--engine", "arrays")[0] == 0
+    manifest = layout.stage_file(layout.build_dir("portland", "b1"), "build/manifest.json")
+    manifest.unlink()  # an interrupted write
+    code, output = pipeline("build", *flags, "--engine", "arrays")
+    assert code == 0 and output.startswith("build b1: wrote ") and manifest.exists()
+
+
 def cleaned_build(source: str, build_id: str = "b1") -> Path:
     """Filter, build and clean a fixture under the test's data directory; the stages."""
     assert pipeline("filter", "--region", "portland", "--source", source)[0] == 0

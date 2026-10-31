@@ -7,6 +7,7 @@ import networkx as nx
 import pytest
 import shapely
 
+from tests.pipeline import test_consolidate as consolidate_cases
 from tests.pipeline.chain import (
     FIXTURES,
     brand_pois,
@@ -275,6 +276,22 @@ def test_collectibles_at_junctions_and_off_the_graph() -> None:
             "off_graph": 1,
             "edges": 1,
         },
+    }
+
+
+def test_a_collectible_at_a_lone_node_is_off_the_graph(tmp_path: Path) -> None:
+    """A lone super-junction, kept only with --allow-fragmented, has no out-edge to count a toll
+    booth or level crossing at it on: it is off the graph, not an error."""
+    graph = cleaned(consolidate_cases.detached(tmp_path), allow_fragmented=True)
+    assert graph.number_of_nodes() == 1 and graph.number_of_edges() == 0
+    (member, *_) = graph.nodes[0]["members"]
+    report = run_enrich(graph, poi_table([("n", member, "toll_booth")]))
+    assert report.collectibles["toll_booth"] == {
+        "found": 1,
+        "on_edges": 0,
+        "at_junctions": 0,
+        "off_graph": 1,
+        "edges": 0,
     }
 
 

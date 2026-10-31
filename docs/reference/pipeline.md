@@ -595,7 +595,9 @@ constants are in `config.py`.
   level crossing whose OSM id lies inside edges counts on every edge that holds it, both
   directions of a two-way road, of which a legal route uses one; one that is a node's member (at
   a junction, or a shape point a cluster absorbed) counts on that node's lowest-key out-edge, an
-  M1 approximation until node collectibles (M3); any other is off the graph.
+  M1 approximation until node collectibles (M3); any other is off the graph, and so is one at a
+  junction without out-edges (a lone node, which only `--allow-fragmented` keeps), since no edge
+  a route drives holds it.
 - **Node delay**: the largest `NODE_DELAY_S` (stop 10 s, signals 30 s) among the stop signs and
   signals in the node's members, so a signal cluster delays once. One that is a shape point adds
   none: most stop signs are mapped a few metres before the junction, on the approach.

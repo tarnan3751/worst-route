@@ -25,7 +25,9 @@ the cleaned graph, in place, on every edge:
 - `toll_booths`, `level_crossings`: the POI nodes of those kinds on the edge. A POI whose OSM id
   lies inside edges counts on every edge that holds it (the two directions of a two-way road, of
   which a route uses one); one that is a node's member (a junction) counts on that node's
-  lowest-key out-edge; any other is not on the graph.
+  lowest-key out-edge; any other is not on the graph, nor is one at a junction without
+  out-edges (a lone node, kept with `--allow-fragmented`), which no edge the engine drives
+  holds.
 
 and on every node:
 
@@ -281,8 +283,8 @@ def _place_pois(
             else:
                 counts[kind]["shape_points" if osm_id in inside else "off_graph"] += 1
             continue
-        if node is not None:
-            edges = [min(graph.out_edges(node, keys=True))]
+        if node is not None and (leaving := list(graph.out_edges(node, keys=True))):
+            edges = [min(leaving)]
             counts[kind]["at_junctions"] += 1
         elif osm_id in inside:
             edges = inside[osm_id]

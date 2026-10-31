@@ -2,14 +2,16 @@
 
     uv run python tools/turn_bearings.py --region portland [--build-id ID]
 
-It needs a build under `WORST_ROUTE_DATA`, so it is not part of the gate. Cleanup extends an
-edge's geometry to a merged node's position with stub coordinates: one at an end on a stage A
-cluster or a super-node, two where the super-node took in a stage A cluster. Enrich measures the
-bearings over the road without them (`pipeline/enrich.py`, `road_geometry`). This tool checks
-that from the build alone, by its own count of the stubs: every coordinate of an edge is one of
-its OSM nodes' (`osmnode_ids`) or a stub, so an edge has len(coords) - len(osmnode_ids) of
-them, all at its merged end when only one end is merged, split evenly when both are (an odd
-count there cannot be split, and its turns are skipped).
+It needs a build under `WORST_ROUTE_DATA` with its stages, so it is not part of the gate.
+Cleanup extends an edge's geometry to a merged node's position with stub coordinates: one at an
+end on a stage A cluster or a super-node, two where the super-node took in a stage A cluster.
+Enrich measures the bearings over the road without them (`pipeline/enrich.py`, `road_geometry`).
+This tool checks that from the build's arrays and the whole geometry its enrich stage holds
+(`stages/enrich.pkl`, edges in key order, which are the build's edge ids; the build's own
+geometry is simplified), by its own count of the stubs: every coordinate of an edge is one of
+its OSM nodes' (`osm_nodes`) or a stub, so an edge has len(coords) - len(osm_nodes) of them, all
+at its merged end when only one end is merged, split evenly when both are (an odd count there
+cannot be split, and its turns are skipped).
 
 For every turn between two roads (an edge in, an edge out of a different road unit) at every
 node, it classes the turn (`graph.backend.TURN_CLASS`) three ways: by the stored bearings, by
@@ -17,19 +19,19 @@ bearings over the road (the geometry less the stubs, measured as enrich does ove
 `BEARING_SAMPLE_M`), and by bearings over the whole geometry, stubs included (what builds before
 pipeline version 2 stored). It prints, per node kind, the turns compared, how many the stored
 bearings and the whole geometry class differently from the road, and the largest gap in degrees
-between a stored bearing and the road's at that kind of node. The stored bearings differ from
-the road's only by the rounding of the build's float32 coordinates, a degree or two, so a
-handful of turns near a class's threshold flip, at every kind of node alike. It exits 0.
+between a stored bearing and the road's at that kind of node. Measured on the stage's own
+coordinates, the stored bearings are the road's. It exits 0.
 """
 
 import argparse
+import pickle
 import sys
 from collections import Counter
 
+import networkx as nx
 import numpy as np
 import shapely
 from numpy.typing import NDArray
-from pyproj import Transformer
 
 from worst_route.config import REGIONS
 from worst_route.graph.backend import TURN_CLASS
@@ -41,20 +43,20 @@ from worst_route.pipeline.enrich import bearings
 NAMES = {0: "straight", 1: "left", 2: "right", 4: "u-turn"}
 
 
-def edge_lines(data: GraphData) -> tuple[list[shapely.LineString], list[shapely.LineString | None]]:
+def edge_lines(
+    data: GraphData, graph: nx.MultiDiGraph
+) -> tuple[list[shapely.LineString], list[shapely.LineString | None]]:
     """Each edge's whole geometry and its road (None where the stubs cannot be split), in the
-    build's projected CRS."""
-    project = Transformer.from_crs("EPSG:4326", f"EPSG:{data.meta['crs_epsg']}", always_xy=True)
-    lonlat = np.asarray(data.coords, dtype=np.float64)
-    x, y = project.transform(lonlat[:, 0], lonlat[:, 1])
-    xy = np.column_stack((x, y))
+    build's projected CRS, from the enrich stage's graph."""
+    keys = sorted(graph.edges(keys=True))
     merged = np.asarray(data.node_kind) != NodeKind.PLAIN
     wholes: list[shapely.LineString] = []
     roads: list[shapely.LineString | None] = []
-    for e in range(data.m):
-        line = xy[data.coord_indptr[e] : data.coord_indptr[e + 1]]
+    for e, key in enumerate(keys):
+        edge = graph.edges[key]
+        line = np.asarray(edge["geometry"].coords)
         wholes.append(shapely.LineString(line))
-        stubs = len(line) - int(data.osmnode_indptr[e + 1] - data.osmnode_indptr[e])
+        stubs = len(line) - len(edge["osm_nodes"])
         at_u, at_v = bool(merged[data.edge_u[e]]), bool(merged[data.edge_v[e]])
         if at_u and at_v and stubs % 2:
             roads.append(None)
@@ -72,8 +74,11 @@ def turn(b_in: NDArray[np.int64], b_out: NDArray[np.int64], e: int, f: int) -> i
 
 def main(args: argparse.Namespace) -> int:
     build_id = args.build_id or layout.latest_file(args.region).read_text().strip()
-    data = read_build(layout.build_dir(args.region, build_id))
-    wholes, roads = edge_lines(data)
+    build_dir = layout.build_dir(args.region, build_id)
+    data = read_build(build_dir)
+    with layout.stage_file(build_dir, "enrich.pkl").open("rb") as f:
+        graph = pickle.load(f)
+    wholes, roads = edge_lines(data, graph)
     whole_in, whole_out = bearings(wholes)
     fit = [k for k, line in enumerate(roads) if line is not None]
     road_in = np.full(data.m, -1, dtype=np.int64)

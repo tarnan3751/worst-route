@@ -10,7 +10,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from worst_route.graph.testing import edge_id
+from worst_route.graph.geometry import encode, straight
+from worst_route.graph.testing import edge_id, make_graph
 from worst_route.presentation import share_image
 from worst_route.presentation.places import PlaceIndex
 from worst_route.presentation.share_image import headline, render_share_image
@@ -19,6 +20,7 @@ from ..engine.graphs import edges_of
 from .support import EAST_THEN_NORTH, EAST_THEN_NORTH_EDGES, GRID, write_fixture_places
 
 NODES = np.array(EAST_THEN_NORTH, dtype=np.int32)
+STRAIGHT = straight(GRID.m)
 BASELINE = edges_of(GRID, [10, 20, 30, 40, 50, 60, 70, 80, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99])
 METRICS = {"length_m": 1700.0, "baseline_length_m": 1700.0, "ratio": 1.0}
 LINE = "Longer than the Golden Gate Bridge, which is 1.7 mi (2.7 km)."
@@ -41,6 +43,7 @@ def places(tmp_path: Path) -> PlaceIndex:
 def render(places: PlaceIndex | None, **metrics: float | None) -> bytes:
     return render_share_image(
         GRID,
+        STRAIGHT,
         NODES,
         EAST_THEN_NORTH_EDGES,
         {**METRICS, **metrics},
@@ -79,6 +82,7 @@ def test_a_slowest_time_route_draws_its_own_headline() -> None:
     assert time_route == render(None)  # a distance route ignores its time ratio
     slow = render_share_image(
         GRID,
+        STRAIGHT,
         NODES,
         EAST_THEN_NORTH_EDGES,
         {**METRICS, "time_ratio": 2.5},
@@ -91,7 +95,7 @@ def test_a_slowest_time_route_draws_its_own_headline() -> None:
 
 
 def test_without_a_baseline_it_still_draws() -> None:
-    png = render_share_image(GRID, NODES, EAST_THEN_NORTH_EDGES, METRICS, None, LINE)
+    png = render_share_image(GRID, STRAIGHT, NODES, EAST_THEN_NORTH_EDGES, METRICS, None, LINE)
     assert size_of(png) == (1200, 630) and png != render(None)
 
 
@@ -115,12 +119,30 @@ def test_the_network_is_one_line_per_road_unit_and_thins_when_too_many(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     everywhere = (-123.0, 45.0, -122.0, 46.0)
-    assert len(share_image._network(GRID, everywhere)) == GRID.m  # the builder: a unit per edge
+    # the builder: a unit per edge
+    assert len(share_image._network(GRID, STRAIGHT, everywhere)) == GRID.m
     # As a build pairs them: each street's two directions one unit, its lower edge id.
     pairs = zip(GRID.edge_u.tolist(), GRID.edge_v.tolist(), strict=True)
     unit = np.minimum(np.arange(GRID.m), [edge_id(GRID, v, u) for u, v in pairs])
     paired = replace(GRID, edge_unit=unit.astype(np.int32))
-    assert len(share_image._network(paired, everywhere)) == GRID.m // 2 == 180
-    assert share_image._network(GRID, (-100.0, 40.0, -99.0, 41.0)) == []
+    assert len(share_image._network(paired, STRAIGHT, everywhere)) == GRID.m // 2 == 180
+    assert share_image._network(GRID, STRAIGHT, (-100.0, 40.0, -99.0, 41.0)) == []
     monkeypatch.setattr(share_image, "MAX_NETWORK_EDGES", 100)
-    assert share_image._network(GRID, everywhere) == []  # only T0-T2: no residential street
+    # only T0-T2: no residential street
+    assert share_image._network(GRID, STRAIGHT, everywhere) == []
+
+
+def test_the_network_follows_the_build_s_geometry() -> None:
+    # Two roads of the lattice's south row, the first bending 30 m north half-way: drawn with
+    # its bend, and only the road units whose bounds meet the map.
+    x0, y0 = GRID.node_x[0], GRID.node_y[0]
+    g = make_graph([(x0, y0), (x0 + 100, y0), (x0 + 200, y0)], [(0, 1, 100.0), (1, 2, 100.0)])
+    points = np.array(
+        [(x0, y0), (x0 + 50, y0 + 30), (x0 + 100, y0), (x0 + 100, y0), (x0 + 200, y0)]
+    )
+    bent = encode(g, points, np.array([0, 3, 5]))
+    lines = share_image._network(g, bent, (-123.0, 45.0, -122.0, 46.0))
+    assert [len(line) for line in lines] == [3, 2]
+    assert lines[0][1, 1] > lines[0][0, 1]  # the bend, north
+    east = float(lines[1][0, 0]) + 1e-6  # only the second road: east of node 1
+    assert len(share_image._network(g, bent, (east, 45.0, -122.0, 46.0))) == 1

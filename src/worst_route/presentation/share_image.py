@@ -7,7 +7,9 @@ efficient than the sensible route"), for a slowest-time route the time ratio ("s
 sensible route"), for a round trip, which has neither, its length ("299 mi", "to end up where
 it started"); and the comparison line at the bottom (wrapped, never between a number and its
 unit). The map fills the rest, edge to edge, with no basemap: the build's roads as hairlines
-(one edge per road unit; only tiers T0-T2 when more than `MAX_NETWORK_EDGES` would show), the
+(one edge per road unit, along the build's geometry, the units near the map found first by
+their bounds in the build's CRS against the map's, grown by `NETWORK_MARGIN_M`; only tiers T0-T2
+when more than `MAX_NETWORK_EDGES` would show), the
 state outlines from the places index when there is one, the route in red on a white casing, the
 baseline dashed over it, a ring at the start and a smaller dot at the end (inside the ring, for
 a round trip). Its extent is the route's bbox with `MARGIN` on each side (at least `MIN_SPAN_M`
@@ -45,6 +47,7 @@ from numpy.typing import NDArray
 
 from worst_route.engine.route import IntArray
 from worst_route.graph.data import GraphData
+from worst_route.graph.geometry import Geometry, edge_points, edge_xy, lonlat_to_xy
 from worst_route.presentation.comparisons import METRES_PER_MILE
 from worst_route.presentation.geojson import line_coordinates
 from worst_route.presentation.places import PlaceIndex
@@ -56,6 +59,7 @@ MARGIN = 0.15  # around the route, of its extent, on each side
 MIN_SPAN_M = 1000.0
 METRES_PER_DEGREE = 111_320.0  # of latitude
 MAX_NETWORK_EDGES = 50_000
+NETWORK_MARGIN_M = 50.0  # around the map's extent projected, when finding the roads near it
 THIN_TIER = 2  # the highest tier drawn when the network is thinned
 
 SURFACE = "#fcfcfb"
@@ -79,6 +83,7 @@ Points = NDArray[np.float64]
 
 def render_share_image(
     data: GraphData,
+    geometry: Geometry,
     route_nodes: IntArray,
     route_edges: IntArray,
     metrics: Mapping[str, Any],
@@ -88,10 +93,10 @@ def render_share_image(
     baseline_edges: IntArray | None = None,
     objective: str = "distance",
 ) -> bytes:
-    """The share image of a route (its nodes and edges on `data`, its document's metrics, the
-    objective it was planned for) as PNG bytes, with `comparison` under the headline; `places`
-    gives the state outlines."""
-    route = np.asarray(line_coordinates(data, route_edges))
+    """The share image of a route (its nodes and edges on `data`, drawn along `geometry`, its
+    document's metrics, the objective it was planned for) as PNG bytes, with `comparison` under
+    the headline; `places` gives the state outlines."""
+    route = np.asarray(line_coordinates(data, geometry, route_edges))
     with _RENDERING:
         fig = Figure(figsize=(WIDTH_PX / DPI, HEIGHT_PX / DPI), dpi=DPI, facecolor=SURFACE)
         FigureCanvasAgg(fig)  # the figure's canvas from now on: Agg
@@ -101,7 +106,7 @@ def render_share_image(
         ax.set_xlim(west, east)
         ax.set_ylim(south, north)
 
-        network = _network(data, (west, south, east, north))
+        network = _network(data, geometry, (west, south, east, north))
         ax.add_collection(LineCollection(network, colors=NETWORK, linewidths=0.6, zorder=1))
         if places is not None:
             outlines = _outlines(places, (west, south, east, north))
@@ -109,7 +114,7 @@ def render_share_image(
         ax.plot(*route.T, color=SURFACE, linewidth=4.2, solid_joinstyle="round", zorder=3)
         ax.plot(*route.T, color=ROUTE, linewidth=2.0, solid_joinstyle="round", zorder=4)
         if baseline_edges is not None and len(baseline_edges) > 0:
-            base = np.asarray(line_coordinates(data, baseline_edges))
+            base = np.asarray(line_coordinates(data, geometry, baseline_edges))
             ax.plot(
                 *base.T,
                 color=BASELINE,
@@ -156,25 +161,55 @@ def _extent(points: Points, aspect: float) -> tuple[float, float, float, float]:
     return x - half_x, x + half_x, y - half_y, y + half_y
 
 
-def _network(data: GraphData, bbox: tuple[float, float, float, float]) -> list[Points]:
+def _network(
+    data: GraphData, geometry: Geometry, bbox: tuple[float, float, float, float]
+) -> list[Points]:
     """The lines of the road units whose bounds meet `bbox`, thinned to T0-T2 when too many."""
     west, south, east, north = bbox
-    starts = data.coord_indptr[:-1]
-    lon, lat = data.coords[:, 0], data.coords[:, 1]
+    units = np.flatnonzero(data.edge_unit == np.arange(data.m))
+    near = units[_near(data, geometry, units, bbox)]
+    if len(near) == 0:
+        return []
+    points, counts = edge_points(data, geometry, near)
+    starts = np.cumsum(counts) - counts
+    lon, lat = points[:, 0], points[:, 1]
     inside = (
         (np.maximum.reduceat(lon, starts) >= west)
         & (np.minimum.reduceat(lon, starts) <= east)
         & (np.maximum.reduceat(lat, starts) >= south)
         & (np.minimum.reduceat(lat, starts) <= north)
-        & (data.edge_unit == np.arange(data.m))
     )
     if inside.sum() > MAX_NETWORK_EDGES:
-        inside &= data.edge_tier <= THIN_TIER
-    edges = np.flatnonzero(inside)
-    ends = zip(
-        data.coord_indptr[edges].tolist(), data.coord_indptr[edges + 1].tolist(), strict=True
+        inside &= data.edge_tier[near] <= THIN_TIER
+    ends = zip(starts[inside].tolist(), (starts + counts)[inside].tolist(), strict=True)
+    return [points[a:b] for a, b in ends]
+
+
+def _near(
+    data: GraphData,
+    geometry: Geometry,
+    edges: NDArray[np.intp],
+    bbox: tuple[float, float, float, float],
+) -> NDArray[np.bool_]:
+    """Which of `edges` have bounds in the build's CRS meeting `bbox`'s, its outline projected
+    (nine points a side) and grown by `NETWORK_MARGIN_M`."""
+    west, south, east, north = bbox
+    t = np.linspace(0.0, 1.0, 9)
+    lon = np.concatenate([west + (east - west) * t, np.full(9, east), east - (east - west) * t])
+    lon = np.concatenate([lon, np.full(9, west)])
+    lat = np.concatenate([np.full(9, south), south + (north - south) * t, np.full(9, north)])
+    lat = np.concatenate([lat, north - (north - south) * t])
+    x, y = lonlat_to_xy(data, lon, lat)
+    xy, counts = edge_xy(data, geometry, edges)
+    starts = np.cumsum(counts) - counts
+    margin = NETWORK_MARGIN_M
+    near: NDArray[np.bool_] = (
+        (np.maximum.reduceat(xy[:, 0], starts) >= x.min() - margin)
+        & (np.minimum.reduceat(xy[:, 0], starts) <= x.max() + margin)
+        & (np.maximum.reduceat(xy[:, 1], starts) >= y.min() - margin)
+        & (np.minimum.reduceat(xy[:, 1], starts) <= y.max() + margin)
     )
-    return [data.coords[a:b].astype(np.float64) for a, b in ends]
+    return near
 
 
 def _outlines(places: PlaceIndex, bbox: tuple[float, float, float, float]) -> list[Points]:

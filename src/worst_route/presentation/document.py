@@ -1,10 +1,10 @@
 """What a route's document says about it (`docs/reference/presentation.md`, **The document**).
 
 `present(data, nodes, edges, stop_idx, metrics, *, active, banned, seed, labels, vehicle,
-places)` is what both route documents add to a route, the CLI's `route.json` (`worst-route plan
---out`) and the API's `GET /routes/{id}`, from its arrays, its document's metrics, its request's
-masks (`active`, `banned`), its seed, its stops' labels, its request's vehicle and the region's
-places index:
+places, geometry)` is what both route documents add to a route, the CLI's `route.json`
+(`worst-route plan --out`) and the API's `GET /routes/{id}`, from its arrays, its document's
+metrics, its request's masks (`active`, `banned`), its seed, its stops' labels, its request's
+vehicle, the region's places index and the build's geometry (which only the places need):
 
     {"directions":    [step as JSON, ...],
      "toasts":        [text, ...],
@@ -29,6 +29,7 @@ from numpy.random import PCG64, Generator
 from numpy.typing import ArrayLike, NDArray
 
 from worst_route.graph.data import GraphData
+from worst_route.graph.geometry import Geometry
 from worst_route.presentation.directions import Step, directions
 from worst_route.presentation.jokes import inject
 from worst_route.presentation.places import PlaceIndex
@@ -48,6 +49,7 @@ def present(
     labels: Sequence[str | None],
     vehicle: Vehicle | None,
     places: PlaceIndex | None,
+    geometry: Geometry | None,
 ) -> dict[str, Any]:
     """The route's directions, toasts and extra metrics, as a document adds them."""
     nodes = np.asarray(nodes, dtype=np.int32)
@@ -59,6 +61,7 @@ def present(
         baseline_length_m=metrics["baseline_length_m"],
         vehicle=vehicle,
         places=places,
+        geometry=geometry,
         active=active,
         banned=banned,
     )

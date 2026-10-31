@@ -104,7 +104,7 @@ async def test_events_come_in_order_and_replay_to_the_stored_route(data: Path) -
         done = json.loads(events[-1].data)
         assert done["stopped_because"] == "budget"
         saved = validated(m, data, done["route_id"])
-        coords, node_index = path_points(build.data, saved.edges)
+        coords, node_index = path_points(build.data, build.geometry, saved.edges)
         assert client.coords == coords and client.index == node_index
         assert job.route is not None and job.route.nodes.tobytes() == saved.nodes.tobytes()
         assert done["metrics"]["length_m"] == saved.metrics.length_m
@@ -151,7 +151,7 @@ async def test_a_reconnect_resyncs_with_a_snapshot_then_continues(
         for event in events:
             client.apply(event)
         saved = validated(m, data, json.loads(events[-1].data)["route_id"], "big")
-        assert (client.coords, client.index) == path_points(build.data, saved.edges)
+        assert (client.coords, client.index) == path_points(build.data, build.geometry, saved.edges)
 
 
 async def test_cancel_stores_the_route_so_far_which_its_attempts_reproduce(
@@ -204,7 +204,7 @@ async def test_a_best_route_the_client_did_not_draw_last_comes_as_a_snapshot(dat
         for event in events:
             client.apply(event)
         saved = validated(m, data, done["route_id"], "town")
-        assert (client.coords, client.index) == path_points(build.data, saved.edges)
+        assert (client.coords, client.index) == path_points(build.data, build.geometry, saved.edges)
         assert job.route is not None and job.route.nodes.tobytes() == saved.nodes.tobytes()
         late = await collect(m.subscribe(job))  # a late subscriber draws the stored route too
         assert names(late)[-2:] == ["snapshot", "done"]

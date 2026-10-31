@@ -1,9 +1,11 @@
 """Jobs in real spawned worker processes: one run to its end, one cancelled, one killed; a worker
-that dies partway through a message; a worker whose API process dies."""
+that dies partway through a message; a worker whose API process dies; a worker that plans on a
+build whose geometry is gone, never importing the code that draws routes."""
 
 import asyncio
 import json
 import os
+import shutil
 import signal
 import struct
 import subprocess
@@ -120,3 +122,38 @@ def test_a_worker_exits_when_its_api_process_dies(data: Path) -> None:
         time.sleep(0.05)
     os.kill(pid, signal.SIGKILL)
     pytest.fail("the worker went on searching after its API process died")
+
+
+ALONE = """
+import queue, sys
+from pathlib import Path
+from worst_route.api.worker import JobSpec, run_job
+from worst_route.engine.request import RouteRequest
+
+if __name__ == "__main__":
+    request = RouteRequest.model_validate_json(sys.argv[2])
+    out = queue.Queue()
+    run_job(JobSpec(Path(sys.argv[1]), "portland", "bare", "python", request), out)
+    names = [type(out.get()).__name__ for _ in range(out.qsize())]
+    drawing = ("worst_route.graph.geometry", "worst_route.presentation.geojson")
+    print(names[0], names[-1], [m for m in drawing if m in sys.modules])
+"""
+
+
+def test_a_worker_plans_without_the_build_s_geometry(data: Path) -> None:
+    # The worker of a job, alone in a fresh interpreter, on a build without its geometry/: it
+    # plans and validates the route, and never imports the geometry's module or the GeoJSON's.
+    save_build(data, GRID, "bare", latest=False)
+    shutil.rmtree(data / "graphs" / "portland" / "bare" / "geometry")
+    req = request(GRID, [0, 99])
+    root = Path(__file__).resolve().parents[2]
+    run = subprocess.run(
+        [sys.executable, "-c", ALONE, str(data), req.model_dump_json()],
+        capture_output=True,
+        text=True,
+        cwd=root,
+        check=False,
+        timeout=120,
+    )
+    assert run.returncode == 0, run.stderr
+    assert run.stdout.split() == ["Started", "Finished", "[]"]

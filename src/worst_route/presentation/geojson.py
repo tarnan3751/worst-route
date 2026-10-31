@@ -1,12 +1,13 @@
 """A route as GeoJSON (`docs/reference/presentation.md`, **GeoJSON**).
 
-`route_geojson(data, result)` is a FeatureCollection: the route and the baseline as
-LineStrings along their edges' geometry (`[lon, lat]`, 7 decimals, a point repeated where two
-edges meet kept once; the baseline of a round trip has no geometry), and one Point per stop.
-`feature_collection(...)` makes the same from the route's parts, for a route that was stored
-rather than planned in this process (the API's), and `line_coordinates(data, edges)` is one such
-line's points. The CLI writes it (`worst-route plan --geojson`) and the API answers it
-(`GET /routes/{id}/geojson`); the engine and the job workers never import this module.
+`route_geojson(data, geometry, result)` is a FeatureCollection: the route and the baseline as
+LineStrings along their edges' shapes in the build's geometry (`graph/geometry.py`: `[lon,
+lat]`, 7 decimals, a point repeated where two edges meet kept once; the baseline of a round trip
+has no geometry), and one Point per stop. `feature_collection(...)` makes the same from the
+route's parts, for a route that was stored rather than planned in this process (the API's), and
+`line_coordinates(data, geometry, edges)` is one such line's points. The CLI writes it
+(`worst-route plan --geojson`) and the API answers it (`GET /routes/{id}/geojson`); the engine
+and the job workers never import this module.
 """
 
 from collections.abc import Sequence
@@ -17,14 +18,16 @@ import numpy as np
 from worst_route.engine.plan import PlanResult
 from worst_route.engine.route import IntArray
 from worst_route.graph.data import GraphData
+from worst_route.graph.geometry import Geometry, edge_points
 from worst_route.graph.spatial import Snap
 
 
-def route_geojson(data: GraphData, result: PlanResult) -> dict[str, Any]:
+def route_geojson(data: GraphData, geometry: Geometry, result: PlanResult) -> dict[str, Any]:
     """The route, the baseline and the stops as a GeoJSON FeatureCollection."""
     route, baseline = result.route, result.baseline
     return feature_collection(
         data,
+        geometry,
         edges=route.edges,
         length_m=route.metrics.length_m,
         time_s=route.metrics.time_s,
@@ -37,6 +40,7 @@ def route_geojson(data: GraphData, result: PlanResult) -> dict[str, Any]:
 
 def feature_collection(
     data: GraphData,
+    geometry: Geometry,
     *,
     edges: IntArray,
     length_m: float,
@@ -48,8 +52,8 @@ def feature_collection(
 ) -> dict[str, Any]:
     """`route_geojson`'s FeatureCollection, from the route's parts."""
     lines = [
-        _line(data, edges, "route", length_m, time_s),
-        _line(data, baseline_edges, "baseline", baseline_length_m, baseline_time_s),
+        _line(data, geometry, edges, "route", length_m, time_s),
+        _line(data, geometry, baseline_edges, "baseline", baseline_length_m, baseline_time_s),
     ]
     stops = [
         {
@@ -68,13 +72,10 @@ def feature_collection(
     return {"type": "FeatureCollection", "features": [*lines, *stops]}
 
 
-def line_coordinates(data: GraphData, edges: IntArray) -> list[list[float]]:
+def line_coordinates(data: GraphData, geometry: Geometry, edges: IntArray) -> list[list[float]]:
     """The `[lon, lat]` points along `edges`, 7 decimals, a point repeated where two edges meet
     kept once."""
-    starts = data.coord_indptr[edges]
-    counts = data.coord_indptr[edges + 1] - starts
-    within = np.arange(counts.sum()) - np.repeat(np.cumsum(counts) - counts, counts)
-    points = data.coords[np.repeat(starts, counts) + within].astype(np.float64)
+    points, _ = edge_points(data, geometry, edges)
     fresh = np.ones(len(points), dtype=np.bool_)
     fresh[1:] = (points[1:] != points[:-1]).any(axis=1)
     coordinates: list[list[float]] = np.round(points[fresh], 7).tolist()
@@ -82,13 +83,13 @@ def line_coordinates(data: GraphData, edges: IntArray) -> list[list[float]]:
 
 
 def _line(
-    data: GraphData, edges: IntArray, kind: str, length_m: float, time_s: float
+    data: GraphData, geometry: Geometry, edges: IntArray, kind: str, length_m: float, time_s: float
 ) -> dict[str, Any]:
     properties = {"kind": kind, "length_m": length_m, "time_s": time_s}
     if len(edges) == 0:
         return {"type": "Feature", "geometry": None, "properties": properties}
     return {
         "type": "Feature",
-        "geometry": {"type": "LineString", "coordinates": line_coordinates(data, edges)},
+        "geometry": {"type": "LineString", "coordinates": line_coordinates(data, geometry, edges)},
         "properties": properties,
     }

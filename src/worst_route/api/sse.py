@@ -3,8 +3,9 @@
 An `Event` is one server-sent event of a job: its id (from the job's counter), its name and its
 JSON data. `server_sent(event)` is the same for `EventSourceResponse`.
 
-The geometry of a path: consecutive edges share their junction point (true of every build:
-an edge's `coords` start and end at its nodes), so `path_points(data, edges)` keeps it once and
+The geometry of a path: consecutive edges share their junction point (an edge's line in the
+build's geometry starts and ends at its nodes), so `path_points(data, geometry, edges)` keeps it
+once and
 returns, with the `[lon, lat]` points (7 decimals), each node's index among them. A splice
 (`splice_out`) carries the detour's points and indices, so a client can replace route nodes
 i..j and still know where every node is. A snapshot (`snapshot`) carries the whole route the
@@ -28,6 +29,7 @@ from sse_starlette import ServerSentEvent
 from worst_route.api.schemas import BaselineOut, LineString, RouteMetrics, Snapshot, SpliceOut
 from worst_route.engine.route import IntArray, Metrics
 from worst_route.graph.data import GraphData
+from worst_route.graph.geometry import Geometry, edge_points
 from worst_route.presentation.geojson import line_coordinates
 
 METRES_PER_DEGREE = 111_320.0  # of latitude
@@ -48,13 +50,10 @@ def server_sent(event: Event) -> ServerSentEvent:
 
 
 def path_points(
-    data: GraphData, edges: IntArray, simplify_m: float = 0.0
+    data: GraphData, geometry: Geometry, edges: IntArray, simplify_m: float = 0.0
 ) -> tuple[list[list[float]], list[int]]:
     """The `[lon, lat]` points along a path of edges, and the index of each of its nodes."""
-    starts = data.coord_indptr[edges]
-    counts = data.coord_indptr[edges + 1] - starts
-    within = np.arange(counts.sum()) - np.repeat(np.cumsum(counts) - counts, counts)
-    points = data.coords[np.repeat(starts, counts) + within].astype(np.float64)
+    points, counts = edge_points(data, geometry, edges)
     if simplify_m > 0 and len(edges):
         owner = np.repeat(np.arange(len(edges)), counts)
         lines = shapely.linestrings(points, indices=owner)
@@ -90,14 +89,17 @@ def time_ratio(
     return (time_s + delay_s) / (baseline_time_s + baseline_delay_s)
 
 
-def splice_out(data: GraphData, i: int, j: int, nodes: IntArray, edges: IntArray) -> SpliceOut:
+def splice_out(
+    data: GraphData, geometry: Geometry, i: int, j: int, nodes: IntArray, edges: IntArray
+) -> SpliceOut:
     """One accepted splice: route nodes i..j replaced by the detour `nodes`."""
-    coords, node_index = path_points(data, edges)
+    coords, node_index = path_points(data, geometry, edges)
     return SpliceOut(i=i, j=j, node_count=len(nodes), coords=coords, node_index=node_index)
 
 
 def snapshot(
     data: GraphData,
+    geometry: Geometry,
     *,
     nodes: IntArray,
     edges: IntArray,
@@ -108,7 +110,7 @@ def snapshot(
     simplify_m: float,
 ) -> Snapshot:
     """The whole route, every node a vertex of its simplified geometry."""
-    coords, node_index = path_points(data, edges, simplify_m)
+    coords, node_index = path_points(data, geometry, edges, simplify_m)
     return Snapshot(
         iteration=iteration,
         elapsed_s=elapsed_s,
@@ -120,7 +122,9 @@ def snapshot(
     )
 
 
-def baseline_out(data: GraphData, length_m: float, time_s: float, edges: IntArray) -> BaselineOut:
+def baseline_out(
+    data: GraphData, geometry: Geometry, length_m: float, time_s: float, edges: IntArray
+) -> BaselineOut:
     """The `baseline` event: the sensible route, without geometry for a round trip."""
-    geometry = LineString(coordinates=line_coordinates(data, edges)) if len(edges) else None
-    return BaselineOut(length_m=length_m, time_s=time_s, geometry=geometry)
+    line = LineString(coordinates=line_coordinates(data, geometry, edges)) if len(edges) else None
+    return BaselineOut(length_m=length_m, time_s=time_s, geometry=line)

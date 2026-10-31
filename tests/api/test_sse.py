@@ -1,5 +1,3 @@
-from dataclasses import replace
-
 import numpy as np
 import pytest
 
@@ -14,12 +12,14 @@ from worst_route.api.sse import (
 )
 from worst_route.engine.route import Metrics
 from worst_route.graph.data import GraphData
+from worst_route.graph.geometry import Geometry, encode, straight
 from worst_route.graph.testing import make_graph
 
 from ..engine.graphs import TO_LONLAT, X0, Y0, edges_of
 from .support import GRID
 
-F32 = 1e-5  # degrees: edge coords are float32, about 1 m from the nodes' float64 positions
+F32 = 1e-5  # degrees, about a metre: a shape point is stored to the metre
+STRAIGHT = straight(GRID.m)
 
 
 def lonlat(x: float, y: float) -> list[float]:
@@ -27,43 +27,44 @@ def lonlat(x: float, y: float) -> list[float]:
     return [float(lon), float(lat)]
 
 
-def shaped() -> GraphData:
-    """Three nodes 100 m apart on a line; 0 → 1 and back bend 5 m off it, with a point on the way
-    to the bend."""
+def shaped() -> tuple[GraphData, Geometry]:
+    """Three nodes 100 m apart on a line, and its geometry: 0 → 1 and back bend 5 m off it, with
+    a point on the way to the bend."""
     g = make_graph(
         [(X0, Y0), (X0 + 100, Y0), (X0 + 200, Y0)],
         [(0, 1, 100), (1, 0, 100), (1, 2, 100), (2, 1, 100)],
     )
-    bent = [lonlat(0, 0), lonlat(30, 2.5), lonlat(60, 5), lonlat(100, 0)]
-    lines = [bent, bent[::-1], [lonlat(100, 0), lonlat(200, 0)], [lonlat(200, 0), lonlat(100, 0)]]
+    bent = [(0, 0), (30, 3), (60, 5), (100, 0)]
+    lines = [bent, bent[::-1], [(100, 0), (200, 0)], [(200, 0), (100, 0)]]
     indptr = np.concatenate(([0], np.cumsum([len(line) for line in lines]))).astype(np.int64)
-    coords = np.array([p for line in lines for p in line], dtype=np.float32)
-    return replace(g, coord_indptr=indptr, coords=coords)
+    points = np.array([(X0 + x, Y0 + y) for line in lines for x, y in line], dtype=np.float64)
+    return g, encode(g, points, indptr)
 
 
 def test_a_path_keeps_shared_junctions_once_and_indexes_every_node() -> None:
     nodes = [0, 1, 2, 12, 22]
-    coords, node_index = path_points(GRID, edges_of(GRID, nodes))
+    coords, node_index = path_points(GRID, STRAIGHT, edges_of(GRID, nodes))
     assert len(coords) == 5 and node_index == [0, 1, 2, 3, 4]
     for k, v in enumerate(nodes):
         assert coords[node_index[k]] == pytest.approx([GRID.node_lon[v], GRID.node_lat[v]], abs=F32)
 
 
 def test_a_snapshot_simplifies_each_edge_and_keeps_every_node() -> None:
-    g = shaped()
+    g, geometry = shaped()
     edges = edges_of(g, [0, 1, 2])
-    full, node_index = path_points(g, edges)
+    full, node_index = path_points(g, geometry, edges)
     assert len(full) == 5 and node_index == [0, 3, 4]
-    coords, node_index = path_points(g, edges, simplify_m=1.0)
+    coords, node_index = path_points(g, geometry, edges, simplify_m=1.0)
     assert all(p in full for p in coords)  # the original values, to the last digit
     assert len(coords) == 4 and node_index == [0, 2, 3]  # the point on the way goes
     assert coords[1] == pytest.approx(lonlat(60, 5), abs=F32)  # the bend stays
-    coords, node_index = path_points(g, edges, simplify_m=10.0)
+    coords, node_index = path_points(g, geometry, edges, simplify_m=10.0)
     assert node_index == [0, 1, 2]
     for k, v in enumerate([0, 1, 2]):
         assert coords[node_index[k]] == pytest.approx([g.node_lon[v], g.node_lat[v]], abs=F32)
     shot = snapshot(
         g,
+        geometry,
         nodes=np.array([0, 1, 2], dtype=np.int32),
         edges=edges,
         stop_idx=(0, 2),
@@ -78,7 +79,7 @@ def test_a_snapshot_simplifies_each_edge_and_keeps_every_node() -> None:
 
 def test_a_splice_carries_its_points_and_node_indices() -> None:
     nodes = np.array([1, 11, 12, 2], dtype=np.int32)
-    out = splice_out(GRID, 1, 2, nodes, edges_of(GRID, [1, 11, 12, 2]))
+    out = splice_out(GRID, STRAIGHT, 1, 2, nodes, edges_of(GRID, [1, 11, 12, 2]))
     assert (out.i, out.j, out.node_count, out.node_index) == (1, 2, 4, [0, 1, 2, 3])
     assert out.coords[3] == pytest.approx([GRID.node_lon[2], GRID.node_lat[2]], abs=F32)
 

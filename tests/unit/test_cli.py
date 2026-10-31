@@ -83,6 +83,26 @@ def test_serve_on_a_build_saved_before_an_array_existed_is_one_line(
     )
 
 
+def test_serve_on_a_build_without_its_geometry_is_one_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A build that plans but cannot draw a route: serve refuses before it listens.
+    g = grid_graph(3, 3, 100)
+    g = replace(g, meta={**g.meta, "region": "portland", "build_id": "b1"})
+    path = tmp_path / "graphs" / "portland" / "b1"
+    write_build(g, path)
+    (path / "geometry" / "geom_dxy.npy").unlink()
+    monkeypatch.setenv("WORST_ROUTE_DATA", str(tmp_path))
+    settings.cache_clear()
+    result = runner.invoke(app, ["serve", "--region", "portland", "--build-id", "b1"])
+    settings.cache_clear()
+    assert result.exit_code == 1
+    assert result.stderr == (
+        f"the build at {path} lacks its geometry (geom_dxy): rebuild it with "
+        "`worst-route pipeline save --force --region portland`\n"
+    )
+
+
 def test_serve_runs_the_app_for_its_options(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

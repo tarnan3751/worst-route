@@ -8,7 +8,8 @@ brand tables the brand ids index into, and `meta`. `ARRAY_SPECS` is the format (
 number of brands. Edge ids are sorted by (u, v, original order), so each node's out-edges are a
 contiguous run of ascending ids. Brand k's nodes are
 `brand_nodes[brand_indptr[k]:brand_indptr[k + 1]]` (`nodes_of_brand`), ascending, with the POIs
-snapped to each in `brand_locations`.
+snapped to each in `brand_locations`. The shape of each edge is not among the arrays: it is
+the build's geometry (`graph/geometry.py`), which the engine never reads.
 
 Three arrays are derived, not stored, each worked out once per `GraphData` on first use and
 read-only: `node_lon` and `node_lat`, the inverse projection of `node_x` and `node_y` from
@@ -98,9 +99,7 @@ ARRAY_SPECS: dict[str, tuple[np.dtype[Any], tuple[str | int, ...]]] = {
     "out_edges": (np.dtype(np.int32), ("m",)),
     "in_indptr": (np.dtype(np.int64), ("n+1",)),
     "in_edges": (np.dtype(np.int32), ("m",)),
-    # geometry
-    "coord_indptr": (np.dtype(np.int64), ("m+1",)),
-    "coords": (np.dtype(np.float32), ("*", 2)),
+    # OSM nodes along each edge
     "osmnode_indptr": (np.dtype(np.int64), ("m+1",)),
     "osmnode_ids": (np.dtype(np.int64), ("*",)),
     # twins
@@ -182,9 +181,7 @@ class GraphData:
     out_edges: NDArray[np.int32]  # each node's out-edges, ascending edge id
     in_indptr: NDArray[np.int64]
     in_edges: NDArray[np.int32]  # each node's in-edges, ascending edge id
-    # geometry
-    coord_indptr: NDArray[np.int64]
-    coords: NDArray[np.float32]  # (lon, lat) along each edge, endpoints included
+    # OSM nodes along each edge
     osmnode_indptr: NDArray[np.int64]
     osmnode_ids: NDArray[np.int64]  # original OSM node ids along each edge, endpoints included
     # twins: using an edge bans every edge in its row (symmetric)
@@ -300,7 +297,6 @@ class GraphData:
         _check_indptr("member_indptr", self.member_indptr, len(self.member_osm_ids), 1)
         if len(np.unique(self.member_osm_ids)) != len(self.member_osm_ids):
             raise ValueError("member_osm_ids: an original OSM node id is a member twice")
-        _check_indptr("coord_indptr", self.coord_indptr, len(self.coords), 2)
         _check_indptr("osmnode_indptr", self.osmnode_indptr, len(self.osmnode_ids), 2)
         _check_indptr("twin_indptr", self.twin_indptr, len(self.twin_edges), 0)
         _check_indptr("out_indptr", self.out_indptr, m, 0)

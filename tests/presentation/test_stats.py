@@ -9,6 +9,7 @@ import pytest
 
 from worst_route.api.schemas import Vehicle
 from worst_route.config import TOASTS_MAX
+from worst_route.graph.geometry import straight
 from worst_route.presentation.places import PlaceIndex
 from worst_route.presentation.stats import Stats, stats, toasts
 
@@ -23,7 +24,7 @@ LOOP = np.array([0, 1, 11, 10, 0], dtype=np.int32)
 def stats_of(**fields: Any) -> Stats:
     values: dict[str, Any] = {
         "length_m": 10_000.0, "baseline_length_m": 3_000.0, "vehicle": None, "places": None,
-        "active": ALL, "banned": NONE, **fields,
+        "geometry": straight(GRID.m), "active": ALL, "banned": NONE, **fields,
     }  # fmt: skip
     return stats(GRID, EAST_THEN_NORTH_EDGES, **values)
 
@@ -67,7 +68,7 @@ def test_the_network_fraction_counts_road_units_within_reach() -> None:
     paired = replace(GRID, edge_unit=units)
     reach = stats(
         paired, EAST_THEN_NORTH_EDGES, length_m=1.0, baseline_length_m=1.0, vehicle=None,
-        places=None, active=ALL, banned=NONE,
+        places=None, geometry=None, active=ALL, banned=NONE,
     )  # fmt: skip
     assert reach.network_fraction == pytest.approx(17 / 359)
 

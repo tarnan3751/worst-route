@@ -1,7 +1,8 @@
 """The FastAPI application (`docs/reference/api.md`).
 
-`create_app(settings)` loads the region's build (memory-mapped, `graph.loader`) when it is
-called, so `worst-route serve` fails before it listens when the build is missing; it opens the
+`create_app(settings)` loads the region's build (memory-mapped, `graph.loader`) and its geometry,
+which drawing a route needs, when it is called, so `worst-route serve` fails before it listens
+when the build or its geometry is missing; it opens the
 route store, builds the geocoding service (Nominatim, with its cache `geocode.sqlite` beside
 the route store; none when the geocoder is `none`; a test passes its own), loads the region's
 places index (`presentation.places`; none when `worst-route aux places` has not written it) and
@@ -67,7 +68,8 @@ from worst_route.geocode.cache import GeocodeCache
 from worst_route.geocode.limiter import RateLimiter
 from worst_route.geocode.nominatim import NominatimGeocoder, user_agent
 from worst_route.geocode.service import GeocodeService
-from worst_route.graph.loader import Loaded, load_build
+from worst_route.graph.loader import BuildNotFound, Loaded, load_build
+from worst_route.graph.store import MissingArray
 from worst_route.presentation.places import PlaceIndex
 
 log = logging.getLogger(__name__)
@@ -122,6 +124,10 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
     loaded = load_build(
         settings.data_dir, settings.region, settings.build_id, backend=settings.backend
     )
+    try:
+        _ = loaded.geometry  # read now: a build without its geometry cannot draw a route
+    except MissingArray as error:
+        raise BuildNotFound(str(error)) from None
     store_path = settings.store_path or settings.data_dir / "routes.sqlite"
     store = RouteStore(store_path)
     limits = PUBLIC if settings.public else LOCAL

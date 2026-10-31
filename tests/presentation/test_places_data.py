@@ -8,6 +8,7 @@ from worst_route.engine.plan import plan_route
 from worst_route.engine.request import RouteRequest
 from worst_route.graph.backends import make_backend
 from worst_route.graph.data import GraphData
+from worst_route.graph.geometry import Geometry, read_geometry
 from worst_route.graph.store import read_build
 from worst_route.pipeline import layout
 from worst_route.presentation.places import PlaceIndex, route_line
@@ -28,6 +29,11 @@ def portland() -> GraphData:
 
 
 @pytest.fixture(scope="module")
+def geometry(portland: GraphData) -> Geometry:
+    return read_geometry(layout.build_dir("portland", portland.meta["build_id"]), portland.m)
+
+
+@pytest.fixture(scope="module")
 def index() -> PlaceIndex:
     loaded = PlaceIndex.load("portland")
     if loaded is None:
@@ -36,11 +42,13 @@ def index() -> PlaceIndex:
 
 
 def test_powells_to_reed_stays_in_oregon_and_in_portland(
-    portland: GraphData, index: PlaceIndex
+    portland: GraphData, geometry: Geometry, index: PlaceIndex
 ) -> None:
     request = RouteRequest(stops=[POWELLS, REED], seed=1, max_iterations=2000, budget_s=120)
     line = route_line(
-        portland, plan_route(portland, request, backend=make_backend(portland)).route.edges
+        portland,
+        geometry,
+        plan_route(portland, request, backend=make_backend(portland)).route.edges,
     )
     assert [s.usps for s in index.states_crossed(line)] == ["OR"]
     towns = index.towns_passed(line)

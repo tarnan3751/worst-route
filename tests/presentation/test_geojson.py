@@ -7,11 +7,13 @@ import pytest
 
 from worst_route.engine.plan import PlanResult, plan_route
 from worst_route.engine.request import RouteRequest
+from worst_route.graph.geometry import straight
 from worst_route.presentation.geojson import feature_collection, line_coordinates, route_geojson
 
 from ..engine.graphs import at_node, lattice
 
 GRID = lattice(8, 8)
+STRAIGHT = straight(GRID.m)
 
 
 def planned(stops: list[int], seed: int = 2) -> PlanResult:
@@ -22,13 +24,13 @@ def planned(stops: list[int], seed: int = 2) -> PlanResult:
 
 
 def test_a_round_trip_has_no_baseline_line() -> None:
-    features = route_geojson(GRID, planned([27, 27]))["features"]
+    features = route_geojson(GRID, STRAIGHT, planned([27, 27]))["features"]
     assert features[1]["properties"]["kind"] == "baseline" and features[1]["geometry"] is None
 
 
 def test_geojson_draws_the_route_the_baseline_and_the_stops() -> None:
     result = planned([0, 27, 63])
-    collection = route_geojson(GRID, result)
+    collection = route_geojson(GRID, STRAIGHT, result)
     assert collection["type"] == "FeatureCollection"
     route, baseline, *stops = collection["features"]
     assert route["properties"]["kind"] == "route" and baseline["properties"]["kind"] == "baseline"
@@ -51,6 +53,7 @@ def test_the_collection_from_a_route_s_parts_is_route_geojson_s() -> None:
     route, baseline = result.route, result.baseline
     parts = feature_collection(
         GRID,
+        STRAIGHT,
         edges=route.edges,
         length_m=route.metrics.length_m,
         time_s=route.metrics.time_s,
@@ -59,6 +62,6 @@ def test_the_collection_from_a_route_s_parts_is_route_geojson_s() -> None:
         baseline_time_s=baseline.time_s,
         snaps=result.snaps,
     )
-    assert json.dumps(parts) == json.dumps(route_geojson(GRID, result))
+    assert json.dumps(parts) == json.dumps(route_geojson(GRID, STRAIGHT, result))
     line = parts["features"][0]["geometry"]["coordinates"]
-    assert line_coordinates(GRID, route.edges) == line
+    assert line_coordinates(GRID, STRAIGHT, route.edges) == line

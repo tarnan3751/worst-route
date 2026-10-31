@@ -51,11 +51,10 @@ def with_brand_strings(g: GraphData, brands: list[str], wikidata: list[str | Non
 MALFORMED: list[tuple[str, Callable[[GraphData], GraphData], str]] = [
     ("not an array", lambda g: replace(g, node_x=g.node_x.tolist()), "node_x: not a NumPy"),
     ("dtype", edited("edge_u", lambda a: a.astype(np.int64)), "edge_u: dtype"),
-    ("ndim", edited("coords", lambda a: a.ravel()), "coords: shape"),
+    ("ndim", edited("tier_node_mask", lambda a: a.ravel()), "tier_node_mask: shape"),
     ("length n", edited("node_kind", lambda a: a[:-1]), "node_kind: shape"),
     ("length m", edited("edge_tier", lambda a: a[:-1]), "edge_tier: shape"),
     ("tier count", edited("tier_node_mask", lambda a: a[:-1]), "tier_node_mask: shape"),
-    ("coords width", edited("coords", lambda a: np.hstack([a, a[:, :1]])), "coords: shape"),
     ("transition rows", edited("trans_in", lambda a: a[:-1]), "trans_in: shape"),
     (
         "meta missing",
@@ -83,7 +82,6 @@ MALFORMED: list[tuple[str, Callable[[GraphData], GraphData], str]] = [
     ),
     ("indptr order", edited("twin_indptr", setitem(1, 3)), "twin_indptr"),
     ("empty member run", edited("member_indptr", setitem(1, 0)), "member_indptr: every run"),
-    ("short coord run", edited("coord_indptr", setitem(1, 1)), "coord_indptr: every run"),
     ("short osmnode run", edited("osmnode_indptr", setitem(1, 1)), "osmnode_indptr: every run"),
     ("node kind", edited("node_kind", setitem(0, 4)), "node_kind"),
     ("edge_v range", edited("edge_v", setitem(7, 4)), "edge_v"),

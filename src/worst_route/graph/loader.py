@@ -3,16 +3,19 @@
 `load_build(data_dir, region, build_id="latest", backend=...)` reads
 `<data_dir>/graphs/<region>/<build_id>/` with `store.read_build`, every array memory-mapped, so
 worker processes share one copy through the OS page cache, and returns it as `Loaded`: the
-`GraphData`, its `SpatialIndex` and the backend `backend` names (`make_backend`). "latest" is the
-id in `graphs/<region>/latest`, read on every call. The two builds used last stay loaded, keyed
-by data directory, region, build id and backend. A build that is not there, or one saved before
-an array of the format existed (`store.MissingArray`), raises `BuildNotFound`, naming the
-pipeline step to run.
+`GraphData`, its `SpatialIndex`, the backend `backend` names (`make_backend`) and the build's
+directory. `Loaded.geometry` reads the build's geometry (`graph/geometry.py`) on first use,
+memory-mapped: the API process draws routes with it, a job's worker never touches it. "latest"
+is the id in `graphs/<region>/latest`, read on every call. The two builds used last stay
+loaded, keyed by data directory, region, build id and backend. A build that is not there, or
+one saved before an array of the format existed (`store.MissingArray`), raises
+`BuildNotFound`, naming the pipeline step to run.
 """
 
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cached_property, lru_cache
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from worst_route.config import DEFAULT_BACKEND, BackendName
 from worst_route.graph.backend import GraphBackend
@@ -20,6 +23,9 @@ from worst_route.graph.backends import make_backend
 from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import SpatialIndex
 from worst_route.graph.store import MissingArray, read_build
+
+if TYPE_CHECKING:
+    from worst_route.graph.geometry import Geometry
 
 
 class BuildNotFound(FileNotFoundError):  # noqa: N818 (reads as the condition)
@@ -33,6 +39,14 @@ class Loaded:
     data: GraphData
     spatial: SpatialIndex
     backend: GraphBackend
+    path: Path
+
+    @cached_property
+    def geometry(self) -> "Geometry":
+        """The build's geometry, read on first use; `MissingArray` when its files are gone."""
+        from worst_route.graph.geometry import read_geometry  # never in a job's worker
+
+        return read_geometry(self.path, self.data.m)
 
 
 def load_build(
@@ -59,4 +73,4 @@ def _load(data_dir: Path, region: str, build_id: str, backend: BackendName) -> L
         data = read_build(path)
     except MissingArray as error:
         raise BuildNotFound(str(error)) from None
-    return Loaded(data, SpatialIndex(data), make_backend(data, backend))
+    return Loaded(data, SpatialIndex(data), make_backend(data, backend), path)

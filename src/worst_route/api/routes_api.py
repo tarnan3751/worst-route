@@ -101,8 +101,10 @@ from worst_route.engine.snap import StopUnreachable, is_round_trip, role_of
 from worst_route.engine.turns import count_turns
 from worst_route.engine.validator import validate_route
 from worst_route.graph.data import GraphData
+from worst_route.graph.geometry import Geometry
 from worst_route.graph.loader import BuildNotFound, Loaded, load_build
 from worst_route.graph.spatial import SnapError
+from worst_route.graph.store import MissingArray
 from worst_route.presentation.directions import Step
 from worst_route.presentation.document import present, route_directions
 from worst_route.presentation.geojson import feature_collection, line_coordinates
@@ -186,6 +188,14 @@ def build_of(api: "Api", stored: StoredRoute) -> Loaded:
         )
         raise ApiError(409, "BUILD_UNAVAILABLE", message)
     return loaded
+
+
+def geometry_of(loaded: Loaded) -> Geometry:
+    """The build's geometry, to draw a stored route; BUILD_UNAVAILABLE when its files are gone."""
+    try:
+        return loaded.geometry
+    except MissingArray as error:
+        raise ApiError(409, "BUILD_UNAVAILABLE", str(error)) from None
 
 
 def stored_delays(data: GraphData, stored: StoredRoute) -> tuple[float, float]:
@@ -492,7 +502,7 @@ def route(route_id: str, request: Request) -> RouteDocument:
             )
             for label, s, at in zip(labels, stored.stops, stored.stop_idx, strict=True)
         ],
-        geometry=LineString(coordinates=line_coordinates(data, stored.edges)),
+        geometry=LineString(coordinates=line_coordinates(data, geometry_of(loaded), stored.edges)),
         legs=[
             Leg(from_stop=k, to_stop=k + 1, node_range=(a, b))
             for k, (a, b) in enumerate(pairwise(stored.stop_idx))
@@ -523,6 +533,7 @@ def presentation_of(
         labels=[s.label for s in asked.stops or []],
         vehicle=asked.vehicle,
         places=api.places,
+        geometry=geometry_of(loaded) if api.places is not None else None,
     )
 
 
@@ -582,8 +593,10 @@ def route_geojson(route_id: str, request: Request) -> dict[str, Any]:
     api = api_of(request)
     stored = stored_route(api, route_id)
     m = stored.metrics_json
+    loaded = build_of(api, stored)
     return feature_collection(
-        build_of(api, stored).data,
+        loaded.data,
+        geometry_of(loaded),
         edges=stored.edges,
         length_m=m["length_m"],
         time_s=m["time_s"],

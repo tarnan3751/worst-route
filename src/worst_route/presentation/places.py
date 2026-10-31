@@ -48,6 +48,7 @@ from numpy.typing import NDArray
 from worst_route.config import CENSUS_VINTAGE, REGIONS, STATES, settings
 from worst_route.engine.route import IntArray
 from worst_route.graph.data import GraphData
+from worst_route.graph.geometry import Geometry
 from worst_route.presentation.geojson import line_coordinates
 
 STATE_COLUMNS = ("STATEFP", "STUSPS", "NAME")
@@ -179,9 +180,9 @@ def _empty_places(like: Any) -> Any:
     return gpd.GeoDataFrame({c: [] for c in PLACE_COLUMNS}, geometry=[], crs=like.crs)
 
 
-def route_line(data: GraphData, edges: IntArray) -> shapely.LineString:
-    """The route along `edges` as a line in lon/lat."""
-    return shapely.LineString(line_coordinates(data, edges))
+def route_line(data: GraphData, geometry: Geometry, edges: IntArray) -> shapely.LineString:
+    """The route along `edges` as a line in lon/lat, along the build's geometry."""
+    return shapely.LineString(line_coordinates(data, geometry, edges))
 
 
 class PlaceIndex:

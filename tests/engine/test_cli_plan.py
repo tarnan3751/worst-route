@@ -1,6 +1,7 @@
 import json
 import math
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import replace
@@ -17,6 +18,7 @@ from worst_route.graph.data import EdgeFlag, GraphData
 from worst_route.graph.store import write_build
 from worst_route.graph.testing import make_graph
 
+from ..presentation.support import write_fixture_places
 from .graphs import TREES, X0, Y0, at, at_node, avenue, lattice, left_only, named_roads
 
 runner = CliRunner()
@@ -68,6 +70,30 @@ def test_plan_prints_a_validated_route_and_writes_its_files(data_dir: Path, tmp_
     assert result.exit_code == 0, result.output
     assert result.stdout.splitlines()[-1] == "valid"
     assert "metrics: ok" in result.stdout
+
+
+def test_planning_and_validating_never_read_the_geometry(data_dir: Path, tmp_path: Path) -> None:
+    # The build's geometry gone: the route is planned, validated and written all the same
+    # (without a places index, route.json needs no line); only its GeoJSON needs the geometry.
+    save(data_dir, GRID, "b1")
+    shutil.rmtree(data_dir / "graphs" / "portland" / "b1" / "geometry")
+    out, geo = tmp_path / "route.json", tmp_path / "route.geojson"
+    trip = ["--from", latlon(GRID, 0), "--to", latlon(GRID, 99), "--seed", "3"]
+    code, stdout, stderr = plan(*trip, "--max-iterations", "200", "--out", str(out))
+    assert code == 0, stdout + stderr
+    assert "validator: ok (" in stdout and json.loads(out.read_text())["seed"] == 3
+    result = runner.invoke(app, ["validate", str(out)])
+    assert result.exit_code == 0 and result.stdout.splitlines()[-1] == "valid"
+    # what needs it fails before the search: a GeoJSON, or route.json with a places index
+    missing = "lacks its geometry (geom_indptr): rebuild it with `worst-route pipeline save"
+    code, stdout, stderr = plan(*trip, "--max-iterations", "20", "--geojson", str(geo))
+    assert code == 1 and not geo.exists() and missing in stderr
+    assert "search:" not in stdout and "validator:" not in stdout
+    write_fixture_places(data_dir)
+    out.unlink()
+    code, stdout, stderr = plan(*trip, "--max-iterations", "20", "--out", str(out))
+    assert code == 1 and not out.exists() and missing in stderr
+    assert "search:" not in stdout and "validator:" not in stdout
 
 
 def test_the_same_seed_plans_the_same_route(data_dir: Path, tmp_path: Path) -> None:

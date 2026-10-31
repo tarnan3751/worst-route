@@ -52,3 +52,12 @@ def test_a_build_without_an_array_names_its_remedy(tmp_path: Path) -> None:
     (tmp_path / "graphs" / "portland" / "b1" / "arrays" / "node_roundabouts.npy").unlink()
     with pytest.raises(BuildNotFound, match="lacks the array node_roundabouts.*save --force"):
         load_build(tmp_path, "portland", "b1", backend="python")
+
+
+def test_the_geometry_is_read_on_first_use_and_kept(tmp_path: Path) -> None:
+    g = save(tmp_path, "b1")
+    loaded = load_build(tmp_path, "portland", "b1", backend="python")
+    assert "geometry" not in vars(loaded)  # not read with the build
+    geometry = loaded.geometry
+    assert geometry.geom_indptr.tolist() == [0] * (g.m + 1)  # the builder's straight edges
+    assert loaded.geometry is geometry

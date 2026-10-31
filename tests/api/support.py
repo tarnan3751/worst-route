@@ -18,6 +18,7 @@ from worst_route.api.store import RouteStore
 from worst_route.api.worker import RouteArrays
 from worst_route.engine.request import RouteRequest
 from worst_route.graph.data import GraphData
+from worst_route.graph.geometry import Geometry
 from worst_route.graph.loader import Loaded, load_build
 from worst_route.graph.store import write_build
 
@@ -37,11 +38,16 @@ GRID_BBOX = [
 
 
 def save_build(
-    data_dir: Path, g: GraphData, build_id: str, latest: bool = True, **params: Any
+    data_dir: Path,
+    g: GraphData,
+    build_id: str,
+    latest: bool = True,
+    geometry: Geometry | None = None,
+    **params: Any,
 ) -> None:
     meta = {**g.meta, "region": "portland", "build_id": build_id, "params": params}
     g = replace(g, meta=meta)
-    write_build(g, data_dir / "graphs" / "portland" / build_id)
+    write_build(g, data_dir / "graphs" / "portland" / build_id, geometry)
     if latest:
         (data_dir / "graphs" / "portland" / "latest").write_text(f"{build_id}\n")
 

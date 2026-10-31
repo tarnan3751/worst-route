@@ -5,19 +5,25 @@ from typing import Any
 import networkx as nx
 import numpy as np
 import pytest
+import shapely
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from tests.pipeline.chain import FIXTURES, brand_pois, cleaned, east_of, enriched, tier_nodes
 from tests.pipeline.invariants import check_build, check_saved
 from tests.pipeline.osm import write_osm
-from worst_route.config import PIPELINE_VERSION, TIERS
+from worst_route.config import GEOMETRY_SIMPLIFY_M, PIPELINE_VERSION, TIERS
 from worst_route.graph.data import FORMAT_VERSION, NodeKind
+from worst_route.graph.geometry import edge_xy, read_geometry
 from worst_route.graph.store import graph_version, read_build
+from worst_route.graph.testing import GRID_ORIGIN, make_graph
 from worst_route.pipeline import save
 from worst_route.pipeline.enrich import run_enrich
 from worst_route.pipeline.save import (
     EmptyTransitionsError,
     TooManySpeedsError,
     graph_data,
+    graph_geometry,
     remove_build,
     save_build,
 )
@@ -57,11 +63,11 @@ def test_save_each_fixture(name: str, tmp_path: Path) -> None:
     graph = enriched(FIXTURES / f"{name}.osm", tmp_path, allow_fragmented=name == "oneway")
     data = graph_data(graph, tier_nodes(graph), META)
     path = build_dir(tmp_path)
-    report = save_build(data, path)
+    report = save_build(data, path, graph_geometry(graph, data))
     loaded = read_build(path)
     loaded.validate()  # deep
     check_build(loaded)
-    check_saved(graph, loaded)
+    check_saved(graph, loaded, read_geometry(path, loaded.m))
     assert loaded.meta["graph_version"] == report.graph_version == graph_version(data)
     assert report.counts == loaded.meta["counts"]
     assert report.counts["nodes"] == graph.number_of_nodes()
@@ -126,7 +132,8 @@ def test_roundabout_rings_are_saved_at_their_super_junctions(tmp_path: Path) -> 
     for k, (source, (kind, rings)) in enumerate(zip(sources, expected, strict=True)):
         graph = enriched(source, tmp_path)
         path = build_dir(tmp_path / str(k))
-        save_build(graph_data(graph, tier_nodes(graph), META), path)
+        data = graph_data(graph, tier_nodes(graph), META)
+        save_build(data, path, graph_geometry(graph, data))
         loaded = read_build(path)
         (node,) = graph.graph["superjunctions"]
         assert (loaded.node_kind[node], loaded.node_roundabouts[node]) == (kind, rings)
@@ -140,10 +147,10 @@ def test_the_brand_index_is_saved_and_read_back(tmp_path: Path) -> None:
     run_enrich(graph, brand_pois([(*east_of(graph, v, dx), *tags) for v, dx, *tags in rows]))
     data = graph_data(graph, tier_nodes(graph), META)
     path = build_dir(tmp_path)
-    save_build(data, path)
+    save_build(data, path, graph_geometry(graph, data))
     loaded = read_build(path)
     loaded.validate()
-    check_saved(graph, loaded)
+    check_saved(graph, loaded, read_geometry(path, loaded.m))
     assert (loaded.strings.brands, loaded.strings.brand_wikidata) == (["Acme", "Zed"], ["Q1", None])
     assert loaded.nodes_of_brand(0).tolist() == [0, 7, 14]
     assert loaded.nodes_of_brand(1).tolist() == [3, 9, 20]
@@ -187,12 +194,13 @@ def test_a_written_build_is_not_overwritten_and_can_be_removed(tmp_path: Path) -
     graph = enriched(FIXTURES / "divided.osm", tmp_path)
     data = graph_data(graph, tier_nodes(graph), META)
     path = build_dir(tmp_path)
-    save_build(data, path)
+    geometry = graph_geometry(graph, data)
+    save_build(data, path, geometry)
     with pytest.raises(FileExistsError):
-        save_build(data, path)
+        save_build(data, path, geometry)
     remove_build(path)
     assert sorted(p.name for p in path.iterdir()) == ["stages"]
-    save_build(data, path)
+    save_build(data, path, geometry)
     assert (path / "meta.json").exists()
 
 
@@ -212,3 +220,23 @@ def test_graph_data_does_not_change_the_graph(tmp_path: Path) -> None:
     before = nx.to_dict_of_dicts(graph)
     graph_data(graph, tier_nodes(graph), META)
     assert nx.to_dict_of_dicts(graph) == before
+
+
+@settings(max_examples=200, deadline=None)
+@given(st.lists(st.tuples(st.floats(0.0, 1000.0), st.floats(-30.0, 30.0)), min_size=0, max_size=40))
+def test_the_geometry_is_the_shape_within_the_tolerance_and_the_rounding(
+    inner: list[tuple[float, float]],
+) -> None:
+    # One edge, a wiggly road from a node to another 1 km east: what the build draws lies within
+    # GEOMETRY_SIMPLIFY_M of it, plus the metre's rounding, and keeps its ends exactly.
+    x0, y0 = GRID_ORIGIN
+    line = [(x0, y0), *[(x0 + x, y0 + y) for x, y in sorted(inner)], (x0 + 1000.0, y0)]
+    graph = nx.MultiDiGraph()
+    graph.add_edge(0, 1, geometry=shapely.LineString(line))
+    data = make_graph([line[0], line[-1]], [(0, 1, 1000.0)])
+    geometry = save.graph_geometry(graph, data)
+    xy, counts = edge_xy(data, geometry, np.array([0]))
+    assert xy[0].tolist() == list(line[0]) and xy[-1].tolist() == list(line[-1])
+    assert counts[0] <= len(line)
+    drawn, shape = shapely.LineString(xy), shapely.LineString(line)
+    assert shapely.hausdorff_distance(drawn, shape, densify=0.05) <= GEOMETRY_SIMPLIFY_M + 0.71

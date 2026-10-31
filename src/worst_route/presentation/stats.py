@@ -1,14 +1,16 @@
 """A route's extra numbers and its toasts (`docs/reference/presentation.md`, **Stats and
 toasts**).
 
-`stats(data, edges, *, length_m, baseline_length_m, vehicle, places, active, banned)` works out:
+`stats(data, edges, *, length_m, baseline_length_m, vehicle, places, geometry, active, banned)`
+works out:
 
 - `extra_fuel_gal`, the length beyond the baseline's in miles over the vehicle's `mpg`, and
   `extra_cost_usd`, that at its `gas_price_usd`; both None without a vehicle;
 - `states` and `towns`, the Census names (`NAME`, "Portland", not "Portland city") of the states
   and towns the route passes through, in the order it first enters them
-  (`PlaceIndex.states_crossed` and `towns_passed` on `route_line`), and `towns_n`, how many
-  towns; all three None without a places index;
+  (`PlaceIndex.states_crossed` and `towns_passed` on `route_line`, along the build's
+  `geometry`, which only they need), and `towns_n`, how many towns; all three None without a
+  places index;
 - `network_fraction`, the road units (`edge_unit`) the route drives over those of every edge
   its request lets it drive: both ends in the request's `active` mask, not in its `banned` one.
 
@@ -35,6 +37,7 @@ from numpy.typing import NDArray
 from worst_route.config import TOASTS_MAX
 from worst_route.engine.route import IntArray
 from worst_route.graph.data import GraphData
+from worst_route.graph.geometry import Geometry
 from worst_route.presentation.comparisons import METRES_PER_MILE
 from worst_route.presentation.places import PlaceIndex, route_line
 
@@ -87,6 +90,7 @@ def stats(
     baseline_length_m: float,
     vehicle: Vehicle | None,
     places: PlaceIndex | None,
+    geometry: Geometry | None,
     active: NDArray[np.bool_],
     banned: NDArray[np.bool_],
 ) -> Stats:
@@ -97,7 +101,9 @@ def stats(
         cost = fuel * vehicle.gas_price_usd
     states = towns = None
     if places is not None:
-        line = route_line(data, edges)
+        if geometry is None:
+            raise ValueError("stats: a places index needs the build's geometry")
+        line = route_line(data, geometry, edges)
         states = [s.name for s in places.states_crossed(line)]
         towns = [t.name for t in places.towns_passed(line)]
     usable = active[data.edge_u] & active[data.edge_v] & ~banned

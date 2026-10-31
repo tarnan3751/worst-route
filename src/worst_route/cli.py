@@ -99,6 +99,8 @@ if TYPE_CHECKING:
     from worst_route.engine.request import RouteRequest
     from worst_route.graph.backend import GraphBackend
     from worst_route.graph.data import GraphData
+    from worst_route.graph.geometry import Geometry
+    from worst_route.presentation.places import PlaceIndex
 
 app = typer.Typer(help="The least efficient way to get anywhere in the US.", no_args_is_help=True)
 pipeline_app = typer.Typer(
@@ -539,12 +541,15 @@ def save(region: RegionOption, build_id: BuildIdOption = None, force: ForceOptio
     meta = step.build_meta(spec, build_id, params, sources)
     try:
         data = step.graph_data(graph, [t["node_ids"] for t in tiers], meta)
-    except step.EmptyTransitionsError as error:
+    except (step.EmptyTransitionsError, step.TooManySpeedsError) as error:
         _fail(f"save failed: {error}")
-    report = step.save_build(data, directory)
+    report = step.save_build(data, directory, step.graph_geometry(graph, data))
     layout.write_sidecar(output, record)
     c = report.counts
-    typer.echo(f"save {build_id}: wrote {directory} ({report.megabytes:.1f} MB)")
+    typer.echo(
+        f"save {build_id}: wrote {directory} ({report.megabytes:.1f} MB, "
+        f"geometry {report.geometry_megabytes:.1f} MB)"
+    )
     typer.echo(f"graph_version {report.graph_version}")
     typer.echo(
         f"nodes {c['nodes']}, edges {c['edges']}; {c['twin_pairs']} twin pairs; "
@@ -658,6 +663,18 @@ def _load_build(region: str, build_id: str | None) -> "GraphData":
         _fail(f"no saved build at {path}: {hint}")
     try:
         return read_build(path)
+    except MissingArray as error:
+        _fail(str(error))
+
+
+def _load_geometry(data: "GraphData") -> "Geometry":
+    """The geometry of the build `data` was read from, to draw a route along: only the route's
+    places and GeoJSON need it, never planning or the validator."""
+    from worst_route.graph.geometry import read_geometry
+    from worst_route.graph.store import MissingArray
+
+    try:
+        return read_geometry(layout.build_dir(data.meta["region"], data.meta["build_id"]), data.m)
     except MissingArray as error:
         _fail(str(error))
 
@@ -970,6 +987,14 @@ def plan(
             f"the build has {data.meta['graph_version'][:12]}"
         )
     engine = _make_backend(data, backend)
+    # A route's places and its GeoJSON are drawn along the build's geometry: read it before
+    # planning, so a build without one fails at once rather than after the search.
+    places: PlaceIndex | None = None
+    if out is not None:
+        from worst_route.presentation import places as place_index
+
+        places = place_index.PlaceIndex.load(data.meta["region"])
+    geometry = _load_geometry(data) if geojson is not None or places is not None else None
 
     last = time.monotonic()
 
@@ -1069,7 +1094,6 @@ def plan(
     typer.echo(f"validator: ok ({names})")
     if out is not None:
         from worst_route.presentation.document import present, with_presentation
-        from worst_route.presentation.places import PlaceIndex
 
         document = route_document(data, result)
         presented = present(
@@ -1083,14 +1107,16 @@ def plan(
             seed=request.seed,
             labels=[None] * len(result.snaps),
             vehicle=None,
-            places=PlaceIndex.load(meta["region"]),
+            places=places,
+            geometry=geometry,
         )
         out.write_text(json.dumps(with_presentation(document, presented), indent=2) + "\n")
         typer.echo(f"wrote {out}")
     if geojson is not None:
         from worst_route.presentation.geojson import route_geojson
 
-        geojson.write_text(json.dumps(route_geojson(data, result)) + "\n")
+        assert geometry is not None  # read before planning whenever --geojson is asked
+        geojson.write_text(json.dumps(route_geojson(data, geometry, result)) + "\n")
         typer.echo(f"wrote {geojson}")
 
 

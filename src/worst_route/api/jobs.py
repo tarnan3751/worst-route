@@ -552,7 +552,9 @@ class JobManager:
         self._emit(
             job,
             "baseline",
-            sse.baseline_out(data, m.baseline_length_m, m.baseline_time_s, m.baseline_edges),
+            sse.baseline_out(
+                data, job.loaded.geometry, m.baseline_length_m, m.baseline_time_s, m.baseline_edges
+            ),
         )
         self._emit(job, "snapshot", self._snapshot(job))
         job.last_flush = time.monotonic()
@@ -571,7 +573,9 @@ class JobManager:
         if goal.better(value, job.best_value):
             job.best, job.best_value = job.route, value
         job.accepted += 1
-        job.pending.append(sse.splice_out(job.loaded.data, m.i, m.j, m.nodes, m.edges))
+        job.pending.append(
+            sse.splice_out(job.loaded.data, job.loaded.geometry, m.i, m.j, m.nodes, m.edges)
+        )
 
     def _improved(self, job: Job, m: Improved) -> None:
         """A better alphabet route: the job's route and its best, sent as a `snapshot` and then
@@ -805,6 +809,7 @@ class JobManager:
             raise RuntimeError("no route yet")
         return sse.snapshot(
             job.loaded.data,
+            job.loaded.geometry,
             nodes=route.nodes,
             edges=route.edges,
             stop_idx=route.stop_idx,

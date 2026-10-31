@@ -4,7 +4,8 @@
 the stage reports (`cleanup.json`, `enrich.json`, `tiers.json`, `save.json`) and the
 super-junction records in `stages/enrich.pkl`, and writes under `qa/`:
 
-- `twins.geojson`: one feature per twin pair, a MultiLineString of the two edges;
+- `twins.geojson`: one feature per twin pair, a MultiLineString of the two edges (along the
+  build's geometry);
 - `superjunctions.geojson`: one point per super-junction: kind, parts (the nodes it replaced),
   members, transitions (rows), in- and out-edges, and whether every (in, out) pair is allowed;
 - `dropped_components.geojson`: one point per strongly connected component cleanup dropped and
@@ -43,6 +44,7 @@ from worst_route.config import (
     HighwayClass,
 )
 from worst_route.graph.data import GraphData, NodeKind
+from worst_route.graph.geometry import Geometry, edge_points, read_geometry
 from worst_route.graph.store import read_build
 from worst_route.pipeline import layout
 
@@ -143,7 +145,7 @@ def run_qa(build_dir: Path) -> QaReport:
     report.passed = all(t.passed for t in report.thresholds)
 
     layers = {
-        "twins": _twins(data),
+        "twins": _twins(data, read_geometry(build_dir, data.m)),
         "superjunctions": _superjunctions(data, records),
         "dropped_components": [
             _point(c["lon"], c["lat"], {"nodes": c["nodes"], "length_m": round(c["length_m"], 1)})
@@ -188,9 +190,9 @@ def _counts(data: GraphData) -> dict[str, Any]:
     }
 
 
-def _line(data: GraphData, e: int) -> list[list[float]]:
-    coords = data.coords[data.coord_indptr[e] : data.coord_indptr[e + 1]].astype(np.float64)
-    return np.round(coords, 7).tolist()  # type: ignore[no-any-return]
+def _line(data: GraphData, geometry: Geometry, e: int) -> list[list[float]]:
+    points, _ = edge_points(data, geometry, np.array([e]))
+    return np.round(points, 7).tolist()  # type: ignore[no-any-return]
 
 
 def _point(lon: float, lat: float, properties: dict[str, Any]) -> dict[str, Any]:
@@ -207,7 +209,7 @@ def _identity(data: GraphData, e: int) -> str | None:
     return None if i < 0 else data.strings.identities[i]
 
 
-def _twins(data: GraphData) -> list[dict[str, Any]]:
+def _twins(data: GraphData, geometry: Geometry) -> list[dict[str, Any]]:
     rows = np.repeat(np.arange(data.m), np.diff(data.twin_indptr))
     features = []
     for a, b in zip(rows.tolist(), data.twin_edges.tolist(), strict=True):
@@ -217,7 +219,7 @@ def _twins(data: GraphData) -> list[dict[str, Any]]:
                     "type": "Feature",
                     "geometry": {
                         "type": "MultiLineString",
-                        "coordinates": [_line(data, a), _line(data, b)],
+                        "coordinates": [_line(data, geometry, a), _line(data, geometry, b)],
                     },
                     "properties": {
                         "edges": [a, b],

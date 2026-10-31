@@ -31,7 +31,14 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
-from worst_route.api.routes_api import ApiError, api_of, build_of, stored_delays, stored_route
+from worst_route.api.routes_api import (
+    ApiError,
+    api_of,
+    build_of,
+    geometry_of,
+    stored_delays,
+    stored_route,
+)
 from worst_route.api.sse import time_ratio
 from worst_route.api.store import StoredRoute
 from worst_route.presentation.comparisons import comparison_line
@@ -82,12 +89,14 @@ async def share_image(route_id: str, request: Request) -> Response:
 def _render(api: "Api", stored: StoredRoute) -> bytes:
     from worst_route.presentation.share_image import render_share_image  # imports matplotlib
 
-    data = build_of(api, stored).data
+    loaded = build_of(api, stored)
+    data = loaded.data
     m = stored.metrics_json
     delay_s, baseline_delay_s = stored_delays(data, stored)
     ratio = time_ratio(float(m["time_s"]), delay_s, float(m["baseline_time_s"]), baseline_delay_s)
     return render_share_image(
         data,
+        geometry_of(loaded),
         stored.nodes,
         stored.edges,
         {**m, "time_ratio": ratio},  # as the route's document has it

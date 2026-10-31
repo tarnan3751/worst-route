@@ -73,7 +73,6 @@ def test_edge_defaults() -> None:
     assert np.all(g.edge_tier == 4)
     assert g.edge_unit.tolist() == [0, 1]
     assert np.all(g.node_kind == 0)
-    assert g.coords.shape == (4, 2) and g.coord_indptr.tolist() == [0, 2, 4]
     assert g.tier_edge_mask.tolist() == [[False] * 2] * 4 + [[True] * 2]
     assert g.tier_node_mask.tolist() == [[False] * 2] * 4 + [[True] * 2]
 

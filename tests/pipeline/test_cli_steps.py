@@ -472,11 +472,13 @@ def test_save_after_tiers(data_dir: Path) -> None:
     meta = json.loads((directory / "meta.json").read_text())
     assert sorted(p.name for p in directory.iterdir()) == [
         "arrays",
+        "geometry",
         "meta.json",
         "stages",
         "strings.json",
     ]
     assert meta["region"] == "portland" and meta["build_id"] == "b1"
+    assert meta["format"] == 4 and len(meta["geometry_version"]) == 64
     assert meta["counts"] == {
         "nodes": 36,
         "edges": 110,
@@ -497,6 +499,7 @@ def test_save_after_tiers(data_dir: Path) -> None:
     assert params["cleanup"]["config"]["STAGE_A_MAX_LENGTH_M"] == 60.0
     assert params["enrich"]["config"]["NODE_DELAY_S"] == {"stop": 10.0, "traffic_signals": 30.0}
     assert params["tiers"]["config"]["TIER_MIN_RETAINED"] == 0.95
+    assert params["save"] == {"config": {"GEOMETRY_SIMPLIFY_M": 2.0}}
     assert "pipeline_version" not in params["enrich"]
     saved = json.loads((directory / "stages" / "save.json").read_text())
     assert saved["graph_version"] == meta["graph_version"]

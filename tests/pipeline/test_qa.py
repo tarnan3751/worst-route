@@ -9,7 +9,7 @@ from worst_route.graph.data import FORMAT_VERSION
 from worst_route.pipeline import PIPELINE_VERSION, cleanup, enrich, tiers
 from worst_route.pipeline.build import build_raw_graph
 from worst_route.pipeline.qa import LAYERS, parameters, run_qa
-from worst_route.pipeline.save import graph_data, save_build
+from worst_route.pipeline.save import graph_data, graph_geometry, save_build
 
 META: dict[str, Any] = {
     "region": "test",
@@ -33,7 +33,8 @@ def built(name: str, tmp_path: Path) -> Path:
     enrich.save_stage(graph, enrich.run_enrich(graph, pois_of(source, tmp_path)), path)
     report = tiers.run_tiers(graph, allow_fragmented=True)
     tiers.save_stage(report, path)
-    save_build(graph_data(graph, [t.node_ids for t in report.tiers], META), path)
+    data = graph_data(graph, [t.node_ids for t in report.tiers], META)
+    save_build(data, path, graph_geometry(graph, data))
     return path
 
 

@@ -3,6 +3,7 @@ over once the app has finished it, so an SSE stream is read whole, after its `do
 
 import asyncio
 import json
+import shutil
 import sqlite3
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import numpy as np
 import pytest
 from fastapi import FastAPI, Request
 
@@ -20,8 +22,10 @@ from worst_route.api.jobs import JobSettings
 from worst_route.engine.constraints import Constraints, returning
 from worst_route.engine.snap import StopUnreachable
 from worst_route.graph.data import EdgeFlag
+from worst_route.graph.geometry import encode
+from worst_route.graph.loader import load_build
 from worst_route.graph.testing import Edge, make_graph
-from worst_route.presentation.geojson import feature_collection
+from worst_route.presentation.geojson import feature_collection, line_coordinates
 
 from ..engine.graphs import (
     TREES,
@@ -30,6 +34,7 @@ from ..engine.graphs import (
     at,
     at_node,
     avenue,
+    edges_of,
     exactly_at_node,
     lattice,
     named_roads,
@@ -181,6 +186,7 @@ async def test_a_job_streams_its_route_and_stores_it(data: Path) -> None:
         assert stored is not None
         assert geojson == feature_collection(
             api.builds["portland"].data,
+            api.builds["portland"].geometry,
             edges=stored.edges,
             length_m=stored.metrics.length_m,
             time_s=stored.metrics.time_s,
@@ -260,6 +266,36 @@ async def test_a_stored_route_through_a_parallel_edge_comes_as_a_snapshot(tmp_pa
         assert status["snapshot"]["metrics"]["length_m"] == 200.0
         doc = (await client.get(f"/routes/{done['route_id']}")).json()
         assert doc["metrics"]["length_m"] == 200.0 and doc["metrics"]["target"]["achieved"] == 1.0
+
+
+async def test_a_stored_route_is_drawn_along_its_build_s_geometry(tmp_path: Path) -> None:
+    # 0 -> 1 -> 2 on a line, the road 0 - 1 bending 40 m north half-way: the route's document,
+    # its GeoJSON and its share image draw the bend, and without the geometry it is unavailable
+    data = tmp_path / "bent"
+    xy = [(X0, Y0), (X0 + 100, Y0), (X0 + 200, Y0)]
+    line = make_graph(xy, [Edge(a, b, 100.0) for a, b in ((0, 1), (1, 0), (1, 2), (2, 1))])
+    shapes = [[0, (50, 40), 1], [1, (50, 40), 0], [1, 2], [2, 1]]  # in edge id order
+    points = [xy[p] if isinstance(p, int) else (X0 + p[0], Y0 + p[1]) for s in shapes for p in s]
+    indptr = np.concatenate(([0], np.cumsum([len(s) for s in shapes]))).astype(np.int64)
+    bent = encode(line, np.array(points, dtype=np.float64), indptr)
+    save_build(data, line, "bent", geometry=bent)
+    async with serving(data) as (client, _):
+        ends = (exactly_at_node(line, 0), exactly_at_node(line, 2))
+        body = {"region": "portland", "stops": [{"lat": a, "lon": b} for a, b in ends], "seed": 1}
+        _, events = await finished(client, body)
+        route_id = events[-1]["data"]["route_id"]
+        doc = (await client.get(f"/routes/{route_id}")).json()
+        drawn = doc["geometry"]["coordinates"]
+        assert len(drawn) == 4 and drawn == line_coordinates(line, bent, edges_of(line, [0, 1, 2]))
+        assert drawn[1][1] > drawn[0][1] + 0.0003  # 40 m north: 0.00036 degrees
+        geojson = (await client.get(f"/routes/{route_id}/geojson")).json()
+        assert geojson["features"][0]["geometry"]["coordinates"] == drawn
+        assert (await client.get(f"/routes/{route_id}/share.png")).status_code == 200
+    save_build(data, line, "bare", latest=False)
+    shutil.rmtree(data / "graphs" / "portland" / "bare" / "geometry")
+    with pytest.raises(routes_api.ApiError) as missing:
+        routes_api.geometry_of(load_build(data, "portland", "bare", backend="python"))
+    assert missing.value.status == 409 and missing.value.body.code == "BUILD_UNAVAILABLE"
 
 
 async def test_a_ratio_target_for_a_round_trip_is_refused_first(data: Path) -> None:

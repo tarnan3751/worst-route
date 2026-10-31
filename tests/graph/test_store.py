@@ -7,6 +7,7 @@ import pytest
 
 from worst_route.config import PIPELINE_VERSION
 from worst_route.graph.data import ARRAY_SPECS, GraphData, Strings
+from worst_route.graph.geometry import Geometry, geometry_version, straight
 from worst_route.graph.store import MissingArray, graph_version, read_build, write_build
 from worst_route.graph.testing import Edge, grid_graph, make_graph
 
@@ -42,19 +43,21 @@ def branded() -> GraphData:
     return g
 
 
-def assert_same_build(a: GraphData, b: GraphData) -> None:
+def assert_same_build(a: GraphData, b: GraphData, geometry: Geometry | None = None) -> None:
+    """`b`, read back, is `a` written with `geometry` (None: straight edges)."""
     for name in ARRAY_SPECS:
         x, y = getattr(a, name), getattr(b, name)
         assert x.dtype == y.dtype, name
         assert np.array_equal(x, y), name
     assert a.strings == b.strings
-    assert a.meta == b.meta
+    written = straight(a.m) if geometry is None else geometry
+    assert b.meta == {**a.meta, "geometry_version": geometry_version(written)}
 
 
 def test_graph_version_is_pinned() -> None:
     # Freezes the version definition and the array order (docs/reference/graph.md): this
     # literal changes only under a tier A brief that changes the build format.
-    expected = "e9f1191c0c7a816f0985c90e65609b5782025afce6f405cff4bd76d8470b78f8"
+    expected = "0f3826de53630fde673371e56241855deefa7dac399a301ddf9deb5093620aa0"
     assert small_build().meta["graph_version"] == expected
 
 
@@ -79,8 +82,13 @@ def test_files_on_disk(tmp_path: Path) -> None:
     write_build(g, tmp_path / "b")
     assert sorted(p.name for p in (tmp_path / "b").iterdir()) == [
         "arrays",
+        "geometry",
         "meta.json",
         "strings.json",
+    ]
+    assert sorted(p.name for p in (tmp_path / "b" / "geometry").iterdir()) == [
+        "geom_dxy.npy",
+        "geom_indptr.npy",
     ]
     assert sorted(p.name for p in (tmp_path / "b" / "arrays").iterdir()) == sorted(
         f"{name}.npy" for name in ARRAY_SPECS
@@ -96,8 +104,9 @@ def test_files_on_disk(tmp_path: Path) -> None:
     meta = json.loads((tmp_path / "b" / "meta.json").read_text())
     assert meta["graph_version"] == g.meta["graph_version"]
     assert meta["counts"] == {"nodes": 3, "edges": 2}
-    loaded = np.load(tmp_path / "b" / "arrays" / "coords.npy", allow_pickle=False)
-    assert loaded.dtype == np.float32 and loaded.shape == (4, 2)
+    assert meta["format"] == 4 and meta["geometry_version"] == geometry_version(straight(2))
+    loaded = np.load(tmp_path / "b" / "arrays" / "edge_speed.npy", allow_pickle=False)
+    assert loaded.dtype == np.uint8 and loaded.shape == (2,)
 
 
 def test_version_reproduced_by_a_second_write(tmp_path: Path) -> None:
@@ -174,6 +183,7 @@ def test_write_into_an_existing_build_directory(tmp_path: Path) -> None:
     assert write_build(g, build) == g.meta["graph_version"]
     assert sorted(p.name for p in build.iterdir()) == [
         "arrays",
+        "geometry",
         "meta.json",
         "stages",
         "strings.json",
@@ -206,6 +216,8 @@ def test_arrays_and_strings_without_meta_are_replaced(tmp_path: Path) -> None:
     (build / "arrays").mkdir(parents=True)
     (build / "arrays" / "junk.npy").write_bytes(b"junk")
     (build / "arrays" / "edge_u.npy").write_bytes(b"stale")
+    (build / "geometry").mkdir()
+    (build / "geometry" / "geom_dxy.npy").write_bytes(b"stale")
     (build / "strings.json").write_text("stale")
     (build / "stages").mkdir()
     g = named_roads()
@@ -262,7 +274,7 @@ def test_a_crash_between_the_moves_leaves_no_meta_and_the_next_write_succeeds(
         patched.setattr(Path, "replace", crash_on_meta)
         with pytest.raises(OSError, match="power cut"):
             write_build(small_build(), build)
-    assert sorted(p.name for p in build.iterdir()) == ["arrays", "strings.json"]
+    assert sorted(p.name for p in build.iterdir()) == ["arrays", "geometry", "strings.json"]
     with pytest.raises(FileNotFoundError, match="meta.json"):
         read_build(build)
     g = named_roads()

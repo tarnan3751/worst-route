@@ -3,8 +3,8 @@
 They are what the validator's proof from original OSM ids (`docs/PLAN.md` §8.1, checks 3-5)
 rests on. Each check works on the graph after any cleanup step; a node without `members` (the
 simplified graph's nodes) stands for its own OSM id. `check_build` checks the same invariants on
-a saved build from its arrays alone, and `check_saved` that a build holds the enriched graph it
-was saved from.
+a saved build from its arrays alone, and `check_saved` that a build and its geometry hold the
+enriched graph they were saved from.
 """
 
 from collections import Counter, defaultdict, deque
@@ -12,9 +12,11 @@ from typing import Any
 
 import networkx as nx
 import numpy as np
+import shapely
 
-from worst_route.config import TIERS, HighwayClass
+from worst_route.config import GEOMETRY_SIMPLIFY_M, TIERS, HighwayClass
 from worst_route.graph.data import GraphData, NodeKind
+from worst_route.graph.geometry import Geometry, edge_xy
 from worst_route.pipeline.build import ROUNDABOUT_JUNCTIONS
 
 SUPER_KINDS = {"interchange", "roundabout"}
@@ -202,9 +204,11 @@ def check_build(data: GraphData) -> None:
         assert ((data.edge_tier <= t) == in_tier).all()
 
 
-def check_saved(graph: nx.MultiDiGraph, data: GraphData) -> None:
+def check_saved(graph: nx.MultiDiGraph, data: GraphData, geometry: Geometry) -> None:
     """The build holds the enriched graph: its nodes (with each super-junction's roundabout rings),
-    edges, twins, transitions and brands (each at nodes a route can pass through), keys as ids."""
+    edges, twins, transitions and brands (each at nodes a route can pass through), keys as ids;
+    its geometry draws each edge from its tail to its head within the simplification's tolerance
+    and the metre's rounding (half a metre on each axis) of the edge's shape."""
     keys = sorted(graph.edges(keys=True))
     edge_id = {key: e for e, key in enumerate(keys)}
     assert (data.n, data.m) == (graph.number_of_nodes(), len(keys))
@@ -246,11 +250,15 @@ def check_saved(graph: nx.MultiDiGraph, data: GraphData) -> None:
         )
         attributes = ("flags", "toll_booths", "level_crossings", "bearing_in", "bearing_out")
         assert saved == tuple(d[a] for a in attributes)
-        coords = data.coords[data.coord_indptr[e] : data.coord_indptr[e + 1]]
-        assert len(coords) == len(d["geometry"].coords)
-        for end, node in ((coords[0], u), (coords[-1], v)):  # geometry runs node to node
-            assert abs(end[0] - data.node_lon[node]) < 1e-5
-            assert abs(end[1] - data.node_lat[node]) < 1e-5
+    xy, counts = edge_xy(data, geometry, np.arange(data.m))
+    starts = np.cumsum(counts) - counts
+    assert (xy[starts] == np.column_stack([data.node_x, data.node_y])[data.edge_u]).all()
+    assert (
+        xy[starts + counts - 1] == np.column_stack([data.node_x, data.node_y])[data.edge_v]
+    ).all()
+    drawn = shapely.linestrings(xy, indices=np.repeat(np.arange(data.m), counts))
+    shapes = np.asarray([graph.edges[key]["geometry"] for key in keys], dtype=object)
+    assert (shapely.hausdorff_distance(drawn, shapes) <= GEOMETRY_SIMPLIFY_M + 0.5 * 2**0.5).all()
     twins = graph.graph["twins"]
     for e, key in enumerate(keys):
         row = _run(data.twin_indptr, data.twin_edges, e)

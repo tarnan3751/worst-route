@@ -22,7 +22,7 @@ def test_a_planned_route_and_its_file_present_the_same(tmp_path: Path) -> None:
     route, masks = result.route, result.masks
     document = route_document(GRID, result)
     fields = {"active": masks.active, "banned": masks.banned, "seed": 2, "vehicle": None,
-              "places": None, "labels": ["a", None, "c"]}  # fmt: skip
+              "places": None, "geometry": None, "labels": ["a", None, "c"]}  # fmt: skip
     presented = present(
         GRID, route.nodes, route.edges, route.stop_idx, document["metrics"], **fields
     )

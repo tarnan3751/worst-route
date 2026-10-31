@@ -8,6 +8,7 @@ from worst_route.engine.io import route_document
 from worst_route.engine.plan import plan_route
 from worst_route.engine.request import RouteRequest
 from worst_route.graph.data import GraphData
+from worst_route.graph.geometry import Geometry, read_geometry
 from worst_route.graph.store import read_build
 from worst_route.pipeline import layout
 from worst_route.presentation.document import route_directions
@@ -37,7 +38,14 @@ def portland() -> GraphData:
     return read_build(layout.build_dir("portland", latest.read_text().strip()))
 
 
-def test_powells_to_reed_reads_as_directions_and_toasts(portland: GraphData) -> None:
+@pytest.fixture(scope="module")
+def geometry(portland: GraphData) -> Geometry:
+    return read_geometry(layout.build_dir("portland", portland.meta["build_id"]), portland.m)
+
+
+def test_powells_to_reed_reads_as_directions_and_toasts(
+    portland: GraphData, geometry: Geometry
+) -> None:
     request = RouteRequest(stops=[POWELLS, REED], seed=1, max_iterations=4000, budget_s=120)
     result = plan_route(portland, request)
     route = result.route
@@ -58,7 +66,7 @@ def test_powells_to_reed_reads_as_directions_and_toasts(portland: GraphData) -> 
     numbers = stats(
         portland, route.edges, length_m=route.metrics.length_m,
         baseline_length_m=result.baseline.length_m, vehicle=None,
-        places=PlaceIndex.load("portland"), active=result.masks.active,
+        places=PlaceIndex.load("portland"), geometry=geometry, active=result.masks.active,
         banned=result.masks.banned,
     )  # fmt: skip
     lines = toasts(numbers, metrics, nodes=route.nodes, edges=route.edges)

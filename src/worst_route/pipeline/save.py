@@ -13,8 +13,8 @@ tier_nodes, meta)` turns the enriched graph into `GraphData`:
   tier whose classes hold the class; `edge_name` and `edge_ref` index the raw tags and
   `edge_identity` the identities, each table sorted; `speed_kmh` the distinct speeds, ascending,
   as float32, and `edge_speed` each edge's index among them (more than `MAX_SPEEDS` distinct
-  speeds raise `TooManySpeedsError`); `osmnode_ids` from `osm_nodes`, and `coords` the projected
-  geometry turned back into (lon, lat), float32. The way ids (`osmids`) stay in the stages.
+  speeds raise `TooManySpeedsError`); `osmnode_ids` from `osm_nodes`. The way ids (`osmids`)
+  stay in the stages.
 - **Twins** and **transitions**: the cleaned graph's tables with keys turned into ids, rows
   sorted.
 - **Tiers**: `tier_node_mask[t]` the nodes `tiers` kept; `tier_edge_mask[t]` the edges of the
@@ -30,13 +30,18 @@ that means no turn through it is allowed, but `GraphData` reads a node without r
 every turn, so the build cannot say it.
 
 `build_meta` assembles the build's `meta`: the region, the time, `counts` (filled in by
-`graph_data`), `params` (`build_params`: the region, its bbox and CRS and the configuration the
-cleanup, enrich and tiers sidecars recorded, without the pipeline version, which `meta` keeps on
+`graph_data`), `params` (`build_params`: the region, its bbox and CRS, the configuration the
+cleanup, enrich and tiers sidecars recorded, and save's own, `parameters()`: the geometry's
+simplification tolerance; without the pipeline version, which `meta` keeps on
 its own) and `sources` (`build_sources`: the extract `filter` read, its md5 and data date,
 refused with `SourcesChangedError` when the filtered roads are no longer those `build` read).
-`save_build(data, build_dir)` writes it with `graph.store.write_build` beside `stages/`, reads
-it back with `read_build` and raises `RuntimeError` if anything differs, then writes
-`stages/save.json` (the counts and `graph_version`). `remove_build` deletes a written build
+`graph_geometry(graph, data)` is the build's geometry (`graph/geometry.py`): each edge's
+projected shape simplified by Douglas–Peucker to `GEOMETRY_SIMPLIFY_M` (shapely, its ends kept;
+the lengths and bearings were measured on the whole shape at enrich) and encoded as whole-metre
+steps. `save_build(data, build_dir, geometry)` writes both with `graph.store.write_build` beside
+`stages/`, reads them back with `read_build` and `read_geometry` and raises `RuntimeError` if
+anything differs, then writes `stages/save.json` (the counts, `graph_version`, the megabytes of
+the arrays and strings the engine reads and of the geometry). `remove_build` deletes a written build
 (`meta.json` first, so no reader sees half of one) for `--force`.
 """
 
@@ -50,11 +55,10 @@ from typing import Any
 
 import networkx as nx
 import numpy as np
-import pyproj
 import shapely
 from numpy.typing import NDArray
 
-from worst_route.config import TIERS, HighwayClass, Region
+from worst_route.config import GEOMETRY_SIMPLIFY_M, TIERS, HighwayClass, Region
 from worst_route.graph.data import (
     ARRAY_SPECS,
     FORMAT_VERSION,
@@ -63,6 +67,7 @@ from worst_route.graph.data import (
     NodeKind,
     Strings,
 )
+from worst_route.graph.geometry import GEOMETRY_SPECS, Geometry, encode, read_geometry
 from worst_route.graph.store import read_build, write_build
 from worst_route.pipeline import PIPELINE_VERSION, layout
 
@@ -91,7 +96,8 @@ class SaveReport:
 
     graph_version: str = ""
     counts: dict[str, int] = field(default_factory=dict)
-    megabytes: float = 0.0  # arrays/ and strings.json
+    megabytes: float = 0.0  # arrays/ and strings.json, what the engine reads
+    geometry_megabytes: float = 0.0  # geometry/
     seconds: float = 0.0
 
 
@@ -134,11 +140,6 @@ def graph_data(
         )
     edge_u = np.array([u for u, _, _ in keys], dtype=np.int32)
     edge_v = np.array([v for _, v, _ in keys], dtype=np.int32)
-
-    geometries = np.asarray([d["geometry"] for d in edges], dtype=object)
-    xy = shapely.get_coordinates(geometries)
-    to_lonlat = pyproj.Transformer.from_crs(graph.graph["crs"], 4326, always_xy=True)
-    lon, lat = to_lonlat.transform(xy[:, 0], xy[:, 1])
 
     twins: dict[EdgeKey, tuple[EdgeKey, ...]] = graph.graph["twins"]
     twin_rows = [sorted(edge_id[t] for t in twins.get(key, ())) for key in keys]
@@ -195,8 +196,6 @@ def graph_data(
         out_edges=np.arange(len(keys), dtype=np.int32),
         in_indptr=_indptr(np.bincount(edge_v, minlength=n).tolist()),
         in_edges=np.argsort(edge_v, kind="stable").astype(np.int32),
-        coord_indptr=_indptr(shapely.get_num_coordinates(geometries).tolist()),
-        coords=np.column_stack([lon, lat]).astype(np.float32),
         osmnode_indptr=_indptr([len(d["osm_nodes"]) for d in edges]),
         osmnode_ids=_concat([d["osm_nodes"] for d in edges]),
         twin_indptr=_indptr([len(row) for row in twin_rows]),
@@ -236,7 +235,8 @@ def build_params(region: Region, build_dir: Path) -> dict[str, Any]:
     """The build's params: the region, its bbox and CRS, and each step's recorded configuration.
 
     The configuration is what the cleanup, enrich and tiers sidecars recorded (their
-    `allow_fragmented` and `config`), without the pipeline version, which `meta` keeps apart.
+    `allow_fragmented` and `config`), without the pipeline version, which `meta` keeps apart,
+    and save's own (`parameters()`), under "save".
     """
     params: dict[str, Any] = {
         "region": region.name,
@@ -247,7 +247,13 @@ def build_params(region: Region, build_dir: Path) -> dict[str, Any]:
         sidecar = layout.sidecar(layout.stage_file(build_dir, output))
         recorded = json.loads(sidecar.read_text())["params"]
         params[step] = {k: v for k, v in recorded.items() if k != "pipeline_version"}
+    params["save"] = {"config": parameters()}
     return params
+
+
+def parameters() -> dict[str, Any]:
+    """The config values save depends on, JSON-ready: the geometry's simplification."""
+    return {"GEOMETRY_SIMPLIFY_M": GEOMETRY_SIMPLIFY_M}
 
 
 def build_sources(region: Region, build_dir: Path) -> list[dict[str, Any]]:
@@ -286,23 +292,39 @@ def build_meta(
     }
 
 
-def save_build(data: GraphData, build_dir: Path) -> SaveReport:
+def graph_geometry(graph: nx.MultiDiGraph, data: GraphData) -> Geometry:
+    """Each edge's shape, simplified and encoded, as the build's geometry."""
+    keys: list[EdgeKey] = sorted(graph.edges(keys=True))
+    shapes = np.asarray([graph.edges[key]["geometry"] for key in keys], dtype=object)
+    simple = shapely.simplify(shapes, GEOMETRY_SIMPLIFY_M, preserve_topology=False)
+    points, owner = shapely.get_coordinates(simple, return_index=True)
+    indptr = np.concatenate(([0], np.cumsum(np.bincount(owner, minlength=len(keys)))))
+    return encode(data, points, indptr.astype(np.int64))
+
+
+def save_build(data: GraphData, build_dir: Path, geometry: Geometry) -> SaveReport:
     """Write the build into `build_dir`, check it reads back the same, write `save.json`."""
     clock = time.perf_counter()
-    version = write_build(data, build_dir)
+    version = write_build(data, build_dir, geometry)
     loaded = read_build(build_dir, mmap=False)
-    for name in ARRAY_SPECS:
-        written, read = getattr(data, name), getattr(loaded, name)
+    shapes = read_geometry(build_dir, data.m, mmap=False)
+    written_back: list[tuple[str, Any, Any]] = [(name, data, loaded) for name in ARRAY_SPECS]
+    written_back += [(name, geometry, shapes) for name in GEOMETRY_SPECS]
+    for name, ours, theirs in written_back:
+        written, read = getattr(ours, name), getattr(theirs, name)
         if written.dtype != read.dtype or not np.array_equal(written, read):
             raise RuntimeError(f"{build_dir}: {name} reads back different from what was written")
-    if loaded.strings != data.strings or loaded.meta != {**data.meta, "graph_version": version}:
+    meta = {k: v for k, v in loaded.meta.items() if k != "geometry_version"}
+    if loaded.strings != data.strings or meta != {**data.meta, "graph_version": version}:
         raise RuntimeError(f"{build_dir}: strings or meta read back different")
     size = sum(p.stat().st_size for p in (build_dir / "arrays").iterdir())
     size += (build_dir / "strings.json").stat().st_size
+    shape_size = sum(p.stat().st_size for p in (build_dir / "geometry").iterdir())
     report = SaveReport(
         graph_version=version,
         counts=dict(data.meta["counts"]),
         megabytes=round(size / 1e6, 1),
+        geometry_megabytes=round(shape_size / 1e6, 1),
         seconds=round(time.perf_counter() - clock, 3),
     )
     layout.stage_file(build_dir, "save.json").write_text(
@@ -314,6 +336,7 @@ def save_build(data: GraphData, build_dir: Path) -> SaveReport:
 def remove_build(build_dir: Path) -> None:
     """Delete a written build, `meta.json` first; the stages stay."""
     (build_dir / "meta.json").unlink(missing_ok=True)
-    if (build_dir / "arrays").exists():
-        shutil.rmtree(build_dir / "arrays")
+    for directory in ("arrays", "geometry"):
+        if (build_dir / directory).exists():
+            shutil.rmtree(build_dir / directory)
     (build_dir / "strings.json").unlink(missing_ok=True)

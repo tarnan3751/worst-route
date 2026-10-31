@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 
 from worst_route.cli import app
 from worst_route.config import REGIONS, STATES
+from worst_route.graph.geometry import straight
 from worst_route.presentation import places
 from worst_route.presentation.places import PlaceIndex, State, Town, route_line
 
@@ -48,7 +49,7 @@ def test_the_index_holds_every_state_outline_and_place(index: PlaceIndex) -> Non
 
 
 def test_states_and_towns_come_in_route_order_cdp_included(index: PlaceIndex) -> None:
-    line = route_line(GRID, EAST_THEN_NORTH_EDGES)
+    line = route_line(GRID, straight(GRID.m), EAST_THEN_NORTH_EDGES)
     assert len(shapely.get_coordinates(line)) == len(EAST_THEN_NORTH)
     assert index.states_crossed(line) == [WESTLAND, EASTLAND]
     assert index.towns_passed(line) == [WESTVILLE, MIDDLEFIELD, EASTBROOK]
@@ -66,7 +67,7 @@ def test_the_polygons_are_prepared_and_answer_as_unprepared_ones(
     assert plain is not None
     shapely.destroy_prepared(plain._states[0])
     shapely.destroy_prepared(plain._towns[0])
-    line = route_line(GRID, EAST_THEN_NORTH_EDGES)
+    line = route_line(GRID, straight(GRID.m), EAST_THEN_NORTH_EDGES)
     for route in (line, shapely.reverse(line)):
         assert index.states_crossed(route) == plain.states_crossed(route)
         assert index.towns_passed(route) == plain.towns_passed(route)

@@ -355,6 +355,11 @@ BEARING_SAMPLE_M = 20.0
 BRAND_SNAP_M = 100.0
 BRAND_MIN_LOCATIONS = 3
 
+# Save (`docs/reference/pipeline.md`, save): each edge's shape is simplified to this tolerance
+# (Douglas–Peucker, its ends kept) before the build's geometry stores it (`graph/geometry.py`).
+# Lengths and bearings are measured on the whole shape at enrich, before.
+GEOMETRY_SIMPLIFY_M = 2.0
+
 # Tiers (`docs/PLAN.md` §2.6; `pipeline/tiers.py`): each tier keeps the largest strongly
 # connected component of its own roads; the step fails when a tier keeps fewer than this
 # fraction of the nodes its roads touch, unless --allow-fragmented.

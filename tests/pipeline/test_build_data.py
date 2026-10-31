@@ -10,6 +10,7 @@ import pytest
 from tests.pipeline.invariants import check_build, check_saved
 from worst_route.config import BRAND_MIN_LOCATIONS, TIERS
 from worst_route.graph.data import GraphData
+from worst_route.graph.geometry import read_geometry
 from worst_route.graph.store import graph_version, read_build
 from worst_route.pipeline import layout
 
@@ -40,7 +41,7 @@ def test_portland_build_holds_its_graph(build: Build) -> None:
     directory, data = build
     with layout.stage_file(directory, "enrich.pkl").open("rb") as f:
         graph = pickle.load(f)
-    check_saved(graph, data)
+    check_saved(graph, data, read_geometry(directory, data.m))
 
 
 def test_portland_tiers(build: Build) -> None:

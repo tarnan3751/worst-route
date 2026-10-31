@@ -6,7 +6,8 @@ filling every array the pipeline would with a plain default: lengths as given (E
 omitted), bearings from the coordinates, one OSM member per node (id = node index + 1), class
 residential (tier 4), speed 40 km/h, the unit id = the edge id, pass-through from the topology,
 tier masks from the edge tiers (no SCC), every node plain (no roundabout rings), no brands
-unless `brands` names some, and meta["graph_version"] as `write_build` would compute it. Edge
+unless `brands` names some, and meta["graph_version"] as `write_build` would compute it. Its
+edges are straight: `write_build` writes such a graph with `geometry.straight`. Edge
 ids are the positions after a stable sort by (u, v), as in a real build; twins and transitions
 name edges by their (u, v) node pairs, and `edge_id(data, u, v)` finds an edge the same way.
 
@@ -25,7 +26,6 @@ from typing import NamedTuple
 
 import numpy as np
 from numpy.typing import NDArray
-from pyproj import Transformer
 
 from worst_route.config import PIPELINE_VERSION, TIERS, HighwayClass
 from worst_route.graph.data import (
@@ -78,9 +78,6 @@ def make_graph(
     """
     n = len(nodes)
     xy = np.array(nodes, dtype=np.float64).reshape(n, 2)
-    # the geometry's lon/lat, rounded to 1e-7 degrees so its bytes do not depend on PROJ's last bits
-    to_lonlat = Transformer.from_crs(f"EPSG:{crs_epsg}", "EPSG:4326", always_xy=True)
-    ll = np.round(np.column_stack(to_lonlat.transform(xy[:, 0], xy[:, 1])), 7)
 
     given = [e if isinstance(e, Edge) else Edge(e[0], e[1], e[2]) for e in edges]
     order = sorted(range(len(given)), key=lambda k: (given[k].u, given[k].v, k))
@@ -189,8 +186,6 @@ def make_graph(
         out_edges=np.arange(m, dtype=np.int32),
         in_indptr=_indptr(edge_v, n),
         in_edges=np.argsort(edge_v, kind="stable").astype(np.int32),
-        coord_indptr=np.arange(0, 2 * m + 1, 2, dtype=np.int64),
-        coords=np.stack([ll[edge_u], ll[edge_v]], axis=1).reshape(2 * m, 2).astype(np.float32),
         osmnode_indptr=np.arange(0, 2 * m + 1, 2, dtype=np.int64),
         osmnode_ids=np.stack([osm_ids[edge_u], osm_ids[edge_v]], axis=1).reshape(2 * m),
         twin_indptr=np.concatenate(([0], np.cumsum([len(t) for t in twin_sets]))).astype(np.int64),

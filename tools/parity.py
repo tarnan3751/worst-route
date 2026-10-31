@@ -5,17 +5,17 @@
 
 It reads the region's filtered roads and POIs under `WORST_ROUTE_DATA` (`pipeline filter` first)
 and writes nothing there: each engine runs `build`, `cleanup` and then enrich, tiers and save's
-build (its arrays and geometry, by `pipeline.save`'s own functions) into its own directory under
-`--work` (a temporary directory, removed at the end, unless given). Each step runs in a process
-of its own, so its seconds and its peak resident memory are its own; the step after it reads the
-stage it wrote, as the pipeline does. A state is a heavy job: run one only when nothing else
-heavy runs on the machine.
+build (its arrays and geometry, by `pipeline.save`'s own functions), each on its own engine's
+stages as the CLI runs them, into its own directory under `--work` (a temporary directory,
+removed at the end, unless given). Each step runs in a process of its own, so its seconds and
+its peak resident memory are its own; the step after it reads the stage it wrote, as the
+pipeline does. A state is a heavy job: run one only when nothing else heavy runs on the machine.
 
-Then it compares the engines: the cleanup reports (seconds aside) and the builds, array by
-array, the geometry's too (dtype and shape first, then bytes and the rows that differ), with
-their strings and graph_version. It prints a table of the steps and a line per engine compared,
-writes the JSON report to `--out` (by default under `tools/out/`, which git ignores), and exits
-1 when the engines differ, else 0.
+Then it compares the engines: the cleanup, enrich and tiers reports (seconds aside) and the
+builds, array by array, the geometry's too (dtype and shape first, then bytes and the rows that
+differ), with their strings and graph_version. It prints a table of the steps and a line per
+engine compared, writes the JSON report to `--out` (by default under `tools/out/`, which git
+ignores), and exits 1 when the engines differ, else 0.
 """
 
 import argparse
@@ -39,10 +39,11 @@ def run_step(engine: str, step: str, region: str, work: Path, allow_fragmented: 
     import pyarrow.parquet as pq
 
     from worst_route.config import REGIONS
-    from worst_route.pipeline import build, cleanup, layout, save
+    from worst_route.pipeline import build, cleanup, enrich, layout, save, tiers
     from worst_route.pipeline.arrays import build as arrays_build
-    from worst_route.pipeline.enrich import run_enrich
-    from worst_route.pipeline.tiers import run_tiers
+    from worst_route.pipeline.arrays import cleaned
+    from worst_route.pipeline.arrays import enrich as arrays_enrich
+    from worst_route.pipeline.arrays import tiers as arrays_tiers
 
     spec = REGIONS[region]
     directory = work / engine
@@ -56,20 +57,34 @@ def run_step(engine: str, step: str, region: str, work: Path, allow_fragmented: 
             build.save_stage(graph, stats, directory)
     elif step == "cleanup":
         if engine == "arrays":
-            source: Any = arrays_build.load_stage(directory)
+            raw = arrays_build.load_stage(directory)
+            arrays, report = cleanup.run_arrays_cleanup(raw, allow_fragmented=allow_fragmented)
+            cleaned.save_stage(arrays, report, directory)
         else:
             with layout.stage_file(directory, "build.pkl").open("rb") as f:
                 source = pickle.load(f)
-        graph, report = cleanup.run_cleanup(source, allow_fragmented=allow_fragmented)
-        cleanup.save_stage(graph, report, directory)
-    else:
-        with layout.stage_file(directory, "cleanup.pkl").open("rb") as f:
-            graph = pickle.load(f)
-        run_enrich(graph, pq.read_table(layout.pois_parquet(region)))
-        tiers = run_tiers(graph, allow_fragmented=allow_fragmented).tiers
+            graph, report = cleanup.run_cleanup(source, allow_fragmented=allow_fragmented)
+            cleanup.save_stage(graph, report, directory)
+    else:  # enrich, tiers and the build, as `pipeline enrich`, `tiers` and `save` run them
+        pois = pq.read_table(layout.pois_parquet(region))
         meta = save.build_meta(spec, engine, {"region": region}, [])
-        data = save.graph_data(graph, [t.node_ids for t in tiers], meta)
-        save.save_build(data, directory, save.graph_geometry(graph, data))
+        if engine == "arrays":
+            enriched, enrich_report = arrays_enrich.run_enrich(cleaned.load_stage(directory), pois)
+            arrays_enrich.save_stage(enriched, enrich_report, directory)
+            # the build from the stages read back, as `pipeline save` reads them
+            enriched = arrays_enrich.load_stage(cleaned.load_stage(directory), directory)
+            report = arrays_tiers.run_tiers(enriched.graph, allow_fragmented=allow_fragmented)
+            data = save.graph_data_of(enriched, [t.node_ids for t in report.tiers], meta)
+            geometry = save.graph_geometry_of(enriched, data)
+        else:
+            with layout.stage_file(directory, "cleanup.pkl").open("rb") as f:
+                graph = pickle.load(f)
+            enrich.save_stage(graph, enrich.run_enrich(graph, pois), directory)
+            report = tiers.run_tiers(graph, allow_fragmented=allow_fragmented)
+            data = save.graph_data(graph, [t.node_ids for t in report.tiers], meta)
+            geometry = save.graph_geometry(graph, data)
+        tiers.save_stage(report, directory)
+        save.save_build(data, directory, geometry)
     seconds = time.perf_counter() - clock
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     peak_mb = peak / 1e6 if sys.platform == "darwin" else peak / 1e3  # bytes on macOS, else KiB
@@ -86,8 +101,12 @@ def compare(work: Path, engines: list[str]) -> dict[str, Any]:
     from worst_route.pipeline import layout
 
     def report(engine: str) -> dict[str, Any]:
-        loaded = json.loads(layout.stage_file(work / engine, "cleanup.json").read_text())
-        return {key: value for key, value in loaded.items() if key != "seconds"}
+        """The engine's cleanup, enrich and tiers reports, seconds aside."""
+        reports = {}
+        for name in ("cleanup", "enrich", "tiers"):
+            loaded = json.loads(layout.stage_file(work / engine, f"{name}.json").read_text())
+            reports[name] = {key: value for key, value in loaded.items() if key != "seconds"}
+        return reports
 
     base = engines[0]
     want = read_build(work / base, mmap=False)
@@ -131,7 +150,7 @@ def summary(result: dict[str, Any], engines: list[str]) -> tuple[list[str], bool
         lines.append(
             f"{engine} against {engines[0]}: graph_version {found['graph_version'][:12]} "
             f"({'the same' if version else 'differs'}), "
-            f"cleanup report {'the same' if found['same_report'] else 'differs'}, "
+            f"reports {'the same' if found['same_report'] else 'differ'}, "
             f"strings {'the same' if found['same_strings'] else 'differ'}, "
             f"arrays differing: {', '.join(differing) or 'none'}"
         )

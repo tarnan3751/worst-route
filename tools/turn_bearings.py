@@ -6,9 +6,10 @@ It needs a build under `WORST_ROUTE_DATA` with its stages, so it is not part of 
 Cleanup extends an edge's geometry to a merged node's position with stub coordinates: one at an
 end on a stage A cluster or a super-node, two where the super-node took in a stage A cluster.
 Enrich measures the bearings over the road without them (`pipeline/enrich.py`, `road_geometry`).
-This tool checks that from the build's arrays and the whole geometry its enrich stage holds
-(`stages/enrich.pkl`, edges in key order, which are the build's edge ids; the build's own
-geometry is simplified), by its own count of the stubs: every coordinate of an edge is one of
+This tool checks that from the build's arrays and the whole geometry its stages hold (the
+networkx engine's `stages/enrich.pkl` or the arrays engine's `stages/cleanup/`, edges in key
+order, which are the build's edge ids; the build's own geometry is simplified), by its own count
+of the stubs: every coordinate of an edge is one of
 its OSM nodes' (`osm_nodes`) or a stub, so an edge has len(coords) - len(osm_nodes) of them, all
 at its merged end when only one end is merged, split evenly when both are (an odd count there
 cannot be split, and its turns are skipped).
@@ -27,8 +28,8 @@ import argparse
 import pickle
 import sys
 from collections import Counter
+from pathlib import Path
 
-import networkx as nx
 import numpy as np
 import shapely
 from numpy.typing import NDArray
@@ -38,25 +39,37 @@ from worst_route.graph.backend import TURN_CLASS
 from worst_route.graph.data import GraphData, NodeKind
 from worst_route.graph.store import read_build
 from worst_route.pipeline import layout
+from worst_route.pipeline.arrays import cleaned
 from worst_route.pipeline.enrich import bearings
 
 NAMES = {0: "straight", 1: "left", 2: "right", 4: "u-turn"}
 
 
+def stage_shapes(build_dir: Path) -> list[tuple[NDArray[np.float64], int]]:
+    """Each edge's whole geometry and the number of its OSM nodes, by edge id, from the build's
+    stages: the networkx engine's enriched graph or the arrays engine's cleaned graph."""
+    if layout.cleanup_engine(build_dir) == "arrays":
+        graph = cleaned.load_stage(build_dir)
+        xy = np.column_stack([graph.coord_x, graph.coord_y])
+        counts = np.diff(graph.stage_a.osmnode_indptr)[graph.edge_from].tolist()
+        return list(zip(np.split(xy, graph.coord_indptr[1:-1]), counts, strict=True))
+    with layout.stage_file(build_dir, "enrich.pkl").open("rb") as f:
+        enriched = pickle.load(f)
+    edges = [enriched.edges[key] for key in sorted(enriched.edges(keys=True))]
+    return [(np.asarray(d["geometry"].coords), len(d["osm_nodes"])) for d in edges]
+
+
 def edge_lines(
-    data: GraphData, graph: nx.MultiDiGraph
+    data: GraphData, shapes: list[tuple[NDArray[np.float64], int]]
 ) -> tuple[list[shapely.LineString], list[shapely.LineString | None]]:
     """Each edge's whole geometry and its road (None where the stubs cannot be split), in the
-    build's projected CRS, from the enrich stage's graph."""
-    keys = sorted(graph.edges(keys=True))
+    build's projected CRS, from its stage geometry and OSM node count (`stage_shapes`)."""
     merged = np.asarray(data.node_kind) != NodeKind.PLAIN
     wholes: list[shapely.LineString] = []
     roads: list[shapely.LineString | None] = []
-    for e, key in enumerate(keys):
-        edge = graph.edges[key]
-        line = np.asarray(edge["geometry"].coords)
+    for e, (line, osm_nodes) in enumerate(shapes):
         wholes.append(shapely.LineString(line))
-        stubs = len(line) - len(edge["osm_nodes"])
+        stubs = len(line) - osm_nodes
         at_u, at_v = bool(merged[data.edge_u[e]]), bool(merged[data.edge_v[e]])
         if at_u and at_v and stubs % 2:
             roads.append(None)
@@ -76,9 +89,7 @@ def main(args: argparse.Namespace) -> int:
     build_id = args.build_id or layout.latest_file(args.region).read_text().strip()
     build_dir = layout.build_dir(args.region, build_id)
     data = read_build(build_dir)
-    with layout.stage_file(build_dir, "enrich.pkl").open("rb") as f:
-        graph = pickle.load(f)
-    wholes, roads = edge_lines(data, graph)
+    wholes, roads = edge_lines(data, stage_shapes(build_dir))
     whole_in, whole_out = bearings(wholes)
     fit = [k for k, line in enumerate(roads) if line is not None]
     road_in = np.full(data.m, -1, dtype=np.int64)

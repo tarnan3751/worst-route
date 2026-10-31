@@ -32,7 +32,8 @@ def test_an_array_of_another_shape_is_reported(tmp_path: Path) -> None:
     ):
         write_build(data, tmp_path / engine)
         (tmp_path / engine / "stages").mkdir()
-        (tmp_path / engine / "stages" / "cleanup.json").write_text(json.dumps({"seconds": {}}))
+        for name in ("cleanup", "enrich", "tiers"):
+            (tmp_path / engine / "stages" / f"{name}.json").write_text(json.dumps({"seconds": 0}))
     tool = parity()
     result = tool.compare(tmp_path, ["networkx", "arrays"])
     found = result["engines"]["arrays"]

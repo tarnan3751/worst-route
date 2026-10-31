@@ -52,6 +52,11 @@ from worst_route.pipeline.arrays import cleaned
 
 LAYERS = ("twins", "superjunctions", "dropped_components", "tiers")
 
+# The connectivity rule's two thresholds: the QA failures `pipeline prune` accepts from a build
+# cleaned with `--allow-fragmented` (`docs/reference/pipeline.md`, **`prune`**).
+SCC_RETAINED, SCC_LARGEST_DROPPED = "SCC retained", "SCC largest dropped"
+CONNECTIVITY_THRESHOLDS = frozenset({SCC_RETAINED, SCC_LARGEST_DROPPED})
+
 
 @dataclass
 class Threshold:
@@ -130,9 +135,9 @@ def run_qa(build_dir: Path) -> QaReport:
             QA_TWIN_COVERAGE_MIN,
             coverage is None or coverage >= QA_TWIN_COVERAGE_MIN,
         ),
-        _threshold("SCC retained", cleanup["connectivity"]["retained"], SCC_MIN_RETAINED),
+        _threshold(SCC_RETAINED, cleanup["connectivity"]["retained"], SCC_MIN_RETAINED),
         Threshold(
-            "SCC largest dropped",
+            SCC_LARGEST_DROPPED,
             largest,
             None,
             largest <= SCC_MAX_DROPPED_NODES,

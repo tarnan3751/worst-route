@@ -15,10 +15,14 @@ is too fragmented, a step whose earlier stages are stale (`layout.stale_stages`)
 cannot write its build prints one line and exits 1. The steps from `cleanup` on read the build
 named by `--build-id`, else the region's latest. `save` writes the build beside the stages and
 never overwrites one without `--force`; `qa` prints its thresholds, also when it skips, and exits
-1 when one fails. Each imports its step module when it runs, so `version` and the other commands
-do not load the geo stack. A pipeline step exits on SIGTERM as on an exception
-(`exit_on_sigterm`: its `with` blocks unwind, so its temporary files go), whatever the shell
-that started it ignores, which is how `tools/bench_build.py`'s watchdog stops one.
+1 when one fails. `prune` deletes a written build's stage data (the arrays engine's stage
+directories, networkx's pickles) once its QA has passed, or failed only the connectivity rule on a
+build cleaned with `--allow-fragmented`, or whatever QA said with `--force`, keeping the build, its
+QA report and the steps' reports and sidecars, so that the steps from `cleanup` on need `build` to
+run again (`docs/reference/pipeline.md`, **`prune`**). Each imports its step module when it runs, so
+`version` and the other commands do not load the geo stack. A pipeline step exits on SIGTERM as on
+an exception (`exit_on_sigterm`: its `with` blocks unwind, so its temporary files go), whatever the
+shell that started it ignores, which is how `tools/bench_build.py`'s watchdog stops one.
 
 `plan` plans a route on a saved build (`docs/reference/engine.md`, **The CLI**), on the
 `--objective` (distance, time, collect with an `--item`, brand with a `--brand`, an id or a
@@ -771,6 +775,55 @@ def qa(region: RegionOption, build_id: BuildIdOption = None, force: ForceOption 
     if failed:
         _fail(f"qa failed: {', '.join(failed)}")
     typer.echo("qa passed")
+
+
+@pipeline_app.command()
+def prune(
+    region: RegionOption,
+    build_id: BuildIdOption = None,
+    force: Annotated[
+        bool, typer.Option("--force", help="Prune a build whose QA failed or has not run.")
+    ] = False,
+) -> None:
+    """Delete a written build's stage data once its QA has passed, keeping the build."""
+    import json
+    import shutil
+
+    from worst_route.pipeline.qa import CONNECTIVITY_THRESHOLDS
+
+    build_id, directory = _build_of(region, build_id)
+    _require(directory / "meta.json", f"run `worst-route pipeline save --region {region}` first")
+    report = layout.qa_file(directory, "qa.json")
+    if not force:
+        _require(report, f"run `worst-route pipeline qa --region {region}` first")
+        thresholds = json.loads(report.read_text())["thresholds"]
+        failed = {t["name"] for t in thresholds if not t["passed"]}
+        params = json.loads((directory / "meta.json").read_text())["params"]
+        # A build cleaned with --allow-fragmented fails the connectivity rule by design.
+        accepted = CONNECTIVITY_THRESHOLDS if params["cleanup"]["allow_fragmented"] else set()
+        if failed - accepted:
+            _fail(f"prune refused: the QA of build {build_id} failed (--force to prune it anyway)")
+    stages = [  # every engine's build, cleanup and enrich stages; their reports and sidecars stay
+        path
+        for table in (layout.BUILD_STAGES, layout.CLEANUP_STAGES, layout.ENRICH_STAGES)
+        for stage, _ in table.values()
+        if (path := layout.stage_file(directory, stage)).exists()
+    ]
+    if not stages:
+        typer.echo(f"skipped: build {build_id} has no stage data to prune")
+        return
+    files = [f for path in stages for f in ([path] if path.is_file() else path.rglob("*"))]
+    freed = sum(f.stat().st_size for f in files if f.is_file())
+    for path in stages:
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    names = ", ".join(path.name for path in stages)
+    typer.echo(
+        f"prune {build_id}: removed {names} from {directory / 'stages'} ({freed / 1e6:.1f} MB); "
+        "the build and its QA stay"
+    )
 
 
 PROGRESS_EVERY_S = 2.0

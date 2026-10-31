@@ -24,6 +24,7 @@ uv run worst-route pipeline enrich   --region portland [--build-id ID] [--force]
 uv run worst-route pipeline tiers    --region portland [--build-id ID] [--force] [--allow-fragmented]
 uv run worst-route pipeline save     --region portland [--build-id ID] [--force]
 uv run worst-route pipeline qa       --region portland [--build-id ID] [--force]
+uv run worst-route pipeline prune    --region portland [--build-id ID] [--force]
 ```
 
 `--region` is a key of `config.REGIONS` (one or more Geofabrik state slugs, an optional bbox, a
@@ -816,6 +817,28 @@ are refused ("re-plan"). So Portland's version 4 build, made under them, has ano
 The whole pipeline from the Oregon extract takes 47–75 s on the dev machine, depending on its
 load; on the quieter run: filter 13 s, build 3 s, cleanup 23 s, enrich 4 s, tiers 2 s, save 2 s,
 qa 1 s.
+
+## `prune`
+
+`pipeline prune --region R` deletes a written build's stage data, the arrays engine's stage
+directories (`stages/build/`, `stages/cleanup/`, `stages/enrich/`) and networkx's pickles, once
+its QA has passed (`qa/qa.json`'s `passed`), printing what it removed and how much. It keeps
+what the engine, the server and a reader need: `meta.json`, `arrays/`, `geometry/`,
+`strings.json`, `qa/`, and the steps' reports and sidecars under `stages/` (`build.json`,
+`cleanup.json`, `tiers.json` and the rest). A build its `--build-id` names, else the region's
+latest. It refuses, in one line and exit 1, a build not yet saved, a build without a QA report,
+and one whose QA failed, unless `--force`, which prunes whatever QA said or whether it ran; a
+build with nothing left to prune is skipped. One failure it takes as a pass: a build cleaned with
+`--allow-fragmented` (its `params.cleanup.allow_fragmented`) whose QA fails only the connectivity
+rule's thresholds, "SCC retained", "SCC largest dropped" or both (`qa.CONNECTIVITY_THRESHOLDS`),
+since keeping the largest component whatever it leaves out is what the flag asks for; any other
+failure beside them (twin coverage, a tier's retained share) is refused.
+
+Pruning trades the steps' skipping for disk: the stages are what each step checks itself against,
+so once they are gone the steps from `cleanup` on cannot run or skip until `build` has run again
+(from the filtered roads, which stay; the build id is the same), and `qa` cannot rerun on the
+pruned build. The build itself is untouched and loads and plans as before. The state builds are
+pruned so (**The state builds**): a state's stages are about six times its build.
 
 ## Oregon
 

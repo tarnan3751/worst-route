@@ -934,6 +934,86 @@ def test_qa_of_a_fragmented_build(data_dir: Path) -> None:
     assert result.stdout.startswith("skipped: ")
 
 
+def test_prune_deletes_the_stage_data_of_a_build_that_passed_qa(data_dir: Path) -> None:
+    directory = saved_build(str(FIXTURES / "divided.osm"))
+    code, output = pipeline("prune", "--region", "portland")
+    assert code == 1 and "qa.json" in output and "pipeline qa --region portland" in output
+    assert pipeline("qa", "--region", "portland")[0] == 0
+    stages = directory / "stages"
+    kept = sorted(p.name for p in stages.iterdir() if p.is_file())
+    code, output = pipeline("prune", "--region", "portland")
+    assert code == 0, output
+    assert output.startswith(f"prune b1: removed build, cleanup, enrich from {stages} (")
+    assert output.strip().endswith("MB); the build and its QA stay")
+    assert sorted(p.name for p in stages.iterdir()) == kept  # the reports and sidecars
+    assert "cleanup.json" in kept and "save.json.inputs.json" in kept
+    assert (directory / "qa" / "qa.json").exists()
+    assert read_build(directory).n > 0
+    code, output = pipeline("prune", "--region", "portland")
+    assert code == 0 and output == "skipped: build b1 has no stage data to prune\n"
+    # A step after build needs it to run again; build does, and the rest skip or rerun.
+    code, output = pipeline("enrich", "--region", "portland")
+    assert code == 1 and "pipeline cleanup --region portland" in output
+    code, output = pipeline("build", "--region", "portland", "--build-id", "b1")
+    assert code == 0 and output.startswith("build b1: wrote ")
+    assert pipeline("cleanup", "--region", "portland")[0] == 0
+
+
+def test_prune_refuses_a_failed_qa_unless_forced(data_dir: Path, tmp_path: Path) -> None:
+    directory = saved_build(str(FIXTURES / "grid.osm"), allow_fragmented=True)
+    assert pipeline("qa", "--region", "portland")[0] == 1
+    code, output = pipeline("prune", "--region", "portland")
+    assert code == 1
+    assert output == "prune refused: the QA of build b1 failed (--force to prune it anyway)\n"
+    assert (directory / "stages" / "cleanup").is_dir()
+    code, output = pipeline("prune", "--region", "portland", "--force")
+    assert code == 0 and output.startswith("prune b1: removed build, cleanup, enrich from ")
+    route = tmp_path / "route.json"  # the pruned build still plans, validated
+    plan = ["plan", "--region", "portland", "--from", "45.5000,-122.6000", "--to"]
+    result = runner.invoke(app, [*plan, "45.5045,-122.5936", "--seed", "1", "--out", str(route)])
+    assert result.exit_code == 0 and "validator: ok (" in result.stdout, result.output
+    assert runner.invoke(app, ["validate", str(route)]).exit_code == 0
+
+
+@pytest.mark.parametrize(
+    ("allow_fragmented", "failing", "pruned"),
+    [
+        (True, ["SCC largest dropped"], True),  # dropped by design: pruned as if it passed
+        (True, ["SCC retained"], True),
+        (True, ["SCC retained", "SCC largest dropped"], True),
+        (False, ["SCC largest dropped"], False),
+        (True, ["SCC largest dropped", "twin coverage"], False),
+        (True, ["SCC retained", "T0 retained"], False),
+    ],
+)
+def test_prune_takes_a_fragmented_build_failing_only_the_connectivity_rule(
+    data_dir: Path, allow_fragmented: bool, failing: list[str], pruned: bool
+) -> None:
+    # No fixture drops a component of more than 200 nodes, so the build's records say it did.
+    directory = saved_build(str(FIXTURES / "divided.osm"))
+    assert pipeline("qa", "--region", "portland")[0] == 0
+    meta = json.loads((directory / "meta.json").read_text())
+    meta["params"]["cleanup"]["allow_fragmented"] = allow_fragmented
+    (directory / "meta.json").write_text(json.dumps(meta))
+    report = json.loads((directory / "qa" / "qa.json").read_text())
+    for threshold in report["thresholds"]:
+        threshold["passed"] = threshold["name"] not in failing
+    report["passed"] = False
+    (directory / "qa" / "qa.json").write_text(json.dumps(report))
+    code, output = pipeline("prune", "--region", "portland")
+    if pruned:
+        assert code == 0 and output.startswith("prune b1: removed build, cleanup, enrich from ")
+    else:
+        assert code == 1 and output.startswith("prune refused: the QA of build b1 failed")
+        assert (directory / "stages" / "cleanup").is_dir()
+
+
+def test_prune_needs_a_written_build(data_dir: Path) -> None:
+    cleaned_build(str(FIXTURES / "grid.osm"))
+    code, output = pipeline("prune", "--region", "portland", "--force")
+    assert code == 1 and "meta.json" in output and "pipeline save --region portland" in output
+
+
 def test_qa_refuses_a_stale_build(data_dir: Path) -> None:
     saved_build(str(FIXTURES / "divided.osm"))
     # Another extract under the same build id, rerun up to enrich: save refuses, and so does qa.

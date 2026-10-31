@@ -11,7 +11,7 @@ builds and the places index. Directions, stats, toasts and jokes are later M4 pi
 | Module | What it holds |
 |---|---|
 | `places.py` | `write_places` (the index's writer), `PlaceIndex` (`load`, `states_crossed`, `towns_passed`, `outlines`), `State`, `Town`, `PlacesWritten`, `route_line`, `census_dir`, `places_dir`, `state_files`, `place_files` |
-| `comparisons.py` | `COMPARISONS`, `Comparison`, `SHORTER`, `comparison_line`, `METRES_PER_MILE` |
+| `comparisons.py` | `COMPARISONS`, `Comparison`, `SHORTER`, `comparison_line`, `distance_text`, `METRES_PER_MILE` |
 | `share_image.py` | `render_share_image`, `headline`, the image's sizes, thresholds and colours (its version, `SHARE_IMAGE_VERSION`, is the endpoint's, in `api/share_api.py`) |
 
 `config.py` holds `CENSUS_VINTAGE` (2025) and `STATES`: each state's Geofabrik slug (a `Region`'s
@@ -100,7 +100,8 @@ Vancouver (WA).
 `COMPARISONS` it **strictly exceeds**: that thing's "N×" line when the route is at least twice
 as long (N to one decimal), else its "Longer than" line; a route no longer than the shortest
 thing gets `SHORTER`. Every line names the thing's length in miles with kilometres in
-parentheses (one decimal below 100 with ".0" dropped, whole numbers with separators from 100).
+parentheses (`distance_text`: one decimal below 100 with ".0" dropped, whole numbers with
+separators from 100).
 It is a pure function of the length: no randomness, no state.
 
 | Miles | Thing | "Longer than" line |

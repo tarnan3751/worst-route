@@ -6,8 +6,8 @@ lines: `longer` ("Longer than ..., which is {dist}.") and `times` ("{n}× ..., w
 {dist}."). `comparison_line(length_m)` picks the longest thing the route is strictly longer
 than: its `times` line when the route is at least twice as long (`{n}` the multiple, one
 decimal), else its `longer` line; a route shorter than every thing gets `SHORTER`. `{dist}` is the
-thing's length in miles with kilometres in parentheses. No randomness and no state: the same
-length always gives the same line.
+thing's length in miles with kilometres in parentheses (`distance_text`). No randomness and no
+state: the same length always gives the same line.
 """
 
 from dataclasses import dataclass
@@ -110,17 +110,17 @@ def comparison_line(length_m: float) -> str:
     miles = length_m / METRES_PER_MILE
     exceeded = [c for c in COMPARISONS if miles > c.miles]
     if not exceeded:
-        return SHORTER.format(dist=_distance(COMPARISONS[0].miles))
+        return SHORTER.format(dist=distance_text(COMPARISONS[0].miles))
     thing = exceeded[-1]
     multiple = miles / thing.miles
     if multiple >= 2:
-        return thing.times.format(n=f"{multiple:.1f}", dist=_distance(thing.miles))
-    return thing.longer.format(dist=_distance(thing.miles))
+        return thing.times.format(n=f"{multiple:.1f}", dist=distance_text(thing.miles))
+    return thing.longer.format(dist=distance_text(thing.miles))
 
 
-def _distance(miles: float) -> str:
+def distance_text(miles: float) -> str:
     """The length as "26.2 mi (42.2 km)": one decimal below 100 (".0" dropped), whole numbers
-    from 100 on."""
+    from 100 on. The jokes among the directions write their distances so too."""
     return f"{_number(miles)} mi ({_number(miles * METRES_PER_MILE / 1000)} km)"
 
 

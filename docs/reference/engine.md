@@ -989,7 +989,7 @@ import: …") and exits 1.
 `graphs/<region>/latest`. A missing `latest` or `meta.json` is one line on stderr ("... run
 `worst-route pipeline save --region R` first") and exit 1, and so is a build without an array
 of the format, naming its remedy (`docs/reference/graph.md`, **The build format**): one another
-pipeline version wrote is rebuilt ("... was written by pipeline 2 (now 3): rebuild the region
+pipeline version wrote is rebuilt ("... was written by pipeline 2 (now 5): rebuild the region
 with `worst-route pipeline filter --region R` and the steps after it"), one of this version is
 saved again ("... lacks the array node_roundabouts: rebuild it with `worst-route pipeline save
 --force --region R`"); `validate` says the same. Without `--seed` it draws a random seed, which it
@@ -1389,20 +1389,49 @@ stretch between is no pocket, running through 236639's member. So no route drive
 straight through Woodburn on I-5 (southbound passes 236639 twice too, but its direct pass is in
 the table, through the off-ramp, the Newberg Highway and the on-ramp). A legal node-simple path
 exists, 455.0 km by OR 99E against the walk's 454.7 km, which the search does not look for.
-Statewide, carriageways of motorway, trunk or primary class that leave a super-junction and come
-back to it with the direct pass not in its table number 11 at 9 super-junctions (Portland's
-build: 5 at 4). The I-5 junction near Salem (237073) the turn-blind path also crosses is right:
-straight through is allowed both ways, and what the blind path did there, northbound I-5 onto the
-Salem Parkway's on-ramp, cannot be driven.
+Statewide, roads that leave a super-junction and come back to it with the pass not in its table
+number 20 at 19 super-junctions on that build, Portland's 9 at 9, by `lost_through`'s count
+(`tests/pipeline/invariants.py`: every road class, every branch, back within four edges; the
+first count, of motorway, trunk and primary roads down one branch, had given 11 at 9 and 5 at
+4). The I-5 junction near Salem (237073) the turn-blind path also crosses is right: straight
+through is allowed both ways, and what the blind path did there, northbound I-5 onto the Salem
+Parkway's on-ramp, cannot be driven.
+
+**At pipeline version 5** stage B joins the clusters a carriageway leaves and comes back to, and
+its pockets follow a road by its name as well as its refs (`docs/reference/pipeline.md`,
+**cleanup**): Woodburn's halves are one interchange, through which northbound I-5 and the Newberg
+Highway both ways each pass once. On the rebuilt build (ad1ae3f57d81, `graph_version`
+089647c53fa2, from the 2026-10-29 extract that replaced the 2026-10-28 one; engine version 3,
+2026-10-31, load average about 17; seed 1, `--budget 30`), every route validating:
+
+| Trip | Before (build 5913ade7a2df, 2026-10-28) | At version 5 |
+|---|---|---|
+| Medford → Portland, `--tier T1` | refused | 2.01× (454.66 km baseline), budget |
+| Eugene → Portland, `--tier T1` | refused | 4.74× (182.89 km), budget |
+| Medford → Portland (T4) | 8.17× | 6.03× (443.40 km), budget, 4,111 attempts |
+| Eugene → Portland (T4) | 14.00× | 12.02× (180.80 km), budget |
+| near Rose Lodge → near Sisters (T4) | refused at Valley Junction | 2.70× (258.72 km), budget |
+| near Melrose → near Warren (T4) | refused at McKay Road / French Prairie Road | refused |
+
+Every run that plans stops on its budget, so its ratio depends on how many attempts its 30 s
+allow; on the version 5 build made before the review's fold (97dc06067f0c, from the 2026-10-28
+extract) the same three T4 trips made 9.20×, 14.68× and 12.77×.
+
+Valley Junction's OR 18 and "OR 18;OR 22" are one road by name (Salmon River Highway), which the
+pockets now follow. The pair at 236640 stays refused: there the table forbids every turn from
+French Prairie Road onto McKay Road inside one super-junction, a cross turn rather than a road
+leaving and coming back, like NE 42nd Avenue onto NE Sandy Boulevard at I-84 and NE Halsey in
+Portland (`docs/project_overview.md` §2.3).
 
 ## Limitations
 
 - **Transitions.** The searches see the transition tables (**Searches**), but a leg or a part
   of a detour whose cheapest legal path passes a node twice is no path: the search does not
   look for the cheapest node-simple legal path, which a turn table can make longer than the
-  cheapest walk. The seed then falls back as for an unreachable leg. On Oregon this refuses 2 of
-  ten random 60–650 km pairs on T4 and two of the four named trips on T1, at super-junctions
-  whose table forbids a same-road through movement (**On Oregon**).
+  cheapest walk. The seed then falls back as for an unreachable leg. On Oregon's build at
+  pipeline version 3 this refused 2 of ten random 60–650 km pairs on T4 and two of the four
+  named trips on T1, at super-junctions whose table forbade a through movement; since version
+  5's stage B, one pair (a cross turn at McKay Road and French Prairie Road; **On Oregon**).
 - **Twins within a leg.** A leg driving an edge and its twin is searched again without the
   later one, up to 8 times; a leg that needs more rounds, or whose only way drives a twin
   pair, falls back as an unreachable one.

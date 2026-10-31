@@ -344,16 +344,29 @@ The risks the plan anticipates are `docs/PLAN.md` §8.3. Found on the Portland b
 
 Found on the Oregon build (M5.1, 2026-10-31; the inputs to M5.2's decision):
 
-- **Stage B forbids some same-road through movements, and the search then gives up.** Where an
-  interchange became several super-junctions interleaved along a freeway, a carriageway leaves
-  one and comes back to it, and its direct pass is not in the table: northbound I-5 at Woodburn
-  (OR 214 / OR 219, whose two halves share only I-5 as an identity) cannot be driven straight
-  through. Statewide, 11 such movements on motorway, trunk or primary roads at 9 super-junctions
-  (Portland's build: 5 at 4). The transition-aware search, finding the cheapest legal walk enters
-  such a junction twice, answers no path although a slightly longer node-simple one exists: two
-  of the four named trips were refused on T1, and 2 of 10 random 60–650 km pairs on T4 (at two
-  other junctions, not yet checked on the ground). Both are tier A: stage B's join and pocket
-  rules, and the search (`docs/reference/engine.md`, **On Oregon**, **Limitations**).
+- **Some junctions still forbid a movement drivable on the ground, and the search then gives
+  up.** Pipeline version 5 fixed the defect found at Woodburn (`docs/reference/pipeline.md`,
+  **cleanup**, step 4): stage B now joins two clusters a carriageway leaves and comes back to, and
+  its pockets follow a road by its name as well as its refs, so northbound I-5 and the Newberg
+  Highway both go straight through Woodburn's interchange; Medford → Portland and Eugene →
+  Portland plan on T1, and the random pair refused at Valley Junction plans
+  (`docs/reference/engine.md`, **On Oregon**). Roads that leave a super-junction and come back to
+  it with the pass not in its table (`lost_through`'s count: every road class, every branch) fell
+  from 20 at 19 super-junctions to 12 at 11 on Oregon, and from 9 to 7 on Portland. Named
+  limitations left, each for a brief of its own:
+  - **Pockets longer than 600 m**: I-5 and US 30 by the Rose Quarter (1,497 m), US 26 by Banks
+    (1,302 m), Old Highway 30 at Meacham (1,378 m), US 97 by Sunriver (3,456 m).
+  - **Roads without a ref that leave under one name and come back under another**, which no
+    pocket follows: North Argyle Way / North Columbia Boulevard, North Greeley Avenue / North
+    Going Street, Northwest Zion Church Road / Northwest Glencoe Road, South Barlow Road / South
+    Arndt Road, Northeast Cascades Parkway by Northeast Mount Hood Avenue, Southeast 91st Avenue
+    round the block by Southeast Tolman Street and Southeast 90th Avenue (Portland); Southwest
+    Country Club Drive / Southwest 35th Street (Corvallis).
+  - **Cross-street turns a super-junction forbids** though they look drivable: NE 42nd Avenue onto
+    NE Sandy Boulevard at I-84 and NE Halsey (Portland), French Prairie Road onto McKay Road by
+    I-5 near Donald, which still refuses one random statewide pair on T4.
+  - **The transition-aware search answers no path** when the cheapest legal walk enters a node
+    twice, though a slightly longer node-simple path may exist (**Transitions**, above).
 - **The leash is tight where roads wind**: two rural points 8.8 km apart and 32.4 km apart by road
   have no route inside their 5.3 km leash (0.6 × the trip); the factor is kept, since it shapes
   every Portland route.
@@ -436,7 +449,12 @@ brief):
   identities within 500 m, a slip-lane cluster takes in the at-grade crossing it bypasses
   (reached along two different roads), and every cluster takes in its pockets, a stretch of one
   road of at most 600 m that leaves it and comes back (2026-10-30, at the cleanup plan and its
-  review).
+  review). Since pipeline version 5 (the coordinator, 2026-10-31, at the plan found on the Oregon
+  build), two clusters are one when a carriageway (motorway, trunk or primary, followed OSM node
+  to node with one highway and its ref set, or its normalised name when it has no ref) leaves
+  one, passes the other and comes back to the first within 1.5 km, from attachment nodes within
+  500 m of each other; and a pocket follows one road by its name as well as by its refs, so a
+  road whose ref changes on the way is one road.
 - **Divided carriageways are linked as twins** detected on the stage A graph's edge segments
   (same ref/name and, motorways aside, the same name less directional words when both have
   one, so couplets are not twins; opposite bearing; side by side within a lateral distance by

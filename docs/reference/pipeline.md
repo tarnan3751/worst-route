@@ -76,6 +76,11 @@ report beside it in `qa/`.
   | 2 | M3: `enrich`'s bearings leave out cleanup's stubs; `save` writes `node_roundabouts` | 506f747d7458 (ae1ce1e8289b) |
   | 3 | M3: `enrich` indexes the brands, `save` writes them as arrays | ffe2e7c881ca (8867636799a6) |
   | 4 | M5: stage A places each cluster from its own buffers, not from OSMnx's union of every buffer (**cleanup**, step 2) | 4b8998deee9f (57e5deb43289) |
+  | 5 | M5: stage B joins two clusters a carriageway leaves and comes back to, and its pockets follow a road by its name as well as its refs (**cleanup**, step 4). With them came the drop of a super-junction with edges in and out that allows no turn through it (step 4, No turn allowed), which needed no version of its own: no build that saved had one (`save` refuses them), so it changes no array of Portland's or Oregon's | c60bc0c9cb4a (0d4338234cae), under the connectivity rule of M5.1 |
+
+  Rows 1–4 were measured on Geofabrik's Oregon extract of 2026-10-28, rows from 5 on on that of
+  2026-10-29 (md5 3c9bc0db9a4830d004044865fbecd965, data of 2026-10-29T21:21:26Z), which
+  replaced it.
 
   Version 4 moves 3,977 of Portland's 4,236 clusters by at most 1.5e-8 m: against version 3,
   the build's `node_x`, `node_y`, `node_lat` and `node_lon` differ in 3,216, 3,206, 3,020 and
@@ -316,6 +321,28 @@ twice.
      attachment nodes within `STAGE_B_JOIN_M` (500 m) of each other are one cluster. The ramps of
      one interchange rarely share a node (a diamond's two sides, a cloverleaf's eight ramps), and
      consecutive interchanges share only the freeway, so this joins the first and not the second.
+   - **Join along a carriageway** (`_carriageway_rejoins`, pipeline version 5): then two clusters
+     are one when a carriageway runs through them interleaved. An edge's carriageway key is its
+     highway, of `STAGE_B_CARRIAGEWAY_CLASSES` (motorway, trunk, primary), and its ref set, else its
+     normalised name (`_carriageway_key`; an edge with neither has none and continues no
+     carriageway). The candidates are two attachment nodes of different clusters within
+     `STAGE_B_JOIN_M` of each other with a key in common among their edges. Their clusters are one
+     when a chain of edges of one of the keys the two nodes share, starting from any node of one
+     cluster that has such an edge leaving it, each edge continuing the one before it OSM node to
+     node and never back the way it came, leaves that cluster, passes a node of the other and comes
+     back to the first within `STAGE_B_MAX_DIAMETER_M` (1,500 m) (`_comes_back`, which follows every
+     branch, shortest first, so the answer does not depend on the order of the graph's edges). Kept
+     apart, the carriageway would pass the first super-node twice, and no route could drive it
+     straight through. A chain never turns onto another road at a corner: the key holds the name as
+     well as the class. Woodburn's interchange (I-5 and the Newberg Highway, OR 219 west of I-5 and
+     OR 214 east) is the case: its halves share only I-5, so the identity join leaves them apart,
+     and northbound I-5 leaves the east half at its off-ramp (4,449 m along OSM way 1186652782),
+     passes the west half's on-ramp (4,999 m) and comes back to the east half's on-ramp (5,427 m).
+     The test runs on the clusters the identity join made, so a carriageway that comes back to
+     another part of its cluster counts (OR 99E on Martin Luther King Boulevard in Portland), and
+     repeats until nothing more joins; a cluster that grows still passes every test it passed, so
+     the result does not depend on the order. The joined clusters go through the slip lanes, the
+     pockets and the diameter guard like any other.
    - **Slip lanes:** a cluster whose links are all minor (`STAGE_B_MINOR_LINKS`:
      `primary_link`, `secondary_link`, `tertiary_link`) also takes in every node that two of its
      attachment nodes reach through other roads of at most `STAGE_B_SLIP_CENTER_M` (150 m), of
@@ -324,15 +351,30 @@ twice.
      merging, or two carriageways meeting). Clusters that claim the same node, or a node of
      another cluster, become one.
    - **Pockets:** each cluster then takes in the interior nodes of every path of at most
-     `STAGE_B_POCKET_M` (600 m) along one road (one signature, unnamed roads aside) from one of
-     its attachment nodes to another, outside the cluster and through no other cluster, and
-     repeats until it takes nothing more. Without that, a road that leaves the super-junction
-     and comes back to it (a bridge between two ramp terminals, a frontage-road crossing) could
-     not be driven straight through: the route would pass the super-node twice. A path that
-     changes road (one carriageway, a cross street, the other carriageway) is not a pocket, and
-     a road that leaves a node and comes back to the same node is a turnaround, not a pocket.
-     On Portland 8 same-road through movements at 5 super-junctions stay lost: their pocket
-     path runs through another cluster's nodes or is longer than 600 m.
+     `STAGE_B_POCKET_M` (600 m) along one road from one of its attachment nodes to another,
+     outside the cluster and through no other cluster, and repeats until it takes nothing more.
+     Without that, a road that leaves the super-junction and comes back to it (a bridge between
+     two ramp terminals, a frontage-road crossing) could not be driven straight through: the
+     route would pass the super-node twice. One road is one ref signature, or, since pipeline
+     version 5, one normalised name (`_road_keys`): at Woodburn the Newberg Highway becomes OR 214
+     on the bridge, so once the halves are joined, only its name makes the bridge a pocket, and
+     the highway can still be driven straight across. Roads with neither ref nor name make no
+     pockets. A path that changes road (one carriageway, a cross street, the other carriageway)
+     is not a pocket, and a road that leaves a node and comes back to the same node is a
+     turnaround, not a pocket.
+     A road that leaves a super-junction and comes back to it with a pass from its in-edge to
+     where it goes on not in the table is a lost through movement (`tests/pipeline/invariants.py`,
+     `lost_through`: chains of edges of one highway and ref, OSM node to node, every branch, back
+     within four edges). On Portland 9 at 9 super-junctions before pipeline version 5 and 7 since,
+     on either extract; on Oregon 20 at 19 before and 12 at 11 since. Each left is a road without
+     a ref that leaves under one name and comes back under another (North Argyle Way and North
+     Columbia Boulevard, North Greeley Avenue and North Going Street over 756 m, Northwest Zion
+     Church Road and Northwest Glencoe Road, South Barlow Road and South Arndt Road, Northeast
+     Cascades Parkway by Northeast Mount Hood Avenue, Southeast 91st Avenue round the block by
+     Southeast Tolman Street and Southeast 90th Avenue; Southwest Country Club Drive and Southwest
+     35th Street in Corvallis), or a pocket longer than 600 m (I-5 and US 30 by the Rose Quarter,
+     1,497 m; US 26 by Banks, 1,302 m; Old Highway 30 at Meacham, 1,378 m; US 97 by Sunriver,
+     3,456 m).
    - **Diameter guard:** a cluster whose bbox diagonal exceeds `STAGE_B_MAX_DIAMETER_M`
      (1500 m), other than a roundabout, is split by single linkage of its attachment nodes at
      `STAGE_B_SPLIT_EPS_M` (300 m, `scipy.spatial.cKDTree.query_pairs`); every other node joins
@@ -348,6 +390,18 @@ twice.
      the out-edge's original start (the same node counts). A full cloverleaf or diamond allows
      every pair, U-turns included (two loops, or off, across and back on); a half-diamond does
      not. Route splicing enforces them from M1.
+   - **No turn allowed:** a super-junction with edges in and out whose table is empty is
+     dropped, with its boundary edges, and has no record: no route can pass through it,
+     connectivity (which does not read the tables) would keep it, and a build cannot say so (a
+     node without transition rows allows every turn). It happens where a region's edge cuts an
+     interchange whose interior lies beyond the extracts: I-90 at the Washington–Idaho line
+     (State Line, 47.6968, −117.0417) in the build of Oregon and Washington enters from the
+     west on one carriageway and leaves on the other, the junction between them in Idaho.
+     Connectivity then drops the stubs left at its neighbours. A super-junction without edges in
+     or out (a ramp chain touching no other road) allows no pair either and keeps its record;
+     connectivity drops it as it is. Portland and Oregon have none of the first kind, so their
+     builds are unchanged; the report counts them (`dropped_empty`) and the CLI's stage B line
+     adds "N dropped with no allowed turn" when there are any.
    - **Twins carried across** (`_carry_twins`): an edge that stays maps to itself. An edge
      internal to a super-node maps to the super-node's boundary edges on the same road (equal
      signature) along its own carriageway: the in-edges from which that road leads to it through
@@ -399,10 +453,11 @@ twice.
   edge's attributes plus `u`, `v`: the smallest OSM id of the part at each end), `roundabouts`
   (the number of roundabout rings among its internal edges, so an interchange that holds a
   dumbbell's ring still counts it) and `transitions` (sorted `((u, v, key), (u, v, key))`
-  pairs; present, possibly empty, for every super-node: an empty table here means no pair is
-  allowed). `GraphData` reads a node without transition rows as allowing every pair and cannot
-  express an empty table, so `save` refuses a build that has a super-node whose table is empty
-  (Portland's has none).
+  pairs; present for every super-node, and empty only for one without edges in or out, since
+  stage B drops one with both that allows no pair; connectivity drops the first kind).
+  `GraphData` reads a node without transition rows as allowing every pair and cannot express an
+  empty table, so `save` still refuses a build that has a super-node whose table is empty, as a
+  guard.
 - `G.graph["twins"]`: edge key → sorted tuple of its twins' keys, for every edge with one.
 
 **Lengths through junctions.** An edge at a cluster or super-node has its geometry extended to
@@ -427,7 +482,9 @@ among its internal edges. These are what the validator's proof from original ids
 `twins`, found on the stage A graph (`candidates`, `paired`, `pairs`, `motorway_trunk_m`,
 `coverage`: the share of one-way motorway and trunk length with a twin, the QA metric);
 `stage_b` (`superjunctions` by kind, `sizes`: nodes replaced → super-nodes, `joined`,
-`slip_centres`, `pocket_nodes`, `split`, `internal_edges`, `twin_pairs` carried across,
+`rejoined`: joins made along a carriageway, `slip_centres`, `pocket_nodes`, `split`,
+`dropped_empty`: super-junctions with edges in and out dropped for allowing no turn between
+them, `internal_edges`, `twin_pairs` carried across,
 `twin_transitions`: transitions that must drive an internal edge with a twin outside,
 `twin_passages`: passages banned for driving both edges of a twin pair inside, `nodes`,
 `edges`); `connectivity` (nodes and edges before and after, dropped nodes, edges and length, a
@@ -444,7 +501,12 @@ roundabouts), takes in 661 pocket nodes and carries 3,388 twin pairs (298 transi
 a twinned internal stretch, 250 passages at 39 super-junctions must drive both carriageways
 inside); connectivity keeps 65,810
 of 66,072 nodes (99.6%), dropping 262 nodes and 62.9 km in 157 components, the largest 11 nodes.
-The cleaned graph has 65,810 nodes and 168,167 edges.
+The cleaned graph has 65,810 nodes and 168,167 edges. At pipeline version 5 (build c60bc0c9cb4a,
+the 2026-10-29 extract, about 50 s), stage B joins 25 pairs of clusters along a carriageway and
+makes 647 super-junctions (481 interchanges, of which 123 joined, 144 slip-lane clusters, 14
+split by the guard; 166 roundabouts), takes in 678 pocket nodes and carries 3,433 twin pairs (293
+transitions, 304 passages); connectivity keeps 65,779 of 66,041 nodes, dropping 262 nodes and
+62.8 km in 157 components, and the cleaned graph has 65,779 nodes and 168,120 edges.
 
 ## `enrich`
 
@@ -553,7 +615,8 @@ The small fixtures cut through networks, so their upper tiers are often fragment
 whose ramps are inside its interchange is one-way stubs around the super-node at T0 (diamond,
 cloverleaf), and the overpass's two tertiary roads meet only through a residential connector.
 **Portland** (2–3 s): T0 keeps 1,345 of 1,345 nodes, T1 5,202 of 5,202, T2 11,693 of 11,693,
-T3 20,202 of 20,213 (99.95%; 7 components), T4 all 65,810.
+T3 20,202 of 20,213 (99.95%; 7 components), T4 all 65,810 (pipeline version 3; at version 5,
+build c60bc0c9cb4a: 1,331, 5,169, 11,663, 20,173 of 20,184 and 65,779).
 
 ## `save`
 
@@ -583,7 +646,8 @@ build_dir)`. The arrays are `docs/reference/graph.md`'s; how they come from the 
 
 A super-node whose transition table is empty allows no turn through it, which the format cannot
 say (a node without rows allows every turn): `graph_data` raises `EmptyTransitionsError`, naming
-the node and its position, and the CLI exits 1. Portland has none.
+the node and its position, and the CLI exits 1. It is a guard: stage B drops such super-nodes
+(**cleanup**, step 4).
 
 `save.build_meta` assembles `meta`: `region`, `build_id`, `crs_epsg`, `created` (UTC),
 `pipeline_version`, `sources` and `params`. `save.build_sources` gives the extract `filter`
@@ -601,7 +665,9 @@ size, seconds). `save.remove_build` deletes a written build, `meta.json` first, 
 
 **Portland** (2–4 s): 65,810 nodes, 168,167 edges, 3,353 twin pairs, 11,378 transition rows at
 657 super-junctions, 39.9 MB; 170 roundabout rings, at 165 roundabouts (one holds two) and 4
-interchanges.
+interchanges (pipeline version 3). At version 5 (build c60bc0c9cb4a, the 2026-10-29 extract):
+65,779 nodes, 168,120 edges, 3,397 twin pairs, 11,455 transition rows at 642 super-junctions (477
+interchanges, 165 roundabouts), the same 170 rings.
 
 ## `qa`
 
@@ -711,8 +777,23 @@ below 0.98 or a dropped component of more than 200 nodes (**cleanup**, step 5), 
 passes and Portland passes as before (99.60%, 11). Those constants enter every build's `params`,
 and so its `graph_version`: a build saved before them keeps its version until it is rebuilt,
 and rebuilding it gives another version with the same arrays, which refuses the routes stored
-on the old one (**qa**, Portland). The tiers' rule needed no change. Nothing else in the pipeline changed for the state;
-`engine.md`, **On Oregon**, has the trips and what the engine's tiers became.
+on the old one (**qa**, Portland). The tiers' rule needed no change. Nothing else in the
+pipeline changed for the state; `engine.md`, **On Oregon**, has the trips and what the engine's
+tiers became.
+
+**At pipeline version 5** (build ad1ae3f57d81, `graph_version` 089647c53fa2, from the 2026-10-29
+extract, md5 3c9bc0db9a4830d004044865fbecd965, which replaced the one above;
+`tools/bench_build.py --force` at load average about 10–17): the whole pipeline takes 223 s,
+cleanup 123 s (stage A 92 s, stage B 11 s) and 4.11 GB at its peak. Stage B joins 56 pairs of
+clusters along a carriageway and makes 2,006 super-junctions (1,662 interchanges, of which 383
+joined, 482 slip-lane clusters and 27 split; 344 roundabouts), taking in 1,708 pocket nodes;
+connectivity keeps 237,469 of 241,100 nodes (98.49%, 3,631 dropped as before). The build has
+237,469 nodes, 593,325 edges, 6,412 twin pairs and 30,502 transition rows at 2,002
+super-junctions; the tiers keep 98.21%, 99.58%, 99.65% and 99.90% of their nodes, and QA passes
+as before. Lost through movements (**cleanup**, step 4, Pockets) fall from 20 at 19
+super-junctions on the version 3 build to 12 at 11, among them northbound I-5 at Woodburn, whose
+two halves are now one interchange through which the Newberg Highway, OR 219 on one side and OR
+214 on the other, also goes straight across.
 
 ## Fixtures
 

@@ -64,9 +64,10 @@ lists the arrays in a fixed order, the order of the fields, the files and the ha
 | brands | `brand_indptr`, `brand_nodes` | i64[b+1], i32[r] | the brand index: brand k's nodes are `brand_nodes[brand_indptr[k]:brand_indptr[k + 1]]` (`nodes_of_brand(k)`), at least one each, strictly ascending; the nodes a route can pass through nearest the brand's POIs (`docs/reference/pipeline.md`, **enrich**); the brand mode's locations (`docs/reference/engine.md`, **Objectives**). A brand's id is its run's index; its name and wikidata id are in `strings` |
 | | `brand_locations` | i32[r] | the POIs snapped to each of those nodes (≥ 1). The three arrays were added with `PIPELINE_VERSION` 3 |
 
-A node with no transition rows allows every pair, so an empty table cannot be written: cleanup
-keeps a super-junction whose table is empty (no pair allowed), and `save` refuses a build that has
-one (`docs/reference/pipeline.md`, **cleanup**).
+A node with no transition rows allows every pair, so an empty table cannot be written: stage B
+drops a super-junction with edges in and out whose table would be empty (no pair allowed),
+connectivity drops one without, and `save` refuses a build that has one, as a guard
+(`docs/reference/pipeline.md`, **cleanup**).
 
 **Edge ids are sorted by (u, v, original order).** Each node's out-edges are therefore one
 contiguous run of ascending ids (`out_edges` is `0..m-1`), which the backends' tie rule relies
@@ -123,7 +124,7 @@ arrays/<name>.npy    one file per array of ARRAY_SPECS, written by np.save witho
   `FileNotFoundError`), one line naming the remedy for the build's state (`store.outdated`):
   for a build another pipeline version wrote (its `meta.pipeline_version` is not
   `PIPELINE_VERSION`), whatever arrays it holds, the rebuild ("the build at PATH was written by
-  pipeline 3 (now 4): rebuild the region with `worst-route pipeline filter --region R` and the
+  pipeline 3 (now 5): rebuild the region with `worst-route pipeline filter --region R` and the
   steps after it"), which gives the build a new id, so this code never reads a build another
   version made; for this version's build lacking an array, the array and the save that writes
   it again ("the build at PATH lacks the array node_roundabouts: rebuild it with `worst-route

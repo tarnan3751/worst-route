@@ -357,11 +357,6 @@ Found on the Oregon build (M5.1, 2026-10-31; the inputs to M5.2's decision):
 
 In the frontend (`docs/reference/frontend.md`, **Limitations**):
 
-- **MapLibre GL JS 5 carries an advisory**: GHSA-jrc7-96c5-q579, an XSS bypass in its HTML
-  sanitizer, which `npm audit` lists as critical for every version up to 6.4.0. In 5.x the
-  sanitizer renders only the attribution control's strings, here the app's own, so 5.x is kept
-  for local use (decided 2026-10-30); the upgrade to 6.x comes before public hosting, whose
-  third-party vector style brings attribution of its own (M5).
 - **The dev server's proxy does not end a stream whose upstream drops**: if the API dies
   mid-run, the page keeps showing the run as going; a stream dropped between the browser and
   the server reconnects. No watchdog is planned.

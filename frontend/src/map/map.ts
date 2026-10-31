@@ -2,13 +2,18 @@
 // navigation control. Layers are stacked in the order they are added: the route's (routeLayer.ts:
 // baseline, casing, route, flash, the directions' highlight) above the basemap; the stops are DOM
 // markers above the canvas.
-import { Map as MapLibreMap, NavigationControl } from "maplibre-gl";
+//
+// MapLibre 6 finds its worker beside its own module, which a bundle does not keep: the worker is
+// imported as an asset (Vite's `?url`, emitted into dist/assets/) and named with setWorkerUrl.
+import { Map as MapLibreMap, NavigationControl, setWorkerUrl } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import type { Bounds } from "../util/geo";
 import { basemapStyle } from "./basemap";
 
 /** The map in `container`, showing the contiguous US until a region is known. */
 export function createMap(container: HTMLElement): MapLibreMap {
+  setWorkerUrl(workerUrl);
   const map = new MapLibreMap({
     container,
     style: basemapStyle(),

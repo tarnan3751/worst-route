@@ -4,7 +4,7 @@ The single-page app under `frontend/`: a map of the served region on which the u
 start, an end and stops along the way, starts a job, watches the worst route grow live, cancels,
 rerolls, makes the route worse, reads its directions and its toasts, and opens a stored route
 by link. Vite + TypeScript (strict), no
-framework, MapLibre GL JS 5. The design it implements is `docs/PLAN.md` §5; the conventions are
+framework, MapLibre GL JS 6. The design it implements is `docs/PLAN.md` §5; the conventions are
 `CLAUDE.md`. It talks to the backend through the API only (`docs/reference/api.md`), and changes
 nothing there.
 
@@ -60,7 +60,10 @@ gate runs its check as part of `typecheck`.
 
 `dist/` expects `/api` to reach the API, as the dev server and `preview` arrange; public
 hosting needs the same from its web server (M5). The bundle is about 1.1 MB minified (MapLibre
-is most of it), 300 kB gzipped.
+is most of it), 310 kB gzipped, and MapLibre's worker a module of its own, 0.5 MB, in
+`dist/assets/`: MapLibre 6 looks for its worker beside its own module, which a bundle (or Vite's
+pre-bundled dependencies in the dev server) does not keep, so `map.ts` imports it as an asset
+(`maplibre-gl/dist/maplibre-gl-worker.mjs?url`) and names it with `setWorkerUrl`.
 
 ## Using it
 
@@ -324,7 +327,7 @@ the browser closes for good (an answer that is not a stream, as a 404 for a job 
 raster tiles (`https://tile.openstreetmap.org/{z}/{x}/{y}.png`, desaturated so the route stands
 out) with the attribution "© OpenStreetMap contributors", at hobby volume, as the tile usage
 policy allows; the browser's own `User-Agent` and `Referer` are what the policy asks for. MapLibre
-GL JS 5 fetches only the tiles in view (it has no prefetch option) and nothing is cached
+GL JS 6 fetches only the tiles in view (it has no prefetch option) and nothing is cached
 offline. The policy rules these tiles out for a public site: `VECTOR_STYLE_URL`, marked as the
 switch, takes a vector style URL (Protomaps PMTiles, MapTiler, Stadia), and the map then uses it
 instead. Agents verifying the app block the tile server (**Seeing it**), so their screenshots
@@ -454,9 +457,11 @@ its end, so a mid-run snapshot exists, and stays near 1 MB.
 
 Agents run the app in their own clone (**Running it**) and drive it with headless Chrome over
 the DevTools protocol, the tile server blocked (`Network.setBlockedURLs`) and the geocoder off
-or pointed at a stub of their own, writing screenshots to their scratch directory; a Playwright tool under `tools/` is a later item. Killing the dev
-server mid-run reloads the page (Vite's client does), so a dropped stream is tested through a
-relay in front of `npm run preview`.
+or pointed at a stub of their own, writing screenshots to their scratch directory; a
+Playwright tool under `tools/` is a later item. MapLibre 6 needs WebGL2, which headless Chrome
+gives with `--use-angle=swiftshader --enable-unsafe-swiftshader`. Killing the dev server
+mid-run reloads the page (Vite's client does), so a dropped stream is tested through a relay in
+front of `npm run preview`.
 
 ## Measured
 
@@ -584,10 +589,6 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
 - **A stream through the dev proxy whose upstream drops is not ended**: Vite's proxy keeps the
   browser's response open, so if the API dies mid-run the stat line stays at `getting worse…`.
   A connection dropped between the browser and the server is reconnected as above.
-- **MapLibre GL JS 5**, as decided, carries GHSA-jrc7-96c5-q579 (its HTML sanitizer; `npm audit`
-  lists every version up to 6.4.0). In 5.x the sanitizer renders the attribution control's
-  strings only, which here are the app's own; a vector style from a third party for public
-  hosting brings its own attribution, so the upgrade to 6.x comes before that (M5).
 - **Seeds above 2⁵³ − 1** cannot be typed: the API allows up to 2⁶³ − 1, but a JavaScript number
   is exact only up to 2⁵³. A stored route with a larger seed (from the CLI or a script) shows it
   rounded.

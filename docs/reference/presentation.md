@@ -227,10 +227,10 @@ tools/fetch_census.sh 41 53      # Oregon's and Washington's places, then the tw
 
 into `$WORST_ROUTE_DATA/aux/census/` (default `./data/aux/census/`), each with `curl` under the
 project's User-Agent (`config.Settings.user_agent`) to a temporary name, then checked against its
-pinned sha256: the two state files and the places of Oregon (41), Washington (53), California
-(06), Idaho (16) and Nevada (32) are pinned; a mismatch is deleted (exit 1); a file with no
-pinned sum is kept and its sum printed, to pin in the script; a fetch that fails leaves nothing
-behind (exit 1). A code that is not two digits is refused before anything is fetched (exit 2).
+pinned sha256: the two state files and the places of the 48 contiguous states and DC (`us-t1`'s
+states) are pinned; a mismatch is deleted (exit 1); a file with no pinned sum is kept and its
+sum printed, to pin in the script; a fetch that fails leaves nothing behind (exit 1). A code
+that is not two digits is refused before anything is fetched (exit 2).
 
 **The index.** `worst-route aux places --region R [--census-dir PATH]` (`--census-dir` default
 `<WORST_ROUTE_DATA>/aux/census/`) writes three GeoParquet files under

@@ -15,6 +15,7 @@ else: every route it returns has passed the validator.
 | `share_api.py` | `GET` and `HEAD /routes/{id}/share.png`, `SHARE_IMAGE_VERSION` (**Share image**) |
 | `directions_api.py` | `GET /routes/{id}/directions` |
 | `ready_api.py` | `GET /ready` (**Endpoints**) |
+| `basemap_api.py` | `GET /config`, the basemap's files under `/basemap/` (`BasemapFiles`), `basemap_of` (**Basemap**) |
 | `logs.py` | `RequestLog` (request ids, access lines), `JsonFormatter`, `ContextFilter`, `json_log_config` (**Logs**) |
 | `limits.py` | `Limits` (`LOCAL`, `PUBLIC`), `GeocodeQuota`, `client_of` (who a client is), `client_hash` (**Public limits**, **Logs**) |
 | `schemas.py` | the request and response models (pydantic), the SSE payloads |
@@ -75,11 +76,13 @@ own handling of them (`proxy_headers` off), so the client is always the peer. It
 `--log-format json` logs one JSON object a line on stdout (**Logs**); `text`, the default, is
 uvicorn's format, as before. `--public` applies the public limits (**Public limits**) and prints
 them last: `public: a client runs 1 job at once with 3 waiting, budgets up to 60 s, 10 place
-searches a minute`.
+searches a minute`. The basemap the frontend draws is `WORST_ROUTE_BASEMAP`'s, `raster` (the
+default) or `pmtiles` (**Basemap**), and with `pmtiles` `serve` prints the file it serves,
+`basemap: pmtiles <data>/basemap/<region>.pmtiles`, before the proxy's and the public lines.
 
 `create_app(ApiSettings(data_dir, region, build_id="latest", backend, store_path, jobs,
-geocoder="nominatim", nominatim_url, contact, trust_proxy=False, public=False))` builds the
-same application in-process, and
+geocoder="nominatim", nominatim_url, contact, trust_proxy=False, public=False,
+basemap="raster"))` builds the same application in-process, and
 `create_app(settings, geocode=service)` with a geocoding service of the caller's own (a
 `FakeGeocoder` behind it, in the tests); the tests drive it over `httpx` (**Tests**).
 
@@ -160,7 +163,8 @@ what the API and the presentation need:
 - An unknown field is refused.
 
 **Every error** answers `{code, message}` and the error's own fields, at the top level (not
-FastAPI's `detail`):
+FastAPI's `detail`), but for the basemap's files' range errors: `/basemap/` answers a malformed
+`Range` 400 and a range starting past the end 416, both as Starlette's `text/plain` (**Basemap**):
 
 | Status | Code | When |
 |---|---|---|
@@ -205,6 +209,8 @@ later.
 |---|---|---|
 | GET | `/health` | `{status: "ok", builds: [{region, build_id, graph_version}]}` |
 | GET | `/ready` | `{status: "ready"\|"not_ready", checks: [{name, ok, detail}]}`: 200 when every check passes, else 503 (below) |
+| GET | `/config` | `{public, basemap: {kind, tiles, glyphs, sprite}, limits: {budget_max_s, leash_max_km}}` (**Basemap**) |
+| GET, HEAD | `/basemap/{path}` | the files under `<WORST_ROUTE_DATA>/basemap/`, with byte ranges (**Basemap**) |
 | GET | `/regions` | `[{region, build_id, graph_version, bbox: [w, s, e, n], counts, tiers: [{tier, nodes, edges}]}]` |
 | POST | `/snap` | `{region, lat, lon, role: start\|via\|end, tier?}` → `{node, lat, lon, moved_m, note}` |
 | GET | `/brands` | `{region, brands: [{id, name, wikidata, locations}]}`, for `?region=` (below) |
@@ -223,11 +229,13 @@ later.
 lives: `build`, the served build still on disk at the `graph_version` it loaded (a build
 replaced since, or gone, fails: restart to serve the new one); `store`, the route store
 answering a query; `places`, the region's places index loaded at startup (missing, the check
-names `worst-route aux places --region R`). A check that fails makes the answer 503 with
-`status: "not_ready"`; each check's `detail` says what it found, or what is missing and its
-remedy, never a path on the server or an error of its system (those go to the log, as
-warnings of `worst_route.api.ready_api`). Its use is a container's health check and a deploy's
-last step (`docs/reference/hosting.md`).
+names `worst-route aux places --region R`); `basemap`, with the `pmtiles` basemap its file
+(missing, the check names `tools/fetch_basemap.sh R`; its detail says whether the labels' fonts
+and icons are there too, which are optional), with `raster` nothing. A check that fails makes
+the answer 503 with `status: "not_ready"`; each check's `detail` says what it found, or what is
+missing and its remedy, never a path on the server or an error of its system (those go to the
+log, as warnings of `worst_route.api.ready_api`). Its use is a container's health check and a
+deploy's last step (`docs/reference/hosting.md`).
 
 **`/snap`** judges the stop in the tier's nodes and every node within `BUBBLE_KM` (3 km) of it,
 as a job's masks do near a stop (`auto` is T4); its `note` says why a stop moved ("moved 214 m
@@ -705,6 +713,51 @@ machine, with curl:
   2.73× (700.5 km, `target`); the document 0.6 MB in 0.08–0.15 s with 723 steps and 33 towns,
   `/directions` 11 ms, `/share.png` 0.54 s (115,836 road units, thinned to 17,050).
 
+## Basemap
+
+The frontend draws the basemap the server names (`docs/reference/frontend.md`, **Basemap**;
+`docs/reference/hosting.md`). `WORST_ROUTE_BASEMAP` (`config.Settings.basemap`,
+`ApiSettings.basemap`) picks it: `raster`, the default, OpenStreetMap's raster tiles, which their
+usage policy allows at hobby volume and so only locally; or `pmtiles`, Protomaps' vector tiles
+from one file the server holds, `<WORST_ROUTE_DATA>/basemap/<region>.pmtiles`, which
+`tools/fetch_basemap.sh` cuts from a Protomaps build (`docs/reference/hosting.md`).
+
+**`GET /config`** answers what the frontend needs of the server:
+
+```
+{"public": false,
+ "basemap": {"kind": "pmtiles", "tiles": "/basemap/portland.pmtiles",
+             "glyphs": "/basemap/fonts/{fontstack}/{range}.pbf",
+             "sprite": "/basemap/sprites/grayscale"},
+ "limits": {"budget_max_s": 120.0, "leash_max_km": 150.0}}
+```
+
+`public` is `--public`'s, `limits` the budget and leash a request may ask for (**Public
+limits**). `basemap.kind` is `raster` or `pmtiles`; with `raster` the other three are null.
+With `pmtiles`, `tiles` is the file's path; `glyphs` (a MapLibre template of the labels' fonts)
+is given when `<data>/basemap/fonts/` exists, and `sprite` (the base of the icons' files, of
+Protomaps' grayscale flavor, the one the frontend draws: `basemap_api.SPRITE`) when
+`<data>/basemap/sprites/grayscale.json` does, both from `tools/fetch_basemap.sh --assets`; null,
+the frontend draws the basemap without labels. Every path is the API's own: the frontend reaches
+it under `/api`.
+
+**`/basemap/{path}`** serves `<data>/basemap/` as static files (`basemap_api.BasemapFiles`, on
+Starlette's `StaticFiles`): `GET` and `HEAD`; byte ranges, as the PMTiles reader asks for every
+read (`Accept-Ranges: bytes`; one range is a 206 with `Content-Range`, a range running past
+the end cut at it, so the reader's first read of 16 kB is all of a smaller file; several are a
+`multipart/byteranges` 206; a range starting past the end is a 416 with `Content-Range: bytes
+*/<size>`, and a malformed one a 400, both `text/plain`, not an error body); `ETag` and
+`Last-Modified`,
+with `If-Range` (a range of a file that has changed since is the whole file) and
+`If-None-Match` (304); `Cache-Control: public, max-age=86400`; `application/vnd.pmtiles` for a
+`.pmtiles` and `application/x-protobuf` for a font's `.pbf`. A file that is not there is 404
+`NOT_FOUND`, and so is every file when the directory is missing; a path that would leave the
+directory is 404. The directory is the operator's and holds only the basemap, so a symlink in it
+is followed: the file may be kept elsewhere and linked in, which `/ready` accepts too. A
+replaced file has a new `ETag`, which the PMTiles reader notices and reads
+again. In a deployment behind a reverse proxy, the proxy may serve `/api/basemap/` from the same
+directory itself (`docs/reference/hosting.md`).
+
 ## Public limits
 
 `serve --public` (`ApiSettings.public`) applies `limits.PUBLIC`, the `config.PUBLIC_*` numbers,
@@ -788,6 +841,7 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 | `test_schemas.py` | the request mirrors the engine's (a pilgrimage's brand included), its defaults, the seed's bounds, stops left out only with a base, malformed requests refused (both turn constraints at once, an unknown one); the target as the engine's, each kind with its own number and within its bounds; `done`'s time ratio, target, delays and turns typed |
 | `test_logs.py` | who a client is (the peer; the last `X-Forwarded-For` address only when trusted, without a port; IPv6 by its /64), its hash; a request id and one access line per request, without the address or the query; a proxy's request id kept only when trusted and well formed; a job's end line with its id, outcome and route and the id of the request that started it; a queued job's lines with its own request's id, not the one that freed its slot; an unhandled error's 500 `INTERNAL_ERROR` with the request's id, logged with it; a JSON line's fields and traceback |
 | `test_limits.py` | each client's searches on a fake clock (ten in any minute, `retry_after_s`, other clients apart, idle ones forgotten); the manager's per-client jobs (one running and three waiting while workers are free, the fifth refused with its counts, another client and a job without a client unaffected, the next of a client starting in order when its running one ends, a waiting job whose client is busy letting the next one start, a full server's refusal without counts); over HTTP the public budget (and 120 s otherwise), a client's share of the jobs from one peer and behind a trusted proxy (the last forwarded address counting, an untrusted header ignored), a client's eleventh search refused, cached answers counted, none of it when not public |
+| `test_basemap_api.py` | `/config` for each basemap, with and without the labels' assets, and its public flag and limits; the basemap's file: whole, its first 127 bytes, a suffix, a range running past the end (cut), one starting past it (416 with the length), `If-Range` current and stale, `HEAD`, the media types and caching; a font; a missing file, a missing directory and a path leaving it, 404; a linked file served and ready, and a small one's first 16 kB read whole; `/ready`'s basemap check, failing without the file (no path in its detail) and naming the labels |
 | `test_ready_api.py` | `/ready`: 200 with the build, the store and the places index; 503 without the index, and once the build is replaced or gone (while `/health` answers), its details without a path on the server |
 | `test_store.py` | the round trip (the stored route validates), unknown ids, the first record kept, what the id covers |
 | `test_sse.py` | path points and node indices, the per-edge simplification keeping nodes and original values, splices, metrics, the event encoding |
@@ -800,7 +854,8 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 
 `tests/engine/test_plan.py` covers `plan_route`'s hooks, `tests/graph/test_loader.py` the loader,
 and `tests/unit/test_cli.py` `serve`'s errors, options (the geocoder's included, with the line
-it prints; `--trust-proxy`, `--log-format` and `--public`, uvicorn's proxy headers off) and its taking `csr` on a build with transition tables. `tests/geocode/` covers the
+it prints; `--trust-proxy`, `--log-format`, `--public` and `WORST_ROUTE_BASEMAP`, uvicorn's proxy
+headers off) and its taking `csr` on a build with transition tables. `tests/geocode/` covers the
 geocoding package: `normalise`; the cache and its TTL on a fake clock; the rate limit on a fake
 clock (a burst of ten serving six and refusing four, requests the interval plus a 300 ms
 latency apart, the interval from the answer, a failure spacing the next request too, a turn

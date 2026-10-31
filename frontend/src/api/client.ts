@@ -25,6 +25,7 @@ import type {
   RouteDocument,
   RouteFeatureCollection,
   RouteRequest,
+  ServerConfig,
   Snapped,
   Snapshot,
 } from "./types";
@@ -83,6 +84,11 @@ export function errorBody(error: unknown): ErrorBody {
 
 export function getRegions(): Promise<Region[]> {
   return call("/regions");
+}
+
+/** What the server tells the app: its basemap, whether it is public, its limits. */
+export function getConfig(): Promise<ServerConfig> {
+  return call("/config");
 }
 
 export function createJob(request: RouteRequest): Promise<JobCreated> {

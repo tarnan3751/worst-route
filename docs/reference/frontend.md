@@ -10,12 +10,12 @@ nothing there.
 
 | Module | What it holds |
 |---|---|
-| `main.ts` | bootstrap and wiring: the store from the URL's state, the panel's parts, the region's bbox, a stored route when the URL names one, clicks on the map, the cancel on `pagehide` |
+| `main.ts` | bootstrap and wiring: the store from the URL's state, the panel's parts, the region's bbox, the basemap the server names (`GET /config`), a stored route when the URL names one, clicks on the map, the cancel on `pagehide` |
 | `state.ts` | `Store`, the app's state on an `EventTarget`; `Settings`, `Stop`, `RunView`, `targetOf`, `takesTarget` (the targets a mode takes), `modeOf` (the request's objective, item, brand and constraints), `vehicleOf`, `departureOf`; the API's limits (tiers, budget, leash, targets), the vehicle's, and the modes and items it plans |
 | `api/types.ts` | the API's shapes, written by hand from `api.md` |
-| `api/client.ts` | the fetch wrappers (`getBrands` and `geocode` among them), `ApiError`, `errorBody`, `subscribe` (a job's events over `EventSource`) |
-| `map/basemap.ts` | the basemap and its switch (**Basemap**) |
-| `map/map.ts` | the MapLibre map, its controls, `fitTo` |
+| `api/client.ts` | the fetch wrappers (`getConfig`, `getBrands` and `geocode` among them), `ApiError`, `errorBody`, `subscribe` (a job's events over `EventSource`) |
+| `map/basemap.ts` | `basemapParts` (the basemap `/config` names, as sources and layers), `addBasemap`, `EMPTY_STYLE` (**Basemap**) |
+| `map/map.ts` | the MapLibre map, its controls, MapLibre's worker and the `pmtiles://` protocol, `fitTo` |
 | `map/routeLayer.ts` | `spliceLine` and `RouteLayer`: the baseline, the growing route, the flash (**Live growth**), and the highlight of a step of the directions |
 | `map/stopsLayer.ts` | the stop markers and the snapped-position ghosts |
 | `stops/stopList.ts` | how a click, a drag or a removal changes the stops (`placeStop`: a click's, and a place search's pick); `stopErrored`, the stops an error names; the list in the panel |
@@ -59,8 +59,8 @@ Prettier formats everything under `frontend/` but the recordings (`.prettierigno
 gate runs its check as part of `typecheck`.
 
 `dist/` expects `/api` to reach the API, as the dev server and `preview` arrange; public
-hosting needs the same from its web server (M5). The bundle is about 1.1 MB minified (MapLibre
-is most of it), 310 kB gzipped, and MapLibre's worker a module of its own, 0.5 MB, in
+hosting needs the same from its web server (M5). The bundle is about 1.2 MB minified (MapLibre
+is most of it), 330 kB gzipped, and MapLibre's worker a module of its own, 0.5 MB, in
 `dist/assets/`: MapLibre 6 looks for its worker beside its own module, which a bundle (or Vite's
 pre-bundled dependencies in the dev server) does not keep, so `map.ts` imports it as an asset
 (`maplibre-gl/dist/maplibre-gl-worker.mjs?url`) and names it with `setWorkerUrl`.
@@ -323,15 +323,36 @@ the browser closes for good (an answer that is not a stream, as a 404 for a job 
 
 ## Basemap
 
-`map/basemap.ts` is the one place it is configured. Locally the map shows OpenStreetMap's
-raster tiles (`https://tile.openstreetmap.org/{z}/{x}/{y}.png`, desaturated so the route stands
-out) with the attribution "© OpenStreetMap contributors", at hobby volume, as the tile usage
-policy allows; the browser's own `User-Agent` and `Referer` are what the policy asks for. MapLibre
-GL JS 6 fetches only the tiles in view (it has no prefetch option) and nothing is cached
-offline. The policy rules these tiles out for a public site: `VECTOR_STYLE_URL`, marked as the
-switch, takes a vector style URL (Protomaps PMTiles, MapTiler, Stadia), and the map then uses it
-instead. Agents verifying the app block the tile server (**Seeing it**), so their screenshots
-show the route on a blank background.
+The server names the basemap (`GET /config`, `docs/reference/api.md`, **Basemap**; its
+`WORST_ROUTE_BASEMAP`), and `map/basemap.ts` draws it. The map starts with nothing drawn
+(`EMPTY_STYLE`); once it has loaded, the route's layers are added, and once `/config` has
+answered, `addBasemap` adds the basemap's sources and layers below them (before the first layer
+the map has), its fonts (`setGlyphs`) and icons (`setSprite`) when it has labels. If `/config`
+fails the banner shows the error and the map has no basemap: it never falls back to another,
+and a `pmtiles` answer without its file draws none either (and logs an error on the console).
+
+- **`raster`** (the server's default): OpenStreetMap's raster tiles
+  (`https://tile.openstreetmap.org/{z}/{x}/{y}.png`, desaturated so the route stands out) with
+  the attribution "© OpenStreetMap contributors", at hobby volume, as the tile usage policy
+  allows locally; the browser's own `User-Agent` and `Referer` are what the policy asks for.
+  MapLibre GL JS 6 fetches only the tiles in view (it has no prefetch option) and nothing is
+  cached offline. The policy rules these tiles out for a public site.
+- **`pmtiles`**: Protomaps' vector tiles from one file the server holds, read through
+  `pmtiles://` (the `pmtiles` package's `Protocol`, registered in `map.ts` with `addProtocol`)
+  by HTTP byte ranges at `/api/basemap/<region>.pmtiles`; drawn by `@protomaps/basemaps` in its
+  `grayscale` flavor, muted so the route stands out, with labels (`layers(…, {lang: "en"})`) when
+  the server has their fonts and icons (`glyphs` and `sprite`) and without them otherwise, so a
+  deployment without `fetch_basemap.sh --assets` still has a basemap. The labels ask for four
+  fonts, the ones the script fetches (`basemap.test.ts` holds the style to them). The source's
+  attribution is "Protomaps © OpenStreetMap", linked, the app's own string: never a tileset's
+  metadata, whose HTML the attribution control would render.
+
+The URLs are made absolute under the page's origin and `/api` (MapLibre needs absolute ones,
+and the templates' braces must stay unencoded). Below the panel a footer credits the data: "Road
+data © OpenStreetMap contributors (ODbL) · Towns and states: U.S. Census Bureau", linked; the
+basemap's own credit is in the map's attribution control. Agents verifying the app block the
+tile server (**Seeing it**), so their screenshots show the route on a blank background with
+`raster`, or on a basemap of their own making with `pmtiles` (**Measured**).
 
 ## Links
 
@@ -380,7 +401,8 @@ follows the app again from the next change. The units are not in the URL.
 | Test file | What it covers |
 |---|---|
 | `map/routeLayer.test.ts` | `spliceLine` on hand-made lines (a longer and a shorter detour, either end, the input left alone); each recording replayed: it ends with the stored route's node count, every node where the job's final snapshot has it (whose stop positions are the route's), every drawn point a point of the stored geometry in order with the same ends; and at every snapshot after splices (the max-mode recording's after its 50th `progress`), the replayed nodes equal the snapshot's (the alphabet recording's snapshots follow none); the alphabet recording through a `RouteLayer` on a stand-in map: each snapshot drawn whole, no flash ever, the stored geometry drawn at the end |
-| `api/types.test.ts` | each type's runtime spec, which the compiler holds to the type's keys; the specs against `api.md` (its JSON request example, and the field lists of the events, `done`'s metrics, `/regions`, the 202, the job status, the route document, `/routes/{id}/directions`, `/brands` and `/geocode`) and against every payload of the seven recordings; the ratio recording's target reached in `done` and the document, its round-trip refusal; the slowest-time recording's time ratio, delays and turns in `done` and the document, its refusal of both turn constraints; the collect recording's bridges counted in every `progress`, in `done` and the document, its refusal of a ratio target; the directions recording's vehicle, fuel and cost, states and towns, its steps numbered from 1 with the driving steps' ranges covering the route's edges in order and adding up to its length, its first toast, its refusal of a vehicle of 0 mpg; the brand recording's visits never falling in its `progress` events (8, 13, 14 of 19), `done` and the document agreeing, its refusal of a ratio target; the alphabet recording's better routes, each a snapshot then a `progress` with no splice, the same metrics and a higher score, from "A" to "ABCDEFGHIJKLMNO", `done` and the document agreeing, its refusal of a stop along the way (`field: "stops"`); a payload that does not fit is caught |
+| `api/types.test.ts` | each type's runtime spec, which the compiler holds to the type's keys; the specs against `api.md` (its JSON request example, and the field lists of the events, `done`'s metrics, `/regions`, the 202, the job status, the route document, `/routes/{id}/directions`, `/brands`, `/geocode` and `/config`) and against every payload of the seven recordings; the ratio recording's target reached in `done` and the document, its round-trip refusal; the slowest-time recording's time ratio, delays and turns in `done` and the document, its refusal of both turn constraints; the collect recording's bridges counted in every `progress`, in `done` and the document, its refusal of a ratio target; the directions recording's vehicle, fuel and cost, states and towns, its steps numbered from 1 with the driving steps' ranges covering the route's edges in order and adding up to its length, its first toast, its refusal of a vehicle of 0 mpg; the brand recording's visits never falling in its `progress` events (8, 13, 14 of 19), `done` and the document agreeing, its refusal of a ratio target; the alphabet recording's better routes, each a snapshot then a `progress` with no splice, the same metrics and a higher score, from "A" to "ABCDEFGHIJKLMNO", `done` and the document agreeing, its refusal of a stop along the way (`field: "stops"`); a payload that does not fit is caught |
+| `map/basemap.test.ts` | `basemapParts`: OSM's raster tiles for `raster`; nothing (an error on the console, never OSM's tiles) for `pmtiles` without its file; Protomaps' tiles from the server for `pmtiles`, its `pmtiles://` URL absolute under `/api`, the attribution the app's own, no symbol layer without the server's fonts; with them the fonts' and icons' URLs absolute with the template's braces kept, and the labels asking for no font but the four `tools/fetch_basemap.sh` fetches; `addBasemap` on a stand-in map: the fonts, icons and sources set, then every layer before the first layer the map already had (the route's), or on top of an empty map |
 | `run/controls.test.ts` | `JobRunner` with `fetch` and `EventSource` stubbed: a TypeError from the client and an event the app cannot handle end the run as `CLIENT_ERROR` with the controls unlocked (the job cancelled), the server's `error` closes the stream; Make it worse keeps the route and its seed when nothing worse is found and tries the next seed, follows a worse route's seed; Go and Reroll send the settings' seed, then none; leaving the page cancels a job whose POST is in flight once it is answered, a running one at once; a ratio and a drive-time target sent, shown while running and with what was achieved (`target reached`), and Make it worse whose base already meets its target; the objective, the item only under collect and the constraints only with a side sent (and not by default), the brand only under brand, the alphabet route with no item nor brand, Brand waiting for the region's brands with the brand set among them (none, a link's before they answer, one they lack, an empty list) and no other mode waiting, hard mode's `hard: true` alone or beside a side (the key left out when off, strict sent only with a side), Make it worse in the mode set (a pilgrimage under hard mode, its whole body); the slowest-time recording replayed (the lengths' ratio while running, then the time ratio, the drive and delays, the turns) and the collect recording's bridges counted live, then the stored route's; the run's mode shown when Make it worse in another finds nothing; "no lefts" and "no rights" (not with a U-turn); `INFEASIBLE_TURN_CONSTRAINT` as the error, and the refused request sent again without strict: a Go with its seed, a Make it worse on the same route with its seed, a Reroll with none, hard mode kept; the counter row's "17 of 19 Starbucks" and "letters: 23 (A–W)", "letters: 1 (A)", "letters: 0", the laps past Z for 26, 27 and 29 letters ("(A–Z)", "(A–Z, A)", "(A–Z, A–C)"), the roads one a line in its tooltip, nothing under another mode; Make it worse off under Alphabet with its reason, and in no other mode; the brand recording's visits counted live (1, 8, 13, 14 of 19), then the stored route's; the alphabet recording replayed: every snapshot drawn, no splice, the ratio and letters following each better route (1.1× and 1, 1.0× and 2, ...), the stored route drawn, its fifteen roads in the tooltip; a refusal under hard mode sent again without it: a Go with its seed and no constraints left, a Make it worse with its base and seed and its strict side kept, a Reroll with none, and a Make it worse whose base hard mode refuses (`BASE_ROUTE_MISMATCH`) on the same route with the same seed; each stop along the way labelled as its marker is numbered ("Stop 2", "Stop 3"), the start and the end without a label; the vehicle set sent by Make it worse, Go and Reroll (the default in Make it worse's whole body); the departure set sent, or, empty, the time Go is pressed at the browser's offset (on a fake clock); "arrives Sat 17:42" from a document's arrival at its own offset, nothing without one; the directions recording replayed: no route rows while it runs, then its towns, states, fuel and share of the roads; the first two towns and how many more with every name in the tooltip, two states by their codes, no fuel without a vehicle, "under 1 %", and nothing from a document without them |
 | `directions/panel.test.ts` | on the directions recording: a row per step classed by its kind, numbered as the document numbers them (none for the 40 jokes, the numbers skipping them), a driving step's distance and time in miles and kilometres, the arrival's and a stop's rows with none; `StepLocator`: the driving steps' lines ending on their first and last nodes (more than 99 % exactly, all within a metre; the job's last snapshot gives where the nodes are) and covering the geometry end to end, a step given at least one segment however short its distance, no line for a step that drives nothing, every step starting where it is; `DirectionsPanel` with a stand-in map: the rows of the route shown and none without one, the units followed, a hover highlighting the right edges, from node to node (once for the same step), a joke and none highlighting nothing, a click panning to the step's start, the highlight forgotten when the route changes, a document without directions listing nothing |
 | `settings/panel.test.ts` | the brand picker with `fetch` stubbed: one `GET /api/brands?region=`, the options in the API's order named with their locations ("Starbucks (126)", "(1,234)"), the first picked when the settings name none, the list put in the store, a brand the region has kept and one it lacks replaced, a region without brands leaving the settings alone |
@@ -583,6 +605,17 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
   and no `hard`). The alphabet route's link set Alphabet, under which Make it worse was off with
   its tooltip; under Longest it continued that route (seed 2, 48.3×, its base the alphabet
   route).
+
+- **The pmtiles basemap** (2026-10-31, build 4b8998deee9f, `WORST_ROUTE_BASEMAP=pmtiles`, the dev
+  server proxying to a lane's `serve`; the lane's `portland.pmtiles` a 191 kB file of hand-made
+  vector tiles in Protomaps' schema, zooms 0–12 over the Portland bbox, standing for an extract,
+  and no fonts): `/api/config` named the file without fonts or icons; the page read
+  `/api/basemap/portland.pmtiles` by byte ranges, every answer a 206, and drew the earth, a band
+  of water and the roads in the grayscale flavor under the route (Powell's → Reed, seed 1, 4 s,
+  32.3×), "Protomaps © OpenStreetMap" in the attribution control, the credits under the panel,
+  no request to the OSM tile server. With stand-in icons and an empty fonts directory the
+  labelled style loaded too, its font requests 404 (`Unable to load glyph range`, at the
+  `/api/basemap/fonts/Noto Sans Regular/0-255.pbf` the template gives) and the rest drawn alike.
 
 ## Limitations
 

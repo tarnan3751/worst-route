@@ -2,7 +2,9 @@
 
 `Settings` holds what varies per machine, read from the environment: the data directory
 (`WORST_ROUTE_DATA`, default `./data`; `CLAUDE.md`, **Commands**), the User-Agent sent to
-outside services, and the contact (`WORST_ROUTE_CONTACT`) the geocoder adds to it.
+outside services, the contact (`WORST_ROUTE_CONTACT`) the geocoder adds to it, and the basemap
+the API offers the frontend (`WORST_ROUTE_BASEMAP`, `raster` or `pmtiles`;
+`docs/reference/hosting.md`).
 `settings()` returns one cached instance; tests that change the environment call
 `settings.cache_clear()`.
 
@@ -27,6 +29,10 @@ from typing import Literal
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# The basemap the API offers the frontend: OpenStreetMap's raster tiles (hobby volume, local
+# use) or Protomaps' vector tiles from a file the server holds (`api/basemap_api.py`).
+BasemapName = Literal["raster", "pmtiles"]
+
 
 class Settings(BaseSettings):
     """Per-machine settings, read from `WORST_ROUTE_*` environment variables."""
@@ -36,6 +42,7 @@ class Settings(BaseSettings):
     data_dir: Path = Field(default=Path("data"), validation_alias="WORST_ROUTE_DATA")
     user_agent: str = "worst-route/0.1.0 (https://github.com/tarnan3751/worst-route)"
     contact: str | None = None  # WORST_ROUTE_CONTACT: added to the geocoder's User-Agent
+    basemap: BasemapName = "raster"  # WORST_ROUTE_BASEMAP: OSM's raster tiles, or pmtiles
 
 
 class Region(BaseModel):

@@ -523,3 +523,15 @@ body {
   background: #fff;
   cursor: pointer;
 }
+
+#credits {
+  margin-top: 16px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+#credits a {
+  color: inherit;
+}

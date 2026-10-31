@@ -1,14 +1,15 @@
 // The hand-written types against the API: each type has a runtime spec whose keys the compiler
 // holds to the type's (`object<T>` needs exactly T's keys); the specs are checked against the
 // shapes docs/reference/api.md writes down (its JSON request example, and the field lists of
-// the events, /regions, the 202, the job status, the route document, its directions and
-// /geocode) and against every payload of the streams recorded from the server.
+// the events, /regions, the 202, the job status, the route document, its directions, /geocode
+// and /config) and against every payload of the streams recorded from the server.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { RECORDINGS, loadStream } from "../__fixtures__/stream";
 import type {
   AlphabetLetters,
   Baseline,
+  BasemapConfig,
   BrandEntry,
   BrandList,
   BrandVisits,
@@ -33,6 +34,8 @@ import type {
   RouteRequest,
   RouteStop,
   Run,
+  ServerConfig,
+  ServerLimits,
   Snapped,
   SnappedStop,
   Snapshot,
@@ -389,6 +392,17 @@ const geocodeResult = object<GeocodeResult>({
   cached: "boolean",
 });
 
+const serverConfig = object<ServerConfig>({
+  public: "boolean",
+  basemap: object<BasemapConfig>({
+    kind: literal("raster", "pmtiles"),
+    tiles: nullable("string"),
+    glyphs: nullable("string"),
+    sprite: nullable("string"),
+  }),
+  limits: object<ServerLimits>({ budget_max_s: "number", leash_max_km: "number" }),
+});
+
 const brandList = object<BrandList>({
   region: "string",
   brands: array(
@@ -559,6 +573,22 @@ describe("the types against docs/reference/api.md", () => {
 
   it("has the fields of /geocode", () => {
     expect(differences(documentedOn("| GET | `/geocode` |"), geocodeResult, "geocode")).toEqual([]);
+  });
+
+  it("has the fields of /config", () => {
+    expect(differences(documentedOn("| GET | `/config` |"), serverConfig, "config")).toEqual([]);
+    const example = {
+      public: true,
+      basemap: {
+        kind: "pmtiles",
+        tiles: "/basemap/portland.pmtiles",
+        glyphs: "/basemap/fonts/{fontstack}/{range}.pbf",
+        sprite: "/basemap/sprites/grayscale",
+      },
+      limits: { budget_max_s: 60, leash_max_km: 150 },
+    };
+    expect(problems(example, serverConfig)).toEqual([]);
+    expect(problems({ ...example, basemap: { kind: "vector" } }, serverConfig)).not.toEqual([]);
   });
 
   it("has the route document's fields", () => {

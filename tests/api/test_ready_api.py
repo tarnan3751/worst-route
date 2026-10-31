@@ -22,7 +22,7 @@ async def test_ready_with_the_build_the_store_and_the_places_index(data: Path) -
     assert answer.status_code == 200, answer.text
     body = answer.json()
     assert body["status"] == "ready"
-    assert checks_of(body) == {"build": True, "store": True, "places": True}
+    assert checks_of(body) == {"build": True, "store": True, "places": True, "basemap": True}
     assert body["checks"][0]["detail"] == "portland/grid"
     assert str(data) not in answer.text  # no path on the server
 

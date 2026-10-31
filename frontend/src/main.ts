@@ -2,11 +2,13 @@
 // and the panel's parts (the directions, which highlight their steps on the route layer, among
 // them); the toasts under the map; the region's bbox from /regions; a stored route when the URL
 // names one, the URL left alone until it has opened; clicks on the map and a place search's
-// picks add stops, the same way (placeStop); leaving the page cancels a running job.
+// picks add stops, the same way (placeStop); leaving the page cancels a running job. The basemap
+// the server names (GET /config) goes under the route's layers once the map has loaded.
 import "./style.css";
-import { errorBody, getRegions } from "./api/client";
+import { API_BASE, errorBody, getConfig, getRegions } from "./api/client";
 import { mountBanner } from "./banner";
 import { DirectionsPanel, mountDirections } from "./directions/panel";
+import { addBasemap, basemapParts } from "./map/basemap";
 import { createMap, fitTo } from "./map/map";
 import { RouteLayer } from "./map/routeLayer";
 import { StopsLayer } from "./map/stopsLayer";
@@ -33,6 +35,7 @@ const store = new Store({
 });
 
 const map = createMap(byId("map"));
+const config = getConfig();
 let routeLayer: RouteLayer | null = null;
 let runner: JobRunner | null = null;
 
@@ -74,6 +77,9 @@ map.once("load", () => {
   if (url.route !== null) {
     void openRoute(url.route, store, runner).then((opened) => urlSync.start(opened));
   }
+  config
+    .then(({ basemap }) => addBasemap(map, basemapParts(basemap, location.origin + API_BASE)))
+    .catch((error: unknown) => store.update({ error: errorBody(error) }));
 });
 
 getRegions()

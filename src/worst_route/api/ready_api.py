@@ -3,9 +3,10 @@
     GET /ready    {status, checks: [{name, ok, detail}]}: 200 when ready, 503 when not
 
 Where `GET /health` says the process lives, `/ready` says the deployment is whole: the served
-build still on disk at the `graph_version` loaded (`build`), the route store answering (`store`)
-and the region's places index loaded (`places`). A failed check says what is missing and its
-remedy, never a path on the server or an error of its system, which go to the log instead.
+build still on disk at the `graph_version` loaded (`build`), the route store answering (`store`),
+the region's places index loaded (`places`), and with the `pmtiles` basemap its file there
+(`basemap`; the labels' fonts and icons are optional). A failed check says what is missing and
+its remedy, never a path on the server or an error of its system, which go to the log instead.
 """
 
 import json
@@ -15,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Request, Response
 
+from worst_route.api.basemap_api import basemap_of, tiles_path
 from worst_route.api.routes_api import api_of
 from worst_route.api.schemas import ReadyCheck, ReadyOut
 
@@ -29,7 +31,7 @@ log = logging.getLogger(__name__)
 def ready(request: Request, response: Response) -> ReadyOut:
     """Whether the deployment has everything it serves from."""
     api = api_of(request)
-    checks = [_build(api), _store(api), _places(api)]
+    checks = [_build(api), _store(api), _places(api), _basemap(api)]
     ok = all(c.ok for c in checks)
     response.status_code = 200 if ok else 503
     return ReadyOut(status="ready" if ok else "not_ready", checks=checks)
@@ -70,3 +72,17 @@ def _places(api: "Api") -> ReadyCheck:
         detail = f"no places index of {region}: run `worst-route aux places --region {region}`"
         return ReadyCheck(name="places", ok=False, detail=detail)
     return ReadyCheck(name="places", ok=True, detail=f"{region}: {len(api.places.towns)} towns")
+
+
+def _basemap(api: "Api") -> ReadyCheck:
+    basemap = basemap_of(api)
+    if basemap.kind == "raster":
+        return ReadyCheck(name="basemap", ok=True, detail="raster: OpenStreetMap's tiles")
+    path = tiles_path(api)
+    if not path.is_file():
+        region = api.settings.region
+        detail = f"no basemap file {path.name}: run `tools/fetch_basemap.sh {region}`"
+        return ReadyCheck(name="basemap", ok=False, detail=detail)
+    labels = "with labels" if basemap.glyphs and basemap.sprite else "without labels (--assets)"
+    detail = f"{path.name}, {path.stat().st_size / 1e6:.1f} MB, {labels}"
+    return ReadyCheck(name="basemap", ok=True, detail=detail)

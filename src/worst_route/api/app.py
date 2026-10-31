@@ -13,8 +13,9 @@ contact in its User-Agent (`geocoder_user_agent`); whether a reverse proxy in fr
 trusted (`trust_proxy`: its `X-Forwarded-For` names the client, its `X-Request-ID` the request);
 and whether it is public (`public`: the limits `limits.PUBLIC`, a budget up to 60 s and each
 client's share of the jobs and the place searches, held as `Api.limits`, the job manager's
-settings and `Api.quota`; else `limits.LOCAL`). Every request gets an id and an access line
-(`logs.RequestLog`).
+settings and `Api.quota`; else `limits.LOCAL`); and the basemap `GET /config` offers the
+frontend (`basemap`), whose files it serves under `/basemap/` (`basemap_api`). Every request gets
+an id and an access line (`logs.RequestLog`).
 
 Every error answers an `ErrorBody` (`{code, message, ...}`): an endpoint refuses with
 `routes_api.ApiError(status, code, message, **fields)`, a malformed request is 422
@@ -41,14 +42,27 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from worst_route import __version__, config
-from worst_route.api import directions_api, geocode_api, ready_api, routes_api, share_api
+from worst_route.api import (
+    basemap_api,
+    directions_api,
+    geocode_api,
+    ready_api,
+    routes_api,
+    share_api,
+)
 from worst_route.api.jobs import JobManager, JobSettings
 from worst_route.api.limits import LOCAL, PUBLIC, GeocodeQuota, Limits
 from worst_route.api.logs import RequestLog, request_id_of
 from worst_route.api.routes_api import ApiError
 from worst_route.api.schemas import ErrorBody
 from worst_route.api.store import RouteStore
-from worst_route.config import DEFAULT_BACKEND, NOMINATIM_URL, BackendName, GeocoderName
+from worst_route.config import (
+    DEFAULT_BACKEND,
+    NOMINATIM_URL,
+    BackendName,
+    BasemapName,
+    GeocoderName,
+)
 from worst_route.geocode.cache import GeocodeCache
 from worst_route.geocode.limiter import RateLimiter
 from worst_route.geocode.nominatim import NominatimGeocoder, user_agent
@@ -74,6 +88,7 @@ class ApiSettings:
     contact: str | None = None  # in the geocoder's User-Agent (WORST_ROUTE_CONTACT)
     trust_proxy: bool = False  # a reverse proxy's X-Forwarded-For and X-Request-ID believed
     public: bool = False  # the public limits (`limits.PUBLIC`)
+    basemap: BasemapName = "raster"  # what `/config` offers (WORST_ROUTE_BASEMAP)
 
 
 @dataclass(frozen=True, eq=False)
@@ -147,6 +162,8 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
     app.include_router(share_api.router)
     app.include_router(directions_api.router)
     app.include_router(ready_api.router)
+    app.include_router(basemap_api.router)
+    basemap_api.mount_basemap(app, settings.data_dir)
     app.add_middleware(RequestLog, trust_proxy=settings.trust_proxy)
 
     @app.exception_handler(ApiError)

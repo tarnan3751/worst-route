@@ -533,3 +533,32 @@ class ReadyOut(_Out):
 
     status: Literal["ready", "not_ready"]
     checks: list[ReadyCheck]
+
+
+# --- The client's configuration (`GET /config`) ---------------------------------------------
+
+
+class BasemapOut(_Out):
+    """The basemap to draw: OpenStreetMap's raster tiles, or Protomaps' vector tiles from the
+    server (`tiles`), with the labels' fonts (`glyphs`) and icons (`sprite`) when it has them;
+    paths are the API's."""
+
+    kind: Literal["raster", "pmtiles"]
+    tiles: str | None = None
+    glyphs: str | None = None
+    sprite: str | None = None
+
+
+class LimitsOut(_Out):
+    """The limits a request meets on this server."""
+
+    budget_max_s: float
+    leash_max_km: float
+
+
+class ConfigOut(_Out):
+    """`GET /config`: whether the server is public, its basemap and its limits."""
+
+    public: bool
+    basemap: BasemapOut
+    limits: LimitsOut

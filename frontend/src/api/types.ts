@@ -391,3 +391,28 @@ export interface GeocodeResult {
   candidates: GeocodeCandidate[];
   cached: boolean;
 }
+
+// --- The server (GET /config) ---------------------------------------------------------------
+
+/** The basemap to draw: OpenStreetMap's raster tiles, or Protomaps' vector tiles from the server
+ * (`tiles`), with the labels' fonts (`glyphs`, a MapLibre template) and icons (`sprite`) when it
+ * has them; the paths are the API's (under /api). */
+export interface BasemapConfig {
+  kind: "raster" | "pmtiles";
+  tiles: string | null;
+  glyphs: string | null;
+  sprite: string | null;
+}
+
+/** The limits a request meets on this server (`BUDGET_TOO_LARGE` above `budget_max_s`). */
+export interface ServerLimits {
+  budget_max_s: number;
+  leash_max_km: number;
+}
+
+/** `GET /config`: whether the server is public, its basemap and its limits. */
+export interface ServerConfig {
+  public: boolean;
+  basemap: BasemapConfig;
+  limits: ServerLimits;
+}

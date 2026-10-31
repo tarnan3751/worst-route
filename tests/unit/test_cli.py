@@ -215,4 +215,12 @@ def test_serve_takes_the_proxy_log_and_public_options(
     assert api.settings.public is True and api.limits.budget_max_s == 60
     assert (api.jobs.settings.running_per_client, api.jobs.settings.queued_per_client) == (1, 3)
     assert api.quota is not None and api.quota.per_minute == 10
+    monkeypatch.setenv("WORST_ROUTE_BASEMAP", "pmtiles")
+    settings.cache_clear()
+    vector = runner.invoke(app, base)
+    assert vector.exit_code == 0, vector.output
+    assert vector.stdout.splitlines()[-1] == (
+        f"basemap: pmtiles {tmp_path / 'basemap' / 'portland.pmtiles'}"
+    )
+    assert ran["app"].state.api.settings.basemap == "pmtiles"
     settings.cache_clear()

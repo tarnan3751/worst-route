@@ -51,7 +51,9 @@ cache is `geocode.sqlite` beside the store; it prints the geocoder and the User-
 the contact from `WORST_ROUTE_CONTACT` included. `--trust-proxy` believes a reverse proxy's
 `X-Forwarded-For` and `X-Request-ID` (uvicorn's own proxy headers are off), and `--log-format
 json` logs a JSON object a line on stdout, with request ids and without uvicorn's access lines
-(`api/logs.py`); `--public` applies the public limits (`api/limits.py`) and prints them.
+(`api/logs.py`); `--public` applies the public limits (`api/limits.py`) and prints them. The
+basemap the frontend draws is `WORST_ROUTE_BASEMAP`'s (`raster` or `pmtiles`, whose file it then
+names).
 
 `aux places` writes the places index (`docs/reference/presentation.md`, **Places**) under
 `<WORST_ROUTE_DATA>/aux/places/` from the Census files `tools/fetch_census.sh` fetched into
@@ -1228,6 +1230,7 @@ def serve(
         contact=settings().contact,
         trust_proxy=trust_proxy,
         public=public,
+        basemap=settings().basemap,
     )
     try:
         application = create_app(config)
@@ -1241,6 +1244,8 @@ def serve(
         typer.echo("geocoder: none")
     else:
         typer.echo(f'geocoder: nominatim {nominatim_url} as "{geocoder_user_agent(config)}"')
+    if config.basemap == "pmtiles":
+        typer.echo(f"basemap: pmtiles {config.data_dir / 'basemap' / f'{region}.pmtiles'}")
     if trust_proxy:
         typer.echo("trusting the proxy's X-Forwarded-For and X-Request-ID")
     if public:

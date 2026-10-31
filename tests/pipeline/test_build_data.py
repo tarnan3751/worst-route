@@ -5,6 +5,7 @@ import pickle
 from pathlib import Path
 
 import numpy as np
+import pyarrow.parquet as pq
 import pytest
 
 from tests.pipeline.invariants import check_build, check_saved
@@ -13,6 +14,9 @@ from worst_route.graph.data import GraphData
 from worst_route.graph.geometry import read_geometry
 from worst_route.graph.store import graph_version, read_build
 from worst_route.pipeline import layout
+from worst_route.pipeline.arrays import cleaned
+from worst_route.pipeline.arrays.to_nx import cleanup_graph
+from worst_route.pipeline.enrich import run_enrich
 
 pytestmark = pytest.mark.data
 
@@ -38,9 +42,15 @@ def test_portland_build_is_valid(build: Build) -> None:
 
 
 def test_portland_build_holds_its_graph(build: Build) -> None:
+    """The build holds the enriched graph: the networkx engine's enrich stage, or the arrays
+    engine's cleaned graph handed to networkx and enriched there."""
     directory, data = build
-    with layout.stage_file(directory, "enrich.pkl").open("rb") as f:
-        graph = pickle.load(f)
+    if layout.cleanup_engine(directory) == "arrays":
+        graph = cleanup_graph(cleaned.load_stage(directory))
+        run_enrich(graph, pq.read_table(layout.pois_parquet("portland")))
+    else:
+        with layout.stage_file(directory, "enrich.pkl").open("rb") as f:
+            graph = pickle.load(f)
     check_saved(graph, data, read_geometry(directory, data.m))
 
 

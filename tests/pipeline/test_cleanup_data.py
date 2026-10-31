@@ -12,7 +12,9 @@ from tests.pipeline.invariants import check_all, lost_through
 from tests.pipeline.parity import raw_graph
 from worst_route.config import SCC_MAX_DROPPED_NODES, SCC_MIN_RETAINED
 from worst_route.pipeline import layout
+from worst_route.pipeline.arrays import cleaned
 from worst_route.pipeline.arrays.build import load_stage
+from worst_route.pipeline.arrays.to_nx import cleanup_graph
 
 pytestmark = pytest.mark.data
 
@@ -25,16 +27,22 @@ def stages() -> Stages:
     if not latest.exists():
         pytest.skip(f"no Portland build under {latest.parent}")
     directory = layout.build_dir("portland", latest.read_text().strip())
-    built, cleaned = layout.build_stage(directory), layout.stage_file(directory, "cleanup.pkl")
     report = layout.stage_file(directory, "cleanup.json")
-    if not all(path.exists() for path in (built, cleaned, report)):
+    engine = layout.cleanup_engine(directory)
+    if engine is None or not report.exists():
         pytest.skip(f"no cleanup stage in {directory}")
-    if built.is_dir():  # the arrays engine's build stage, as networkx holds the raw graph
+    if engine == "arrays":  # its stages, as networkx holds the graphs
+        raw = raw_graph(load_stage(directory))
+        return raw, cleanup_graph(cleaned.load_stage(directory)), json.loads(report.read_text())
+    # build.pkl, or the arrays engine's build/ where it handed its cleaned graph to a pickle,
+    # as it did before its stages after cleanup were its own
+    built = layout.build_stage(directory)
+    if built.is_dir():
         raw = raw_graph(load_stage(directory))
     else:
         with built.open("rb") as f:
             raw = pickle.load(f)
-    with cleaned.open("rb") as f:
+    with layout.stage_file(directory, "cleanup.pkl").open("rb") as f:
         graph = pickle.load(f)
     return raw, graph, json.loads(report.read_text())
 

@@ -287,11 +287,13 @@ def test_a_missing_build_says_to_run_save(data_dir: Path) -> None:
 
 
 def test_a_build_saved_before_an_array_existed_is_one_line(data_dir: Path, tmp_path: Path) -> None:
-    save(data_dir, replace(GRID, meta={**GRID.meta, "pipeline_version": "1"}), "b1")
+    save(data_dir, GRID, "b1")
     out = tmp_path / "route.json"
     trip = ["--from", latlon(GRID, 0), "--to", latlon(GRID, 9), "--max-iterations", "20"]
     assert plan(*trip, "--out", str(out))[0] == 0
-    path = data_dir / "graphs" / "portland" / "b1"
+    path = data_dir / "graphs" / "portland" / "b1"  # now as pipeline 1 wrote it
+    meta = json.loads((path / "meta.json").read_text())
+    (path / "meta.json").write_text(json.dumps({**meta, "pipeline_version": "1"}))
     (path / "arrays" / "node_roundabouts.npy").unlink()
     line = (
         f"the build at {path} was written by pipeline 1 (now {PIPELINE_VERSION}): "

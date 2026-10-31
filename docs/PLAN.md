@@ -187,6 +187,7 @@ Each simplified edge keeps: summed `length`, the full coordinate list, the tuple
 - `max_length=60` means nodes only merge when they are also connected by edges ≤ 60 m. This is what prevents a cloverleaf's 300 m loop ramps from fusing endpoints. It also prevents merging the two ends of a short overpass (no connecting edge).
 - `dead_ends=True`: OSMnx's default *removes* dead-end nodes; we need them (stops at cul-de-sacs).
 - Original node ids of merged nodes land in `osmid_original`; OSMnx drops an edge whose two ends merged without record, so our post-pass adds its interior OSM node ids too, and keeps the lot as the node's `members`.
+- The post-pass places each cluster itself (pipeline version 4, for the array pipeline of M5): at the centroid of the union of its members' buffers, or of their points when the `max_length` test split their group, as OSMnx does; OSMnx takes the first from one union of every buffer in the region, whose last bits depend on the whole graph (`docs/reference/pipeline.md`, **cleanup**).
 
 **d. Consolidate, stage B — interchanges and roundabouts become super-junctions** (`consolidate.py`):
 This is the piece the no-repeat rule actually depends on, and OSMnx does not do it.

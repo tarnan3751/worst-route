@@ -371,6 +371,13 @@ brief):
 - **OSMnx for stage A consolidation, not for loading or simplification**: its
   `simplify_graph` would lose the shape points, so simplification is our own; array-based
   replacements for simplification and `consolidate_intersections` at national scale (M5).
+- **Stage A places each cluster from its own buffers** (M5.2, 2026-10-31, pipeline version 4):
+  at the centroid of the union of its members' buffers, or of their points when OSMnx's edge
+  test split their group, as OSMnx does. OSMnx's own position comes from one union of every
+  buffer in the region, whose last bits depend on the whole graph, which an array pipeline
+  cannot reproduce at scale; placing each cluster from its own buffers in both pipelines keeps
+  their builds byte-identical. On Portland it moves 3,977 clusters by at most 1.5e-8 m, which
+  changes about 3,200 node positions and six float32 lengths and times, and nothing else.
 - **State extracts, never the full US file**; cross-border ways deduplicated by id.
 - **On-disk format: one `.npy` per array + `strings.json` + `meta.json`, memory-mapped**; not
   GraphML or pickle, and not NPZ (whose members NumPy cannot map) or Parquet for the graph.

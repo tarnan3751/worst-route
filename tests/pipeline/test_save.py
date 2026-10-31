@@ -9,7 +9,7 @@ import pytest
 from tests.pipeline.chain import FIXTURES, brand_pois, cleaned, east_of, enriched, tier_nodes
 from tests.pipeline.invariants import check_build, check_saved
 from tests.pipeline.osm import write_osm
-from worst_route.config import TIERS
+from worst_route.config import PIPELINE_VERSION, TIERS
 from worst_route.graph.data import NodeKind
 from worst_route.graph.store import graph_version, read_build
 from worst_route.pipeline.enrich import run_enrich
@@ -25,7 +25,7 @@ META: dict[str, Any] = {
     "build_id": "b1",
     "crs_epsg": 32610,
     "created": "2026-10-30T00:00:00+00:00",
-    "pipeline_version": "1",
+    "pipeline_version": PIPELINE_VERSION,
     "params": {"bbox": None},
     "sources": [],
 }

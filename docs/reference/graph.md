@@ -119,12 +119,13 @@ arrays/<name>.npy    one file per array of ARRAY_SPECS, written by np.save witho
   `np.load(mmap_mode="r", allow_pickle=False)`: worker processes share one copy through the OS
   page cache, and loading costs nearly nothing. `mmap=False` loads read-only copies. It runs
   `validate(deep=False)` only: a deep validation or a re-hash would read every page of the
-  build in every worker. A build without one of the arrays raises `MissingArray` (a
+  build in every worker. A build it cannot take raises `MissingArray` (a
   `FileNotFoundError`), one line naming the remedy for the build's state (`store.outdated`):
   for a build another pipeline version wrote (its `meta.pipeline_version` is not
-  `PIPELINE_VERSION`), the rebuild ("the build at PATH was written by pipeline 2 (now 3):
-  rebuild the region with `worst-route pipeline filter --region R` and the steps after it"),
-  which gives the build a new id; for this version's build, the array and the save that writes
+  `PIPELINE_VERSION`), whatever arrays it holds, the rebuild ("the build at PATH was written by
+  pipeline 3 (now 4): rebuild the region with `worst-route pipeline filter --region R` and the
+  steps after it"), which gives the build a new id, so this code never reads a build another
+  version made; for this version's build lacking an array, the array and the save that writes
   it again ("the build at PATH lacks the array node_roundabouts: rebuild it with `worst-route
   pipeline save --force --region R`"). `plan`, `validate`, `serve`, `pipeline qa` and the
   acceptance tool print it and exit 1, and a plain `pipeline save` refuses another version's

@@ -19,11 +19,12 @@ staging directory a crashed write left is cleared.
 `read_build(path, mmap=True)` memory-maps every array read-only (`np.load(mmap_mode="r")`), so
 worker processes share the OS page cache; `mmap=False` loads read-only copies. Reading checks
 dtypes, shapes and meta only (`validate(deep=False)`): a deep validation or a re-hash would
-read every page of the build in every worker. A build without one of the arrays raises
-`MissingArray`, one line naming the remedy: when another pipeline version wrote the build
-(`outdated`, its `meta.pipeline_version` against `PIPELINE_VERSION`), the rebuild of the region
-from `pipeline filter` on, which gives it a new build id; otherwise the missing array and the
-`pipeline save --force` that writes the build again.
+read every page of the build in every worker. A build it cannot take raises `MissingArray`,
+one line naming the remedy: when another pipeline version wrote the build (`outdated`, its
+`meta.pipeline_version` against `PIPELINE_VERSION`), whatever arrays it holds, the rebuild of
+the region from `pipeline filter` on, which gives it a new build id; when this version's build
+lacks one of the arrays, that array and the `pipeline save --force` that writes the build
+again.
 
 `graph_version(data)` is the sha256 over, in ARRAY_SPECS order, each array's name, dtype,
 shape and raw bytes, then the strings.json bytes, then the canonical JSON of meta["params"]
@@ -82,7 +83,8 @@ def write_build(data: GraphData, path: Path) -> str:
 
 
 class MissingArray(FileNotFoundError):  # noqa: N818 (reads as the condition)
-    """A build without one of the format's arrays (one saved before the array existed)."""
+    """A build this code cannot read: another pipeline version's, or one without one of the
+    format's arrays (saved before the array existed)."""
 
 
 def outdated(path: Path, meta: dict[str, Any]) -> str | None:
@@ -99,14 +101,16 @@ def outdated(path: Path, meta: dict[str, Any]) -> str | None:
 def read_build(path: Path, mmap: bool = True) -> GraphData:
     """Load the build at `path`, every array memory-mapped read-only (`mmap=False`: copies)."""
     meta = json.loads((path / "meta.json").read_text())
+    line = outdated(path, meta)
+    if line is not None:
+        raise MissingArray(line)
     strings = json.loads((path / "strings.json").read_text(encoding="utf-8"))
     arrays: dict[str, Any] = {}
     for name in ARRAY_SPECS:
         file = path / "arrays" / f"{name}.npy"
         if not file.exists():
             raise MissingArray(
-                outdated(path, meta)
-                or f"the build at {path} lacks the array {name}: rebuild it with "
+                f"the build at {path} lacks the array {name}: rebuild it with "
                 f"`worst-route pipeline save --force --region {meta['region']}`"
             )
         a = np.load(file, mmap_mode="r" if mmap else None, allow_pickle=False)

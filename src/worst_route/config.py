@@ -59,8 +59,10 @@ REGIONS: dict[str, Region] = {
 
 # The pipeline's version enters every build id and every step's sidecar (`pipeline/layout.py`);
 # bump it when a step's output changes for the same input. `pipeline` re-exports it, and
-# `graph.store` reads it to name the remedy for a build another version wrote.
-PIPELINE_VERSION = "3"  # 2: bearings exclude stubs, node_roundabouts; 3: brand arrays
+# `graph.store` reads it to name the remedy for a build another version wrote. 2: bearings
+# exclude stubs, node_roundabouts; 3: brand arrays; 4: stage A places each cluster from its
+# own buffers.
+PIPELINE_VERSION = "4"
 
 
 @cache

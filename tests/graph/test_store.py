@@ -296,6 +296,21 @@ def test_read_rejects_a_missing_array(tmp_path: Path) -> None:
         read_build(tmp_path / "b")
 
 
+def test_read_refuses_a_build_another_pipeline_version_wrote(tmp_path: Path) -> None:
+    # Every array present, but written by pipeline 3: this code does not read it.
+    g = small_build()
+    write_build(replace(g, meta={**g.meta, "pipeline_version": PIPELINE_VERSION}), tmp_path / "b")
+    meta = json.loads((tmp_path / "b" / "meta.json").read_text())
+    (tmp_path / "b" / "meta.json").write_text(json.dumps({**meta, "pipeline_version": "3"}))
+    with pytest.raises(MissingArray) as refused:
+        read_build(tmp_path / "b")
+    assert str(refused.value) == (
+        f"the build at {tmp_path / 'b'} was written by pipeline 3 (now {PIPELINE_VERSION}): "
+        "rebuild the region with `worst-route pipeline filter --region test` and the steps "
+        "after it"
+    )
+
+
 @pytest.mark.parametrize("version", [PIPELINE_VERSION, "1"])
 def test_a_build_without_an_array_names_its_remedy(tmp_path: Path, version: str) -> None:
     # This pipeline's build lacking an array is saved again; another version's is rebuilt from

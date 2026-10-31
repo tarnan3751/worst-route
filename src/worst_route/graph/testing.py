@@ -27,7 +27,7 @@ import numpy as np
 from numpy.typing import NDArray
 from pyproj import Transformer
 
-from worst_route.config import TIERS, HighwayClass
+from worst_route.config import PIPELINE_VERSION, TIERS, HighwayClass
 from worst_route.graph.data import ARRAY_SPECS, N_TIERS, EdgeFlag, GraphData, Strings
 from worst_route.graph.store import graph_version
 
@@ -219,7 +219,7 @@ def make_graph(
             "build_id": "test",
             "crs_epsg": crs_epsg,
             "created": "1970-01-01T00:00:00+00:00",
-            "pipeline_version": "test",
+            "pipeline_version": PIPELINE_VERSION,
             "graph_version": "",
             "counts": {"nodes": n, "edges": m},
             "params": {},

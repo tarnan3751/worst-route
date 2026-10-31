@@ -65,14 +65,22 @@ report beside it in `qa/`.
   list `[md5 of the filtered roads file, region name, region bbox, region CRS (EPSG code),
   PIPELINE_VERSION]` (`layout.build_id_for`). `PIPELINE_VERSION` is in `config.py` (the
   `pipeline` package re-exports it, and `graph.store` reads it to name the remedy for another
-  version's build); bump it when a step's output changes for the same input. It became 2 in
-  M3 for two changes (`enrich`'s bearings leave out cleanup's stubs, and `save` writes
-  `node_roundabouts`), and is 3 since the brand index (`enrich` indexes the brands, `save`
-  writes them as arrays). Every step's sidecar records it, so a region built at an earlier
-  version is rebuilt from `filter` (which reads the raw extract again, no download) under a new
-  build id, and `latest` moves to it. Portland's build at version 3 is ffe2e7c881ca, at the
-  `graph_version` 8867636799a6 (on the dev machine; the main tree's 506f747d7458, version 2, is
-  rebuilt so after this lands).
+  version's build); bump it when a step's output changes for the same input. Every step's
+  sidecar records it, so a region built at an earlier version is rebuilt from `filter` (which
+  reads the raw extract again, no download) under a new build id, and `latest` moves to it.
+  What each version changed:
+
+  | Version | Change | Portland's build (`graph_version` on the dev machine) |
+  |---|---|---|
+  | 1 | M1's pipeline | |
+  | 2 | M3: `enrich`'s bearings leave out cleanup's stubs; `save` writes `node_roundabouts` | 506f747d7458 (ae1ce1e8289b) |
+  | 3 | M3: `enrich` indexes the brands, `save` writes them as arrays | ffe2e7c881ca (8867636799a6) |
+  | 4 | M5: stage A places each cluster from its own buffers, not from OSMnx's union of every buffer (**cleanup**, step 2) | 4b8998deee9f (57e5deb43289) |
+
+  Version 4 moves 3,977 of Portland's 4,236 clusters by at most 1.5e-8 m: against version 3,
+  the build's `node_x`, `node_y`, `node_lat` and `node_lon` differ in 3,216, 3,206, 3,020 and
+  510 rows, `edge_length_m` in one and `edge_time_s` in five (each by one float32 step), and
+  every other array is identical.
 - **Sidecar:** after `filter`, `build` or `cleanup` writes its output it records
   `{"step", "inputs": [{"file", "md5"}], "params"}` in `<output>.inputs.json` (filter: the
   bbox and the pipeline version; build: the region, bbox, CRS and pipeline version; cleanup:
@@ -263,10 +271,20 @@ twice.
    sees every ring; `STAGE_A_TOLERANCE_ARTERIAL_M` (15 m) on a `STAGE_A_ARTERIAL_CLASSES` edge
    (trunk, primary, secondary: divided arterials' medians are 20–30 m); else
    `STAGE_A_TOLERANCE_M` (8 m). Nodes whose buffers overlap and that edges of at most 60 m join
-   become one `cluster` node at the centroid of their buffers; nodes near each other with no
-   short edge between them (an overpass, the far ends of a cloverleaf loop) do not. OSMnx drops
-   an edge whose two ends merged without keeping it anywhere, so the post-pass adds its interior
-   `osm_nodes` to the cluster's members; it also replaces OSMnx's node attributes
+   become one `cluster` node; nodes near each other with no short edge between them (an
+   overpass, the far ends of a cloverleaf loop) do not. A buffer is the 64-sided polygon
+   geopandas makes (`consolidate.BUFFER_QUAD_SEGS`, 16 segments a quarter circle), so a pair
+   whose distance is near the sum of their tolerances merges as the polygons' corners decide
+   (23 such pairs on Portland). The post-pass places each cluster itself
+   (`consolidate.cluster_centre`): at the centroid of the union of its members' buffers when they
+   are a whole group of overlapping buffers (`consolidate.buffer_groups`), at the centroid of
+   its members' points when the edge test split the group (as OSMnx does). OSMnx takes the first
+   from one union of every buffer in the region, whose last bits depend on all the others (3,977
+   of Portland's 4,053 such clusters differ from their own buffers' centroid, by at most
+   1.5e-8 m); a cluster's own union does not depend on the rest of the graph or on its members'
+   order, which is what lets an array pipeline place it the same way (pipeline version 4).
+   OSMnx drops an edge whose two ends merged without keeping it anywhere, so the post-pass adds
+   its interior `osm_nodes` to the cluster's members; it also replaces OSMnx's node attributes
    (`osmid_original`, `street_count`, list-valued `lon`/`lat`) and edge attributes
    (`u_original`, `v_original`) with ours. Edges at a cluster have their geometry extended to the
    cluster's position and their `length` recomputed from it.

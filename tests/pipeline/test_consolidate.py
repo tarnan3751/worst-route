@@ -1,9 +1,12 @@
 import math
 from pathlib import Path
+from typing import Any
 
 import networkx as nx
+import numpy as np
 import pyproj
 import pytest
+import shapely
 
 from tests.pipeline.invariants import check_all
 from tests.pipeline.osm import write_osm
@@ -15,6 +18,7 @@ from worst_route.config import (
 from worst_route.pipeline.build import build_raw_graph
 from worst_route.pipeline.carriageways import find_twins
 from worst_route.pipeline.consolidate import (
+    BUFFER_QUAD_SEGS,
     StageAStats,
     StageBStats,
     _absorb_pockets,
@@ -23,6 +27,7 @@ from worst_route.pipeline.consolidate import (
     _is_junction_edge,
     _ramp_clusters,
     _road_signatures,
+    buffer_groups,
     relabel,
     stage_a,
     stage_a_tolerances,
@@ -159,6 +164,101 @@ def test_edges_reach_the_cluster() -> None:
     )
     assert eastbound["osm_nodes"] == (31, 73, 50)  # unchanged; the geometry gains one point
     assert len(eastbound["geometry"].coords) == 4
+
+
+def test_a_cluster_sits_at_the_centroid_of_its_own_buffers() -> None:
+    before, merged, _ = through_a("divided")
+    simplified = simplify(before)[0]
+    tolerances = stage_a_tolerances(simplified)
+    members = (50, 51, 52, 53)
+    xy = [(simplified.nodes[n]["x"], simplified.nodes[n]["y"]) for n in members]
+    radii = [tolerances[n] for n in members]
+    buffers = shapely.buffer(shapely.points(xy), radii, quad_segs=BUFFER_QUAD_SEGS)
+    centre = shapely.union_all(buffers).centroid
+    crossing = node_of(merged, 50)
+    assert (merged.nodes[crossing]["x"], merged.nodes[crossing]["y"]) == (centre.x, centre.y)
+    for u, _, data in [
+        *merged.in_edges(crossing, data=True),
+        *merged.out_edges(crossing, data=True),
+    ]:
+        assert data["geometry"].coords[0 if u == crossing else -1] == (centre.x, centre.y)
+        assert data["length"] == data["geometry"].length
+
+
+def _near_pair(tmp_path: Path, overpass: bool) -> Path:
+    """Junctions 2 (on a primary, 15 m buffer) and 3 (residential, 8 m) joined by a 10 m street,
+    and, with `overpass`, junction 7 of an unconnected road 15 m north of 3, whose buffer meets
+    both of theirs."""
+    nodes = {1: (-100.0, 0.0), 2: (0.0, 0.0), 3: (10.0, 0.0), 4: (110.0, 0.0)}
+    nodes |= {5: (0.0, 100.0), 6: (10.0, -100.0)}
+    residential = {"highway": "residential", "name": "Pine Street"}
+    ways = [
+        (1, [1, 2], {"highway": "primary", "name": "Main Street"}),
+        (2, [2, 3, 4], residential),
+        (3, [2, 5], {"highway": "residential", "name": "Oak Street"}),
+        (4, [3, 6], {"highway": "residential", "name": "Elm Street"}),
+    ]
+    if overpass:
+        nodes |= {7: (10.0, 15.0), 8: (-100.0, 15.0), 9: (100.0, 15.0), 10: (10.0, 115.0)}
+        ways += [
+            (5, [8, 7, 9], {"highway": "residential", "name": "High Street", "bridge": "yes"}),
+            (6, [7, 10], {"highway": "residential", "name": "Ash Street"}),
+        ]
+    return write_osm(tmp_path / "pair.osm", nodes, ways)
+
+
+@pytest.mark.parametrize("overpass", [False, True], ids=["whole group", "split group"])
+def test_a_cluster_sits_at_its_buffers_or_at_its_points(tmp_path: Path, overpass: bool) -> None:
+    before, merged, stats = through_a(_near_pair(tmp_path, overpass))
+    simplified = simplify(before)[0]
+    tolerances = stage_a_tolerances(simplified)
+    assert (tolerances[2], tolerances[3]) == (STAGE_A_TOLERANCE_ARTERIAL_M, STAGE_A_TOLERANCE_M)
+    junctions = [n for n in (2, 3, 7) if n in simplified]  # 7 with the overpass only
+    xy = np.array([(simplified.nodes[n]["x"], simplified.nodes[n]["y"]) for n in junctions])
+    radii = np.array([tolerances[n] for n in junctions])
+    # One group: 2's and 3's buffers, and with the overpass 7's, which meets both.
+    assert len(set(buffer_groups(xy, radii).tolist())) == 1
+    assert stats.cluster_sizes == {2: 1}  # no short edge reaches 7: only 2 and 3 merge
+    pair = merged.nodes[node_of(merged, 2)]
+    assert node_of(merged, 3) == node_of(merged, 2) and pair["kind"] == "cluster"
+    # A split group sits at its members' points, as OSMnx places it; the whole group at its
+    # buffers, nearer the wider one than the midpoint.
+    points = shapely.points(xy[:2])
+    buffers = shapely.buffer(points, radii[:2], quad_segs=BUFFER_QUAD_SEGS)
+    centre = shapely.union_all(points if overpass else buffers).centroid
+    assert (pair["x"], pair["y"]) == (centre.x, centre.y)
+    off_midpoint = math.dist(xy[:2].mean(axis=0), (pair["x"], pair["y"]))
+    assert off_midpoint < 1e-9 if overpass else off_midpoint > 1.0
+
+
+def _reordered(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
+    """The graph with its nodes and edges added in reverse order."""
+    result = nx.MultiDiGraph()
+    result.graph.update(graph.graph)
+    result.add_nodes_from(reversed(list(graph.nodes(data=True))))
+    result.add_edges_from(reversed(list(graph.edges(keys=True, data=True))))
+    return result
+
+
+def _placed(graph: nx.MultiDiGraph) -> tuple[dict[Any, Any], dict[Any, Any]]:
+    """Each node's position and each edge's geometry and length, keyed by members."""
+    members = dict(graph.nodes(data="members"))
+    nodes = {d["members"]: (d["x"], d["y"], d["lon"], d["lat"]) for _, d in graph.nodes(data=True)}
+    edges = {
+        (members[u], members[v], d["osm_nodes"]): (tuple(d["geometry"].coords), d["length"])
+        for u, v, d in graph.edges(data=True)
+    }
+    return nodes, edges
+
+
+@pytest.mark.parametrize("case", ["divided", "split group"])
+def test_cluster_positions_do_not_depend_on_the_order(tmp_path: Path, case: str) -> None:
+    source = FIXTURES / "divided.osm" if case == "divided" else _near_pair(tmp_path, True)
+    simplified = simplify(raw(source))[0]
+    forward, _ = stage_a(simplified)
+    backward, _ = stage_a(_reordered(simplified))
+    assert any(kind == "cluster" for _, kind in forward.nodes(data="kind"))
+    assert _placed(backward) == _placed(forward)
 
 
 def test_an_overpass_does_not_merge() -> None:

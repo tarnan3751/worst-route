@@ -11,10 +11,16 @@ segment (an edge and its reverse count once). An edge keeps its `osm_nodes`, `os
 **Stage A** (`stage_a`) is OSMnx 2.1's `consolidate_intersections` with a per-node tolerance
 (`stage_a_tolerances`; `config.STAGE_A_*`), `max_length`, dead ends kept and the graph rebuilt:
 nodes whose buffers overlap and that an edge of at most `STAGE_A_MAX_LENGTH_M` joins become one
-node at the centroid of their buffers. OSMnx drops an edge whose two ends merged without
-record, so the post-pass adds its interior `osm_nodes` to the cluster's members, then replaces
-OSMnx's node attributes (`osmid_original`, `street_count`, list-valued `lon`/`lat`) and edge
-attributes (`u_original`, `v_original`) with ours.
+node. The post-pass places each such cluster itself (`cluster_centre`): at the centroid of the
+union of its members' buffers when it is a whole group of overlapping buffers
+(`buffer_groups`), at the centroid of its members' points when the edge test split the group
+(as OSMnx does). OSMnx takes the first from one union of every buffer in the region, whose last
+bits depend on all the others, so ours is the cluster's own and does not depend on the rest of
+the graph. Edges at a cluster end at that position, their `length` the geometry's. OSMnx drops
+an edge whose two ends merged without record, so the post-pass adds its interior `osm_nodes` to
+the cluster's members, then replaces OSMnx's node attributes (`osmid_original`,
+`street_count`, list-valued `lon`/`lat`) and edge attributes (`u_original`, `v_original`) with
+ours.
 
 **Stage B** (`stage_b`) is ours. The ramp (`*_link`) and roundabout edges, undirected, form
 components; a component's attachment nodes are those with another road too. Two components
@@ -79,6 +85,9 @@ import numpy as np
 import osmnx
 import pyproj
 import shapely
+from numpy.typing import NDArray
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
 from worst_route.config import (
@@ -98,6 +107,9 @@ from worst_route.pipeline.build import ROUNDABOUT_JUNCTIONS
 from worst_route.pipeline.names import road_signature
 
 SUPER_KINDS = frozenset({"interchange", "roundabout"})
+# Segments per quarter circle of a stage A buffer: geopandas' default, which OSMnx's buffers use,
+# so a pair whose distance is near the sum of their radii overlaps as it does there.
+BUFFER_QUAD_SEGS = 16
 
 type EdgeKey = tuple[int, int, int]
 type EdgeData = dict[str, Any]
@@ -164,6 +176,42 @@ def stage_a_tolerances(graph: nx.MultiDiGraph) -> dict[int, float]:
     return tolerances
 
 
+def buffer_groups(xy: NDArray[np.float64], radii: NDArray[np.float64]) -> NDArray[np.int32]:
+    """Each point's group: the points whose stage A buffers overlap, directly or through others.
+
+    A buffer is the `BUFFER_QUAD_SEGS` polygon OSMnx merges. Two whose centres lie further apart
+    than the sum of their radii cannot meet; the others are tested with GEOS on the polygons
+    themselves, whose corners decide the pairs near that sum.
+    """
+    if len(xy) == 0:
+        return np.zeros(0, dtype=np.int32)
+    pairs = cKDTree(xy).query_pairs(2 * float(radii.max()), output_type="ndarray")
+    a, b = pairs[:, 0], pairs[:, 1]
+    near = np.hypot(*(xy[a] - xy[b]).T) <= radii[a] + radii[b]
+    a, b = a[near], b[near]
+    ends = np.unique(np.concatenate([a, b]))
+    polygon = np.empty(len(xy), dtype=object)
+    polygon[ends] = shapely.buffer(
+        shapely.points(xy[ends]), radii[ends], quad_segs=BUFFER_QUAD_SEGS
+    )
+    meet = shapely.intersects(polygon[a], polygon[b])
+    links = coo_matrix((np.ones(int(meet.sum())), (a[meet], b[meet])), shape=(len(xy), len(xy)))
+    labels: NDArray[np.int32] = connected_components(links, directed=False)[1].astype(np.int32)
+    return labels
+
+
+def cluster_centre(
+    xy: NDArray[np.float64], radii: NDArray[np.float64], whole: bool
+) -> tuple[float, float]:
+    """A stage A cluster's position, from its members' positions and radii: the centroid of the
+    union of their buffers when the cluster is a whole group of overlapping buffers, else (the
+    edge test split the group) the centroid of their points. Neither depends on the order."""
+    points = shapely.points(xy)
+    shapes = shapely.buffer(points, radii, quad_segs=BUFFER_QUAD_SEGS) if whole else points
+    centre = shapely.union_all(shapes).centroid
+    return float(centre.x), float(centre.y)
+
+
 def stage_a(graph: nx.MultiDiGraph) -> tuple[nx.MultiDiGraph, StageAStats]:
     """The simplified graph with its signal clusters and divided crossings merged."""
     stats = StageAStats()
@@ -173,9 +221,10 @@ def stage_a(graph: nx.MultiDiGraph) -> tuple[nx.MultiDiGraph, StageAStats]:
             data.update(kind="plain", members=(node,))
         stats.nodes = merged.number_of_nodes()
         return merged, stats
+    tolerances = stage_a_tolerances(graph)
     merged = osmnx.simplification.consolidate_intersections(
         graph,
-        tolerance=stage_a_tolerances(graph),
+        tolerance=tolerances,
         rebuild_graph=True,
         max_length=STAGE_A_MAX_LENGTH_M,
         dead_ends=True,
@@ -187,6 +236,7 @@ def stage_a(graph: nx.MultiDiGraph) -> tuple[nx.MultiDiGraph, StageAStats]:
         originals[node] = original if isinstance(original, list) else [original]
         for osm_id in originals[node]:
             cluster_of[osm_id] = node
+    centres = _cluster_centres(graph, tolerances, originals)
     absorbed: dict[int, set[int]] = defaultdict(set)
     for u, v, data in graph.edges(data=True):
         if cluster_of[u] == cluster_of[v]:  # no self-loops are left, so u != v
@@ -199,10 +249,11 @@ def stage_a(graph: nx.MultiDiGraph) -> tuple[nx.MultiDiGraph, StageAStats]:
         if len(ids) == 1:
             attributes = {**graph.nodes[ids[0]], "kind": "plain", "members": (ids[0],)}
         else:
-            lon, lat = to_lonlat.transform(data["x"], data["y"])
+            x, y = centres[node]
+            lon, lat = to_lonlat.transform(x, y)
             attributes = {
-                "x": float(data["x"]),
-                "y": float(data["y"]),
+                "x": x,
+                "y": y,
                 "lon": float(lon),
                 "lat": float(lat),
                 "kind": "cluster",
@@ -211,8 +262,14 @@ def stage_a(graph: nx.MultiDiGraph) -> tuple[nx.MultiDiGraph, StageAStats]:
             sizes[len(ids)] += 1
         data.clear()
         data.update(attributes)
-    for _, _, data in merged.edges(data=True):
+    for u, v, data in merged.edges(data=True):
         del data["u_original"], data["v_original"]
+        if u in centres or v in centres:  # OSMnx extended it to its own position of the cluster
+            coords = list(data["geometry"].coords)
+            coords[0] = centres.get(u, coords[0])
+            coords[-1] = centres.get(v, coords[-1])
+            data["geometry"] = shapely.LineString(coords)
+            data["length"] = float(data["geometry"].length)
     merged.graph = dict(graph.graph)
     stats.clusters = sum(sizes.values())
     stats.nodes_merged = sum(size * count for size, count in sizes.items())
@@ -220,6 +277,31 @@ def stage_a(graph: nx.MultiDiGraph) -> tuple[nx.MultiDiGraph, StageAStats]:
     stats.nodes = merged.number_of_nodes()
     stats.edges = merged.number_of_edges()
     return merged, stats
+
+
+def _cluster_centres(
+    graph: nx.MultiDiGraph, tolerances: dict[int, float], originals: dict[int, list[int]]
+) -> dict[int, tuple[float, float]]:
+    """The position of each cluster of `originals` (node -> the nodes of `graph` it merged) that
+    merged more than one node. A cluster always lies within one group of overlapping buffers
+    (OSMnx only splits a group); one that does not raises `RuntimeError`."""
+    nodes = list(graph.nodes)
+    index = {node: i for i, node in enumerate(nodes)}
+    xy = np.array([(graph.nodes[n]["x"], graph.nodes[n]["y"]) for n in nodes]).reshape(-1, 2)
+    radii = np.array([tolerances[n] for n in nodes], dtype=np.float64)
+    group = buffer_groups(xy, radii)
+    size = np.bincount(group)
+    centres = {}
+    for node, ids in originals.items():
+        if len(ids) > 1:
+            at = np.array(sorted(index[n] for n in ids))
+            if np.any(group[at] != group[at[0]]):
+                raise RuntimeError(
+                    f"stage A merged nodes {sorted(ids)} whose buffers do not meet: GEOS's union "
+                    "of the buffers and its intersection test disagree"
+                )
+            centres[node] = cluster_centre(xy[at], radii[at], bool(size[group[at[0]]] == len(at)))
+    return centres
 
 
 def stage_b(graph: nx.MultiDiGraph) -> tuple[nx.MultiDiGraph, StageBStats]:

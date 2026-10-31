@@ -1,12 +1,12 @@
 # Worst Route — project overview
 
-Last updated: 2026-10-30. Snapshot taken after the frontend's directions panel, toasts and
-departure landed: the plan is written; the project scaffolding, every pipeline step, the graph
-package, the engine, the API and the frontend are built, and so is the presentation (M4): the
-geocoding proxy, the places index, the comparison lines, the share image, the directions with
-their jokes, and the stats and toasts, in the route documents and in the frontend; Portland has a
-saved build, and the M1 acceptance run on it passes (§2.2): M1 is built, and M3's first four
-modes are.
+Last updated: 2026-10-31. Snapshot taken after the public-hosting preparation landed: the plan
+is written; the project scaffolding, every pipeline step, the graph package, the engine, the API
+and the frontend are built, and so is the presentation (M4): the geocoding proxy, the places
+index, the comparison lines, the share image, the directions with their jokes, and the stats and
+toasts, in the route documents and in the frontend; Portland and Oregon have saved builds, and
+the M1 acceptance run on Portland passes (§2.2): M1 is built, and so are M3's modes; of M5,
+Oregon and the public-hosting preparation are.
 
 This file answers three questions: what the project is meant to become, how far along it is, and
 what has been decided. It is written for a human reader and for an AI agent picking up the
@@ -65,7 +65,9 @@ Claude: Python for the pipeline, engine, API and rendering; TypeScript + MapLibr
   directions panel whose steps highlight on the map, rotating toasts under the map, the extra
   stats with the arrival time, a vehicle and a departure setting, and the route's GeoJSON to
   download (`docs/reference/frontend.md`).
-- **Scale** (Planned): Portland → Oregon → national at a tier to be decided at M5.
+- **Scale** (In progress): Portland → Oregon → national at a tier to be decided at M5. Oregon
+  is built, and so is what public hosting needs on one machine: an image, the vector basemap,
+  per-client limits, logs and readiness (`docs/reference/hosting.md`).
 
 Out of scope for now: social features, accounts, mobile apps.
 
@@ -239,6 +241,18 @@ peak memory and output sizes as a table and a JSON report under `tools/out/`; th
 runs it. The automatic tier is the all-roads graph below 800 km (engine version 3), on which the
 named trips plan at 4.03–14.00× in 30 s and 8 of 10 random statewide pairs at a median of 8.88×;
 `worst-route serve --region oregon` keeps a job's worker under 400 MB.
+The public-hosting preparation is built (M5.4; `docs/reference/hosting.md`): a container image
+(`Dockerfile`, `compose.yaml`) serves the built frontend at `/` and the API under `/api` from one
+process (`worst-route serve --frontend`), the data mounted read only and its state in a volume;
+the map draws Protomaps' vector basemap from a file the API serves by byte ranges
+(`WORST_ROUTE_BASEMAP=pmtiles`, named by `GET /config`; `tools/fetch_basemap.sh` cuts it from a
+Protomaps build, with its labels' fonts and icons), on MapLibre GL JS 6, which carries no
+advisory; `serve --public` gives each client one running job, three waiting and ten place
+searches a minute, and budgets up to 60 s; every request has an id and, with `--log-format json`,
+a JSON line with the client hashed, never its address; `GET /ready` says whether the build, the
+store, the places index and the basemap are there; the map's attribution control and a footer
+credit OpenStreetMap, Protomaps and the Census Bureau. Built and run with Docker on the dev
+machine (1.57 GB), it serves Portland from the main tree's data mounted read only.
 The workflow scaffolding exists: `CLAUDE.md`, the four agents,
 `tools/gates.sh`, `tools/land_series.sh`, this overview, `docs/PLAN.md`. The M1 bootstrap is
 built: the uv project (Python 3.12, `src` layout, the M1 dependencies), the gate running ruff,
@@ -255,7 +269,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 | M2 — API + map, live growth | In progress | CSR + Numba backend built, its transition-aware kernels included (the default on every build; byte-identical to the reference: on Portland the acceptance's 20 routes and Powell's → Reed reproduce exactly, at 7,200–8,200 attempts/s); the API built (jobs in worker processes, SSE progress, the route store, make it worse, `worst-route serve`); targets by ratio and duration built (engine, CLI `--target`/`--base`, API), a 13-minute Portland drive to 9 h within ±2 % in 1.8 s over the API; the MapLibre frontend built (stops by click, the route growing live, run controls, settings with the targets, links); remaining: the acceptance |
 | M3 — Modes and constraints | In progress | built: the turn classes, never turn left / right (soft by default, `strict` for none; engine, CLI, API), the kernels refusing banned turn classes, slowest time (engine, CLI, API), collectibles (the collect objective for toll booths, level crossings, roundabouts and bridges in the engine, `plan --objective collect --item` and the API; `node_roundabouts` in the build; on Portland 24–30 bridges where the distance route passes 16–17); the frontend's controls for them (the Mode and Turns rows, the request, the URL, the stat line's time ratio, delays, items and turns, the strict refusal's retry); the brand pilgrimage (the brand index at `enrich`, saved as build arrays at pipeline version 3; `plan --objective brand --brand`, the API's `brand` and `GET /brands`; on Portland 17 of the 19 Starbucks in reach); the frontend's controls for the brand pilgrimage, the alphabet route and hard mode (a Brand mode with its picker, an Alphabet mode, a Hard mode checkbox, the request, the URL, the visits and letters live in the stat line, the alphabet route's better routes drawn in place, the hard-mode refusal's retry); on Portland strict no-left plans 4 of the 20 acceptance pairs and soft no-left 20 at a median of 5.33× (§2.3; on a build re-enriched at pipeline version 2, whose bearings describe the roads, not cleanup's stubs); hard mode (engine, CLI, API; on Portland 19 of the 20 acceptance pairs plan under it, at a median of 4.73×); the alphabet route (its own search, a new tree search on both backends, `plan --objective alphabet` and the API; on Portland Powell's → Reed A to M, Powell's → PDX A to W, the acceptance pairs a median of 1 letter); the search honouring stage B transitions was built at M1. Remaining: the acceptance |
 | M4 — Presentation | Built | directions, stats, toasts, comparisons, share image, geocoding proxy, share links; built: the geocoding proxy (`GET /geocode`, Nominatim behind a cache and 1 request/s) and the place search in the stop list; the Census places index (`tools/fetch_census.sh`, `worst-route aux places`: the states and towns a route passes through), the comparison lines, and the share image (`GET /routes/{id}/share.png`, linked from the share section); the directions with deadpan jokes and the stats and toasts in the route documents (`GET /routes/{id}`, `GET /routes/{id}/directions`, route.json, `worst-route directions`); the frontend's directions panel (a step's edges highlighted on the map), toasts under the map, extra stat rows and vehicle setting; the departure setting with the arrival time, and the GeoJSON download |
-| M5 — Scaling up | In progress | built: Oregon (M5.1; `docs/reference/pipeline.md`, **Oregon**; `docs/reference/engine.md`, **On Oregon**): the whole state builds in 6–11 min with the OSMnx path (237,581 nodes, 593,555 edges, 174 MB; peak 2.6–3.9 GB, in cleanup), measured by `tools/bench_build.py`, and passes QA (connectivity judged by a 98% share and its largest dropped component, at most 200 nodes); the automatic tier is the all-roads graph below 800 km (engine version 3), giving Portland → Bend 10.47×, Astoria → Ontario 4.03×, Eugene → Portland 14.00× and Medford → Portland 8.17× in 30 s, and 8 of 10 random statewide pairs at a median of 8.88×; served, a job's worker peaks at 374–399 MB. Remaining: array-based simplify/consolidate; US at T1; the national decision gate; public-hosting prep |
+| M5 — Scaling up | In progress | built: Oregon (M5.1; `docs/reference/pipeline.md`, **Oregon**; `docs/reference/engine.md`, **On Oregon**): the whole state builds in 6–11 min with the OSMnx path (237,581 nodes, 593,555 edges, 174 MB; peak 2.6–3.9 GB, in cleanup), measured by `tools/bench_build.py`, and passes QA (connectivity judged by a 98% share and its largest dropped component, at most 200 nodes); the automatic tier is the all-roads graph below 800 km (engine version 3), giving Portland → Bend 10.47×, Astoria → Ontario 4.03×, Eugene → Portland 14.00× and Medford → Portland 8.17× in 30 s, and 8 of 10 random statewide pairs at a median of 8.88×; served, a job's worker peaks at 374–399 MB. built: the public-hosting preparation (M5.4; `docs/reference/hosting.md`): the image serving the frontend and the API from one process, the Protomaps basemap, per-client limits, JSON logs with request ids, `/ready`, the attribution, MapLibre GL JS 6. Remaining: array-based simplify/consolidate; US at T1; the national decision gate |
 | M6 — Stretch | Planned | certified worst (CP-SAT), turn restrictions, stop reordering, portfolio runs |
 
 ### 2.3 Known limitations
@@ -666,6 +680,24 @@ brief):
   A brand and an alphabet recording are added, their sizes kept down by `max_iterations`. At the
   review (same day): Make it worse is off under Alphabet, its tooltip saying to pick another mode;
   the letters' span is written as the CLI writes it, a lap at a time past Z ("(A–Z, A–C)").
+- **Public hosting as built** (2026-10-31, at its brief and plan; M5.4): one container serving
+  the built frontend at `/` and the API under `/api` from one process, the data never inside it;
+  the basemap Protomaps' PMTiles, self-hosted from a file a person fetches
+  (`tools/fetch_basemap.sh`, which downloads nothing in a lane), served by the API with byte
+  ranges (nginx may serve it instead), drawn by `@protomaps/basemaps` in its grayscale flavor
+  with labels only when their fonts and icons are there; `WORST_ROUTE_BASEMAP=raster|pmtiles`
+  named to the frontend by `GET /config`, which also carries `public` and the limits (the
+  frontend reads only the basemap for now); the public limits behind `serve --public`, off by
+  default: per client one job running and three waiting, its next waiting even while workers are
+  free, `TOO_MANY_JOBS` carrying the client's counts only when they are why, ten place searches
+  a minute counting cached answers, budgets up to 60 s, and the leash the schema's 150 km (the
+  plan's 300 km is above any request); the client the peer, or with `--trust-proxy` the last
+  `X-Forwarded-For` address, IPv6 by its /64, uvicorn's own proxy headers off; JSON logs with a
+  request id, the client as a salted hash and a line at each job's end; `/ready` failing (503)
+  on a missing places index or basemap; Protomaps credited in the map's attribution control,
+  OpenStreetMap (ODbL) and the Census Bureau in a footer; MapLibre GL JS upgraded to 6
+  (GHSA-jrc7-96c5-q579 fixed); `pmtiles` and `@protomaps/basemaps` (BSD-3-Clause) the new
+  dependencies.
 - **Workflow conventions**: tiers A/B/C, lanes as clones, patch-series delivery, no commit
   trailers, the gate on every change (`CLAUDE.md`, **Agent workflow**).
 
@@ -682,5 +714,5 @@ The plan's assumed defaults, each open until the owner confirms (`docs/PLAN.md` 
 - Alaska and Hawaii in national builds.
 - Round trips exposed in the UI.
 - Vehicle stats: MPG and gas price only, or EV too.
-- Public geocoder: self-hosted Photon or a paid provider.
-- Attribution text beyond a footer line.
+- Public geocoder: self-hosted Photon or a paid provider (the trade-off in
+  `docs/reference/hosting.md`, **The geocoder**).

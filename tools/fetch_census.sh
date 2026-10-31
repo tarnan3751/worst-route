@@ -24,6 +24,9 @@ pinned() {
     cb_2025_us_state_20m.zip) echo 9340b6d995e971b2b4230518f4fa85e6cd9e7fe6811afabc90a6a8b1191530f6 ;;
     cb_2025_41_place_500k.zip) echo 9e06eff08882940973c5d5bbed82d433b3f4a5bb91535312186c418278eedc26 ;;
     cb_2025_53_place_500k.zip) echo 24e23e4c626d87b099c45cb5cab6df90939ddc311e6b09062e16fb2436a4a7db ;;
+    cb_2025_06_place_500k.zip) echo d8aa978aa353baf70dcbf3b8d4499edf2b7f71dc8dbd33f3a6a099caf9c15607 ;;
+    cb_2025_16_place_500k.zip) echo 48d40376c6f55533be3cdb808cedcff4fa4d48962e9c4f865d084d53bb4d71d2 ;;
+    cb_2025_32_place_500k.zip) echo 481234154b42916ab2e6b6e0c6c6a0b2e09fa1f39d797a3c43b66b5e3b887878 ;;
     *) echo "" ;;
   esac
 }

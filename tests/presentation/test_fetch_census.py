@@ -52,12 +52,12 @@ def fetch(tmp_path: Path, *fips: str, fail: str = "") -> subprocess.CompletedPro
 
 
 def test_unpinned_files_are_kept_and_a_wrong_sum_is_not(tmp_path: Path) -> None:
-    result = fetch(tmp_path, "06")
+    result = fetch(tmp_path, "99")  # not a state: never pinned
     census = tmp_path / "data" / "aux" / "census"
-    places = census / "cb_2025_06_place_500k.zip"
-    sum_06 = hashlib.sha256(f"fake {BASE}/{places.name}".encode()).hexdigest()
+    places = census / "cb_2025_99_place_500k.zip"
+    sum_99 = hashlib.sha256(f"fake {BASE}/{places.name}".encode()).hexdigest()
     assert result.stdout == (
-        f"wrote {places}, sha256 {sum_06} (no pinned sum: add it to tools/fetch_census.sh)\n"
+        f"wrote {places}, sha256 {sum_99} (no pinned sum: add it to tools/fetch_census.sh)\n"
     )
     assert result.returncode == 1
     sum_5m = hashlib.sha256(f"fake {BASE}/cb_2025_us_state_5m.zip".encode()).hexdigest()
@@ -70,7 +70,7 @@ def test_unpinned_files_are_kept_and_a_wrong_sum_is_not(tmp_path: Path) -> None:
     agent = settings().user_agent
     assert calls == [
         f"-fsSL --user-agent {agent} -o {census}/.{name}.part {BASE}/{name}"
-        for name in ("cb_2025_06_place_500k.zip", "cb_2025_us_state_5m.zip")
+        for name in ("cb_2025_99_place_500k.zip", "cb_2025_us_state_5m.zip")
     ]
 
 

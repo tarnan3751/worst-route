@@ -51,6 +51,12 @@ to download. M4 is built. So is the whole of Oregon (M5's first step, `docs/refe
 **Oregon**): it builds in 6–11 minutes with the same pipeline, measured by
 `tools/bench_build.py`, passes QA, and plans statewide trips on the all-roads tier, which the
 automatic tier now is below 800 km (engine version 3; `docs/reference/engine.md`, **On Oregon**).
+So is the public-hosting preparation (M5's fourth step, `docs/reference/hosting.md`): a container
+image serving the built frontend and the API (under `/api`) from one process (`serve
+--frontend`), Protomaps' vector basemap from a file the API serves (`WORST_ROUTE_BASEMAP=pmtiles`,
+`tools/fetch_basemap.sh`) on MapLibre GL JS 6, each client's share of the jobs and the place
+searches on a public server (`serve --public`), JSON logs with request ids, `/ready`, and the
+attribution.
 The plan (`docs/PLAN.md`,
 2026-10-30) is written and its open questions answered as far as `docs/project_overview.md` §3
 records. **M1 is built**: in the acceptance run on the
@@ -101,9 +107,11 @@ Every command below exists. One a later milestone adds is marked with that miles
 | Plan a route from the CLI, validated (`--target ratio:20` or `duration:9h` aims for a target within ±2 %; `--base route.json` continues a saved route; `--objective time` the slowest; `--no-left` / `--no-right` such turns at a kilometre each, `--strict` none; `--hard` each road in one stretch, never driven again once left; `--objective collect --item bridge` collects bridges, or `toll_booth`, `level_crossing`, `roundabout`; `--objective brand --brand Starbucks` visits a brand's locations, by name or id; `--objective alphabet` drives roads A, B, C, … from `--from` to `--to`) | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
 | Validate a saved route | `uv run worst-route validate route.json` |
 | Print a saved route's turn-by-turn directions (`--no-jokes` without the jokes) | `uv run worst-route directions route.json` |
-| API server (the coordinator only; agents use `--port 0` or a port of their own, `--store` in their own tree, and `--geocoder none` or `--nominatim-url` pointed at a local stub: no agent calls Nominatim) | `uv run worst-route serve --region portland` |
+| API server (the coordinator only; agents use `--port 0` or a port of their own, `--store` in their own tree, and `--geocoder none` or `--nominatim-url` pointed at a local stub: no agent calls Nominatim; for public hosting `--public`, `--trust-proxy`, `--log-format json` and `--frontend frontend/dist`, the basemap by `WORST_ROUTE_BASEMAP=raster\|pmtiles`) | `uv run worst-route serve --region portland` |
 | Frontend dev server / build / typecheck (with the prettier check) / tests / format (the dev server proxies `/api` to `WORST_ROUTE_API`, default `http://127.0.0.1:8000`; agents point it at their own server and add `-- --port <free>`) | `cd frontend && npm run dev` / `npm run build` / `npm run typecheck` / `npm test` / `npm run format` |
 | Build a region's pipeline with each step's time, peak memory and output sizes (a heavy job for a state; writes `tools/out/`, never downloads; `--steps`, `--force`, `--allow-fragmented`) | `uv run python tools/bench_build.py --region oregon --source data/raw/oregon-latest.osm.pbf` |
+| Fetch the vector basemap (a person, never the gate or an agent; needs go-pmtiles; `--dry-run` for the size, `--assets` for the labels' fonts and icons) | `tools/fetch_basemap.sh portland --build 20261030 --bbox -123.05,45.25,-122.35,45.72 --assets` |
+| Build and run the image (the frontend and the API from one process; the data mounted, never inside; `docker compose up -d --build` from `compose.yaml`; bound to `127.0.0.1` it sits behind a reverse proxy, hence `--trust-proxy`, which the image's own command leaves out so a container exposed directly never trusts `X-Forwarded-For`) | `docker build -t worst-route .` / `docker run -p 127.0.0.1:8000:8000 -v "$PWD/data:/data:ro" -v worst-route-state:/state worst-route serve --region portland --host 0.0.0.0 --port 8000 --store /state/routes.sqlite --frontend /app/frontend --public --log-format json --trust-proxy` |
 | Land a delivered series | `tools/land_series.sh <patch-dir> <base-commit> <tree-hash>` |
 
 **Run the gate after every change.** The gate never downloads anything and never needs `data/`;
@@ -128,6 +136,7 @@ first built and listed here when it exists.
 | Presentation: places (states, towns), directions, stats, comparisons, share image, jokes | `src/worst_route/presentation/`, `api/share_api.py`, `api/directions_api.py` | §4.3, M4 | `docs/reference/presentation.md` |
 | Frontend: map, stops, settings, run controls, toasts, directions, share | `frontend/src/` | §5 | `docs/reference/frontend.md` |
 | Testing and tools: the gate, lanes, landing, fixtures, benchmarks | `tests/`, `tools/` | §8 | `docs/reference/testing-tools.md` |
+| Hosting: the image, the site, the public limits, the logs, readiness, the basemap and its fetch | `Dockerfile`, `compose.yaml`, `api/static.py`, `api/limits.py`, `api/logs.py`, `api/basemap_api.py`, `api/ready_api.py`, `tools/fetch_basemap.sh` | §4.5, §5.1, §7 M5.4 | `docs/reference/hosting.md` |
 
 ## Architecture rules
 
@@ -191,22 +200,25 @@ really gives the same route), so treat them as hard rules.
 ### Outside services and their policies
 
 - Nominatim: backend proxy only, ≤ 1 request/s, a search button (no type-ahead), cached,
-  `User-Agent: worst-route/<version> (<contact>)`. OSM raster tiles: hobby volume locally,
-  a vector basemap before anything public. **No test, gate, agent or fixture calls either.**
-- Downloads happen only through `pipeline download` and `tools/fetch_census.sh`, run by a
-  person, never by the gate.
+  `User-Agent: worst-route/<version> (<contact>)`; on a public server ten searches a minute a
+  client too. OSM raster tiles: hobby volume locally (`WORST_ROUTE_BASEMAP=raster`); anything
+  public draws Protomaps' vector basemap from a file the server holds (`pmtiles`,
+  `docs/reference/hosting.md`). **No test, gate, agent or fixture calls either.**
+- Downloads happen only through `pipeline download`, `tools/fetch_census.sh` and
+  `tools/fetch_basemap.sh`, run by a person, never by the gate.
 
 ## Folder layout
 
 ```
 docs/            PLAN.md (the design); project_overview.md (scope, status, roadmap, decisions);
                  reference/ (one file per built area); adr/ later
-data/            gitignored: raw/, filtered/, aux/, graphs/<region>/<build_id>/
+data/            gitignored: raw/, filtered/, aux/, graphs/<region>/<build_id>/, basemap/
 src/worst_route/ config, cli; pipeline/, graph/, engine/ (objectives/), presentation/, geocode/, api/
 frontend/        Vite + TS app: src/{main,state,api,map,stops,settings,run,toasts,directions,share}
 tests/           fixtures/osm/*.osm, unit/, graph/, pipeline/, engine/, api/, property/, golden/, bench/
 tools/           gates.sh, land_series.sh, acceptance.py (the M1 acceptance run), fetch_census.sh,
-                 bench_build.py (a region's pipeline, measured)
+                 bench_build.py (a region's pipeline, measured), fetch_basemap.sh
+Dockerfile       the image; compose.yaml, one machine's service (docs/reference/hosting.md)
 .claude/agents/  scout, researcher, developer, reviewer
 .github/         workflows/gate.yml: the gate on every push and pull request
 ```
@@ -227,6 +239,9 @@ tools/           gates.sh, land_series.sh, acceptance.py (the M1 acceptance run)
   cannot memory-map `.npz` members. Parquet via `pyarrow`.
 - Bearings are degrees clockwise from north; turn deltas are wrapped to `(−180, 180]`.
 - GeoJSON is `[lon, lat]`. MapLibre's `LngLat` is `[lng, lat]`. Requests are `{lat, lon}`.
+- MapLibre GL JS 6 is ES modules only and finds its worker beside its own module, which a Vite
+  bundle does not keep: `map/map.ts` imports the worker `?url` and calls `setWorkerUrl`. It needs
+  WebGL2 (headless Chrome: SwiftShader).
 - 4 spaces in Python, 2 in TypeScript (`.editorconfig`); ruff formats Python.
 
 ## Seeing the app

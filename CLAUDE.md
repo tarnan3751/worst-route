@@ -136,6 +136,7 @@ Every command below exists. One a later milestone adds is marked with that miles
 | Build a region's pipeline with each step's time, peak memory and output sizes (a heavy job for a state; writes `tools/out/`, never downloads; `--steps`, `--force`, `--allow-fragmented`; `--max-mem-gb` stops a step past that much memory, its physical footprint on macOS, `--min-free-gb` starts none with less disk free) | `uv run python tools/bench_build.py --region oregon --source data/raw/oregon-latest.osm.pbf` |
 | Fetch the vector basemap (a person, never the gate or an agent; needs go-pmtiles; `--dry-run` for the size, `--assets` for the labels' fonts and icons) | `tools/fetch_basemap.sh portland --build 20261030 --bbox -123.05,45.25,-122.35,45.72 --assets` |
 | Build and run the image (the frontend and the API from one process; the data mounted, never inside; `docker compose up -d --build` from `compose.yaml`; bound to `127.0.0.1` it sits behind a reverse proxy, hence `--trust-proxy`, which the image's own command leaves out so a container exposed directly never trusts `X-Forwarded-For`) | `docker build -t worst-route .` / `docker run -p 127.0.0.1:8000:8000 -v "$PWD/data:/data:ro" -v worst-route-state:/state worst-route serve --region portland --host 0.0.0.0 --port 8000 --store /state/routes.sqlite --frontend /app/frontend --public --log-format json --trust-proxy` |
+| Build regions in turn, smallest extract first, each measured, checked, pruned and given its places: a city list, or every contiguous state with `--states` (a heavy job; `--max-mem-gb`, `--min-free-gb`; writes `tools/out/`, never downloads) | `uv run python tools/build_regions.py --regions portland` |
 | Compare the two pipeline engines on a region's filtered roads (a heavy job for a state) | `uv run python tools/parity.py --region portland` |
 | Land a delivered series | `tools/land_series.sh <patch-dir> <base-commit> <tree-hash>` |
 
@@ -243,7 +244,7 @@ frontend/        Vite + TS app: src/{main,state,api,map,stops,settings,run,toast
 tests/           fixtures/osm/*.osm, unit/, graph/, pipeline/, engine/, api/, property/, golden/, bench/
 tools/           gates.sh, land_series.sh, acceptance.py (the M1 acceptance run), fetch_census.sh,
                  bench_build.py (a region's pipeline, measured), fetch_basemap.sh,
-                 parity.py (the two pipeline engines compared)
+                 parity.py (the two pipeline engines compared), build_regions.py (regions built in turn)
 Dockerfile       the image; compose.yaml, one machine's service (docs/reference/hosting.md)
 .claude/agents/  scout, researcher, developer, reviewer
 .github/         workflows/gate.yml: the gate on every push and pull request

@@ -105,6 +105,36 @@ which git ignores) and exits with the failed step's code, else 0. It needs real 
 (`docs/reference/pipeline.md`, **Oregon**). `tests/pipeline/test_bench_build.py` runs it on the
 divided fixture.
 
+## Building regions in turn: `tools/build_regions.py`
+
+```
+uv run python tools/build_regions.py (--regions portland ... | --states) [--max-mem-gb 18]
+    [--min-free-gb 15] [--out tools/out/build_regions.json]
+```
+
+Builds regions one after another, each the same way: those `--regions` names (`config.REGIONS`: a
+city's bbox region like `portland`, a state's, a national one), or with `--states` every region of
+one state, the 48 contiguous states and DC (`docs/reference/pipeline.md`, **The state builds**),
+smallest extract first, so that the biggest come last. Each region is a `tools/bench_build.py` run
+from `filter` to `qa`, under its watchdog (18 GB of memory by default) and its disk floor (15 GB
+free), its report under `tools/out/regions/`. A `cleanup` or `tiers` that refuses a graph too
+fragmented is followed by a second run with `--allow-fragmented` (cleanup reruns too, since its
+parameters record the flag; the steps before it skip as up to date), whose QA then fails on what was
+dropped and is recorded. Every build whose QA ran is offered to `pipeline prune`, which takes one
+that passed or one cleaned with `--allow-fragmented` that failed only the connectivity rule's
+thresholds (the table then says "fragmented: retained 0.966, largest 351 nodes, pruned", whichever
+apply) and refuses the rest, whose stages stay; every build written gets its places index (`aux
+places`). A step the watchdog stopped or a step not started for want of disk ends the batch, which
+exits with that step's code; any other failure is recorded and the next region runs. A region whose
+latest build, at this pipeline version, already holds a QA report is not run again, its row read
+from that report and its earlier bench reports, and is offered to `prune` again, so a batch ended
+early can be restarted and a rerun prunes what an earlier run left. It prints a Markdown table
+(region, build, nodes, edges, road km, size, time, peak memory, QA) and rewrites its JSON report to
+`--out` after each region. It needs the extracts and the Census files under `WORST_ROUTE_DATA` and
+never downloads, so the gate never runs it; with `--states` it is a heavy job, run on the heavy slot
+alone. `tests/pipeline/test_build_regions.py` runs it on the fixtures (a city region that passes,
+one too fragmented, the disk floor, the regions or the states in their order, the table's words).
+
 ## Comparing the pipeline engines: `tools/parity.py`
 
 `uv run python tools/parity.py --region R` runs both pipeline engines on a region's filtered

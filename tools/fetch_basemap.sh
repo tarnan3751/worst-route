@@ -4,7 +4,8 @@
 # of Protomaps' daily builds, cut with the go-pmtiles CLI, as $WORST_ROUTE_DATA/basemap/NAME.pmtiles
 # (default the repository's data/basemap/), NAME being the region the API serves; and with
 # --assets the fonts and icons of its labels, from protomaps/basemaps-assets at a pinned commit,
-# into fonts/ and sprites/ beside it. Run by a person; never by the gate, a test or an agent:
+# into fonts/ and sprites/ beside it, with their licences. Run by a person; never by the gate, a
+# test or an agent:
 #
 #   tools/fetch_basemap.sh portland --build 20261030 --bbox -123.05,45.25,-122.35,45.72 --assets
 #   tools/fetch_basemap.sh us --build 20261030 --region us.geojson --maxzoom 14
@@ -24,13 +25,18 @@
 #
 # Needs `pmtiles` (go-pmtiles: https://github.com/protomaps/go-pmtiles/releases, or
 # `brew install pmtiles`; $PMTILES names another) to cut an area, curl for --planet, git for
-# --assets. The fonts are under the SIL Open Font License (fonts/OFL.txt, copied too).
+# --assets. The fonts are under the SIL Open Font License (fonts/OFL.txt, copied too). The icons
+# derive from Mapzen's tangrams/icons, under the MIT License, whose notice the sprites directory
+# of basemaps-assets does not carry: --assets copies it from tangrams/icons at a pinned commit, as
+# sprites/LICENSE-mapzen-icons.txt.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 builds="${PROTOMAPS_BUILDS:-https://build.protomaps.com}"
 assets_repo="${BASEMAP_ASSETS_REPO:-https://github.com/protomaps/basemaps-assets.git}"
 assets_commit="${BASEMAP_ASSETS_COMMIT:-028c18f713baecad011301ff7a69acc39bcc2ae7}"
+icons_repo="${MAPZEN_ICONS_REPO:-https://github.com/tangrams/icons.git}"
+icons_commit="${MAPZEN_ICONS_COMMIT:-92510779634f4a006c61ea70e50cb8c52c765a81}"
 out="${WORST_ROUTE_DATA:-$root/data}/basemap"
 # The fonts the labels ask for (frontend/src/map/basemap.test.ts holds the style to them) and the
 # icons of the flavor the frontend draws (api/basemap_api.py's SPRITE).
@@ -128,8 +134,23 @@ if [ -n "$build" ]; then
   fi
 fi
 
+# checkout DIR REPO COMMIT PATH...: the paths of REPO at COMMIT into DIR, a sparse checkout of one
+# commit (git's hashes check what arrives).
+checkout() {
+  local dir="$1" repo="$2" commit="$3"
+  shift 3
+  mkdir -p "$dir"
+  git -C "$dir" init -q
+  git -C "$dir" remote add origin "$repo"
+  git -C "$dir" sparse-checkout set --no-cone "$@"
+  git -C "$dir" fetch -q --depth 1 --filter=blob:none origin "$commit"
+  git -C "$dir" -c advice.detachedHead=false checkout -q FETCH_HEAD
+}
+
 if [ $assets -eq 1 ] && [ $dry -eq 1 ]; then
   echo "would fetch the fonts and icons from basemaps-assets $assets_commit into $out"
+  echo "would write the icons' licence from tangrams/icons $icons_commit" \
+    "as $out/sprites/LICENSE-mapzen-icons.txt"
 elif [ $assets -eq 1 ]; then
   work="$(mktemp -d "${TMPDIR:-/tmp}/basemap-assets.XXXXXX")"
   trap 'rm -rf "$work"' EXIT
@@ -137,17 +158,16 @@ elif [ $assets -eq 1 ]; then
   for font in "${fonts[@]}"; do
     paths+=("/fonts/$font/")
   done
-  git -C "$work" init -q
-  git -C "$work" remote add origin "$assets_repo"
-  git -C "$work" sparse-checkout set --no-cone "${paths[@]}"
-  git -C "$work" fetch -q --depth 1 --filter=blob:none origin "$assets_commit"
-  git -C "$work" -c advice.detachedHead=false checkout -q FETCH_HEAD
+  checkout "$work/assets" "$assets_repo" "$assets_commit" "${paths[@]}"
+  checkout "$work/icons" "$icons_repo" "$icons_commit" "/LICENSE.md"
   mkdir -p "$out/fonts" "$out/sprites"
   for font in "${fonts[@]}"; do
     rm -rf "${out:?}/fonts/$font"
-    cp -R "$work/fonts/$font" "$out/fonts/$font"
+    cp -R "$work/assets/fonts/$font" "$out/fonts/$font"
   done
-  cp "$work/fonts/OFL.txt" "$out/fonts/OFL.txt"
-  cp "$work/sprites/v4/$flavor".* "$work/sprites/v4/$flavor@2x".* "$out/sprites/"
+  cp "$work/assets/fonts/OFL.txt" "$out/fonts/OFL.txt"
+  cp "$work/assets/sprites/v4/$flavor".* "$work/assets/sprites/v4/$flavor@2x".* "$out/sprites/"
+  cp "$work/icons/LICENSE.md" "$out/sprites/LICENSE-mapzen-icons.txt"
   echo "wrote $out/fonts and $out/sprites from basemaps-assets $assets_commit"
+  echo "wrote $out/sprites/LICENSE-mapzen-icons.txt from tangrams/icons $icons_commit"
 fi

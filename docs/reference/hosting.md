@@ -70,7 +70,8 @@ geopandas, pyarrow, numba, come with it, though the server uses only some of the
   graphs/<region>/latest        the build served: its id
   aux/places/                   the places index: tools/fetch_census.sh, worst-route aux places
   basemap/<region>.pmtiles      the basemap: tools/fetch_basemap.sh
-  basemap/fonts/, sprites/      its labels' fonts and icons: tools/fetch_basemap.sh --assets
+  basemap/fonts/, sprites/      its labels' fonts and icons, with their licences:
+                                tools/fetch_basemap.sh --assets
 /state (written by the server)
   routes.sqlite                 the route store
   geocode.sqlite                the geocoder's cache
@@ -143,10 +144,16 @@ from one and served from your own machine, which is what `tools/fetch_basemap.sh
   Regular, Medium and Italic, and Noto Sans Devanagari Regular v1, each 256 files of glyphs,
   about 11.5 MB together) into `basemap/fonts/` with their licence (`OFL.txt`, the SIL Open Font
   License), and the icons of the grayscale flavor (`grayscale.json`, `.png` and their `@2x`)
-  into `basemap/sprites/`. Without them the map draws the basemap without labels.
+  into `basemap/sprites/`. The icons derive from Mapzen's `tangrams/icons`, under the MIT
+  License, whose notice the sprites directory of `basemaps-assets` does not carry: `--assets`
+  copies it from `tangrams/icons` at a pinned commit (`92510779634f4a006c61ea70e50cb8c52c765a81`,
+  the head of `master`, unchanged since 2018; its `LICENSE.md`, "Copyright (c) 2017 Mapzen") as
+  `basemap/sprites/LICENSE-mapzen-icons.txt`, the same way. With `--dry-run` it says what it
+  would fetch and write. Without the fonts and icons the map draws the basemap without labels.
 - It needs `pmtiles` (or `$PMTILES`) to cut an area, curl for `--planet`, git for `--assets`;
-  `$PROTOMAPS_BUILDS`, `$BASEMAP_ASSETS_REPO` and `$BASEMAP_ASSETS_COMMIT` point it elsewhere
-  (its tests use them). A missing `--build`, area or tool is refused before anything runs.
+  `$PROTOMAPS_BUILDS`, `$BASEMAP_ASSETS_REPO`, `$BASEMAP_ASSETS_COMMIT`, `$MAPZEN_ICONS_REPO`
+  and `$MAPZEN_ICONS_COMMIT` point it elsewhere (its tests use them). A missing `--build`, area
+  or tool is refused before anything runs.
 
 How large an extract is depends on its area and its deepest zoom, and `--dry-run` says so; none
 was downloaded while this was built, so no size is recorded here.
@@ -274,7 +281,8 @@ The hosting pieces are tested with the API's (`docs/reference/api.md`, **Tests**
 `test_static.py`, and `tests/unit/test_cli.py` for `serve`'s options), the frontend's
 (`docs/reference/frontend.md`, **Tests**: `map/basemap.test.ts`, `api/types.test.ts`'s
 `/config`), and `tests/unit/test_fetch_basemap.py`, which runs `tools/fetch_basemap.sh` against
-a stand-in for `pmtiles` on `PATH` and a local git repository standing for the assets'. The gate
+a stand-in for `pmtiles` on `PATH` and local git repositories standing for the assets' and the
+icons' licence's. The gate
 builds no image; `docker build` and a run are checked by hand (**The image**).
 
 ## Limitations

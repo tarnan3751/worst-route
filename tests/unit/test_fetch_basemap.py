@@ -3,7 +3,8 @@ arguments and writes its output file, or fails partway), and a local git reposit
 protomaps/basemaps-assets. The extract kept only once complete, a failed one keeping the file
 there was, the refusals before anything runs (a flag without its value among them), a dry run
 writing nothing, relative paths taken as the caller's, and the assets: the four fonts, their
-licence and the grayscale icons, nothing else."""
+licence, the grayscale icons and theirs (MIT, from a local repository standing for
+tangrams/icons), nothing else."""
 
 import os
 import subprocess
@@ -85,6 +86,11 @@ def test_a_dry_run_writes_nothing(tmp_path: Path) -> None:
     planet = run(tmp_path, "us", "--build", "20261030", "--planet", "--dry-run", "--assets")
     assert planet.returncode == 0, planet.stderr
     assert planet.stdout.startswith("would download https://build.protomaps.com/20261030.pmtiles")
+    sprites = tmp_path / "data" / "basemap" / "sprites"
+    assert planet.stdout.splitlines()[-1] == (
+        "would write the icons' licence from tangrams/icons "
+        f"92510779634f4a006c61ea70e50cb8c52c765a81 as {sprites}/LICENSE-mapzen-icons.txt"
+    )
     assert not (tmp_path / "data").exists()
 
 
@@ -137,7 +143,29 @@ def git(repo: Path, *args: str) -> str:
     return done.stdout.strip()
 
 
+MIT = """The MIT License (MIT)
+
+Copyright (c) 2017 Mapzen
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction ...
+"""
+
+
+def commit_all(repo: Path) -> str:
+    git(repo, "init", "-q")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@example.org", "commit", "-qm", "files")
+    return git(repo, "rev-parse", "HEAD")
+
+
 def test_the_assets_are_the_fonts_their_licence_and_the_grayscale_icons(tmp_path: Path) -> None:
+    icons = tmp_path / "icons"
+    icons.mkdir()
+    (icons / "LICENSE.md").write_text(MIT)
+    (icons / "README.md").write_text("not fetched")
+    icons_commit = commit_all(icons)
     repo = tmp_path / "basemaps-assets"
     for font in [*FONTS, "Noto Sans Bold"]:
         (repo / "fonts" / font).mkdir(parents=True)
@@ -148,29 +176,32 @@ def test_the_assets_are_the_fonts_their_licence_and_the_grayscale_icons(tmp_path
     for flavor in ("grayscale", "light"):
         for suffix in (".json", ".png", "@2x.json", "@2x.png"):
             (sprites / f"{flavor}{suffix}").write_text(f"{flavor}{suffix}")
-    git(repo, "init", "-q")
-    git(repo, "add", ".")
-    git(repo, "-c", "user.name=t", "-c", "user.email=t@example.org", "commit", "-qm", "assets")
-    commit = git(repo, "rev-parse", "HEAD")
+    commit = commit_all(repo)
     result = run(
         tmp_path,
         "portland",
         "--assets",
         BASEMAP_ASSETS_REPO=str(repo),
         BASEMAP_ASSETS_COMMIT=commit,
+        MAPZEN_ICONS_REPO=str(icons),
+        MAPZEN_ICONS_COMMIT=icons_commit,
     )
     assert result.returncode == 0, result.stderr
     basemap = tmp_path / "data" / "basemap"
-    assert result.stdout.splitlines()[-1] == (
-        f"wrote {basemap}/fonts and {basemap}/sprites from basemaps-assets {commit}"
-    )
+    assert result.stdout.splitlines()[-2:] == [
+        f"wrote {basemap}/fonts and {basemap}/sprites from basemaps-assets {commit}",
+        f"wrote {basemap}/sprites/LICENSE-mapzen-icons.txt from tangrams/icons {icons_commit}",
+    ]
     assert sorted(p.name for p in (basemap / "fonts").iterdir()) == sorted([*FONTS, "OFL.txt"])
     for font in FONTS:
         assert (basemap / "fonts" / font / "0-255.pbf").read_bytes() == font.encode()
     assert sorted(p.name for p in (basemap / "sprites").iterdir()) == [
+        "LICENSE-mapzen-icons.txt",
         "grayscale.json",
         "grayscale.png",
         "grayscale@2x.json",
         "grayscale@2x.png",
     ]
+    # The icons' MIT notice, which basemaps-assets' sprites do not carry, beside them.
+    assert (basemap / "sprites" / "LICENSE-mapzen-icons.txt").read_text() == MIT
     assert calls(tmp_path) == []  # no build named: no tiles

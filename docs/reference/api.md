@@ -215,7 +215,9 @@ base route, each stop against the bbox, then the **pre-flight** (`jobs.prepare`)
 masks, a pilgrimage's brand within them, and `resolve_stops` (snapping and the re-snap
 fallback), in a worker thread, and for a base route `plan.check_base`. The worker repeats
 them, deterministically, so a request that passes the pre-flight is not refused for its stops
-later.
+later. A request a strict turn constraint refuses can cost several seconds of CPU there on a
+state build, since every failing seed search looks again for a node-simple path
+(`docs/reference/engine.md`, **Limitations**).
 
 ## Endpoints
 

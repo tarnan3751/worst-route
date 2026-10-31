@@ -1407,7 +1407,8 @@ to 590995) is not in 236835's table, since no internal path joins those two memb
 stretch between is no pocket, running through 236639's member. So no route drives north
 straight through Woodburn on I-5 (southbound passes 236639 twice too, but its direct pass is in
 the table, through the off-ramp, the Newberg Highway and the on-ramp). A legal node-simple path
-exists, 455.0 km by OR 99E against the walk's 454.7 km, which the search does not look for.
+exists, 455.0 km by OR 99E against the walk's 454.7 km, which the search did not look for
+before engine version 4 (**Searching again**, below).
 Statewide, roads that leave a super-junction and come back to it with the pass not in its table
 number 20 at 19 super-junctions on that build, Portland's 9 at 9, by `lost_through`'s count
 (`tests/pipeline/invariants.py`: every road class, every branch, back within four edges; the
@@ -1437,10 +1438,42 @@ allow; on the version 5 build made before the review's fold (97dc06067f0c, from 
 extract) the same three T4 trips made 9.20×, 14.68× and 12.77×.
 
 Valley Junction's OR 18 and "OR 18;OR 22" are one road by name (Salmon River Highway), which the
-pockets now follow. The pair at 236640 stays refused: there the table forbids every turn from
+pockets now follow. The pair at 236640 stayed refused: there the table forbids every turn from
 French Prairie Road onto McKay Road inside one super-junction, a cross turn rather than a road
 leaving and coming back, like NE 42nd Avenue onto NE Sandy Boulevard at I-84 and NE Halsey in
-Portland (`docs/project_overview.md` §2.3).
+Portland (`docs/project_overview.md` §2.3), and the seed's cheapest legal walk came back
+through it.
+
+**Searching again** (engine version 4, **Searches**): on Oregon's version 6 build (e78224b5cf9a,
+`graph_version` ec7360404031; 2026-10-31, `CsrBackend`, seed 1, `--budget 30 --max-iterations
+1000000`, the near Melrose → near Warren pair from (43.23416, −123.48214) to (45.88307,
+−122.93844); load average 17–22 as other lanes ran, so every run stopped on its budget and the
+attempts compare only roughly), engine version 3 (main at a61bd77) against version 4, every route
+validating:
+
+| Trip | Engine version 3 | Engine version 4 |
+|---|---|---|
+| near Melrose → near Warren (T4) | refused | 5.19× (353.81 km baseline), 7,091 attempts |
+| Medford → Portland, `--tier T1` | 1.92× (454.66 km), 20,496 attempts | 2.54×, 45,990 attempts |
+| Medford → Portland (T4) | 6.24× (443.40 km), 5,306 attempts | 5.91×, 3,879 attempts |
+| Eugene → Portland, `--tier T1` | 4.82× (182.89 km), 41,757 attempts | 4.89×, 44,966 attempts |
+| Eugene → Portland (T4) | 11.93× (180.80 km), 7,052 attempts | 13.99×, 9,938 attempts |
+
+Near Melrose → near Warren plans with its stops where the snap put them: the seed's leg search
+meets a walk that enters a node twice and finds a node-simple leg one round later, as the seed
+built again in `plan` does; the baseline, which does not search again, is the turn-blind path.
+At a fixed 5,000 attempts (`--max-iterations 5000`, two runs each, alternated), Eugene → Portland
+on T4 takes 18.1–18.3 s of CPU at version 3 and 14.2–15.1 s at version 4, on another route
+(11.21× against 12.74×). In those 5,000 attempts, 14 of the 5,082 transition-aware detour
+searches met a walk that loops (0.3%); searching again found a node-simple path for 13 (10 after
+one round, 2 after two, 1 after three) and no walk for the last; with their retries they took
+1.45 s, against 0.45 s for the 14 such searches of the version 3 run, which gave up at once. The
+same seed gives the same route twice (near Melrose → near Warren, 2,000 attempts: 3.80×), and
+both backends the same route (500 attempts). The same fixed-attempt runs on the version 5 build
+(ad1ae3f57d81) gave the same routes (11.21×, 12.74×, 3.80×).
+On Portland's version 6 build (3a4a3df6269f) the acceptance pairs plan as before, 20 of 20 at a
+median of 21.22×, the validator passing all; the second look changed four of their routes
+(**Limitations**, Transitions).
 
 ## Limitations
 
@@ -1449,10 +1482,21 @@ Portland (`docs/project_overview.md` §2.3).
   with the edge banned by which the walk comes back to the node. That is a heuristic: it misses
   a node-simple legal path that drives a banned edge or needs more rounds (41 of 107 on the
   small towns of `test_search.py`), and need not find the cheapest one; the seed then falls back
-  as for an unreachable leg. On Oregon's build at pipeline version 3 the walks that loop refused
-  2 of ten random 60–650 km pairs on T4 and two of the four named trips on T1, at super-junctions
-  whose table forbade a through movement, before the search looked again; since version 5's
-  stage B, one pair (a cross turn at McKay Road and French Prairie Road; **On Oregon**).
+  as for an unreachable leg. On Portland's acceptance pairs (the version 6 build 3a4a3df6269f,
+  2026-10-31), 40 of about a million transition-aware detour searches met a walk that loops: 15
+  found a node-simple path (6 after one round, 8 after two, 1 after three), 25 no walk once the
+  edge was banned; no seed leg met one. On Oregon's build at pipeline version 3 the walks that
+  loop refused 2 of ten random 60–650 km pairs on T4 and two of the four named trips on T1, at
+  super-junctions whose table forbade a through movement, before the search looked again; since
+  version 5's stage B, one pair (a cross turn at McKay Road and French Prairie Road), which
+  engine version 4 plans (**On Oregon**). Under a strict turn constraint walks that loop are
+  common (three rights round a block), so a leg with no node-simple path runs all 9 searches in
+  every search that fails, through each re-snap of the stops' fallback, and a refusal costs
+  several times its old CPU: Medford → Portland under strict no-right on Oregon's version 6
+  build (e78224b5cf9a) 11.2–14.1 s against 1.3–1.7 s, Powell's → Reed under strict no-right on
+  Portland's (3a4a3df6269f) 0.52–0.68 s against 0.09–0.10 s, the refusals among the 20
+  acceptance pairs a median of 0.19–0.21 s against 0.06–0.10 s (load average about 23). The
+  rounds stay at 8.
 - **Twins within a leg.** A leg driving an edge and its twin is searched again without the
   later one, up to 8 times; a leg that needs more rounds, or whose only way drives a twin
   pair, falls back as an unreachable one.

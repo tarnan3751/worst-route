@@ -277,11 +277,14 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 
 The risks the plan anticipates are `docs/PLAN.md` §8.3. Found on the Portland build:
 
-- **The transition-aware search answers no path** when the cheapest legal way passes a node
-  twice; it does not look for the cheapest node-simple legal way, so a leg can fall back (a
-  re-snapped stop) where a longer legal one exists. No seed leg of the acceptance pairs did;
-  in their detour searches the review counted 23 such answers in about 155,000 calls, each
-  costing one failed attempt.
+- **The transition-aware search's second look is a heuristic**: when the cheapest legal way
+  passes a node twice, the search is made again with the edge that comes back to the node
+  banned, up to 8 times (engine version 4; `docs/reference/engine.md`, **Searches**), and can
+  still miss a longer node-simple legal way, so a leg can fall back (a re-snapped stop) or a
+  detour attempt fail where one exists. On the acceptance pairs (the version 6 build,
+  2026-10-31), 40 of about a million detour searches met such a walk: 15 now give a path, 25 find
+  no walk once the edge is banned (before, 42 met one, each a failed attempt). No seed leg met
+  one, and every seed is what it was.
 - **Most of the road a request allows stays unused**: the loop converges before its budget on
   every acceptance pair (quartiles 9× and 27×); the remaining levers are the search's
   (`docs/reference/engine.md`, **On Portland**), and a faster backend helps only runs that hit
@@ -366,9 +369,11 @@ Found on the Oregon build (M5.1, 2026-10-31; the inputs to M5.2's decision):
     Country Club Drive / Southwest 35th Street (Corvallis).
   - **Cross-street turns a super-junction forbids** though they look drivable: NE 42nd Avenue onto
     NE Sandy Boulevard at I-84 and NE Halsey (Portland), French Prairie Road onto McKay Road by
-    I-5 near Donald, which still refuses one random statewide pair on T4.
-  - **The transition-aware search answers no path** when the cheapest legal walk enters a node
-    twice, though a slightly longer node-simple path may exist (**Transitions**, above).
+    I-5 near Donald, which refused one random statewide pair on T4 until the search looked again
+    for a node-simple path (engine version 4: it plans, 5.19× on the version 6 build
+    e78224b5cf9a; `docs/reference/engine.md`, **On Oregon**).
+  - **The transition-aware search's second look can miss** a slightly longer node-simple path
+    where the cheapest legal walk enters a node twice (the search's second look, above).
 - **The leash is tight where roads wind**: two rural points 8.8 km apart and 32.4 km apart by road
   have no route inside their 5.3 km leash (0.6 × the trip); the factor is kept, since it shapes
   every Portland route.

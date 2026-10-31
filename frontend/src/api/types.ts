@@ -47,11 +47,13 @@ export interface Vehicle {
   gas_price_usd: number;
 }
 
-/** The turn constraints: left (or right) turns at a kilometre each, or with `strict` none. */
+/** The turn constraints: left (or right) turns at a kilometre each, or with `strict` none; and
+ * hard mode, each road in one stretch (in a route's request only when asked). */
 export interface Constraints {
   no_left?: boolean;
   no_right?: boolean;
   strict?: boolean;
+  hard?: boolean;
 }
 
 /** `POST /jobs`; a route document's `request` has every field. */

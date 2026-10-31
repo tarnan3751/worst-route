@@ -192,6 +192,7 @@ const constraints = object<Constraints>({
   no_left: optional("boolean"),
   no_right: optional("boolean"),
   strict: optional("boolean"),
+  hard: optional("boolean"),
 });
 const routeRequest = object<RouteRequest>({
   region: "string",

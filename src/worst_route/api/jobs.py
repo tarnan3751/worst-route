@@ -579,6 +579,7 @@ class JobManager:
             node_mask=masks.active,
             banned_edges=masks.banned,
             banned_turn_classes=job.request.constraints.banned_turn_classes,
+            hard=job.request.constraints.hard,
         )
         if not report.ok:
             failed = "; ".join(line for line in report.lines() if "FAILED" in line)

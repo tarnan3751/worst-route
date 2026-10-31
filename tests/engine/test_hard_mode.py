@@ -2,12 +2,17 @@
 check of the spliced route, the bans it gives the searches per window, its terms (none), the
 window it widens, `find_detour` keeping only the paths it allows; the request's flag, the seed
 re-solving legs that come back to a road, what an unreachable leg blames, a base route that
-breaks it, and the loop under it on both backends."""
+breaks it, the loop under it on both backends; the validator's proof, and the CLI's `--hard`."""
+
+import json
+from pathlib import Path
 
 import numpy as np
 import pytest
 from pydantic import ValidationError
+from typer.testing import CliRunner
 
+from worst_route.cli import app
 from worst_route.engine.constraints import (
     NO_CONSTRAINTS,
     Constraints,
@@ -25,6 +30,7 @@ from worst_route.engine.request import RouteRequest, request_masks
 from worst_route.engine.route import Metrics, Route, splice_arrays
 from worst_route.engine.seed_route import resolve_stops, seed_route
 from worst_route.engine.snap import InfeasibleHardMode, InfeasibleTurnConstraint, StopUnreachable
+from worst_route.engine.validator import validate_route
 from worst_route.graph.csr_backend import CsrBackend
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
@@ -32,6 +38,7 @@ from worst_route.graph.spatial import SpatialIndex
 from worst_route.graph.testing import Edge, edge_id, make_graph
 
 from .graphs import X0, Y0, at_node, edges_of, lattice, left_only, route_on, two_rings
+from .test_cli_plan import latlon, plan, save
 from .test_constraints import seeded
 
 # node r * 6 + c, row 0 the southmost; rows "Row r", columns "Col c"; the road 8–9 has no name
@@ -438,3 +445,92 @@ def _seed_of(g: GraphData, request: RouteRequest) -> tuple[np.ndarray, np.ndarra
         constraints=request.constraints,
     )  # fmt: skip
     return found.nodes, found.edges, found.stop_idx
+
+
+def constraints_check(g: GraphData, nodes: list[int], hard: bool) -> tuple[bool, int | None, str]:
+    route = route_on(g, nodes)
+    report = validate_route(
+        g,
+        route,
+        stop_nodes=[nodes[0], nodes[-1]],
+        node_mask=np.ones(g.n, dtype=bool),
+        banned_edges=np.zeros(g.m, dtype=bool),
+        hard=hard,
+    )
+    check = report.check("constraints")
+    return check.ok, check.index, check.detail
+
+
+def test_the_validator_proves_each_road_one_stretch() -> None:
+    # Row 0, Col 1, Row 1, down Col 2, Row 0 again: legal without hard mode, not with it
+    back = [0, 1, 7, 8, 2, 3]
+    assert constraints_check(GRID, back, hard=False) == (True, None, "")
+    assert constraints_check(GRID, back, hard=True) == (
+        False,
+        4,
+        "road 'Row 0' appears in two stretches, from edges 0 and 4, which hard mode refuses",
+    )
+    assert constraints_check(GRID, SNAKE, hard=True)[0]
+    # Row 1 on both sides of the unnamed 8–9: two stretches
+    assert constraints_check(GRID, [6, 7, 8, 9, 10], hard=True)[:2] == (False, 3)
+    # a round trip coming home along Row 0, which it left by
+    assert constraints_check(GRID, [2, 3, 9, 8, 7, 1, 2], hard=True)[:2] == (False, 5)
+
+
+def long_main_street() -> GraphData:
+    """One way east: Main St, Bridge St, then Main St for twelve more blocks. Past the bridge,
+    every node is reached only by coming back to Main St."""
+    xy = [(X0 + 100 * k, Y0) for k in range(15)]
+    names = ["Main St", "Bridge St"] + ["Main St"] * 12
+    return make_graph(xy, [Edge(k, k + 1, 100.0, name=n) for k, n in enumerate(names)])
+
+
+def test_the_cli_plans_under_hard_mode_and_validate_proves_it(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    g = save(data_dir, lattice(10, 10, rounded_lonlat=True, named=True), "named")
+    trip = ("--from", latlon(g, 22), "--to", latlon(g, 77), "--seed", "3")
+    out = tmp_path / "hard.json"
+    code, stdout, stderr = plan(*trip, "--hard", "--no-left", "--out", str(out))
+    assert code == 0, stdout + stderr
+    assert "objective: distance, few left turns, hard mode" in stdout.splitlines()
+    doc = json.loads(out.read_text())
+    assert doc["request"]["constraints"] == {
+        "no_left": True,
+        "no_right": False,
+        "strict": False,
+        "hard": True,
+    }
+    assert one_stretch_each(g, np.array(doc["edges"]))
+    result = CliRunner().invoke(app, ["validate", str(out)])
+    assert result.exit_code == 0 and result.stdout.splitlines()[-1] == "valid", result.output
+    # a route planned without it, its file edited to claim hard mode
+    plain = tmp_path / "plain.json"
+    assert plan(*trip, "--out", str(plain))[0] == 0
+    edited = json.loads(plain.read_text())
+    assert not one_stretch_each(g, np.array(edited["edges"]))
+    edited["request"]["constraints"] = {"hard": True}
+    plain.write_text(json.dumps(edited))
+    result = CliRunner().invoke(app, ["validate", str(plain)])
+    assert result.exit_code == 1
+    assert any(
+        line.startswith("constraints: FAILED at ") and "appears in two stretches" in line
+        for line in result.stdout.splitlines()
+    ), result.output
+    assert plan("--base", str(out), "--hard") == (
+        2,
+        "",
+        "--base takes the objective, item, brand and constraints from its route: drop --hard\n",
+    )
+
+
+def test_a_trip_hard_mode_cannot_drive_is_one_line(data_dir: Path) -> None:
+    g = save(data_dir, long_main_street(), "main")
+    trip = ("--from", latlon(g, 0), "--to", latlon(g, 14), "--seed", "1")
+    assert plan(*trip)[0] == 0
+    assert plan(*trip, "--hard") == (
+        1,
+        "",
+        "cannot plan: the seed found no way from stop 0 to stop 1 under hard mode, after moving "
+        "stop 1 up to 10 times; try without --hard\n",
+    )

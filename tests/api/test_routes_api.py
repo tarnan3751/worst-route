@@ -17,7 +17,7 @@ from fastapi import FastAPI, Request
 from worst_route.api import routes_api
 from worst_route.api.app import Api, ApiSettings, create_app
 from worst_route.api.jobs import JobSettings
-from worst_route.engine.constraints import Constraints
+from worst_route.engine.constraints import Constraints, returning
 from worst_route.engine.io import feature_collection
 from worst_route.engine.snap import StopUnreachable
 from worst_route.graph.data import EdgeFlag
@@ -809,3 +809,53 @@ async def test_a_strict_constraint_refuses_a_base_that_breaks_it(data: Path) -> 
         assert r.json()["field"] == "route" and "strict no-left" in r.json()["message"]
         soft = {**worse, "constraints": {"no_left": True}}
         assert (await client.post("/jobs", json=soft)).status_code == 202
+
+
+async def test_a_hard_mode_job_keeps_each_road_one_stretch(tmp_path: Path) -> None:
+    root = tmp_path / "data"  # GRID's lattice with its rows and columns named
+    named = lattice(10, 10, rounded_lonlat=True, named=True)
+    save_build(root, named, "named", bbox=GRID_BBOX)
+    async with serving(root) as (client, app):
+        trip = {"stops": [stop(22), stop(77)], "max_iterations": 200}
+        _, events = await finished(client, job_body(**trip))
+        base_id = events[-1]["data"]["route_id"]
+        base = app.state.api.store.get(base_id)
+        assert returning(named, base.edges) is not None  # without hard mode it comes back
+
+        _, events = await finished(client, job_body(**trip, constraints={"hard": True}))
+        done = events[-1]["data"]
+        assert events[-1]["event"] == "done"
+        stored = app.state.api.store.get(done["route_id"])
+        assert returning(named, stored.edges) is None
+        doc = (await client.get(f"/routes/{done['route_id']}")).json()
+        assert doc["request"]["constraints"] == {
+            "no_left": False,
+            "no_right": False,
+            "strict": False,
+            "hard": True,
+        }
+        assert (await client.post(f"/routes/{done['route_id']}/validate")).json()["ok"] is True
+
+        worse = {"region": "portland", "base_route_id": base_id, "seed": 4, "max_iterations": 50}
+        r = await client.post("/jobs", json={**worse, "constraints": {"hard": True}})
+        assert r.status_code == 422 and r.json()["code"] == "BASE_ROUTE_MISMATCH"
+        assert r.json()["field"] == "route" and "hard mode refuses" in r.json()["message"]
+        assert (await client.post("/jobs", json=worse)).status_code == 202
+
+
+async def test_a_leg_hard_mode_cannot_drive_says_so(
+    data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def infeasible(*args: object) -> None:
+        raise Constraints(hard=True).unreachable((0, 1), "after moving stop 1 up to 10 times")
+
+    monkeypatch.setattr(routes_api, "prepare", infeasible)
+    async with serving(data) as (client, _):
+        r = await client.post("/jobs", json=job_body(constraints={"hard": True}))
+        assert r.status_code == 422 and r.json() == {
+            "code": "STOP_UNREACHABLE_WITHOUT_REPEAT",
+            "message": "the seed found no way from stop 0 to stop 1 under hard mode, after "
+            "moving stop 1 up to 10 times; try without hard",
+            "leg": [0, 1],
+            "stop_index": 1,
+        }

@@ -1,7 +1,7 @@
 """The validator: proves a finished route legal from the raw data (`docs/PLAN.md` §8.1).
 
-`validate_route(data, route, stop_nodes=, node_mask=, banned_edges=, banned_turn_classes=0)`
-runs every check below
+`validate_route(data, route, stop_nodes=, node_mask=, banned_edges=, banned_turn_classes=0,
+hard=False)` runs every check below
 on a route's `nodes`, `edges`, `stop_idx` and reported `metrics`, and returns a
 `ValidationReport`: one `Check` per rule, each with `ok`, the first offending index (a position
 in `nodes` or `edges`, an edge for `osm_ids`, a stop for `stops`) and a detail. `report.ok` is
@@ -21,10 +21,12 @@ recomputed from the request by the caller, not taken from the engine's state.
 5. `transitions`: every (edges[k-1], edges[k]) turn allowed at a node with transition rows.
 6. `stops`: `nodes[stop_idx[s]] == stop_nodes[s]`, strictly increasing positions from the
    first node to the last.
-7. `constraints`: every node in the active mask, no edge in `banned_edges`, and, under a strict
-   turn constraint (`banned_turn_classes`, its class bits), no turn of a class it refuses: each
+7. `constraints`: every node in the active mask, no edge in `banned_edges`, under a strict
+   turn constraint (`banned_turn_classes`, its class bits) no turn of a class it refuses: each
    turn classed again here from the edges' bearings (`TURN_STRAIGHT_DEG`, `TURN_UTURN_DEG`),
-   not with the engine's table.
+   not with the engine's table; and under hard mode (`hard`) each road in one stretch: the
+   positions of the edges of each identity (`edge_identity`, −1 free) one run, so a road the
+   route leaves never comes back, read here from the build's identities, not the engine's.
 8. `metrics`: the reported length and time are finite and equal the ones recomputed from the
    edges within a relative 1e-6, reported `items` (the metrics' counters carry them for a
    collecting route and for a route read from a file) equal the route's recount, and a
@@ -158,6 +160,7 @@ def validate_route(
     node_mask: NDArray[np.bool_],
     banned_edges: NDArray[np.bool_],
     banned_turn_classes: int = 0,
+    hard: bool = False,
 ) -> ValidationReport:
     """Run every check on `route`; see the module docstring."""
     nodes = np.asarray(route.nodes, dtype=np.int64)
@@ -177,7 +180,7 @@ def validate_route(
             _osm_ids(data, edges, round_trip),
             _transitions(data, nodes, edges),
             _stops(nodes, route.stop_idx, stop_nodes),
-            _constraints(data, nodes, edges, node_mask, banned_edges, banned_turn_classes),
+            _constraints(data, nodes, edges, node_mask, banned_edges, banned_turn_classes, hard),
             _metrics(data, route, edges, node_mask),
         )
     )
@@ -344,6 +347,7 @@ def _constraints(
     node_mask: NDArray[np.bool_],
     banned_edges: NDArray[np.bool_],
     banned_turn_classes: int,
+    hard: bool,
 ) -> Check:
     bad = np.flatnonzero(~node_mask[nodes])
     if len(bad):
@@ -360,6 +364,18 @@ def _constraints(
         node = nodes[bad[0] + 1]
         detail = f"a {turn} at node {node}, which the request's strict constraint refuses"
         return _fail("constraints", bad[0] + 1, detail)
+    ids = data.edge_identity[edges]
+    starts = np.flatnonzero((ids >= 0) & np.concatenate(([True], ids[1:] != ids[:-1])))
+    k = _first_repeat(ids[starts]) if hard else None
+    if k is not None:
+        again, road = int(starts[k]), ids[starts[k]]
+        first = int(starts[np.flatnonzero(ids[starts] == road)[0]])
+        name = data.strings.identities[road]
+        detail = (
+            f"road {name!r} appears in two stretches, from edges {first} and {again}, "
+            "which hard mode refuses"
+        )
+        return _fail("constraints", again, detail)
     return Check("constraints", True)
 
 

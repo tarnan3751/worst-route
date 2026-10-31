@@ -42,7 +42,7 @@ from worst_route.engine.plan import BaseRouteMismatch, plan_route
 from worst_route.engine.request import RequestMasks, RouteRequest
 from worst_route.engine.route import IntArray, Metrics, Route
 from worst_route.engine.seed_route import Baseline
-from worst_route.engine.snap import InfeasibleTurnConstraint, StopUnreachable
+from worst_route.engine.snap import InfeasibleHardMode, InfeasibleTurnConstraint, StopUnreachable
 from worst_route.engine.validator import ValidationFailed
 from worst_route.engine.worsen import ProgressEvent
 from worst_route.graph.loader import load_build
@@ -137,11 +137,14 @@ class _Orphaned(Exception):  # noqa: N818 (not an error: the API process is gone
 def unreachable(error: StopUnreachable) -> tuple[str, str, dict[str, Any]]:
     """The API's (code, message, fields) for a leg no route covers: `INFEASIBLE_TURN_CONSTRAINT`
     when a strict turn constraint is why (its message suggesting to drop `strict`), else
-    `STOP_UNREACHABLE_WITHOUT_REPEAT`."""
+    `STOP_UNREACHABLE_WITHOUT_REPEAT` (its message suggesting to drop `hard` when hard mode is
+    why)."""
     fields: dict[str, Any] = {"leg": list(error.leg), "stop_index": error.stop_index}
     if isinstance(error, InfeasibleTurnConstraint):
         message = f"{error}; try without strict"
         return "INFEASIBLE_TURN_CONSTRAINT", message, {**fields, "constraint": error.constraint}
+    if isinstance(error, InfeasibleHardMode):
+        return "STOP_UNREACHABLE_WITHOUT_REPEAT", f"{error}; try without hard", fields
     return "STOP_UNREACHABLE_WITHOUT_REPEAT", str(error), fields
 
 

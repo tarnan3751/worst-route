@@ -579,6 +579,7 @@ def validate(route_id: str, request: Request) -> ValidationOut:
         node_mask=masks.active,
         banned_edges=masks.banned,
         banned_turn_classes=stored.request.constraints.banned_turn_classes,
+        hard=stored.request.constraints.hard,
     )
     return ValidationOut(
         route_id=stored.route_id,

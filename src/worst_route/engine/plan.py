@@ -182,6 +182,7 @@ def plan_route(
         node_mask=masks.active,
         banned_edges=masks.banned,
         banned_turn_classes=request.constraints.banned_turn_classes,
+        hard=request.constraints.hard,
     )
     if not report.ok:
         raise ValidationFailed(report)

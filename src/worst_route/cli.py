@@ -17,13 +17,14 @@ do not load the geo stack.
 `plan` plans a route on a saved build (`docs/reference/engine.md`, **The CLI**), on the
 `--objective` (distance, time, collect with an `--item`, or brand with a `--brand`, an id or a
 name of the build's brand index), with `--no-left` or `--no-right` (such turns cost a kilometre
-each; none with `--strict`): it prints the objective and constraints when not the default, the
-snapped stops, the baseline, the worst route, the ratio and the time ratio (of the experienced
-time, with its drive and delays), its turns and delays, the target and what was achieved (for
-`--target ratio:<x>` or `duration:<time>`), the search, the backend it searched with and the
-validator's report, with a progress line on stderr on an accepted splice, at most one every
-2 s, and writes `route.json` (with its directions, toasts and extra metrics,
-`presentation.document`) and GeoJSON when asked; a stop that cannot be snapped or reached, or a
+each; none with `--strict`) and `--hard` (each road in one stretch): it prints the objective and
+constraints when not the default, the snapped stops, the baseline, the worst route, the ratio
+and the time ratio (of the experienced time, with its drive and delays), its turns and delays,
+the target and what was achieved (for `--target ratio:<x>` or `duration:<time>`), the search,
+the backend it searched with and the validator's report, with a progress line on stderr on an
+accepted splice, at most one every 2 s, and writes `route.json` (with its directions, toasts and
+extra metrics, `presentation.document`) and GeoJSON when asked; a stop that cannot be snapped or
+reached (under `--strict` or `--hard` when either is why, saying to try without it), or a
 missing build (or one without an array of the format, which names its remedy: the rebuild from
 `filter` when another pipeline version wrote it, which a plain `save` names too; `validate`,
 `serve` and `qa` say the same), is one line and exit 1, and a route that fails the validator is
@@ -740,11 +741,13 @@ def _decimal(text: str) -> int | None:
 
 
 def _mode_line(request: "RouteRequest") -> str:
-    """`objective: time, few left turns` (or `no left turns` when strict)."""
+    """`objective: time, few left turns` (or `no left turns` when strict), `, hard mode`."""
     parts: list[str] = [request.objective]
     for kind in request.constraints.kinds:
         way = "left" if kind.key == "no_left" else "right"
         parts.append(f"{'no' if request.constraints.strict else 'few'} {way} turns")
+    if request.constraints.hard:
+        parts.append("hard mode")
     return "objective: " + ", ".join(parts)
 
 
@@ -799,6 +802,10 @@ def plan(
     strict: Annotated[
         bool, typer.Option("--strict", help="No such turn at all, or no route.")
     ] = False,
+    hard: Annotated[
+        bool,
+        typer.Option("--hard", help="Each road in one stretch: once left, never driven again."),
+    ] = False,
     base: Annotated[
         Path | None,
         typer.Option(
@@ -819,7 +826,12 @@ def plan(
     from worst_route.engine.request import RouteRequest, objective_problem
     from worst_route.engine.route import IllegalSplice
     from worst_route.engine.seed_route import Baseline
-    from worst_route.engine.snap import InfeasibleTurnConstraint, StopUnreachable, is_round_trip
+    from worst_route.engine.snap import (
+        InfeasibleHardMode,
+        InfeasibleTurnConstraint,
+        StopUnreachable,
+        is_round_trip,
+    )
     from worst_route.engine.turns import count_turns
     from worst_route.engine.validator import ValidationFailed
     from worst_route.engine.worsen import ProgressEvent
@@ -833,7 +845,7 @@ def plan(
         "objective": objective,
         "item": item,
         "brand": None if brand is None else 0,  # resolved once the build is loaded
-        "constraints": {"no_left": no_left, "no_right": no_right, "strict": strict},
+        "constraints": {"no_left": no_left, "no_right": no_right, "strict": strict, "hard": hard},
     }
     saved: SavedRoute | None = None
     if base is None:
@@ -860,7 +872,7 @@ def plan(
             _fail(message, code=2)
         mode = [
             f"--{name.replace('_', '-')}"
-            for name in ("objective", "item", "brand", "no_left", "no_right", "strict")
+            for name in ("objective", "item", "brand", "no_left", "no_right", "strict", "hard")
             if (source := ctx.get_parameter_source(name)) is not None and source.name != "DEFAULT"
         ]
         if mode:
@@ -929,6 +941,8 @@ def plan(
         result = plan_route(data, request, backend=engine, base=saved, on_progress=progress)
     except InfeasibleTurnConstraint as error:
         _fail(f"cannot plan: {error}; try without --strict")
+    except InfeasibleHardMode as error:
+        _fail(f"cannot plan: {error}; try without --hard")
     except BrandRefused as error:
         _fail(f"invalid --brand: {error}", code=2)
     except (SnapError, StopUnreachable, BaseRouteMismatch) as error:
@@ -950,7 +964,7 @@ def plan(
         f"request: tier {masks.tier}, leash {masks.leash_m / 1000:.1f} km, seed {request.seed}, "
         f"budget {request.budget_s:g} s or {request.max_iterations} attempts"
     )
-    if request.objective != "distance" or request.constraints.kinds:
+    if request.objective != "distance" or request.constraints.kinds or request.constraints.hard:
         typer.echo(_mode_line(request))
     for k, s in enumerate(result.snaps):
         role = "start" if k == 0 else "end" if k == len(result.snaps) - 1 else "via"
@@ -1075,6 +1089,7 @@ def validate(
         node_mask=masks.active,
         banned_edges=masks.banned,
         banned_turn_classes=saved.request.constraints.banned_turn_classes,
+        hard=saved.request.constraints.hard,
     )
     typer.echo(f"{route_file}: {len(saved.nodes)} nodes on {saved.region}/{saved.build_id}")
     typer.echo(f"backend: {engine.name}")

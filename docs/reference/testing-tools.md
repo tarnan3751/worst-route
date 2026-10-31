@@ -85,24 +85,25 @@ column report, read with `proc_pid_rusage` as each process's lifetime peak; else
 set size, from `ps`), read every `WATCH_INTERVAL_S` (0.5 s) and once more when the step's output
 ends, the peak resident set size of the step's process (`os.wait4`'s `ru_maxrss`, which is what
 `/usr/bin/time -l` reports on macOS: it leaves out the pages macOS has compressed or swapped out, so
-a step past the machine's memory reads far below its footprint, as the national build did at 2.1 GB
-against 27 GB), the exit code, the output, and the sizes of the files the step wrote (the filtered
-roads and POIs, the stage pickles and reports, the build's `arrays/`, `geometry/` (the edges' shapes
-in the compact format), `strings.json` and `meta.json`, the `qa/` layers), and the free space on the
-data directory's volume before it. A step the CLI skips as up to date is reported as skipped. Two
-guards keep a heavy run from swapping the machine or filling its disk: `--max-mem-gb` stops a step
-whose memory, as read above (the physical footprint on macOS, the resident set size elsewhere),
-passes the limit (SIGTERM, on which a pipeline step exits as on an exception and removes its
-temporary files, `cli.exit_on_sigterm`; SIGINT would not do, since a shell's background job starts
-with it ignored; then SIGKILL after `KILL_GRACE_S`, 5 s; it counts the step's descendants but
-signals the step's own process, which serves while no step starts processes of its own, and leaves
-the reaping to the run), the row saying "killed at X GB" with the size and the time in the report;
-`--min-free-gb` starts no step while the volume has less free, the row saying "not started" and the
-run exiting 3. The first step that fails, is stopped or is not started ends the run. It prints a
-Markdown table, writes the JSON report to `--out` (under `tools/out/`, which git ignores) and exits
-with the failed step's code, else 0. It needs real extracts under `WORST_ROUTE_DATA`, so the gate
-never runs it; it is a heavy job when the region is a state (`docs/reference/pipeline.md`,
-**Oregon**). `tests/pipeline/test_bench_build.py` runs it on the divided fixture.
+a step past the machine's memory reads far below its footprint, as the national build did at about
+2.2–2.6 GB against about 29 GB), the exit code, the output, and the sizes of the files the step
+wrote (the filtered roads and POIs, the stage pickles and reports, the build's `arrays/`,
+`geometry/` (the edges' shapes in the compact format), `strings.json` and `meta.json`, the `qa/`
+layers), and the free space on the data directory's volume before it. A step the CLI skips as up to
+date is reported as skipped. Two guards keep a heavy run from swapping the machine or filling its
+disk: `--max-mem-gb` stops a step whose memory, as read above (the physical footprint on macOS, the
+resident set size elsewhere), passes the limit (SIGTERM, on which a pipeline step exits as on an
+exception and removes its temporary files, `cli.exit_on_sigterm`; SIGINT would not do, since a
+shell's background job starts with it ignored; then SIGKILL after `KILL_GRACE_S`, 5 s; it counts the
+step's descendants but signals the step's own process, which serves while no step starts processes
+of its own, and leaves the reaping to the run), the row saying "killed at X GB" with the size and
+the time in the report; `--min-free-gb` starts no step while the volume has less free, the row
+saying "not started" and the run exiting 3. The first step that fails, is stopped or is not started
+ends the run. It prints a Markdown table, writes the JSON report to `--out` (under `tools/out/`,
+which git ignores) and exits with the failed step's code, else 0. It needs real extracts under
+`WORST_ROUTE_DATA`, so the gate never runs it; it is a heavy job when the region is a state
+(`docs/reference/pipeline.md`, **Oregon**). `tests/pipeline/test_bench_build.py` runs it on the
+divided fixture.
 
 ## Comparing the pipeline engines: `tools/parity.py`
 

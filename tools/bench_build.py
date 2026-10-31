@@ -79,7 +79,7 @@ class RusageInfoV4(ctypes.Structure):
         ("ri_phys_footprint", ctypes.c_uint64),
         ("between", ctypes.c_uint64 * 20),  # ri_proc_start_abstime to ri_logical_writes
         ("ri_lifetime_max_phys_footprint", ctypes.c_uint64),
-        ("after", ctypes.c_uint64 * 7),  # ri_instructions to ri_runnable_time
+        ("after", ctypes.c_uint64 * 6),  # ri_instructions to ri_runnable_time
     ]
 
 

@@ -870,20 +870,20 @@ The plan's assumed defaults, each open until the owner confirms (`docs/PLAN.md` 
     enrich, tiers and save run on arrays too and `filter` merges in a stream (the in-memory merge
     would have held about 190 M nodes). Its memory, measured (2026-10-31;
     `docs/reference/pipeline.md`, **The all-roads national build**), does not fit the machine's
-    24 GB: the filter streams the country's 1.92 GB of roads in 23 min at 4.2 GB of resident set,
-    but `build` was stopped by hand at a physical footprint of 27 GB, swapping (the watchdog read
-    the resident set, 2.1 GB, which on macOS leaves out compressed and swapped pages; it reads the
-    footprint since), and west-coast's footprints (California, Oregon and Washington), scaled 8–9
-    times, put the steps at about 39–45 GB for build, 79–91 GB for cleanup, 66–76 GB for enrich and
-    71–82 GB for save. So (a) needs leaner steps before it can be built on this machine: the changes
-    the probes point to (chunked projection and geometry, arrays for cleanup's Python lists, one
-    copy of the coordinates, bearings without GEOS lines) would save from about a third of build's
-    to most of enrich's and save's, leaving cleanup at about 45–50 GB, which needs a way of working
-    through the graph in parts. The engine at 17 M nodes has the leash's distances in NumPy (4–10 ms
-    on the T1 build's 887,737 nodes, where shapely's 0.16–0.3 µs a node would have taken seconds for
-    a coast-to-coast trip) and would need searches whose set-up does not grow with the build (the
-    kernels allocate per-node or per-edge work arrays on each call; at 887,737 nodes runs still made
-    1,070–1,170 attempts a second).
+    25.8 GB (24 GiB): the filter streams the country's 1.92 GB of roads in 23 min at 4.2 GB of
+    resident set, but `build` was stopped by hand at a physical footprint of about 29 GB, swapping
+    (the watchdog read the resident set, about 2.2–2.6 GB, which on macOS leaves out compressed and
+    swapped pages; it reads the footprint since), and west-coast's footprints (California, Oregon
+    and Washington), scaled 8–9 times, put the steps at about 39–45 GB for build, 79–91 GB for
+    cleanup, 66–76 GB for enrich and 71–82 GB for save. So (a) needs leaner steps before it can be
+    built on this machine: the changes the probes point to (chunked projection and geometry, arrays
+    for cleanup's Python lists, one copy of the coordinates, bearings without GEOS lines) would save
+    from about a third of build's to most of enrich's and save's, leaving cleanup at about 45–50 GB,
+    which needs a way of working through the graph in parts. The engine at 17 M nodes has the
+    leash's distances in NumPy (4–10 ms on the T1 build's 887,737 nodes, where shapely's 0.16–0.3 µs
+    a node would have taken seconds for a coast-to-coast trip) and would need searches whose set-up
+    does not grow with the build (the kernels allocate per-node or per-edge work arrays on each
+    call; at 887,737 nodes runs still made 1,070–1,170 attempts a second).
   - (b) **T1 nationally plus all-roads builds per state.** The T1 build: 887,737 nodes, 1,324,013
     edges, 178.1 MB of arrays and strings (201.2 MB with the geometry), 22 minutes from the
     extracts with build and cleanup on arrays; the state builds together about (a)'s size (3.9 GB,

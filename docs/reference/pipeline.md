@@ -1284,8 +1284,10 @@ was the default. The build predates the class ceiling's entry in a build's param
   the build saves.
 
 **The all-roads national build** (`us`, M5.3's (a)), from the same 49 extracts at pipeline
-version 7, on the dev machine (24 GB of memory, 10 cores) at load averages of 5–9, under the
-watchdog and the disk check (the watchdog's flag, `--max-rss-gb` then, is `--max-mem-gb` since):
+version 7, on the dev machine (25.8 GB of memory, 24 GiB, and 10 cores) at load averages of 5–9,
+under the watchdog and the disk check (the watchdog's flag, `--max-rss-gb` then, is `--max-mem-gb`
+since). Sizes here are decimal, as the bench tool prints them; `footprint`(1) and `sysctl
+vm.swapusage` print binary units, so `footprint`'s "27 GB" is 27 GiB, 29.0 GB:
 
 ```
 uv run python tools/bench_build.py --region us --allow-fragmented --max-rss-gb 18 --min-free-gb 15
@@ -1296,17 +1298,18 @@ It did not get past `build`:
 | Step | Wall | Memory | Writes |
 |---|---|---|---|
 | filter | 1,372 s (1,926 s CPU) | 4.19 GB of resident set | roads 1,917.6 MB, POIs 61.6 MB |
-| build | stopped by hand after 1,005 s (410 s user, 485 s system) | physical footprint 27 GB (20 GB of large allocations, 4.2 GB of small) | nothing: the stage is written at the step's end |
+| build | stopped by hand after 1,005 s (410 s user, 485 s system) | physical footprint about 29 GB (21.5 GB of large allocations and 4.4–4.8 GB of small, read from `footprint` by hand) | nothing: the stage is written at the step's end |
 
 - **The filter** keeps 14,243,093 of the 51,971,904 highway ways and reads 54,055 border ways
   once; the T1 run counted 14,289,975 kept or above its ceiling, the 46,882 more border copies
   read once now making the difference. Its 2,593,833 POIs are the T1 build's.
-- **The build's stop.** The watchdog read the step's resident set from `ps`: 2.1 GB at the stop, and
-  `ru_maxrss` 4.68 GB. On macOS the resident set leaves out the pages the system has compressed or
-  swapped out, and `footprint` read 27 GB from 15 minutes in to the stop at 16.75 minutes, while the
-  machine's swap grew from 8.5 GB to 16.9 of 18.4 GB (13 M pageouts) and the step spent more time in
-  the kernel than in its own code. So the 18 GB line never fired; the step was stopped by hand, with
-  SIGTERM, and left nothing behind. The watchdog reads the footprint since
+- **The build's stop.** The watchdog read the step's resident set from `ps`: about 2.2–2.6 GB in its
+  last minute (2.43 GB at the stop, read by hand), its `ru_maxrss` 4.68 GB. On macOS the resident
+  set leaves out the pages the system has compressed or swapped out, and `footprint` read about
+  29 GB from 15 minutes in to the stop at 16.75 minutes, while the machine's swap grew from 8.9 GB
+  at the step's start to 18.1 GB at its peak, of 19.3 GB (read by hand), and the step spent more
+  time in the kernel than in its own code. So the 18 GB line never fired; the step was stopped by
+  hand, with SIGTERM, and left nothing behind. The watchdog reads the footprint since
   (`docs/reference/testing-tools.md`).
 - **West-coast** (California, Oregon and Washington, build ea89e860206f at `graph_version`
   c6ea6d2e721c, run twice to the same build), the scale between a state and the country at which
@@ -1347,16 +1350,16 @@ It did not get past `build`:
     their `take` and `dst` indices (int64, 0.30 GB each) and stage A's OSM nodes (0.30 GB); and
     1.0 GB of gathers from the memory-mapped build stage.
   - `enrich`: the bearings, from two full sets of lines, every edge's and every edge's road
-    without its junction stubs (9.6 M geometries, about 4.5 GB of GEOS memory beside their 0.61 GB
-    of Python objects, and their stacked coordinates, 0.57 GB); 0.87 GB of gathers from the
-    memory-mapped stage.
+    without its junction stubs (9.6 M geometries, about 4.5 GB of GEOS memory by estimate, the
+    step's footprint less its heap, beside their 0.61 GB of Python objects, and their stacked
+    coordinates, 0.57 GB); 0.87 GB of gathers from the memory-mapped stage.
   - `save`: the geometry, every edge's line and its simplification (GEOS) and their points
     (0.49 GB), then `geometry.encode`'s per-step arrays (1.55 GB).
 - **The projection.** The country is 8.1 times west-coast by the ways kept (9.3 times by the roads
   file's bytes), and every holder above grows with the graph: the footprints scale to about 39–45 GB
   at `build`, 79–91 GB at `cleanup`, 66–76 GB at `enrich`, 71–82 GB at `save` and 9–11 GB at `tiers`
-  and `qa`, against the machine's 24 GB. The national build's 27 GB was likely short of its peak:
-  the heap alone scales to 28–32 GB there. A slope fitted to the resident sets of Oregon, Oregon and
+  and `qa`, against the machine's 25.8 GB. The national build's 29 GB was likely short of its peak:
+  its heap alone scales to 28–32 GB there. A slope fitted to the resident sets of Oregon, Oregon and
   Washington and west-coast had put `build` at 16–21 GB, and undercounted for the reason above.
 - **Leaner steps.** What each change would save at west-coast (about 8–9 times as much
   nationally): at `build`, projecting and measuring the refs in chunks into `ref_x` and `ref_y`

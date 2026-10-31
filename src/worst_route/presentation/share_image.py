@@ -7,10 +7,10 @@ efficient than the sensible route"), for a slowest-time route the time ratio ("s
 sensible route"), for a round trip, which has neither, its length ("299 mi", "to end up where
 it started"); and the comparison line at the bottom (wrapped, never between a number and its
 unit). The map fills the rest, edge to edge, with no basemap: the build's roads as hairlines
-(one edge per road unit, along the build's geometry, the units near the map found first by
-their bounds in the build's CRS against the map's, grown by `NETWORK_MARGIN_M`; only tiers T0-T2
-when more than `MAX_NETWORK_EDGES` would show), the
-state outlines from the places index when there is one, the route in red on a white casing, the
+(one edge per road unit, along the build's geometry: those whose bounds meet the map's, in the
+build's CRS grown by `NETWORK_MARGIN_M` and then in lon/lat, decoded only where their ends and
+lengths cannot tell; only tiers T0-T2 when more than `MAX_NETWORK_EDGES` would show), the state
+outlines from the places index when there is one, the route in red on a white casing, the
 baseline dashed over it, a ring at the start and a smaller dot at the end (inside the ring, for
 a round trip). Its extent is the route's bbox with `MARGIN` on each side (at least `MIN_SPAN_M`
 across), widened to the map's shape with x scaled by cos(latitude). The attribution sits at the
@@ -164,35 +164,38 @@ def _extent(points: Points, aspect: float) -> tuple[float, float, float, float]:
 def _network(
     data: GraphData, geometry: Geometry, bbox: tuple[float, float, float, float]
 ) -> list[Points]:
-    """The lines of the road units whose bounds meet `bbox`, thinned to T0-T2 when too many."""
-    west, south, east, north = bbox
+    """The lines of the road units whose bounds meet `bbox`, thinned to T0-T2 when too many:
+    those whose bounds meet the map's in the build's CRS (`_outline_box`), then in lon/lat. A
+    unit with an end inside the box meets it, and one whose ends are both beyond its length
+    from it misses it: only the others are decoded to tell, then the units drawn."""
     units = np.flatnonzero(data.edge_unit == np.arange(data.m))
-    near = units[_near(data, geometry, units, bbox)]
-    if len(near) == 0:
-        return []
-    points, counts = edge_points(data, geometry, near)
+    box, at = _outline_box(data, bbox), (data.node_x, data.node_y)
+    # Every point of a line lies within its length of either end on each axis (a metre more
+    # for the decoding's rounding, half a metre on each axis, and the float32 length).
+    reach = data.edge_length_m[units].astype(np.float64) + 1.0
+    near = _ends_near(data, units, at, box)
+    undecided = np.flatnonzero(~near & _ends_near(data, units, at, box, reach))
+    points, counts = edge_xy(data, geometry, units[undecided])
+    near[undecided] = _meets(points, counts, box)
+    units = units[near]
+    inside = _ends_near(data, units, (data.node_lon, data.node_lat), bbox)
+    undecided = np.flatnonzero(~inside)
+    points, counts = edge_points(data, geometry, units[undecided])
+    inside[undecided] = _meets(points, counts, bbox)
+    units = units[inside]
+    if len(units) > MAX_NETWORK_EDGES:
+        units = units[data.edge_tier[units] <= THIN_TIER]
+    points, counts = edge_points(data, geometry, units)
     starts = np.cumsum(counts) - counts
-    lon, lat = points[:, 0], points[:, 1]
-    inside = (
-        (np.maximum.reduceat(lon, starts) >= west)
-        & (np.minimum.reduceat(lon, starts) <= east)
-        & (np.maximum.reduceat(lat, starts) >= south)
-        & (np.minimum.reduceat(lat, starts) <= north)
-    )
-    if inside.sum() > MAX_NETWORK_EDGES:
-        inside &= data.edge_tier[near] <= THIN_TIER
-    ends = zip(starts[inside].tolist(), (starts + counts)[inside].tolist(), strict=True)
+    ends = zip(starts.tolist(), (starts + counts).tolist(), strict=True)
     return [points[a:b] for a, b in ends]
 
 
-def _near(
-    data: GraphData,
-    geometry: Geometry,
-    edges: NDArray[np.intp],
-    bbox: tuple[float, float, float, float],
-) -> NDArray[np.bool_]:
-    """Which of `edges` have bounds in the build's CRS meeting `bbox`'s, its outline projected
-    (nine points a side) and grown by `NETWORK_MARGIN_M`."""
+def _outline_box(
+    data: GraphData, bbox: tuple[float, float, float, float]
+) -> tuple[float, float, float, float]:
+    """The bounds in the build's CRS of `bbox`'s outline projected (nine points a side), grown
+    by `NETWORK_MARGIN_M`, as (x0, y0, x1, y1)."""
     west, south, east, north = bbox
     t = np.linspace(0.0, 1.0, 9)
     lon = np.concatenate([west + (east - west) * t, np.full(9, east), east - (east - west) * t])
@@ -200,16 +203,48 @@ def _near(
     lat = np.concatenate([np.full(9, south), south + (north - south) * t, np.full(9, north)])
     lat = np.concatenate([lat, north - (north - south) * t])
     x, y = lonlat_to_xy(data, lon, lat)
-    xy, counts = edge_xy(data, geometry, edges)
-    starts = np.cumsum(counts) - counts
     margin = NETWORK_MARGIN_M
-    near: NDArray[np.bool_] = (
-        (np.maximum.reduceat(xy[:, 0], starts) >= x.min() - margin)
-        & (np.minimum.reduceat(xy[:, 0], starts) <= x.max() + margin)
-        & (np.maximum.reduceat(xy[:, 1], starts) >= y.min() - margin)
-        & (np.minimum.reduceat(xy[:, 1], starts) <= y.max() + margin)
+    return (
+        float(x.min()) - margin,
+        float(y.min()) - margin,
+        float(x.max()) + margin,
+        float(y.max()) + margin,
     )
+
+
+def _ends_near(
+    data: GraphData,
+    edges: NDArray[np.intp],
+    at: tuple[Points, Points],
+    box: tuple[float, float, float, float],
+    reach: Points | float = 0.0,
+) -> NDArray[np.bool_]:
+    """Which of `edges` have an end inside `box` (x0, y0, x1, y1) grown by `reach` on each side
+    (one for all of them, or one each), their nodes at `at` (every node's x and y)."""
+    x, y = at
+    x0, y0, x1, y1 = box
+    near = np.zeros(len(edges), dtype=np.bool_)
+    for end in (data.edge_u[edges], data.edge_v[edges]):
+        ex, ey = x[end], y[end]
+        near |= (ex >= x0 - reach) & (ex <= x1 + reach) & (ey >= y0 - reach) & (ey <= y1 + reach)
     return near
+
+
+def _meets(
+    points: Points, counts: NDArray[np.int64], box: tuple[float, float, float, float]
+) -> NDArray[np.bool_]:
+    """Which lines, `counts[k]` of `points` each in a row, have bounds meeting `box`
+    (x0, y0, x1, y1)."""
+    x0, y0, x1, y1 = box
+    starts = np.cumsum(counts) - counts
+    x, y = points[:, 0], points[:, 1]
+    meets: NDArray[np.bool_] = (
+        (np.maximum.reduceat(x, starts) >= x0)
+        & (np.minimum.reduceat(x, starts) <= x1)
+        & (np.maximum.reduceat(y, starts) >= y0)
+        & (np.minimum.reduceat(y, starts) <= y1)
+    )
+    return meets
 
 
 def _outlines(places: PlaceIndex, bbox: tuple[float, float, float, float]) -> list[Points]:

@@ -6,6 +6,7 @@ import pickle
 from typing import Any
 
 import networkx as nx
+import pyarrow.parquet as pq
 import pytest
 
 from tests.pipeline.invariants import check_all, lost_through
@@ -47,9 +48,15 @@ def stages() -> Stages:
     return raw, graph, json.loads(report.read_text())
 
 
+def restriction_rows() -> list[dict[str, object]]:
+    """Portland's turn restrictions, none before the filter wrote them."""
+    table = layout.restrictions_parquet("portland")
+    return pq.read_table(table).to_pylist() if table.exists() else []
+
+
 def test_portland_invariants(stages: Stages) -> None:
     raw, graph, _ = stages
-    check_all(raw, graph, complete=False)
+    check_all(raw, graph, complete=False, restrictions=restriction_rows())
     assert list(graph.nodes) == list(range(graph.number_of_nodes()))
 
 
@@ -59,7 +66,10 @@ def test_portland_report(stages: Stages) -> None:
     assert report["connectivity"]["retained"] >= SCC_MIN_RETAINED
     assert report["connectivity"]["largest_dropped"][0]["nodes"] <= SCC_MAX_DROPPED_NODES
     assert report["connectivity"]["nodes_after"] == graph.number_of_nodes()
-    assert report["connectivity"].get("dropped_no_turn", 0) == 0  # none in a report before it
+    # none in a report before it; since pipeline version 8, the junction of two one-way access
+    # roads (ways 566767462 and 566767446, at 45.5388, -122.9138) whose one turn relation
+    # 14604969 bans, the third road there being one the filter drops
+    assert report["connectivity"].get("dropped_no_turn", 0) <= 1
     made = sum(report["stage_b"]["superjunctions"].values())
     assert 0 < len(graph.graph["superjunctions"]) <= made  # some lie in dropped components
 
@@ -84,4 +94,28 @@ def test_portland_roads_pass_their_junctions_once(stages: Stages) -> None:
         ("residential", "Southeast 91st Avenue"),  # by SE Tolman Street and SE 90th Avenue
         ("trunk", "Northwest Zion Church Road"),  # back as Northwest Glencoe Road
         ("trunk", "South Barlow Road"),  # back as South Arndt Road
-    }
+    } | (
+        {
+            # since pipeline version 8: relation 1621276, only right from N Randolph Ave at
+            # 40595800, which bans going on along it there
+            ("unclassified", "North Randolph Avenue"),
+            # and relation 1706307, a no_u_turn from ramp 1052597840 onto ramp 5512006 at
+            # 40403015: their chain from eastbound I 84 at 1894362318 back to it at 3429238808 is
+            # a super-junction whose mainline between (424 m and 926 m) lies outside it, longer
+            # than a pocket, so the pass through it was by the ramps, and the restriction bans it
+            ("motorway", "I 84;US 30"),
+        }
+        if int(graph.graph["pipeline_version"]) >= 8
+        else set()
+    )
+
+
+def test_portland_turn_restrictions(stages: Stages) -> None:
+    _, graph, report = stages
+    if int(graph.graph["pipeline_version"]) < 8:
+        pytest.skip("built before the turn restrictions (pipeline version 8)")
+    counts = report["restrictions"]
+    skipped = counts["unmatched"] + counts["via_inside_edge"] + counts["via_not_found"]
+    assert counts["applied"] + skipped == counts["read"] > 3000
+    assert counts["applied"] > 0.9 * counts["read"] and counts["via_not_found"] == 0
+    assert 1000 < len(graph.graph["restricted"]) <= counts["junctions"]

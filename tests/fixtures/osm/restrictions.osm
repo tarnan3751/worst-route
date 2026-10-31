@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="hand">
+  <!-- OSM turn restrictions (type=restriction relations), one strongly connected network.
+       A residential grid: Alder St (y 0: 10, 11, 12, 13), Birch Ave (x 0: 20, 24, 11, 21; split
+       at 24 with the same tags, so simplification contracts 24), Elm St (x 400: 22, 12, 23), Fir
+       St (y 400: 21, 57, 23, on to 39) and Ash St (y -400: 20, 22, on to 30); a footway 199 from
+       11. Cedar Blvd (primary) is two-way from 30 to 31, splits there into a northbound
+       carriageway (121 to 33, 128 on to 35) and a southbound one (129 to 37, 122 on to 31) 24 m
+       apart, and rejoins at 35, two-way on to 39. Dogwood St continues Alder St east from 13 to
+       the southbound side at 37, crosses the median as its own way 126 to the northbound side at
+       33, which stage A merges with 37 into one cluster (126 absorbed), and goes on to 41. Grand
+       Ave (secondary, y 1200: 50, 51, 52, 53, on to 39) meets Hill St (x 100: 52, 54, 55, on to
+       57) at 52, and a one-way secondary_link slip lane (145) runs from 51 to 54, a slip-lane
+       super-junction of 51, 52 and 54. Lamb Rd (y -800) is one way (160) from 60 through 61 to 62,
+       where Generation Rd (161) from 20 ends, Walnut St (162) joining 60 to 10 and Elm St (163)
+       62 to 22. Mill Rd (y -1200, 170: 70, 71, 72) and Pine St (x 0, 171: 73, 71, 74, dead ends
+       at both) each pass through their crossing at 71, Walnut St (172) and Elm St (173) going on
+       to 70 and 72.
+       Restrictions kept by filter (14): 9001 no_left_turn 101 -> 104 at 11 (a plain crossroads);
+       9002 only_straight_on 102 -> 105 at 12; 9003 no_u_turn 122 -> 121 at 31, where the
+       carriageways meet; 9004 no_left_turn 121 -> 126 at 33, onto the median the cluster absorbed;
+       9005 no_right_turn 141 -> 143 and 9006 no_left_turn 143 -> 141 at 52, inside the
+       super-junction; 9009 no_u_turn 112 -> 112 at 24, which simplification contracts; 9010
+       no_right_turn 145 -> 140 at 51, the slip lane leaving 51, so no edge arrives there on it;
+       and at 61, where Lamb Rd passes through, 9016 only_right_turn 161 -> 160 (the right, west,
+       of Lamb Rd's two edges leaving 61), 9017 no_left_turn 160 -> 161 (from the eastbound of its
+       two edges arriving, the one that turns left onto Generation Rd), and 9018 no_entry 160 ->
+       161, which names no turn to tell Lamb Rd's two edges apart; at 71, where both ways pass
+       through, the pairs that make the turn named: 9019 no_left_turn 170 -> 171 (west to north,
+       east to south), 9020 no_u_turn 170 -> 170 (the U-turns back along Mill Rd, which no route
+       makes), 9021 only_left_turn 171 -> 170 (from the south only west, from the north only east).
+       Left out (one each): 9007 except=psv;motorcar, 9008 a via way, 9011 conditional, 9012
+       no_right_turn_on_red, 9013 from the footway, 9014 restriction:hgv only, 9015 no via.
+       Expected: build 31 nodes, 41 segments, 77 edges; simplify removes 24, 53 and 55; stage A
+       one cluster (33, 37); stage B one interchange (51, 52, 54); cleanup 25 nodes, 64 edges.
+       Restrictions: 14 read, 11 applied, 1 unmatched (9010), 1 way through via (9018), 1 via
+       inside an edge (9009); tables at 7 stage A nodes, 22 pairs banned. The build bans 10-11 to
+       11-21 at 11; 11-12 to 12-22 and to 12-23 at 12 (the U-turn back to 11 no route makes
+       stays); 37-31 to 31-33 at 31; 31-33 to 37-13 and to 37-31 at the cluster; 20-61 to 61-62
+       and 60-61 to 61-20 at 61; 70-71 to 71-73, 72-71 to 71-74, 73-71 to 71-70 and to 71-74, and
+       74-71 to 71-72 and to 71-73 at 71; and in the super-junction 57-54 to 51-50 only (9005's
+       right turn is still made by the slip lane). -->
+  <node id="10" version="1" lat="45.5000000" lon="-122.6051265"/>
+  <node id="11" version="1" lat="45.5000000" lon="-122.6000000"/>
+  <node id="12" version="1" lat="45.5000000" lon="-122.5948735"/>
+  <node id="13" version="1" lat="45.5000000" lon="-122.5897469"/>
+  <node id="20" version="1" lat="45.4964007" lon="-122.6000000"/>
+  <node id="21" version="1" lat="45.5035993" lon="-122.6000000"/>
+  <node id="22" version="1" lat="45.4964007" lon="-122.5948735"/>
+  <node id="23" version="1" lat="45.5035993" lon="-122.5948735"/>
+  <node id="24" version="1" lat="45.4982003" lon="-122.6000000"/>
+  <node id="25" version="1" lat="45.4991002" lon="-122.6012816"/>
+  <node id="30" version="1" lat="45.4928014" lon="-122.5846204"/>
+  <node id="31" version="1" lat="45.4964007" lon="-122.5846204"/>
+  <node id="32" version="1" lat="45.4973005" lon="-122.5844666"/>
+  <node id="33" version="1" lat="45.5000000" lon="-122.5844666"/>
+  <node id="34" version="1" lat="45.5026995" lon="-122.5844666"/>
+  <node id="35" version="1" lat="45.5035993" lon="-122.5846204"/>
+  <node id="36" version="1" lat="45.5026995" lon="-122.5847742"/>
+  <node id="37" version="1" lat="45.5000000" lon="-122.5847742"/>
+  <node id="38" version="1" lat="45.4973005" lon="-122.5847742"/>
+  <node id="39" version="1" lat="45.5071986" lon="-122.5846204"/>
+  <node id="41" version="1" lat="45.5000000" lon="-122.5794938"/>
+  <node id="50" version="1" lat="45.5107980" lon="-122.6051265"/>
+  <node id="51" version="1" lat="45.5107980" lon="-122.6000000"/>
+  <node id="52" version="1" lat="45.5107980" lon="-122.5987184"/>
+  <node id="53" version="1" lat="45.5107980" lon="-122.5935918"/>
+  <node id="54" version="1" lat="45.5098981" lon="-122.5987184"/>
+  <node id="55" version="1" lat="45.5071986" lon="-122.5987184"/>
+  <node id="56" version="1" lat="45.5103481" lon="-122.5991029"/>
+  <node id="57" version="1" lat="45.5035993" lon="-122.5987184"/>
+  <node id="60" version="1" lat="45.4928014" lon="-122.6051265"/>
+  <node id="61" version="1" lat="45.4928014" lon="-122.6000000"/>
+  <node id="62" version="1" lat="45.4928014" lon="-122.5948735"/>
+  <node id="70" version="1" lat="45.4892020" lon="-122.6051265"/>
+  <node id="71" version="1" lat="45.4892020" lon="-122.6000000"/>
+  <node id="72" version="1" lat="45.4892020" lon="-122.5948735"/>
+  <node id="73" version="1" lat="45.4910017" lon="-122.6000000"/>
+  <node id="74" version="1" lat="45.4874024" lon="-122.6000000"/>
+  <way id="101" version="1"><nd ref="10"/><nd ref="11"/><tag k="highway" v="residential"/><tag k="name" v="Alder St"/></way>
+  <way id="102" version="1"><nd ref="11"/><nd ref="12"/><tag k="highway" v="residential"/><tag k="name" v="Alder St"/></way>
+  <way id="105" version="1"><nd ref="12"/><nd ref="13"/><tag k="highway" v="residential"/><tag k="name" v="Alder St"/></way>
+  <way id="103" version="1"><nd ref="20"/><nd ref="24"/><tag k="highway" v="residential"/><tag k="name" v="Birch Ave"/></way>
+  <way id="112" version="1"><nd ref="24"/><nd ref="11"/><tag k="highway" v="residential"/><tag k="name" v="Birch Ave"/></way>
+  <way id="104" version="1"><nd ref="11"/><nd ref="21"/><tag k="highway" v="residential"/><tag k="name" v="Birch Ave"/></way>
+  <way id="106" version="1"><nd ref="22"/><nd ref="12"/><tag k="highway" v="residential"/><tag k="name" v="Elm St"/></way>
+  <way id="107" version="1"><nd ref="12"/><nd ref="23"/><tag k="highway" v="residential"/><tag k="name" v="Elm St"/></way>
+  <way id="108" version="1"><nd ref="21"/><nd ref="57"/><tag k="highway" v="residential"/><tag k="name" v="Fir St"/></way>
+  <way id="113" version="1"><nd ref="57"/><nd ref="23"/><tag k="highway" v="residential"/><tag k="name" v="Fir St"/></way>
+  <way id="109" version="1"><nd ref="20"/><nd ref="22"/><tag k="highway" v="residential"/><tag k="name" v="Ash St"/></way>
+  <way id="133" version="1"><nd ref="22"/><nd ref="30"/><tag k="highway" v="residential"/><tag k="name" v="Ash St"/></way>
+  <way id="134" version="1"><nd ref="23"/><nd ref="39"/><tag k="highway" v="residential"/><tag k="name" v="Fir St"/></way>
+  <way id="199" version="1"><nd ref="11"/><nd ref="25"/><tag k="highway" v="footway"/></way>
+  <way id="120" version="1"><nd ref="30"/><nd ref="31"/><tag k="highway" v="primary"/><tag k="name" v="Cedar Blvd"/></way>
+  <way id="121" version="1"><nd ref="31"/><nd ref="32"/><nd ref="33"/><tag k="highway" v="primary"/><tag k="name" v="Cedar Blvd"/><tag k="oneway" v="yes"/></way>
+  <way id="128" version="1"><nd ref="33"/><nd ref="34"/><nd ref="35"/><tag k="highway" v="primary"/><tag k="name" v="Cedar Blvd"/><tag k="oneway" v="yes"/></way>
+  <way id="129" version="1"><nd ref="35"/><nd ref="36"/><nd ref="37"/><tag k="highway" v="primary"/><tag k="name" v="Cedar Blvd"/><tag k="oneway" v="yes"/></way>
+  <way id="122" version="1"><nd ref="37"/><nd ref="38"/><nd ref="31"/><tag k="highway" v="primary"/><tag k="name" v="Cedar Blvd"/><tag k="oneway" v="yes"/></way>
+  <way id="123" version="1"><nd ref="35"/><nd ref="39"/><tag k="highway" v="primary"/><tag k="name" v="Cedar Blvd"/></way>
+  <way id="125" version="1"><nd ref="13"/><nd ref="37"/><tag k="highway" v="residential"/><tag k="name" v="Dogwood St"/></way>
+  <way id="126" version="1"><nd ref="37"/><nd ref="33"/><tag k="highway" v="residential"/><tag k="name" v="Dogwood St"/></way>
+  <way id="127" version="1"><nd ref="33"/><nd ref="41"/><tag k="highway" v="residential"/><tag k="name" v="Dogwood St"/></way>
+  <way id="140" version="1"><nd ref="50"/><nd ref="51"/><tag k="highway" v="secondary"/><tag k="name" v="Grand Ave"/></way>
+  <way id="141" version="1"><nd ref="51"/><nd ref="52"/><tag k="highway" v="secondary"/><tag k="name" v="Grand Ave"/></way>
+  <way id="142" version="1"><nd ref="52"/><nd ref="53"/><tag k="highway" v="secondary"/><tag k="name" v="Grand Ave"/></way>
+  <way id="143" version="1"><nd ref="52"/><nd ref="54"/><tag k="highway" v="residential"/><tag k="name" v="Hill St"/></way>
+  <way id="144" version="1"><nd ref="54"/><nd ref="55"/><tag k="highway" v="residential"/><tag k="name" v="Hill St"/></way>
+  <way id="146" version="1"><nd ref="55"/><nd ref="57"/><tag k="highway" v="residential"/><tag k="name" v="Hill St"/></way>
+  <way id="145" version="1"><nd ref="51"/><nd ref="56"/><nd ref="54"/><tag k="highway" v="secondary_link"/><tag k="oneway" v="yes"/></way>
+  <way id="147" version="1"><nd ref="53"/><nd ref="39"/><tag k="highway" v="secondary"/><tag k="name" v="Grand Ave"/></way>
+  <way id="160" version="1"><nd ref="60"/><nd ref="61"/><nd ref="62"/><tag k="highway" v="residential"/><tag k="name" v="Lamb Rd"/></way>
+  <way id="161" version="1"><nd ref="20"/><nd ref="61"/><tag k="highway" v="residential"/><tag k="name" v="Generation Rd"/></way>
+  <way id="162" version="1"><nd ref="10"/><nd ref="60"/><tag k="highway" v="residential"/><tag k="name" v="Walnut St"/></way>
+  <way id="163" version="1"><nd ref="22"/><nd ref="62"/><tag k="highway" v="residential"/><tag k="name" v="Elm St"/></way>
+  <way id="170" version="1"><nd ref="70"/><nd ref="71"/><nd ref="72"/><tag k="highway" v="residential"/><tag k="name" v="Mill Rd"/></way>
+  <way id="171" version="1"><nd ref="73"/><nd ref="71"/><nd ref="74"/><tag k="highway" v="residential"/><tag k="name" v="Pine St"/></way>
+  <way id="172" version="1"><nd ref="60"/><nd ref="70"/><tag k="highway" v="residential"/><tag k="name" v="Walnut St"/></way>
+  <way id="173" version="1"><nd ref="62"/><nd ref="72"/><tag k="highway" v="residential"/><tag k="name" v="Elm St"/></way>
+  <relation id="9001" version="1"><member type="way" ref="101" role="from"/><member type="node" ref="11" role="via"/><member type="way" ref="104" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="no_left_turn"/></relation>
+  <relation id="9002" version="1"><member type="way" ref="102" role="from"/><member type="node" ref="12" role="via"/><member type="way" ref="105" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="only_straight_on"/></relation>
+  <relation id="9003" version="1"><member type="way" ref="122" role="from"/><member type="node" ref="31" role="via"/><member type="way" ref="121" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="no_u_turn"/></relation>
+  <relation id="9004" version="1"><member type="way" ref="121" role="from"/><member type="node" ref="33" role="via"/><member type="way" ref="126" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="no_left_turn"/></relation>
+  <relation id="9005" version="1"><member type="way" ref="141" role="from"/><member type="node" ref="52" role="via"/><member type="way" ref="143" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="no_right_turn"/></relation>
+  <relation id="9006" version="1"><member type="way" ref="143" role="from"/><member type="node" ref="52" role="via"/><member type="way" ref="141" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="no_left_turn"/></relation>
+  <relation id="9007" version="1"><member type="way" ref="106" role="from"/><member type="node" ref="12" role="via"/><member type="way" ref="102" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="no_left_turn"/><tag k="except" v="psv;motorcar"/></relation>
+  <relation id="9008" version="1"><member type="way" ref="121" role="from"/><member type="way" ref="126" role="via"/><member type="way" ref="122" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="no_u_turn"/></relation>
+  <relation id="9009" version="1"><member type="way" ref="112" role="from"/><member type="node" ref="24" role="via"/><member type="way" ref="112" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="no_u_turn"/></relation>
+  <relation id="9010" version="1"><member type="way" ref="145" role="from"/><member type="node" ref="51" role="via"/><member type="way" ref="140" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="no_right_turn"/></relation>
+  <relation id="9011" version="1"><member type="way" ref="101" role="from"/><member type="node" ref="11" role="via"/><member type="way" ref="104" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="no_left_turn"/><tag k="restriction:conditional" v="none @ (Sa,Su)"/></relation>
+  <relation id="9012" version="1"><member type="way" ref="112" role="from"/><member type="node" ref="11" role="via"/><member type="way" ref="102" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="no_right_turn_on_red"/></relation>
+  <relation id="9013" version="1"><member type="way" ref="199" role="from"/><member type="node" ref="11" role="via"/><member type="way" ref="102" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="no_left_turn"/></relation>
+  <relation id="9014" version="1"><member type="way" ref="104" role="from"/><member type="node" ref="11" role="via"/><member type="way" ref="101" role="to"/><tag k="type" v="restriction"/><tag k="restriction:hgv" v="no_right_turn"/></relation>
+  <relation id="9015" version="1"><member type="way" ref="102" role="from"/><member type="way" ref="107" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="no_left_turn"/></relation>
+  <relation id="9016" version="1"><member type="way" ref="161" role="from"/><member type="node" ref="61" role="via"/><member type="way" ref="160" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="only_right_turn"/></relation>
+  <relation id="9017" version="1"><member type="way" ref="160" role="from"/><member type="node" ref="61" role="via"/><member type="way" ref="161" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="no_left_turn"/></relation>
+  <relation id="9018" version="1"><member type="way" ref="160" role="from"/><member type="node" ref="61" role="via"/><member type="way" ref="161" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="no_entry"/></relation>
+  <relation id="9019" version="1"><member type="way" ref="170" role="from"/><member type="node" ref="71" role="via"/><member type="way" ref="171" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="no_left_turn"/></relation>
+  <relation id="9020" version="1"><member type="way" ref="170" role="from"/><member type="node" ref="71" role="via"/><member type="way" ref="170" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="no_u_turn"/></relation>
+  <relation id="9021" version="1"><member type="way" ref="171" role="from"/><member type="node" ref="71" role="via"/><member type="way" ref="170" role="to"/><tag k="type" v="restriction"/><tag k="restriction" v="only_left_turn"/></relation>
+</osm>

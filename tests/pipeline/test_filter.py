@@ -4,13 +4,16 @@ import osmium
 import pyarrow.parquet as pq
 import pytest
 
+from tests.pipeline.osm import write_osm
 from worst_route.config import REGIONS
 from worst_route.pipeline.filter import (
     POI_SCHEMA,
+    RESTRICTION_SCHEMA,
     FilterStats,
     filter_roads,
     merge_parts,
     poi_kinds,
+    restriction_skip,
     source_timestamp,
 )
 
@@ -361,6 +364,124 @@ def test_outputs_replace_earlier_ones(tmp_path: Path) -> None:
     assert rows == []
     names = sorted(p.name for p in tmp_path.iterdir())
     assert names == ["pois.parquet", "restrictions.parquet", "roads.osm.pbf"]
+
+
+def test_the_turn_restrictions_of_kept_roads(tmp_path: Path) -> None:
+    stats, roads, _ = run(tmp_path, "restrictions")
+    table = pq.read_table(tmp_path / "restrictions.parquet")
+    assert table.schema.equals(RESTRICTION_SCHEMA)
+    rows = table.to_pylist()
+    kept = [9001, 9002, 9003, 9004, 9005, 9006, 9009, 9010, 9016, 9017, 9018, 9019, 9020, 9021]
+    assert [row["relation_id"] for row in rows] == kept
+    assert rows[0] == {
+        "relation_id": 9001,
+        "restriction": "no_left_turn",
+        "from_ways": [101],
+        "via_node": 11,
+        "to_ways": [104],
+        "except": None,
+    }
+    assert stats.restrictions == {
+        "conditional": 1,  # 9011
+        "except": 1,  # 9007, except=psv;motorcar
+        "incomplete": 1,  # 9015, no via
+        "kept": 14,
+        "other_value": 1,  # 9012, no_right_turn_on_red
+        "outside": 1,  # 9013, from a footway
+        "vehicle": 1,  # 9014, restriction:hgv only
+        "via_way": 1,  # 9008
+    }
+    assert 199 not in contents(roads)[1]  # the footway stays out of the roads
+
+
+def test_an_empty_restrictions_table_keeps_its_schema(tmp_path: Path) -> None:
+    stats, _, _ = run(tmp_path, "grid")
+    assert pq.read_schema(tmp_path / "restrictions.parquet").equals(RESTRICTION_SCHEMA)
+    assert stats.restrictions == {}
+
+
+TURN = [("w", 1, "from"), ("n", 2, "via"), ("w", 3, "to")]
+U_TURN = [("w", 1, "from"), ("n", 2, "via"), ("w", 1, "to")]
+ENTRY = [("w", 1, "from"), ("w", 3, "from"), ("n", 2, "via"), ("w", 4, "to")]
+VIA_WAY = [("w", 1, "from"), ("w", 2, "via"), ("w", 3, "to")]
+TWO_VIAS = [("w", 1, "from"), ("n", 2, "via"), ("n", 5, "via"), ("w", 3, "to")]
+NO_TO = [("w", 1, "from"), ("n", 2, "via")]
+NODE_FROM = [("n", 1, "from"), ("n", 2, "via"), ("w", 3, "to")]
+CONDITIONAL = {"restriction": "no_left_turn", "restriction:conditional": "none @ (Su)"}
+
+
+@pytest.mark.parametrize(
+    ("tags", "members", "reason"),
+    [
+        ({"restriction": "no_u_turn"}, U_TURN, None),
+        ({"restriction": "no_entry"}, ENTRY, None),
+        ({"restriction": "only_u_turn"}, U_TURN, None),
+        ({"restriction": "no_left_turn", "except": "bicycle"}, TURN, None),
+        ({"restriction": "no_left_turn", "except": "psv; motor_vehicle"}, TURN, "except"),
+        (CONDITIONAL, TURN, "conditional"),
+        ({"restriction:conditional": "no_left_turn @ (Mo-Fr 07:00-09:00)"}, TURN, "conditional"),
+        ({"restriction:bus": "no_left_turn"}, TURN, "vehicle"),
+        ({"restriction": "no_right_turn_on_red"}, TURN, "other_value"),
+        ({"restriction": "no_left_turn @ (Mo-Fr 07:00-17:00)"}, TURN, "other_value"),
+        ({"restriction": "no_left_turn"}, VIA_WAY, "via_way"),
+        ({"restriction": "no_left_turn"}, TWO_VIAS, "incomplete"),
+        ({"restriction": "no_left_turn"}, NO_TO, "incomplete"),
+        ({"restriction": "no_left_turn"}, NODE_FROM, "incomplete"),
+    ],
+)
+def test_restriction_skip(
+    tags: dict[str, str], members: list[tuple[str, int, str]], reason: str | None
+) -> None:
+    assert restriction_skip(tags, members) == reason
+
+
+type Relation = tuple[int, list[tuple[str, int, str]], dict[str, str]]
+
+
+def test_the_merge_takes_each_restriction_once(tmp_path: Path) -> None:
+    # Two extracts share road 900 and its restriction 9900 at node 3; each holds a restriction of
+    # its own, 9901 (south) and 9902 (north, from road 900 onto road 902 beyond the south's
+    # edge). Merged, each relation is one row, the first extract's, and so is the union's table.
+    nodes = {1: (0, -200), 2: (0, -100), 3: (0, 0), 4: (100, 0), 10: (0, -300), 20: (0, 100)}
+    road = [(900, [2, 3], {"highway": "residential"}), (903, [3, 4], {"highway": "residential"})]
+    south_ways = [*road, (901, [10, 1, 2], {"highway": "residential"})]
+    north_ways = [*road, (902, [3, 20], {"highway": "residential"})]
+
+    def turn(rid: int, frm: int, to: int, value: str) -> Relation:
+        members = [("w", frm, "from"), ("n", 3, "via"), ("w", to, "to")]
+        return rid, members, {"type": "restriction", "restriction": value}
+
+    shared, own = turn(9900, 900, 903, "no_right_turn"), turn(9901, 903, 900, "no_u_turn")
+    beyond = turn(9902, 900, 902, "only_straight_on")
+    sources = {
+        "south": (south_ways, [shared, own]),
+        "north": (north_ways, [turn(9900, 900, 903, "no_left_turn"), beyond]),
+        "union": ([*south_ways, north_ways[-1]], [shared, own, beyond]),
+    }
+    for name, (ways, relations) in sources.items():
+        write_osm(tmp_path / f"{name}.osm", nodes, ways, relations)
+    tables = {}
+    for name, names in (("merged", ["south", "north"]), ("union", ["union"])):
+        out = tmp_path / name
+        out.mkdir()
+        stats = filter_roads(
+            [tmp_path / f"{n}.osm" for n in names],
+            out / "r.osm.pbf",
+            out / "p.parquet",
+            out / "t.parquet",
+            None,
+        )
+        tables[name] = (out / "t.parquet").read_bytes()
+        if name == "merged":
+            # 9902's road 902 is the north's alone, 9900 a second time there
+            assert stats.restrictions == {"duplicate": 1, "kept": 3}
+            rows = pq.read_table(out / "t.parquet").to_pylist()
+            assert [(row["relation_id"], row["restriction"]) for row in rows] == [
+                (9900, "no_right_turn"),
+                (9901, "no_u_turn"),
+                (9902, "only_straight_on"),
+            ]
+    assert tables["merged"] == tables["union"]
 
 
 @pytest.mark.parametrize(

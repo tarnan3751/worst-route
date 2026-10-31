@@ -408,6 +408,30 @@ def test_cleanup_counts_the_super_junctions_dropped_with_no_allowed_turn(
     assert lines[6].endswith(" components, 1 junctions dropped with no allowed turn")
 
 
+def test_the_turn_restrictions_through_the_cli(data_dir: Path) -> None:
+    source = str(FIXTURES / "restrictions.osm")
+    code, output = pipeline("filter", "--region", "portland", "--source", source)
+    assert code == 0, output
+    assert output.splitlines()[-1] == (
+        "restrictions: kept 14; left out: conditional 1, except 1, incomplete 1, other_value 1, "
+        "outside 1, vehicle 1, via_way 1"
+    )
+    assert pipeline("build", "--region", "portland", "--build-id", "b1")[0] == 0
+    code, output = pipeline("cleanup", "--region", "portland")
+    assert code == 0, output
+    assert output.splitlines()[4] == (
+        "restrictions: 11 of 14 applied, turn tables at 7 junctions (22 pairs banned); skipped: "
+        "1 unmatched, 1 way through via, 1 via inside an edge, 0 via not found"
+    )
+    assert pipeline("enrich", "--region", "portland")[0] == 0
+    assert pipeline("tiers", "--region", "portland", "--allow-fragmented")[0] == 0
+    code, output = pipeline("save", "--region", "portland")
+    assert code == 0, output
+    assert output.splitlines()[-1].endswith(
+        "71 transitions at 1 super-junctions and 6 restricted junctions"
+    )
+
+
 def test_cleanup_counts_the_pairs_of_one_road_mapped_twice(data_dir: Path, tmp_path: Path) -> None:
     source = str(mapped_twice(tmp_path))
     assert pipeline("build", "--region", "portland", "--source", source, "--build-id", "b1")[0] == 0

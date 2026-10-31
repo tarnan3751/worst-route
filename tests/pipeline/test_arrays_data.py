@@ -36,8 +36,10 @@ pytestmark = pytest.mark.data
 
 def test_both_engines_build_portland_the_same() -> None:
     roads, pois = layout.roads_pbf("portland"), layout.pois_parquet("portland")
-    if not roads.exists() or not pois.exists():
+    restrictions = layout.restrictions_parquet("portland")
+    if not roads.exists() or not pois.exists() or not restrictions.exists():
         pytest.skip(f"Portland is not filtered under {roads.parent}")
+    turns = pq.read_table(restrictions)
     crs = REGIONS["portland"].crs_epsg
     raw = read_back(build_raw_graph(roads, crs)[0])
     arrays, _ = build_raw_arrays(roads, crs)
@@ -50,8 +52,8 @@ def test_both_engines_build_portland_the_same() -> None:
     got_table = stage_a_graph(got_a, (twin_indptr, twin_edges)).graph["twins"]
     assert same(want_a.graph["twins"], got_table)
 
-    want, want_report = run_cleanup(raw)
-    got, got_report = run_cleanup(arrays)
+    want, want_report = run_cleanup(raw, restrictions=turns)
+    got, got_report = run_cleanup(arrays, restrictions=turns)
     assert_same_graph(want, got)  # and so the same stage file, byte for byte
     assert pickle.dumps(got, pickle.HIGHEST_PROTOCOL) == pickle.dumps(want, pickle.HIGHEST_PROTOCOL)
     assert dataclasses.replace(got_report, seconds={}) == dataclasses.replace(
@@ -72,7 +74,8 @@ def test_both_engines_build_portland_the_same() -> None:
         enrich_reports.append(dataclasses.replace(run_enrich(graph, table), seconds=0.0))
         builds.append(graph_data(graph, [t.node_ids for t in run_tiers(graph).tiers], meta))
     assert_same_build(*builds)
-    enriched, report = arrays_enrich.run_enrich(run_arrays_cleanup(arrays)[0], table)
+    cleaned = run_arrays_cleanup(arrays, restrictions=turns)[0]
+    enriched, report = arrays_enrich.run_enrich(cleaned, table)
     assert dataclasses.replace(report, seconds=0.0) == enrich_reports[0]
     assert_same_values(want, enriched)
     if "graph_version" in meta and meta["pipeline_version"] == PIPELINE_VERSION:

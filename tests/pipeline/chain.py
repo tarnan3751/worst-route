@@ -19,10 +19,19 @@ UTM_10N = 32610
 TO_LONLAT = pyproj.Transformer.from_crs(UTM_10N, 4326, always_xy=True)
 
 
-def cleaned(source: Path, *, allow_fragmented: bool = False) -> nx.MultiDiGraph:
-    """The cleanup stage of an OSM file."""
+def cleaned(
+    source: Path, *, allow_fragmented: bool = False, restrictions: pa.Table | None = None
+) -> nx.MultiDiGraph:
+    """The cleanup stage of an OSM file, with the turn `restrictions` table if given."""
     raw = build_raw_graph(source, UTM_10N)[0]
-    return run_cleanup(raw, allow_fragmented=allow_fragmented)[0]
+    return run_cleanup(raw, allow_fragmented=allow_fragmented, restrictions=restrictions)[0]
+
+
+def restrictions_of(source: Path, tmp: Path) -> pa.Table:
+    """The turn restrictions table `filter` writes for an OSM file."""
+    roads, pois = tmp / f"{source.stem}.roads.pbf", tmp / f"{source.stem}.pois"
+    filter_roads([source], roads, pois, tmp / f"{source.stem}.restrictions", None)
+    return pq.read_table(tmp / f"{source.stem}.restrictions")
 
 
 def pois_of(source: Path, tmp: Path) -> pa.Table:

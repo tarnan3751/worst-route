@@ -1,7 +1,7 @@
 """The validator: proves a finished route legal from the raw data (`docs/PLAN.md` §8.1).
 
 `validate_route(data, route, stop_nodes=, node_mask=, banned_edges=, banned_turn_classes=0,
-hard=False)` runs every check below
+hard=False, alphabet=False)` runs every check below
 on a route's `nodes`, `edges`, `stop_idx` and reported `metrics`, and returns a
 `ValidationReport`: one `Check` per rule, each with `ok`, the first offending index (a position
 in `nodes` or `edges`, an edge for `osm_ids`, a stop for `stops`) and a detail. `report.ok` is
@@ -31,11 +31,22 @@ recomputed from the request by the caller, not taken from the engine's state.
    edges within a relative 1e-6, reported `items` (the metrics' counters carry them for a
    collecting route and for a route read from a file) equal the route's recount, and a
    reported `brand` (a pilgrimage's `{id, name, visits, of}`) equals its recount from the
-   build's brand index, `of` within the active mask.
+   build's brand index, `of` within the active mask, and a reported `alphabet` (an alphabet
+   route's `{letters, sequence, roads, alpha_from, free_from}`) equals its recount from the
+   route's edges and the build's names, given its `free_from`.
+9. `alphabet`, only for a request whose objective is the alphabet route (`alphabet=True`): the
+   route reports its letters (`free_from`, where its free last leg starts, within the route),
+   and its alphabet part, from its first edge of letter A to `free_from`, reads A, B, C, ...
+   (Z then A again): the letters of its lettered edges, each edge's from its name
+   (`pipeline.names.road_letter`; unnamed edges, links and numbered streets have none), equal
+   ones in a row counting once. The first leg, before the first A road, and the last leg, from
+   `free_from`, are free: they may carry any roads.
 
 It deliberately uses nothing of `engine/route.py`'s bookkeeping, so a bug there cannot hide
 here too; it recounts the items with `objectives.collect.count_items` and a brand's visits
-with `objectives.brand.brand_counts`, which read the route's arrays and the build's alone. A
+with `objectives.brand.brand_counts`, which read the route's arrays and the build's alone, and
+reads an alphabet route's letters itself (sharing only what a name's letter is,
+`road_letter`). A
 route whose ids are out of range fails `chain`, and the checks that would index with them fail
 as skipped. `ValidationFailed` carries a failing report.
 """
@@ -52,7 +63,8 @@ from worst_route.config import TURN_STRAIGHT_DEG, TURN_UTURN_DEG
 from worst_route.engine.objectives.brand import brand_counts
 from worst_route.engine.objectives.collect import count_items
 from worst_route.graph.backend import TURN_LEFT, TURN_RIGHT, TURN_U
-from worst_route.graph.data import GraphData
+from worst_route.graph.data import EdgeFlag, GraphData
+from worst_route.pipeline.names import road_letter
 
 METRICS_TOLERANCE = 1e-6  # relative, docs/PLAN.md §8.1
 
@@ -161,29 +173,33 @@ def validate_route(
     banned_edges: NDArray[np.bool_],
     banned_turn_classes: int = 0,
     hard: bool = False,
+    alphabet: bool = False,
 ) -> ValidationReport:
-    """Run every check on `route`; see the module docstring."""
+    """Run every check on `route` (`alphabet` for an alphabet route's request); see the module
+    docstring."""
     nodes = np.asarray(route.nodes, dtype=np.int64)
     edges = np.asarray(route.edges, dtype=np.int64)
+    names = (*NAMES, "alphabet") if alphabet else NAMES
     invalid = _invalid_ids(data, nodes, edges)
     if invalid is not None:
         skipped = [
-            Check(name, False, None, "skipped: the route's ids are invalid") for name in NAMES
+            Check(name, False, None, "skipped: the route's ids are invalid") for name in names
         ]
         return ValidationReport((invalid, *skipped[1:]))
     round_trip = len(stop_nodes) > 0 and stop_nodes[0] == stop_nodes[-1]
-    return ValidationReport(
-        (
-            _chain(data, nodes, edges, node_mask),
-            _vertex_simple(nodes, round_trip),
-            _edge_simple(data, edges),
-            _osm_ids(data, edges, round_trip),
-            _transitions(data, nodes, edges),
-            _stops(nodes, route.stop_idx, stop_nodes),
-            _constraints(data, nodes, edges, node_mask, banned_edges, banned_turn_classes, hard),
-            _metrics(data, route, edges, node_mask),
-        )
+    checks: tuple[Check, ...] = (
+        _chain(data, nodes, edges, node_mask),
+        _vertex_simple(nodes, round_trip),
+        _edge_simple(data, edges),
+        _osm_ids(data, edges, round_trip),
+        _transitions(data, nodes, edges),
+        _stops(nodes, route.stop_idx, stop_nodes),
+        _constraints(data, nodes, edges, node_mask, banned_edges, banned_turn_classes, hard),
+        _metrics(data, route, edges, node_mask),
     )
+    if alphabet:
+        checks = (*checks, _alphabet(data, route, edges))
+    return ValidationReport(checks)
 
 
 def _fail(name: str, index: int, detail: str) -> Check:
@@ -415,4 +431,75 @@ def _metrics(
         counted = brand_counts(data, brand_id, route.nodes, node_mask)
         if dict(brand) != counted:
             return Check("metrics", False, None, f"brand reported {brand}, recounted {counted}")
+    letters = reported.counters.get("alphabet")
+    if letters is not None:
+        free_from = _free_from(letters, len(edges))
+        if free_from is None:
+            return Check("metrics", False, None, f"alphabet reported {letters}: no free_from")
+        alpha_from, runs = _letter_runs(data, edges, free_from)
+        counted = {
+            "letters": len(runs),
+            "sequence": "".join(letter for _, letter, _ in runs),
+            "roads": [name for _, _, name in runs],
+            "alpha_from": alpha_from,
+            "free_from": free_from,
+        }
+        if not (isinstance(letters, Mapping) and dict(letters) == counted):
+            return Check(
+                "metrics", False, None, f"alphabet reported {letters}, recounted {counted}"
+            )
     return Check("metrics", True)
+
+
+def _free_from(letters: object, m: int) -> int | None:
+    """The reported `free_from` when it is a position in a route of `m` edges, else None."""
+    free_from = letters.get("free_from") if isinstance(letters, Mapping) else None
+    if type(free_from) is not int or not 0 <= free_from <= m:  # no bool, no float
+        return None
+    return free_from
+
+
+def _letter_runs(
+    data: GraphData, edges: NDArray[np.int64], free_from: int
+) -> tuple[int, list[tuple[int, str, str]]]:
+    """Where the alphabet part of `edges[:free_from]` starts (its first edge of letter A, else
+    `free_from`), and its runs of one letter: (first edge's position, letter, road name)."""
+    part = edges[:free_from].tolist()
+    lettered: list[tuple[int, str, str]] = []
+    for k, e in enumerate(part):
+        name_id = int(data.edge_name[e])
+        if name_id < 0 or data.edge_flags[e] & EdgeFlag.LINK:
+            continue
+        name = data.strings.names[name_id]
+        letter = road_letter(name)
+        if letter is not None:
+            lettered.append((k, letter, name))
+    first = next((k for k, letter, _ in lettered if letter == "A"), free_from)
+    runs: list[tuple[int, str, str]] = []
+    for k, letter, name in lettered:
+        if k >= first and (not runs or runs[-1][1] != letter):
+            runs.append((k, letter, name))
+    return first, runs
+
+
+def _alphabet(data: GraphData, route: RouteLike, edges: NDArray[np.int64]) -> Check:
+    letters = route.metrics.counters.get("alphabet")
+    if letters is None:
+        return Check("alphabet", False, None, "an alphabet route that reports no letters")
+    free_from = _free_from(letters, len(edges))
+    if free_from is None:
+        return Check("alphabet", False, None, f"alphabet reported {letters}: no free_from")
+    alpha_from, runs = _letter_runs(data, edges, free_from)
+    for n, (k, letter, name) in enumerate(runs):
+        wanted = chr(ord("A") + n % 26)
+        if letter != wanted:
+            detail = f"{name} ({letter}) at edge {k} where the letters want {wanted}"
+            return _fail("alphabet", k, detail)
+    sequence = "".join(letter for _, letter, _ in runs)
+    return Check(
+        "alphabet",
+        True,
+        None,
+        f"{sequence or 'no letter'} on edges {alpha_from} to {free_from}; the first leg (before "
+        f"the first A road) and the last leg (from edge {free_from}) are free: any roads",
+    )

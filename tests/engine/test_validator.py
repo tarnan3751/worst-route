@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 import pytest
 
+from worst_route.engine.alphabet_search import alphabet_counts
 from worst_route.engine.objectives.collect import count_items
 from worst_route.engine.route import Metrics
 from worst_route.engine.validator import NAMES, ValidationFailed, ValidationReport, validate_route
@@ -12,7 +13,7 @@ from worst_route.graph.backend import TURN_LEFT, TURN_RIGHT, TURN_U
 from worst_route.graph.data import GraphData
 from worst_route.graph.testing import edge_id, make_graph
 
-from .graphs import edges_of, lattice, route_on
+from .graphs import edges_of, lattice, named_roads, route_on
 
 # A two-way 3 × 3 lattice of 100 m streets: node r * 3 + c, row 0 the southmost.
 #   6 - 7 - 8
@@ -354,3 +355,87 @@ def test_a_strict_turn_constraint_is_proven_from_the_bearings() -> None:
         GRID, straight, stop_nodes=[0, 2], node_mask=ALL_NODES, banned_edges=NO_BANS,
         banned_turn_classes=no_left | no_right,
     ).ok  # fmt: skip
+
+
+# The alphabet route: a 3 × 4 lattice whose rows are Elm (south), Alder and Birch Streets, column
+# 3 "Ash Street" (A too) and the other columns numbered avenues (free).
+#   8 - 9 - 10 - 11   Birch
+#   4 - 5 -  6 -  7   Alder
+#   0 - 1 -  2 -  3   Elm
+ABC = lattice(
+    3,
+    4,
+    roads=named_roads(
+        3, 4, ["Elm Street", "Alder Street", "Birch Street"],
+        ["1st Avenue", "2nd Avenue", "3rd Avenue", "Ash Street"],
+    ),
+)  # fmt: skip
+
+
+def lettered(nodes: Sequence[int], last_leg: int, **changes: object) -> Drawn:
+    """A route on ABC reporting its alphabet counts with its last leg from edge `last_leg`
+    (recounted, then `changes` applied)."""
+    route = drawn(ABC, nodes)
+    counts = {**alphabet_counts(ABC, route.edges, last_leg), **changes}
+    return replace(route, metrics=replace(route.metrics, counters={"alphabet": counts}))
+
+
+def alphabet_report(route: Drawn, *, alphabet: bool = True) -> ValidationReport:
+    stops = route.nodes[list(route.stop_idx)].tolist()
+    return validate_route(
+        ABC,
+        route,
+        stop_nodes=stops,
+        node_mask=np.ones(ABC.n, dtype=bool),
+        banned_edges=np.zeros(ABC.m, dtype=bool),
+        alphabet=alphabet,
+    )
+
+
+def test_an_alphabet_route_passes_with_free_first_and_last_legs() -> None:
+    # Elm (free first leg), up 2nd Avenue, Alder, Ash (A again), Birch; then Birch on, free
+    route = lettered([0, 1, 5, 6, 7, 11, 10, 9, 8], 7)
+    assert route.metrics.counters["alphabet"]["sequence"] == "AB"
+    report = alphabet_report(route)
+    assert report.ok, report.lines()
+    assert [c.name for c in report.checks] == [*NAMES, "alphabet"]
+    detail = report.check("alphabet").detail
+    assert "AB on edges 2 to 7" in detail and "free: any roads" in detail
+    assert [c.name for c in alphabet_report(route, alphabet=False).checks] == list(NAMES)
+
+
+def test_a_route_out_of_order_fails_the_alphabet_check() -> None:
+    # Alder, then Elm (E after A), then Birch: reported as recounted, so metrics hold
+    route = lettered([4, 5, 1, 2, 6, 10, 11], 6)
+    assert route.metrics.counters["alphabet"]["sequence"] == "AEB"
+    report = alphabet_report(route)
+    assert report.check("metrics").ok
+    bad = report.check("alphabet")
+    assert not bad.ok and bad.index == 2 and "Elm Street (E)" in bad.detail
+    assert "want B" in bad.detail
+
+
+def test_a_wrong_report_fails_the_metrics_check() -> None:
+    nodes = [0, 1, 5, 6, 7, 11, 10, 9, 8]
+    for changes in (
+        {"sequence": "ABC"},
+        {"letters": 3},
+        {"roads": ["Alder Street", "Ash Street"]},
+        {"alpha_from": 0},
+        {"free_from": 3},  # in range, but the recount up to it is A alone
+    ):
+        report = alphabet_report(lettered(nodes, 7, **changes))
+        assert failed({c.name: c.ok for c in report.checks}) == ["metrics"], changes
+
+
+@pytest.mark.parametrize("free_from", [-1, 9, 2.0, True, None])
+def test_a_free_from_outside_the_route_fails(free_from: object) -> None:
+    route = lettered([0, 1, 5, 6, 7, 11, 10, 9, 8], 7, free_from=free_from)
+    report = alphabet_report(route)
+    assert failed({c.name: c.ok for c in report.checks}) == ["metrics", "alphabet"]
+
+
+def test_an_alphabet_request_needs_the_route_s_letters() -> None:
+    report = alphabet_report(drawn(ABC, [0, 1, 5, 6]))
+    assert failed({c.name: c.ok for c in report.checks}) == ["alphabet"]
+    assert "reports no letters" in report.check("alphabet").detail

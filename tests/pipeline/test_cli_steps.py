@@ -16,6 +16,7 @@ import pytest
 from typer.testing import CliRunner
 
 from tests.pipeline.invariants import check_build
+from tests.pipeline.test_consolidate import cut_interchange
 from worst_route.cli import app
 from worst_route.config import REGIONS
 from worst_route.graph.store import read_build
@@ -247,7 +248,7 @@ def test_cleanup_after_build(data_dir: Path) -> None:
         "stage A: 1 clusters from 4 nodes",
         "twins: 7 of 7 candidate edges paired; motorway and trunk coverage n/a",
         "stage B: 0 super-junctions (interchange 0, roundabout 0), 0 internal edges, "
-        "5 twin pairs carried",
+        "5 twin pairs carried, 0 joins along a carriageway",
         "connectivity: kept 15 of 15 nodes; dropped 0 nodes and 0.0 km in 0 components",
         "nodes 15, edges 25",
     ]
@@ -267,6 +268,19 @@ def test_cleanup_after_build(data_dir: Path) -> None:
     assert sidecar["params"]["config"]["STAGE_B_JOIN_M"] == 500.0
 
 
+def test_cleanup_names_the_super_junctions_dropped_with_no_allowed_turn(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    source = str(cut_interchange(tmp_path))
+    assert pipeline("build", "--region", "portland", "--source", source, "--build-id", "b1")[0] == 0
+    code, output = pipeline("cleanup", "--region", "portland")
+    assert code == 0, output
+    assert (
+        "stage B: 0 super-junctions (interchange 0, roundabout 0), 0 internal edges, "
+        "0 twin pairs carried, 0 joins along a carriageway, 1 dropped with no allowed turn"
+    ) in output.splitlines()
+
+
 def test_cleanup_skips_unless_forced(data_dir: Path) -> None:
     source = str(FIXTURES / "diamond.osm")
     assert pipeline("build", "--region", "portland", "--source", source, "--build-id", "b2")[0] == 0
@@ -280,7 +294,7 @@ def test_cleanup_skips_unless_forced(data_dir: Path) -> None:
     assert code == 0 and output.startswith("cleanup b2: wrote ")
     assert (
         "stage B: 1 super-junctions (interchange 1, roundabout 0), 8 internal edges, "
-        "2 twin pairs carried" in output
+        "2 twin pairs carried, 0 joins along a carriageway" in output
     )
     assert "motorway and trunk coverage 1.000" in output
 

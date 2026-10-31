@@ -52,6 +52,7 @@ def test_cleanup_of_each_fixture(name: str, nodes: int, edges: int, kinds: dict[
     assert (report.connectivity.nodes_after, report.connectivity.edges_after) == (nodes, edges)
     assert set(report.seconds) == {"simplify", "stage_a", "stage_b", "twins", "connectivity"}
     assert set(graph.graph) == {"crs", "pipeline_version", "superjunctions", "twins"}
+    assert report.stage_b.dropped_empty == 0
 
 
 @pytest.mark.parametrize("name", ["divided", "cloverleaf"])

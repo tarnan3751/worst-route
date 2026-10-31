@@ -1,4 +1,5 @@
 import math
+import random
 from pathlib import Path
 from typing import Any
 
@@ -8,13 +9,14 @@ import pyproj
 import pytest
 import shapely
 
-from tests.pipeline.invariants import check_all
+from tests.pipeline.invariants import check_all, lost_through
 from tests.pipeline.osm import write_osm
 from worst_route.config import (
     STAGE_A_TOLERANCE_ARTERIAL_M,
     STAGE_A_TOLERANCE_M,
     STAGE_A_TOLERANCE_ROUNDABOUT_M,
 )
+from worst_route.pipeline import consolidate
 from worst_route.pipeline.build import build_raw_graph
 from worst_route.pipeline.carriageways import find_twins
 from worst_route.pipeline.consolidate import (
@@ -26,6 +28,7 @@ from worst_route.pipeline.consolidate import (
     _incident,
     _is_junction_edge,
     _ramp_clusters,
+    _road_keys,
     _road_signatures,
     buffer_groups,
     relabel,
@@ -477,6 +480,295 @@ def test_ramps_join_when_they_connect_the_same_two_roads(
     check_all(before, graph)
     assert len(supers(graph)) == count
     assert stats.joined == (count == 1)
+    assert stats.rejoined == 0  # the motorway passes both, but never comes back to the first
+
+
+def woodburn(tmp_path: Path, far: bool = False, fork: int | None = None) -> Path:
+    """I-5 over the Newberg Highway as at Woodburn: the highway is OR 219 west of the bridge and
+    OR 214 east of it, so the interchange's halves share one identity, I-5. Northbound, I-5
+    leaves the east half's off-ramp (2), passes the west half's loop on-ramp (3), then the east
+    half's on-ramp (4); east of I-5 the highway is a one-way couplet as far as Evergreen Rd, too
+    long to be a pocket, so the east half's off-ramp (to 13) cannot reach its on-ramp (from 23).
+    With `far`, the east half also has a ramp 1.5 km east to Far Rd. With `fork` (0 or 1, the
+    order its ways are written in), northbound I-5 forks at 26 into two I 5 branches, one past the
+    west half's on-ramp and back to the east half's (3, 4), the other bypassing both (27)."""
+    nodes = {
+        1: (15, -1000), 2: (15, -400), 3: (15, 150), 4: (15, 500), 5: (15, 1000),
+        6: (-15, 1000), 7: (-15, 400), 8: (-15, -300), 9: (-15, -1000),
+        10: (-400, 0), 11: (-150, 0), 12: (0, 0), 13: (150, 0), 14: (800, 0),
+        15: (100, -200), 16: (150, 300), 17: (-60, 100), 18: (-100, 200), 19: (-100, -200),
+        23: (250, 0), 24: (250, -40), 25: (800, 300), 26: (15, -150), 27: (60, 300),
+        20: (900, 0), 21: (1650, 0), 22: (1650, 300),
+    }  # fmt: skip
+    i5 = {"highway": "motorway", "ref": "I 5", "oneway": "yes"}
+    or214 = {"highway": "primary", "name": "Newberg Highway", "ref": "OR 214"}
+    ramp = {"highway": "motorway_link", "oneway": "yes"}
+    north = [(1, [1, 2, 3, 4, 5], i5)]
+    if fork is not None:
+        branches = [(31, [26, 3, 4, 5], i5), (32, [26, 27, 5], i5)]
+        north = [(1, [1, 2, 26], i5), *(branches if fork == 0 else branches[::-1])]
+    ways = [
+        *north,
+        (2, [6, 7, 8, 9], i5),
+        (3, [10, 11, 12], {**or214, "ref": "OR 219"}),
+        (4, [12, 13], or214),
+        (5, [14, 23, 13], {**or214, "oneway": "yes"}),  # westbound
+        (6, [13, 24, 14], {**or214, "oneway": "yes"}),  # eastbound
+        (14, [14, 25], {"highway": "tertiary", "name": "Evergreen Rd"}),
+        (7, [2, 15, 13], ramp),  # east half: off northbound
+        (8, [23, 16, 4], ramp),  # east half: on northbound
+        (9, [11, 17, 3], ramp),  # west half: loop on northbound
+        (10, [7, 18, 11], ramp),  # west half: off southbound
+        (11, [11, 19, 8], ramp),  # west half: on southbound
+    ]
+    if far:
+        ways += [
+            (12, [23, 20, 21], ramp),
+            (13, [21, 22], {"highway": "tertiary", "name": "Far Rd"}),
+        ]
+    else:
+        nodes = {n: xy for n, xy in nodes.items() if n not in (20, 21, 22)}
+    if fork is None:
+        nodes = {n: xy for n, xy in nodes.items() if n not in (26, 27)}
+    return write_osm(tmp_path / "woodburn.osm", nodes, ways)
+
+
+def passes(graph: nx.MultiDiGraph, osm_ids: list[int]) -> list[int]:
+    """The nodes a drive through these OSM nodes passes, in order (one node once per visit)."""
+    holder = {m: n for n, members in graph.nodes(data="members") for m in members}
+    nodes = [holder[i] for i in osm_ids]
+    return [v for i, v in enumerate(nodes) if i == 0 or v != nodes[i - 1]]
+
+
+DRIVES = {
+    "I-5 north": [1, 2, 3, 4, 5],
+    "east": [10, 11, 12, 13, 14],
+    "west": [14, 23, 13, 12, 11, 10],
+}
+
+
+def test_a_carriageway_that_comes_back_joins_its_clusters(tmp_path: Path) -> None:
+    before, merged, _ = through_a(woodburn(tmp_path))
+    graph, stats = stage_b(merged)
+    check_all(before, graph)
+    (node,) = supers(graph)
+    assert supers(graph)[node]["kind"] == "interchange" and stats.rejoined == 1
+    for osm_ids in DRIVES.values():
+        drive = passes(graph, osm_ids)
+        assert len(drive) == len(set(drive))  # each node once
+    pairs = pairs_by_osm(graph, node)
+    assert ((1, 2), (4, 5)) in pairs  # I-5 straight through, northbound
+    assert ((6, 7), (8, 9)) in pairs  # and southbound
+    assert lost_through(graph) == []
+
+
+def test_apart_the_halves_lose_a_through_movement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    before, merged, _ = through_a(woodburn(tmp_path))
+    monkeypatch.setattr(consolidate, "_carriageway_rejoins", lambda *args: [])
+    graph, stats = stage_b(merged)
+    check_all(before, graph)
+    assert len(supers(graph)) == 2 and stats.rejoined == 0
+    north = passes(graph, DRIVES["I-5 north"])
+    assert len(north) == 5 and north[1] == north[3]  # the east half twice
+    ((node, _, _),) = lost_through(graph)
+    assert node == north[1]
+
+
+def test_a_pocket_follows_a_road_whose_ref_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    before, merged, _ = through_a(woodburn(tmp_path))
+
+    def refs_only(graph: nx.MultiDiGraph, signature: dict[Any, Any]) -> dict[Any, frozenset[Any]]:
+        return {e: frozenset({r}) for e, r in signature.items() if r is not None}
+
+    monkeypatch.setattr(consolidate, "_road_keys", refs_only)
+    graph, _ = stage_b(merged)
+    check_all(before, graph)
+    for name in ("east", "west"):  # out to the bridge, where OR 219 becomes OR 214, and back
+        drive = passes(graph, DRIVES[name])
+        assert len(drive) > len(set(drive))
+    monkeypatch.undo()
+    graph, _ = stage_b(merged)
+    for name in ("east", "west"):
+        drive = passes(graph, DRIVES[name])
+        assert len(drive) == len(set(drive))
+
+
+def mlk(tmp_path: Path) -> Path:
+    """OR 99E (one-way north) passes a cluster of two ramp components joined by their roads (both
+    to OR 99E and Clay St, one-way south between them), then another cluster (to Main St), then
+    the other part of the first, as Martin Luther King Boulevard does in Portland."""
+    trunk = {"highway": "trunk", "ref": "OR 99E", "name": "MLK Blvd", "oneway": "yes"}
+    link = {"highway": "trunk_link", "oneway": "yes"}
+    return write_osm(
+        tmp_path / "mlk.osm",
+        {
+            21: (0, -600),
+            22: (0, -150),
+            23: (0, 0),
+            24: (0, 150),
+            25: (0, 600),
+            31: (80, -120),
+            32: (150, -100),
+            33: (150, 100),
+            34: (80, 120),
+            35: (150, 0),
+            41: (-80, 20),
+            42: (-150, 0),
+            43: (-400, 0),
+        },  # fmt: skip
+        [
+            (20, [21, 22, 23, 24, 25], trunk),
+            (21, [22, 31, 32], link),
+            (22, [33, 34, 24], link),
+            (23, [33, 35, 32], {"highway": "tertiary", "name": "Clay St", "oneway": "yes"}),
+            (24, [23, 41, 42], link),
+            (25, [43, 42], {"highway": "tertiary", "name": "Main St"}),
+        ],
+    )
+
+
+def test_a_carriageway_coming_back_to_another_part_of_its_cluster(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    before, merged, _ = through_a(mlk(tmp_path))
+    graph, stats = stage_b(merged)
+    check_all(before, graph)
+    (node,) = supers(graph)
+    assert stats.joined == 1 and stats.rejoined == 1
+    assert ((21, 22), (24, 25)) in pairs_by_osm(graph, node)
+    assert lost_through(graph) == []
+    monkeypatch.setattr(consolidate, "_carriageway_rejoins", lambda *args: [])
+    apart, _ = stage_b(merged)
+    assert len(supers(apart)) == 2 and len(lost_through(apart)) == 1
+
+
+def test_a_joined_cluster_too_wide_is_split(tmp_path: Path) -> None:
+    before, merged, _ = through_a(woodburn(tmp_path, far=True))
+    graph, stats = stage_b(merged)
+    check_all(before, graph)
+    assert stats.rejoined == 1 and stats.split == 1
+    # single linkage at 300 m: the south gores (2 and 8) and the rest; Far Rd's end alone stays
+    # a plain node
+    assert len(supers(graph)) == 2
+    for osm_ids in DRIVES.values():
+        drive = passes(graph, osm_ids)
+        assert len(drive) == len(set(drive))
+    assert lost_through(graph) == []
+
+
+@pytest.mark.parametrize("order", [0, 1])
+def test_a_carriageway_that_forks_is_followed_down_every_branch(tmp_path: Path, order: int) -> None:
+    before, merged, _ = through_a(woodburn(tmp_path, fork=order))
+    graph, stats = stage_b(merged)
+    check_all(before, graph)
+    assert stats.rejoined == 1 and len(supers(graph)) == 1
+    drive = passes(graph, [1, 2, 26, 3, 4, 5])
+    assert len(drive) == len(set(drive))
+    assert lost_through(graph) == []
+
+
+def block(tmp_path: Path) -> Path:
+    """Four primary streets of four names, with no ref, round a 300 m block: a slip lane at the
+    south-west corner (on West St and South St) and one on North St (to Up St). No one road
+    leaves the corner's cluster and comes back to it; a chain that turned the corners would."""
+    street = {"highway": "primary"}
+    link = {"highway": "primary_link", "oneway": "yes"}
+    return write_osm(
+        tmp_path / "block.osm",
+        {
+            1: (0, 0),
+            2: (0, 300),
+            3: (300, 300),
+            4: (300, 0),
+            11: (0, 40),
+            12: (40, 0),
+            13: (15, 15),
+            21: (120, 300),
+            22: (180, 300),
+            23: (150, 340),
+            24: (150, 500),
+            31: (-200, 0),
+            32: (0, -200),
+        },  # fmt: skip
+        [
+            (1, [1, 11, 2], {**street, "name": "West St"}),
+            (2, [2, 21, 22, 3], {**street, "name": "North St"}),
+            (3, [3, 4], {**street, "name": "East St"}),
+            (4, [4, 12, 1], {**street, "name": "South St"}),
+            (5, [11, 13, 12], link),
+            (6, [21, 23, 22], link),
+            (7, [23, 24], {"highway": "tertiary", "name": "Up St"}),
+            (8, [31, 1], {**street, "name": "West Spur"}),
+            (9, [32, 1], {**street, "name": "South Spur"}),
+        ],
+    )
+
+
+def test_a_carriageway_never_turns_onto_another_road(tmp_path: Path) -> None:
+    before, merged, _ = through_a(block(tmp_path))
+    graph, stats = stage_b(merged)
+    check_all(before, graph)
+    assert stats.rejoined == 0 and len(supers(graph)) == 2
+
+
+def shuffled(path: Path, seed: int) -> Path:
+    """The same OSM file with its nodes, and its ways, written in another order."""
+    lines = path.read_text().splitlines()
+    nodes = [line for line in lines if line.lstrip().startswith("<node")]
+    ways = [line for line in lines if line.lstrip().startswith("<way")]
+    rng = random.Random(seed)
+    rng.shuffle(nodes)
+    rng.shuffle(ways)
+    out = path.with_name(f"{path.stem}.{seed}.osm")
+    out.write_text("\n".join([*lines[:2], *nodes, *ways, lines[-1]]) + "\n")
+    return out
+
+
+def in_osm_terms(graph: nx.MultiDiGraph) -> tuple[dict[Any, Any], frozenset[Any]]:
+    """The super-junctions (by members: kind, parts and transitions) and the twin pairs, each
+    edge named by its OSM nodes, so two runs that number nodes and edges differently compare."""
+
+    def osm(edge: tuple[int, int, int]) -> tuple[int, ...]:
+        return tuple(graph.edges[edge]["osm_nodes"])
+
+    junctions = {
+        record["members"]: (
+            record["kind"],
+            record["parts"],
+            frozenset((osm(a), osm(b)) for a, b in record["transitions"]),
+        )
+        for record in supers(graph).values()
+    }
+    twins = frozenset(
+        frozenset((osm(edge), osm(other)))
+        for edge, others in graph.graph["twins"].items()
+        for other in others
+    )
+    return junctions, twins
+
+
+@pytest.mark.parametrize("fixture", ["woodburn", "mlk", "fork"])
+def test_the_joins_do_not_depend_on_the_input_order(tmp_path: Path, fixture: str) -> None:
+    source = {
+        "woodburn": lambda: woodburn(tmp_path, far=True),
+        "mlk": lambda: mlk(tmp_path),
+        "fork": lambda: woodburn(tmp_path, fork=0),
+    }[fixture]()
+    _, merged, _ = through_a(source)
+    find_twins(merged)
+    expected, stats = stage_b(merged)
+    assert bool(expected.graph["twins"]) == (fixture != "mlk")  # I-5's carriageways compared too
+    for seed in range(6):
+        before, merged, _ = through_a(shuffled(source, seed))
+        find_twins(merged)
+        graph, other = stage_b(merged)
+        check_all(before, graph)
+        assert other.rejoined == stats.rejoined
+        assert in_osm_terms(graph) == in_osm_terms(expected)
 
 
 def wide(tmp_path: Path) -> Path:
@@ -551,7 +843,9 @@ def test_every_cluster_node_reaches_an_attachment_node(tmp_path: Path) -> None:
         _, merged, _ = through_a(source)
         stats = StageBStats()
         clusters = _ramp_clusters(merged, stats)
-        for nodes in _absorb_pockets(merged, clusters, _road_signatures(merged), stats):
+        for nodes in _absorb_pockets(
+            merged, clusters, _road_keys(merged, _road_signatures(merged)), stats
+        ):
             within = nx.Graph()
             within.add_nodes_from(nodes)
             within.add_edges_from((u, v) for u, v, _ in _edges_within(merged, nodes))
@@ -678,6 +972,49 @@ def test_roundabouts_are_counted(tmp_path: Path) -> None:
     check_all(before, graph)
     ((node, record),) = supers(graph).items()
     assert (record["kind"], record["roundabouts"]) == ("interchange", 1)
+
+
+def cut_interchange(tmp_path: Path) -> Path:
+    """I 90 cut by a region's edge at an interchange whose interior lies beyond the extracts: the
+    eastbound carriageway ends at its on-ramp's merge (3), the westbound starts at its on-ramp's
+    merge (4), and both ramps come from the cross road's terminal (8), whose road is outside. A
+    street joins the carriageways' west ends (1, 6). No path inside the interchange leads from
+    where eastbound arrives to where westbound leaves, so it allows no turn through it."""
+    return write_osm(
+        tmp_path / "cut.osm",
+        {
+            1: (-900, 15),
+            2: (-400, 15),
+            3: (0, 15),
+            4: (0, -15),
+            5: (-400, -15),
+            6: (-900, -15),
+            7: (-950, 0),
+            8: (300, 0),
+        },  # fmt: skip
+        [
+            (1, [1, 2, 3], {"highway": "motorway", "ref": "I 90", "oneway": "yes"}),
+            (2, [4, 5, 6], {"highway": "motorway", "ref": "I 90", "oneway": "yes"}),
+            (3, [6, 7, 1], {"highway": "residential", "name": "Stateline Rd"}),
+            (4, [8, 3], {"highway": "motorway_link"}),
+            (5, [8, 4], {"highway": "motorway_link"}),
+        ],
+    )
+
+
+def test_a_super_junction_allowing_no_turn_is_dropped(tmp_path: Path) -> None:
+    _, merged, _ = through_a(cut_interchange(tmp_path))
+    find_twins(merged)
+    assert merged.graph["twins"]  # the carriageways are twins
+    graph, stats = stage_b(merged)
+    assert stats.dropped_empty == 1
+    assert stats.superjunctions == {"interchange": 0, "roundabout": 0}
+    assert (stats.internal_edges, stats.twin_pairs) == (0, 0)
+    assert supers(graph) == {} and graph.graph["twins"] == {}  # its boundary edges went with it
+    assert sorted(m for _, members in graph.nodes(data="members") for m in members) == [1, 6]
+    street = {d["osm_nodes"]: d for _, _, d in merged.edges(data=True) if "name" in d}
+    assert {d["osm_nodes"]: d for _, _, d in graph.edges(data=True)} == street  # as it was
+    assert list(graph.nodes) == [0, 1]
 
 
 def test_stage_b_numbers_the_nodes() -> None:

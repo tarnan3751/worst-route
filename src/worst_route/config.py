@@ -68,8 +68,9 @@ REGIONS: dict[str, Region] = {
 # bump it when a step's output changes for the same input. `pipeline` re-exports it, and
 # `graph.store` reads it to name the remedy for a build another version wrote. 2: bearings
 # exclude stubs, node_roundabouts; 3: brand arrays; 4: stage A places each cluster from its
-# own buffers.
-PIPELINE_VERSION = "4"
+# own buffers; 5: stage B joins the clusters a carriageway leaves and comes back to, and its
+# pockets follow a road by its name as well as its refs.
+PIPELINE_VERSION = "5"
 
 
 @cache
@@ -284,16 +285,20 @@ STAGE_A_TOLERANCE_ARTERIAL_M = 15.0
 STAGE_A_TOLERANCE_M = 8.0
 STAGE_A_ARTERIAL_CLASSES = frozenset({"trunk", "primary", "secondary"})
 STAGE_A_MAX_LENGTH_M = 60.0
-# Stage B (`pipeline/consolidate.py`): ramps (`*_link`) and roundabouts become super-junctions.
-# Ramp components whose attachment roads share two identities and lie within STAGE_B_JOIN_M of
-# each other are one interchange; a cluster whose links are all minor (STAGE_B_MINOR_LINKS)
+# Stage B (`pipeline/consolidate.py`): ramps (`*_link`) and roundabouts become super-junctions. Ramp
+# components whose attachment roads share two identities and lie within STAGE_B_JOIN_M of each other
+# are one interchange, and so are two clusters with attachment nodes within STAGE_B_JOIN_M on one
+# carriageway (one highway of STAGE_B_CARRIAGEWAY_CLASSES with one ref set, else one name) that
+# leaves one, passes the other and comes back within STAGE_B_MAX_DIAMETER_M (I-5 northbound at
+# Woodburn, whose halves share only I-5); a cluster whose links are all minor (STAGE_B_MINOR_LINKS)
 # takes in the at-grade node its slip lanes bypass, a neighbour of two of its attachment nodes
-# through two different roads within STAGE_B_SLIP_CENTER_M. A cluster then takes in the nodes
-# of a pocket: a path of at most STAGE_B_POCKET_M along one road leaving the cluster and coming
-# back to it (a bridge between ramp terminals). A cluster wider than STAGE_B_MAX_DIAMETER_M
-# (bbox diagonal) is split by single linkage of its attachment nodes at STAGE_B_SPLIT_EPS_M.
-# Roundabouts never split.
+# through two different roads within STAGE_B_SLIP_CENTER_M. A cluster then takes in the nodes of a
+# pocket: a path of at most STAGE_B_POCKET_M along one road (one ref set, or one name) leaving the
+# cluster and coming back to it (a bridge between ramp terminals). A cluster wider than
+# STAGE_B_MAX_DIAMETER_M (bbox diagonal) is split by single linkage of its attachment nodes at
+# STAGE_B_SPLIT_EPS_M. Roundabouts never split.
 STAGE_B_JOIN_M = 500.0
+STAGE_B_CARRIAGEWAY_CLASSES = frozenset({"motorway", "trunk", "primary"})
 STAGE_B_MINOR_LINKS = frozenset({"primary_link", "secondary_link", "tertiary_link"})
 STAGE_B_SLIP_CENTER_M = 150.0
 STAGE_B_POCKET_M = 600.0

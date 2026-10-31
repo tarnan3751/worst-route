@@ -23,31 +23,48 @@ the cluster's members, then replaces OSMnx's node attributes (`osmid_original`,
 ours.
 
 **Stage B** (`stage_b`) is ours. The ramp (`*_link`) and roundabout edges, undirected, form
-components; a component's attachment nodes are those with another road too. Two components
-whose attachment roads share two identities (`names.road_signature`) and have attachment
-nodes within `STAGE_B_JOIN_M` are one cluster: the ramps of one interchange rarely share a node.
+components; a component's attachment nodes are those with another road too. Two components whose
+attachment roads share two identities (`names.road_signature`) and have attachment nodes within
+`STAGE_B_JOIN_M` are one cluster: the ramps of one interchange rarely share a node. So are two
+clusters that one carriageway runs through interleaved (`_carriageway_rejoins`). Two of their
+attachment nodes within `STAGE_B_JOIN_M` of each other share a carriageway key (an edge in or out
+of each has the same highway, of `STAGE_B_CARRIAGEWAY_CLASSES`, and the same ref set, else the
+same name), and a chain of edges of one of those keys, each continuing the one before it OSM node
+to node, leaves one cluster from any of its nodes, passes the other and comes back to the first
+within `STAGE_B_MAX_DIAMETER_M` (`_comes_back`, every branch followed). Kept apart, the
+carriageway would pass the first super-node twice, and no route could drive it straight through
+(northbound I-5 at Woodburn, whose two halves share only I-5: the cross road is OR 219 on one
+side and OR 214 on the other).
 A cluster whose links are all minor (`STAGE_B_MINOR_LINKS`, slip lanes) also takes every node
 that two of its attachment nodes reach through roads of two different identities of at most
 `STAGE_B_SLIP_CENTER_M`, the at-grade crossing the slip lanes bypass; clusters that claim the
 same node, or a node of another cluster, become one. Then each cluster takes in its pockets
 (`_absorb_pockets`): the interior nodes of a path of at most `STAGE_B_POCKET_M` along one road
-from one of its attachment nodes to another, outside it, such as a bridge between two ramp
-terminals; without that, the road would leave the super-node and come back to it, and no route
-could go straight through. A cluster whose bbox diagonal exceeds `STAGE_B_MAX_DIAMETER_M` (never
-a roundabout) is split by single linkage of its attachment nodes at `STAGE_B_SPLIT_EPS_M`, every
-other node joining the group of its nearest attachment node along the cluster's edges; a group
-of one node stays as it is. Each cluster becomes one super-node at the mean position of the
-nodes it replaces, `kind` `roundabout` when all its ramp and roundabout edges are roundabout
-edges, else `interchange`. Its internal edges (both ends inside) leave the graph; boundary edges
-are re-pointed to it.
+(one ref signature, or one name: a road whose ref changes partway is still one road, as the
+Newberg Highway is OR 219 and OR 214 on either side of I-5 at Woodburn) from one of its
+attachment nodes to another, outside it, such as a bridge between two ramp terminals; without
+that, the road would leave the super-node and come back to it, and no route could go straight
+through. A cluster whose bbox diagonal exceeds `STAGE_B_MAX_DIAMETER_M` (never a roundabout) is
+split by single linkage of its attachment nodes at `STAGE_B_SPLIT_EPS_M`, every other node
+joining the group of its nearest attachment node along the cluster's edges; a group of one node
+stays as it is. Each cluster becomes one super-node at the mean position of the nodes it
+replaces, `kind` `roundabout` when all its ramp and roundabout edges are roundabout edges, else
+`interchange`. Its internal edges (both ends inside) leave the graph; boundary edges are
+re-pointed to it.
 
 `G.graph["superjunctions"][node]` describes each super-node: `kind`, `members`, `parts` (the
 members of each node it replaced), `internal` (each internal edge's attributes plus `u` and `v`,
 the smallest OSM id of the part at each end), `roundabouts` (the roundabout rings among its
 internal edges) and `transitions`, the sorted `(in_edge, out_edge)` pairs, edges keyed `(u, v,
 key)`, for which a directed path through the internal edges leads from the in-edge's end to the
-out-edge's start (the same node counts). Route splicing enforces them; every super-node has the
-entry, even when no pair is allowed.
+out-edge's start (the same node counts). Route splicing enforces them. A super-junction with
+edges in and out that allows no pair between them is dropped, with its boundary edges, and has
+no entry: no route can pass through it, connectivity cannot see that, and a build cannot say so
+(a node without transition rows allows every turn). It happens where a region's edge cuts an
+interchange, its interior continuing beyond the extracts (I-90 at the Washington-Idaho line, in
+a build of Oregon and Washington); connectivity then drops the stubs left at its neighbours. One
+without edges in or out allows no pair either and keeps its entry: connectivity drops it as it
+is, since no route reaches it or leaves it.
 
 Twins (`carriageways.find_twins`) are found on the stage A graph, so a carriageway stretch that
 stage B makes internal still has its twins; `stage_b` carries the table across (`_carry_twins`).
@@ -96,6 +113,7 @@ from worst_route.config import (
     STAGE_A_TOLERANCE_ARTERIAL_M,
     STAGE_A_TOLERANCE_M,
     STAGE_A_TOLERANCE_ROUNDABOUT_M,
+    STAGE_B_CARRIAGEWAY_CLASSES,
     STAGE_B_JOIN_M,
     STAGE_B_MAX_DIAMETER_M,
     STAGE_B_MINOR_LINKS,
@@ -104,7 +122,7 @@ from worst_route.config import (
     STAGE_B_SPLIT_EPS_M,
 )
 from worst_route.pipeline.build import ROUNDABOUT_JUNCTIONS
-from worst_route.pipeline.names import road_signature
+from worst_route.pipeline.names import normalize_name, road_signature
 
 SUPER_KINDS = frozenset({"interchange", "roundabout"})
 # Segments per quarter circle of a stage A buffer: geopandas' default, which OSMnx's buffers use,
@@ -134,9 +152,11 @@ class StageBStats:
     superjunctions: dict[str, int] = field(default_factory=dict)  # by kind
     sizes: dict[int, int] = field(default_factory=dict)  # nodes replaced -> super-nodes
     joined: int = 0  # clusters made of two ramp components or more
+    rejoined: int = 0  # joins made because a carriageway leaves a cluster and comes back to it
     slip_centres: int = 0  # slip-lane clusters that took in the node they bypass
     pocket_nodes: int = 0  # nodes taken in as pockets
     split: int = 0  # clusters split by the diameter guard
+    dropped_empty: int = 0  # super-junctions with edges in and out that allow no turn between
     internal_edges: int = 0
     twin_pairs: int = 0  # unordered twin pairs carried across
     twin_transitions: int = 0  # transitions that must drive an internal edge with a twin outside
@@ -308,7 +328,9 @@ def stage_b(graph: nx.MultiDiGraph) -> tuple[nx.MultiDiGraph, StageBStats]:
     """The stage A graph with its interchanges and roundabouts as super-junctions."""
     stats = StageBStats()
     signature = _road_signatures(graph)
-    clusters = _absorb_pockets(graph, _ramp_clusters(graph, stats), signature, stats)
+    clusters = _absorb_pockets(
+        graph, _ramp_clusters(graph, stats), _road_keys(graph, signature), stats
+    )
     supers: list[tuple[set[int], str]] = []
     for nodes in clusters:
         inner = [d for _, _, d in _edges_within(graph, nodes) if _is_junction_edge(d)]
@@ -362,6 +384,7 @@ def stage_b(graph: nx.MultiDiGraph) -> tuple[nx.MultiDiGraph, StageBStats]:
         new_key[u, v, k] = (nu, nv, result.add_edge(nu, nv, **attributes))
 
     superjunctions = {}
+    empty: set[int] = set()
     sizes: Counter[int] = Counter()
     kinds: Counter[str] = Counter()
     for i, (nodes, kind) in enumerate(supers):
@@ -379,6 +402,9 @@ def stage_b(graph: nx.MultiDiGraph) -> tuple[nx.MultiDiGraph, StageBStats]:
             for out, tail in outs[i]
             if tail in reach[head]
         )
+        if not transitions and ins[i] and outs[i]:  # no route passes it: dropped below
+            empty.add(base + i)
+            continue
         result.nodes[base + i]["members"] = tuple(sorted(members))
         superjunctions[base + i] = {
             "kind": kind,
@@ -396,10 +422,12 @@ def stage_b(graph: nx.MultiDiGraph) -> tuple[nx.MultiDiGraph, StageBStats]:
         result.graph["twins"], stats.twin_transitions, stats.twin_passages = _carry_twins(
             graph, internal, ins, outs, new_key, signature
         )
-        stats.twin_pairs = sum(map(len, result.graph["twins"].values())) // 2
     stats.superjunctions = {kind: kinds[kind] for kind in sorted(SUPER_KINDS)}
     stats.sizes = dict(sorted(sizes.items()))
-    relabelled = relabel(result)
+    stats.dropped_empty = len(empty)
+    relabelled = relabel(result, [node for node in result if node not in empty])
+    if "twins" in relabelled.graph:
+        stats.twin_pairs = sum(map(len, relabelled.graph["twins"].values())) // 2
     stats.nodes = relabelled.number_of_nodes()
     stats.edges = relabelled.number_of_edges()
     return relabelled, stats
@@ -412,6 +440,21 @@ def _road_signatures(graph: nx.MultiDiGraph) -> dict[EdgeKey, Any]:
         for u, v, k, data in graph.edges(keys=True, data=True)
         if not _is_junction_edge(data)
     }
+
+
+def _road_keys(
+    graph: nx.MultiDiGraph, signature: dict[EdgeKey, Any]
+) -> dict[EdgeKey, frozenset[Any]]:
+    """The keys a pocket may follow each road edge by: its `road_signature` and, when it has a
+    name, its normalised name, so a road whose ref changes partway is one road to the pockets.
+    Edges with neither have none."""
+    keys = {}
+    for edge, road in signature.items():
+        name = graph.edges[edge].get("name")
+        found = {key for key in (road, normalize_name(name) if name else None) if key}
+        if found:
+            keys[edge] = frozenset(found)
+    return keys
 
 
 def _edges_within(graph: nx.MultiDiGraph, nodes: set[int]) -> Iterator[tuple[int, int, EdgeData]]:
@@ -433,6 +476,7 @@ def _ramp_clusters(graph: nx.MultiDiGraph, stats: StageBStats) -> list[set[int]]
     signatures: list[set[Any]] = []
     points: list[tuple[float, float]] = []
     owner: list[int] = []
+    attached: list[int] = []
     for i, component in enumerate(components):
         found: set[Any] = set()
         for node in sorted(component, key=first.__getitem__):
@@ -440,15 +484,26 @@ def _ramp_clusters(graph: nx.MultiDiGraph, stats: StageBStats) -> list[set[int]]
             if roads:
                 points.append((graph.nodes[node]["x"], graph.nodes[node]["y"]))
                 owner.append(i)
+                attached.append(node)
                 found.update(s for data in roads if (s := road_signature(data)) is not None)
         signatures.append(found)
     joins = nx.Graph()
     joins.add_nodes_from(range(len(components)))
+    pairs: list[tuple[int, int]] = []
     if points:
-        for p, q in cKDTree(np.asarray(points)).query_pairs(STAGE_B_JOIN_M, output_type="ndarray"):
+        tree = cKDTree(np.asarray(points))
+        pairs = [
+            (int(p), int(q)) for p, q in tree.query_pairs(STAGE_B_JOIN_M, output_type="ndarray")
+        ]
+        for p, q in pairs:
             i, j = owner[p], owner[q]
             if i != j and len(signatures[i] & signatures[j]) >= 2:
                 joins.add_edge(i, j)
+    rejoins = _carriageway_rejoins(
+        graph, components, joins, [(attached[p], attached[q]) for p, q in pairs]
+    )
+    joins.add_edges_from(rejoins)
+    stats.rejoined = len(rejoins)
     clusters = []
     for group in nx.connected_components(joins):
         clusters.append(set().union(*(components[i] for i in group)))
@@ -491,18 +546,125 @@ def _ramp_clusters(graph: nx.MultiDiGraph, stats: StageBStats) -> list[set[int]]
     return merged
 
 
+def _carriageway_rejoins(
+    graph: nx.MultiDiGraph,
+    components: list[set[int]],
+    joins: nx.Graph,
+    pairs: list[tuple[int, int]],
+) -> list[tuple[int, int]]:
+    """The joins, as pairs of `components` indices, of clusters one carriageway runs through
+    interleaved: it leaves one, passes the other and comes back to the first (`_comes_back`).
+
+    `joins` holds the joins made so far (its nodes are the indices of `components`, its
+    connected components the clusters) and is not changed. The candidates are `pairs` of
+    attachment nodes (each within `STAGE_B_JOIN_M` of the other) of two different clusters that
+    share a carriageway key (`_carriageway_key`: an edge in or out of each has the same highway,
+    of `STAGE_B_CARRIAGEWAY_CLASSES`, and the same ref set, else the same name). Their clusters
+    are joined when a chain of one of the keys the two nodes share leaves one cluster, passes the
+    other and comes back to the first. Joining repeats until nothing more joins; a cluster that
+    grows still passes every test it passed, so the clusters made do not depend on the order.
+    """
+    cluster = {i: min(group) for group in nx.connected_components(joins) for i in group}
+    nodes: dict[int, set[int]] = defaultdict(set)
+    for i, c in cluster.items():
+        nodes[c] |= components[i]
+    component = {node: i for i, members in enumerate(components) for node in members}
+    keys = {node: _carriageways(graph, node) for pair in pairs for node in pair}
+    rejoins: list[tuple[int, int]] = []
+    changed = True
+    while changed:
+        changed = False
+        for p, q in pairs:
+            a, b = cluster[component[p]], cluster[component[q]]
+            shared = keys[p] & keys[q]
+            if a == b or not shared:
+                continue
+            if _comes_back(graph, nodes[a], nodes[b], shared) or _comes_back(
+                graph, nodes[b], nodes[a], shared
+            ):
+                rejoins.append((component[p], component[q]))
+                keep, gone = min(a, b), max(a, b)
+                nodes[keep] |= nodes.pop(gone)
+                cluster = {i: keep if c == gone else c for i, c in cluster.items()}
+                changed = True
+    return rejoins
+
+
+def _carriageway_key(data: EdgeData) -> tuple[str, Any] | None:
+    """An edge's carriageway key: its highway and its `road_signature` (the ref set, else the
+    normalised name), when the highway is of `STAGE_B_CARRIAGEWAY_CLASSES`; None otherwise, and
+    for an edge with neither ref nor name, which continues no carriageway."""
+    if data["highway"] not in STAGE_B_CARRIAGEWAY_CLASSES:
+        return None
+    road = road_signature(data)
+    return None if road is None else (data["highway"], road)
+
+
+def _carriageways(graph: nx.MultiDiGraph, node: int) -> set[tuple[str, Any]]:
+    """The carriageway keys of the edges in and out of `node`."""
+    return {
+        key for _, data in _incident(graph, node) if (key := _carriageway_key(data)) is not None
+    }
+
+
+def _comes_back(
+    graph: nx.MultiDiGraph, nodes: set[int], other: set[int], keys: set[tuple[str, Any]]
+) -> bool:
+    """Whether a carriageway of one of `keys` leaves `nodes`, passes a node of `other` and comes
+    back into `nodes` within `STAGE_B_MAX_DIAMETER_M`.
+
+    The chain starts with an edge of one of `keys` (`_carriageway_key`) from any node of `nodes`
+    to a node outside them; each edge after it continues the one before OSM node to node (its
+    first OSM node is the other's last, and its second not the other's last but one, so never
+    back the way it came) with the same key. Every continuation is explored, shortest first, each
+    state (an edge, and whether the chain has passed `other` yet) once for each first edge, so the
+    answer does not depend on the order of the graph's edges.
+    """
+    for start in sorted(nodes):
+        for _, head, k, data in graph.out_edges(start, keys=True, data=True):
+            key = _carriageway_key(data)
+            if head in nodes or key not in keys:
+                continue
+            heap = [(data["length"], 0, (start, head, k), head in other)]
+            pushed = 0
+            seen: set[tuple[EdgeKey, bool]] = set()
+            while heap:
+                length, _, edge, passed = heapq.heappop(heap)
+                if (edge, passed) in seen:
+                    continue
+                seen.add((edge, passed))
+                v = edge[1]
+                if v in nodes:
+                    if passed:
+                        return True
+                    continue
+                last = graph.edges[edge]["osm_nodes"]
+                for _, w, kk, d in graph.out_edges(v, keys=True, data=True):
+                    total = length + d["length"]
+                    if (
+                        d["osm_nodes"][0] == last[-1]
+                        and d["osm_nodes"][1] != last[-2]
+                        and _carriageway_key(d) == key
+                        and total <= STAGE_B_MAX_DIAMETER_M
+                    ):
+                        pushed += 1
+                        heapq.heappush(heap, (total, pushed, (v, w, kk), passed or w in other))
+    return False
+
+
 def _absorb_pockets(
     graph: nx.MultiDiGraph,
     clusters: list[set[int]],
-    signature: dict[EdgeKey, Any],
+    roads: dict[EdgeKey, frozenset[Any]],
     stats: StageBStats,
 ) -> list[set[int]]:
     """Each cluster with its pockets: the interior nodes of a path along one road, of at most
-    `STAGE_B_POCKET_M`, from one of its attachment nodes to another and outside it.
+    `STAGE_B_POCKET_M`, from one of its attachment nodes to another and outside it. One road is
+    the edges sharing a key of `roads` (`_road_keys`: a ref signature or a name).
 
     Clusters are taken in order of their smallest member; a node a cluster took is closed to the
     later ones, and nodes of other clusters are never crossed. A cluster repeats until it takes
-    nothing more, since a node it took is an attachment node too. Unnamed roads (no signature)
+    nothing more, since a node it took is an attachment node too. Roads with neither ref nor name
     make no pockets.
     """
     first = {n: graph.nodes[n]["members"][0] for nodes in clusters for n in nodes}
@@ -512,13 +674,13 @@ def _absorb_pockets(
         while True:
             taken: set[int] = set()
             for start in sorted(nodes):
-                roads = {
+                keys = {
                     road
                     for _, v, k in graph.out_edges(start, keys=True)
-                    if (road := signature.get((start, v, k))) is not None
+                    for road in roads.get((start, v, k), ())
                 }
-                for road in roads:
-                    taken |= _pocket(graph, start, road, nodes, owner, signature)
+                for road in keys:
+                    taken |= _pocket(graph, start, road, nodes, owner, roads)
             if not taken:
                 break
             nodes |= taken
@@ -533,13 +695,13 @@ def _pocket(
     road: Any,
     nodes: set[int],
     owner: dict[int, int],
-    signature: dict[EdgeKey, Any],
+    roads: dict[EdgeKey, frozenset[Any]],
 ) -> set[int]:
     """The interior nodes of the paths along `road` from `start` back into `nodes`.
 
-    A Dijkstra search forward along `road`'s edges, at most `STAGE_B_POCKET_M` long, that never
-    enters a node of another cluster and stops at the cluster's own nodes; each path to one of
-    them other than `start` gives its interior nodes.
+    A Dijkstra search forward along the edges with the key `road` in `roads`, at most
+    `STAGE_B_POCKET_M` long, that never enters a node of another cluster and stops at the
+    cluster's own nodes; each path to one of them other than `start` gives its interior nodes.
     """
     cluster = owner[start]
     best = {start: 0.0}
@@ -553,7 +715,7 @@ def _pocket(
             continue
         for _, v, k, data in graph.out_edges(u, keys=True, data=True):
             length = dist + data["length"]
-            if signature.get((u, v, k)) != road or length > STAGE_B_POCKET_M:
+            if road not in roads.get((u, v, k), ()) or length > STAGE_B_POCKET_M:
                 continue
             if v in nodes:
                 node = u if v != start else start  # back to `start` is no pocket

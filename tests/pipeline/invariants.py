@@ -126,6 +126,41 @@ def check_all(raw: nx.MultiDiGraph, graph: nx.MultiDiGraph, *, complete: bool = 
     check_superjunctions(graph)
 
 
+def lost_through(graph: nx.MultiDiGraph) -> list[tuple[int, int, int]]:
+    """Each (super-node, in-edge key) whose road cannot be driven straight through it: the road
+    (edges of its class and ref, each continuing the one before it OSM node to node, never back
+    the way it came; every branch followed) leaves the super-node and comes back to it within four
+    edges, and a pass from the in-edge to an edge the road leaves by after coming back is not in
+    its table. The stage B defects `consolidate._carriageway_rejoins` and the pockets remove
+    where they can."""
+    tables = {v: set(r["transitions"]) for v, r in graph.graph["superjunctions"].items()}
+
+    def onwards(edge: tuple[int, int, int]) -> list[tuple[int, int, int]]:
+        data = graph.edges[edge]
+        return [
+            (edge[1], w, k)
+            for _, w, k, d in graph.out_edges(edge[1], keys=True, data=True)
+            if d["osm_nodes"][0] == data["osm_nodes"][-1]
+            and d["osm_nodes"][1] != data["osm_nodes"][-2]
+            and d["highway"] == data["highway"]
+            and d.get("ref") == data.get("ref")
+        ]
+
+    lost = set()
+    for v, table in tables.items():
+        for u, _, k in graph.in_edges(v, keys=True):
+            edge = (u, v, k)
+            frontier = [(step, 1) for step in onwards(edge)]
+            while frontier:
+                step, depth = frontier.pop()
+                if step[1] == v:
+                    if any((edge, after) not in table for after in onwards(step)):
+                        lost.add((v, u, k))
+                elif depth < 4:
+                    frontier.extend((after, depth + 1) for after in onwards(step))
+    return sorted(lost)
+
+
 def _run(indptr: np.ndarray, values: np.ndarray, i: int) -> list[int]:
     return values[indptr[i] : indptr[i + 1]].tolist()  # type: ignore[no-any-return]
 

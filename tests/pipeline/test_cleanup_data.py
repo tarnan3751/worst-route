@@ -7,7 +7,7 @@ from typing import Any
 import networkx as nx
 import pytest
 
-from tests.pipeline.invariants import check_all
+from tests.pipeline.invariants import check_all, lost_through
 from worst_route.config import SCC_MAX_DROPPED_NODES, SCC_MIN_RETAINED
 from worst_route.pipeline import layout
 
@@ -45,5 +45,29 @@ def test_portland_report(stages: Stages) -> None:
     assert report["connectivity"]["retained"] >= SCC_MIN_RETAINED
     assert report["connectivity"]["largest_dropped"][0]["nodes"] <= SCC_MAX_DROPPED_NODES
     assert report["connectivity"]["nodes_after"] == graph.number_of_nodes()
+    assert report["stage_b"].get("dropped_empty", 0) == 0  # a report before the field has none
     made = sum(report["stage_b"]["superjunctions"].values())
     assert 0 < len(graph.graph["superjunctions"]) <= made  # some lie in dropped components
+
+
+def test_portland_roads_pass_their_junctions_once(stages: Stages) -> None:
+    _, graph, _ = stages
+    if int(graph.graph["pipeline_version"]) < 5:
+        pytest.skip("built before stage B's carriageway joins (pipeline version 5)")
+    lost = {
+        (graph.edges[edge]["highway"], graph.edges[edge].get("ref") or graph.edges[edge]["name"])
+        for edge in ((u, v, k) for v, u, k in lost_through(graph))
+    }
+    # the ones left are other defects, named in docs/project_overview.md §2.3: a pocket longer
+    # than STAGE_B_POCKET_M (I-5 and US 30 by the Rose Quarter, 1,497 m), and roads without a ref
+    # that leave their junction under one name and come back under another, which no pocket
+    # follows (each listed by the name it leaves under)
+    assert lost == {
+        ("motorway", "I 5;US 30"),
+        ("secondary", "North Argyle Way"),  # back as North Columbia Boulevard
+        ("secondary", "North Greeley Avenue"),  # back as North Going Street, 756 m
+        ("tertiary", "Northeast Cascades Parkway"),  # by Northeast Mount Hood Avenue
+        ("residential", "Southeast 91st Avenue"),  # by SE Tolman Street and SE 90th Avenue
+        ("trunk", "Northwest Zion Church Road"),  # back as Northwest Glencoe Road
+        ("trunk", "South Barlow Road"),  # back as South Arndt Road
+    }

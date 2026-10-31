@@ -343,9 +343,11 @@ def cleanup(
         f"motorway and trunk coverage {coverage}"
     )
     kinds = ", ".join(f"{kind} {n}" for kind, n in b.superjunctions.items())
+    dropped = f", {b.dropped_empty} dropped with no allowed turn" if b.dropped_empty else ""
     typer.echo(
         f"stage B: {sum(b.superjunctions.values())} super-junctions ({kinds}), "
-        f"{b.internal_edges} internal edges, {b.twin_pairs} twin pairs carried"
+        f"{b.internal_edges} internal edges, {b.twin_pairs} twin pairs carried, "
+        f"{b.rejoined} joins along a carriageway{dropped}"
     )
     typer.echo(
         f"connectivity: kept {scc.nodes_after} of {scc.nodes_before} nodes; dropped "

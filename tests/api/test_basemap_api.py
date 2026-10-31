@@ -166,6 +166,24 @@ async def test_ready_needs_the_tiles_of_a_pmtiles_basemap(data: Path) -> None:
         assert basemap["detail"].endswith("with labels")
 
 
+async def test_a_basemap_directory_of_its_own(data: Path, tmp_path: Path) -> None:
+    # The desktop app's data is read only: its basemap is downloaded into a directory apart.
+    from ..presentation.support import write_fixture_places
+
+    write_fixture_places(data)
+    own = tmp_path / "user" / "basemap"
+    write_tiles(data)  # never read: the directory named is the basemap's
+    async with hosted(data, basemap="pmtiles", basemap_dir=own) as (http, _):
+        assert (await http.get("/ready")).status_code == 503
+        assert (await http.get("/basemap/portland.pmtiles")).status_code == 404
+        write_tiles(own.parent)
+        write_assets(own.parent)
+        basemap = (await http.get("/config")).json()["basemap"]
+        assert basemap["tiles"] == "/basemap/portland.pmtiles" and basemap["sprite"] is not None
+        assert (await http.get("/ready")).status_code == 200
+        assert (await http.get("/basemap/portland.pmtiles")).content == TILES
+
+
 async def test_one_named_basemap_serves_every_build(lands: Path) -> None:
     # The file is named by basemap_name, by default the first region served.
     both = (("westland", "latest"), ("lands", "latest"))

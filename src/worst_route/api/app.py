@@ -13,14 +13,15 @@ daily route). Its lifespan starts and stops the job manager, stops following the
 jobs, and closes the geocoder's client. `ApiSettings` says which builds (each
 region with its build id, the first region the default), which backend, where the store is, the job
 limits, and the geocoder: which, at what URL, with what contact in its User-Agent
-(`geocoder_user_agent`); whether a reverse proxy in front of it is trusted (`trust_proxy`: its
-`X-Forwarded-For` names the client, its `X-Request-ID` the request); and whether it is public
-(`public`: the limits `limits.PUBLIC`, a budget up to 60 s and each client's share of the jobs, the
-place searches and the picks of a build, held as `Api.limits`, the job manager's settings,
-`Api.quota` and `Api.pick_quota`; else `limits.LOCAL`); and the basemap `GET /config` offers the
-frontend (`basemap`, its file named by `basemap_name`, by default the first region), whose files it
-serves under `/basemap/` (`basemap_api`). Every request gets an id and an access line
-(`logs.RequestLog`).
+(`geocoder_user_agent`: `user_agent`'s, else the machine's, `config.Settings.user_agent`); whether a
+reverse proxy in front of it is trusted (`trust_proxy`: its `X-Forwarded-For` names the client, its
+`X-Request-ID` the request); and whether it is public (`public`: the limits `limits.PUBLIC`, a
+budget up to 60 s and each client's share of the jobs, the place searches and the picks of a build,
+held as `Api.limits`, the job manager's settings, `Api.quota` and `Api.pick_quota`; else
+`limits.LOCAL`); and the basemap `GET /config` offers the frontend (`basemap`, its file named by
+`basemap_name`, by default the first region), whose files it serves under `/basemap/` from
+`basemap_dir` (by default `<data_dir>/basemap`; `basemap_api`). Every request gets an id and an
+access line (`logs.RequestLog`).
 
 Every error answers an `ErrorBody` (`{code, message, ...}`): an endpoint refuses with
 `routes_api.ApiError(status, code, message, **fields)`, a malformed request is 422
@@ -92,11 +93,13 @@ class ApiSettings:
     jobs: JobSettings = field(default_factory=JobSettings)
     geocoder: GeocoderName = "nominatim"
     nominatim_url: str = NOMINATIM_URL
+    user_agent: str | None = None  # the geocoder's, before the contact; None: config's
     contact: str | None = None  # in the geocoder's User-Agent (WORST_ROUTE_CONTACT)
     trust_proxy: bool = False  # a reverse proxy's X-Forwarded-For and X-Request-ID believed
     public: bool = False  # the public limits (`limits.PUBLIC`)
     basemap: BasemapName = "raster"  # what `/config` offers (WORST_ROUTE_BASEMAP)
     basemap_name: str | None = None  # its file, basemap/<name>.pmtiles; None: the first region
+    basemap_dir: Path | None = None  # the basemap's files; None: <data_dir>/basemap
 
 
 @dataclass(frozen=True, eq=False)
@@ -127,9 +130,9 @@ class Api:
 
 
 def geocoder_user_agent(settings: ApiSettings) -> str:
-    """The User-Agent the geocoder sends: the machine's (`config.Settings.user_agent`), with
-    the contact when there is one."""
-    return user_agent(config.settings().user_agent, settings.contact)
+    """The User-Agent the geocoder sends: `settings.user_agent`, else the machine's
+    (`config.Settings.user_agent`), with the contact when there is one."""
+    return user_agent(settings.user_agent or config.settings().user_agent, settings.contact)
 
 
 def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> FastAPI:
@@ -199,7 +202,7 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
     app.include_router(ready_api.router)
     app.include_router(daily_api.router)
     app.include_router(basemap_api.router)
-    basemap_api.mount_basemap(app, settings.data_dir)
+    basemap_api.mount_basemap(app, basemap_api.basemap_dir(settings))
     app.add_middleware(RequestLog, trust_proxy=settings.trust_proxy)
 
     @app.exception_handler(ApiError)

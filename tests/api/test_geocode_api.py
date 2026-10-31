@@ -217,4 +217,10 @@ async def test_by_default_it_asks_nominatim_as_the_project_with_its_cache_by_the
         assert (geocode.limit, geocode.pause_s) == (5, 60.0)
     assert nominatim.client.is_closed  # the lifespan closed its own client
     assert not (data / "geocode.sqlite").exists()
+    # An embedding (the desktop app) names a User-Agent of its own; the contact still goes in it.
+    agent = "worst-route-desktop/0.1.0 (https://github.com/tarnan3751/worst-route)"
+    async with serving(data, **settings, user_agent=agent) as (_, app):
+        assert app.state.api.geocode.geocoder.user_agent == (
+            "worst-route-desktop/0.1.0 (https://github.com/tarnan3751/worst-route; ops@example.org)"
+        )
     machine_settings.cache_clear()

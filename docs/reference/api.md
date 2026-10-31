@@ -110,8 +110,8 @@ geocoder="nominatim", nominatim_url, user_agent=None, contact, trust_proxy=False
 basemap="raster", basemap_name=None, basemap_dir=None))` builds the same application in-process
 (a build id `"latest"` for the region's latest; `user_agent` the geocoder's in place of
 `config.Settings.user_agent`, the contact still added to it; `basemap_dir` the basemap's
-directory in place of `<data_dir>/basemap/`, as the desktop app names its own), and
-`create_app(settings, geocode=service)` with a geocoding service of the caller's own (a
+directory in place of `<data_dir>/basemap/`: both the desktop app's, `docs/reference/desktop.md`),
+and `create_app(settings, geocode=service)` with a geocoding service of the caller's own (a
 `FakeGeocoder` behind it, in the tests); the tests drive it over `httpx` (**Tests**).
 
 ## Requests and errors
@@ -952,9 +952,9 @@ The frontend draws the basemap the server names (`docs/reference/frontend.md`, *
 `ApiSettings.basemap`) picks it: `raster`, the default, OpenStreetMap's raster tiles, which their
 usage policy allows at hobby volume and so only locally; `openfreemap`, OpenFreeMap's vector tiles
 from its public instance (no key, no limits; https://openfreemap.org), drawn in the style
-`config.OPENFREEMAP_STYLE` names, its Positron; or `pmtiles`, Protomaps' vector tiles from one
-file the server holds, `<WORST_ROUTE_DATA>/basemap/<name>.pmtiles`, which
-`tools/fetch_basemap.sh` cuts from a Protomaps build (`docs/reference/hosting.md`); the name is
+`config.OPENFREEMAP_STYLE` names, its Positron (the desktop app's until its own file arrives,
+`docs/reference/desktop.md`); or `pmtiles`, Protomaps' vector tiles from one file the server
+holds, `<WORST_ROUTE_DATA>/basemap/<name>.pmtiles`, which `tools/fetch_basemap.sh` cuts from a Protomaps build (`docs/reference/hosting.md`); the name is
 `serve --basemap-name`'s (`ApiSettings.basemap_name`), by default the first region served, so
 one file, a national extract, may serve every build.
 

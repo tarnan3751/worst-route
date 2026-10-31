@@ -5,7 +5,8 @@ container serving the built frontend and the API from one process, the data moun
 Protomaps' vector basemap instead of OpenStreetMap's raster tiles, each client's share of the
 jobs and the place searches, JSON logs with request ids, a readiness check, the attribution, and
 a reverse proxy in front for TLS. Locally nothing changes: `worst-route serve` without its public
-options is the server it was, and the CLI has no limits.
+options is the server it was, and the CLI has no limits. The desktop app runs the same API and
+frontend on one person's computer instead (`docs/reference/desktop.md`).
 
 | What | Where |
 |---|---|
@@ -56,7 +57,7 @@ build**; the basemap's file named by `--basemap-name`, by default the first regi
 whole). Its environment:
 `WORST_ROUTE_DATA=/data`, `WORST_ROUTE_BASEMAP=pmtiles` (the vector basemap; `raster` would
 send every visitor to OpenStreetMap's tile servers, which their policy rules out for a public
-site), `NUMBA_CACHE_DIR=/state/numba` (the compiled kernels; the package's own directory is not
+site; `openfreemap`, OpenFreeMap's public tiles, needs no file), `NUMBA_CACHE_DIR=/state/numba` (the compiled kernels; the package's own directory is not
 writable), `MPLCONFIGDIR` under the user's home; `WORST_ROUTE_CONTACT` is the operator's, for the
 geocoder's User-Agent. Its health check asks `/api/ready` every 30 s (after a 60 s start), so the
 container is unhealthy until its data is whole.

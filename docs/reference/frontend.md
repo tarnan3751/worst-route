@@ -63,7 +63,8 @@ gate runs its check as part of `typecheck`.
 
 `dist/` expects `/api` to reach the API, as the dev server and `preview` arrange, and so does
 `worst-route serve --frontend dist`, which serves the build and the API from one process, as the
-container does (`docs/reference/api.md`, **Running it**; `docs/reference/hosting.md`). The bundle is about 1.2 MB minified (MapLibre
+container does (`docs/reference/api.md`, **Running it**; `docs/reference/hosting.md`) and the
+desktop app does in its window (`docs/reference/desktop.md`). The bundle is about 1.2 MB minified (MapLibre
 is most of it), 330 kB gzipped, and MapLibre's worker a module of its own, 0.5 MB, in
 `dist/assets/`: MapLibre 6 looks for its worker beside its own module, which a bundle (or Vite's
 pre-bundled dependencies in the dev server) does not keep, so `map.ts` imports it as an asset

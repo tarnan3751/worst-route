@@ -8,7 +8,11 @@ in `CLAUDE.md`, **Agent workflow**; this file is the how-it-works.
 What exists: `tests/conftest.py`, which documents the `data` marker and whose autouse fixture
 makes httpx's real transports refuse every request, so a test whose mock went missing fails
 instead of reaching a server (`MockTransport` and `ASGITransport` are untouched); `tests/unit/`,
-with the config and CLI tests (typer's `CliRunner`); `tests/pipeline/`, with the pipeline step
+with the config and CLI tests (typer's `CliRunner`) and the desktop app's (`test_desktop.py`,
+whose server, started in a thread, and `worst-route-desktop --headless`, started as a process
+until its SIGTERM, it asks over the loopback with the standard library's `http.client`, and
+`test_desktop_basemap.py`, the basemap's download on a `MockTransport`;
+`docs/reference/desktop.md`); `tests/pipeline/`, with the pipeline step
 tests and a `conftest.py` whose autouse fixture also refuses `httpx.stream` and whose
 `data_dir` fixture points `WORST_ROUTE_DATA` at a temporary directory; `tests/graph/`, the graph
 package's tests, which build their graphs with `worst_route.graph.testing`
@@ -162,6 +166,16 @@ road off beyond the line (`docs/reference/pipeline.md`, **Regions of several sta
 node is absent. It writes the JSON report (every such dead end with its position, state and
 status) to `--out` under `tools/out/`. It reads filtered roads already on disk, so the gate does
 not run it; `tests/pipeline/test_border_ends.py` runs it on the two border fixtures.
+
+## The desktop app's tools
+
+`tools/desktop_data.py` (pack the app's data from the builds, stage a pack for a build, write
+the US outline its basemap is cut to), `tools/build_desktop.sh` (the frontend, PyInstaller and
+the platform's installer, for the machine it runs on) and `tools/desktop_smoke.py` (a built app
+driven headless: ready, two trips planned and validated, a clean stop) are the release
+workflow's and a person's, never the gate's (`docs/reference/desktop.md`, **Building it**,
+**The smoke test**). A build is a heavy job (about five minutes, 2 GB of disk); the data it packs
+is read through `WORST_ROUTE_DATA` and written under the lane.
 
 ## Lanes
 

@@ -72,6 +72,12 @@ image serving the built frontend and the API (under `/api`) from one process (`s
 `tools/fetch_basemap.sh`) on MapLibre GL JS 6, each client's share of the jobs and the place
 searches on a public server (`serve --public`), JSON logs with request ids, `/ready`, and the
 attribution with its notices page (`notices.html`).
+So is the desktop app (M6, `docs/reference/desktop.md`): `worst-route-desktop`, the
+API and the frontend on 127.0.0.1 in a window of the system's own web view (pywebview; macOS on
+Apple Silicon and Windows, the browser on Linux), frozen by PyInstaller with the national T3
+build and Portland's inside, OpenFreeMap's vector tiles until its own Protomaps extract of the
+US (zoom 11) has been fetched on its first start, and a release workflow that builds, smoke-tests
+and attaches the installers to a draft release on a tag.
 The compact build format (format 4, pipeline version 6) is built too: a build's `arrays/`
 hold only what the engine and the validator read, and the roads' shapes, simplified to 2 m,
 sit apart in `geometry/`, which only the drawing of a route reads (`docs/reference/graph.md`,
@@ -109,7 +115,9 @@ every build, Portland's turn tables included; it plans the reference's routes by
   **NumPy** CSR arrays as the graph, searched by a pure-Python reference backend (M1) and
   **Numba** kernels in production (M2), with **networkx** as the tests' oracle;
   **shapely 2**, **scipy**, **pyarrow**; **FastAPI** + **uvicorn** with SSE for progress;
-  **matplotlib** for the share image; **typer** for the CLI; **pytest** + **hypothesis**.
+  **matplotlib** for the share image; **typer** for the CLI; **pytest** + **hypothesis**;
+  **pywebview** (the desktop app's window) and **PyInstaller** (its freezing) in a `desktop`
+  dependency group, which neither the gate nor the image installs.
 - **Frontend: Vite + TypeScript, no framework, MapLibre GL JS.** `npm` only under `frontend/`.
 - **Data: Geofabrik state extracts**, never the 11 GB US file. Census cartographic boundary
   files (states and places polygons, 2025) for states and towns.
@@ -148,6 +156,10 @@ Every command below exists. One a later milestone adds is marked with that miles
 | Build and run the image (the frontend and the API from one process; the data mounted, never inside; `docker compose up -d --build` from `compose.yaml`; bound to `127.0.0.1` it sits behind a reverse proxy, hence `--trust-proxy`, which the image's own command leaves out so a container exposed directly never trusts `X-Forwarded-For`) | `docker build -t worst-route .` / `docker run -p 127.0.0.1:8000:8000 -v "$PWD/data:/data:ro" -v worst-route-state:/state worst-route serve --region portland --host 0.0.0.0 --port 8000 --store /state/routes.sqlite --frontend /app/frontend --public --log-format json --trust-proxy` |
 | Build regions in turn, smallest extract first, each measured, checked, pruned and given its places: a city list, or every contiguous state with `--states` (a heavy job; `--max-mem-gb`, `--min-free-gb`; writes `tools/out/`, never downloads) | `uv run python tools/build_regions.py --regions portland` |
 | Compare the two pipeline engines on a region's filtered roads (a heavy job for a state) | `uv run python tools/parity.py --region portland` |
+| The desktop app from a checkout (a window; agents run it `--headless --port 0 --geocoder none` with `WORST_ROUTE_DESKTOP_HOME` in their scratch directory) | `uv sync --group desktop && uv run --no-sync worst-route-desktop --region portland` |
+| The desktop app's data: pack it from the builds (a person; the pack a release asset a person uploads), stage a pack for a build, the US outline the basemap is cut to | `uv run python tools/desktop_data.py pack\|stage\|conus ...` |
+| Build the desktop app and its installer for this machine (a heavy job: about 5 minutes and 2 GB of disk; `uv sync --no-dev --group desktop` first) | `tools/build_desktop.sh DATA_DIR [OUT_DIR]` |
+| Drive a built desktop app headless: ready, two trips planned and validated, a clean stop | `uv run python tools/desktop_smoke.py APP [--home DIR] [--long]` |
 | Land a delivered series | `tools/land_series.sh <patch-dir> <base-commit> <tree-hash>` |
 
 **Run the gate after every change.** The gate never downloads anything and never needs `data/`;
@@ -173,6 +185,7 @@ first built and listed here when it exists.
 | Frontend: map, stops, settings, run controls, toasts, directions, share | `frontend/src/` | §5 | `docs/reference/frontend.md` |
 | Testing and tools: the gate, lanes, landing, fixtures, benchmarks | `tests/`, `tools/` | §8 | `docs/reference/testing-tools.md` |
 | Hosting: the image, the site, the public limits, the logs, readiness, the basemap and its fetch | `Dockerfile`, `compose.yaml`, `api/static.py`, `api/limits.py`, `api/logs.py`, `api/basemap_api.py`, `api/ready_api.py`, `tools/fetch_basemap.sh` | §4.5, §5.1, §7 M5.4 | `docs/reference/hosting.md` |
+| Desktop: the app, its window and data, the basemap's download, the frozen app, the installers, the release | `src/worst_route/desktop.py`, `desktop_basemap.py`, `packaging/desktop/`, `tools/desktop_data.py`, `tools/build_desktop.sh`, `tools/desktop_smoke.py`, `.github/workflows/release.yml` | §7 M6 | `docs/reference/desktop.md` |
 
 ## Architecture rules
 
@@ -239,9 +252,13 @@ really gives the same route), so treat them as hard rules.
   `User-Agent: worst-route/<version> (<contact>)`; on a public server ten searches a minute a
   client too. OSM raster tiles: hobby volume locally (`WORST_ROUTE_BASEMAP=raster`); anything
   public draws Protomaps' vector basemap from a file the server holds (`pmtiles`,
-  `docs/reference/hosting.md`). **No test, gate, agent or fixture calls either.**
+  `docs/reference/hosting.md`). **No test, gate, agent or fixture calls either.** The desktop app
+  draws OpenFreeMap's public vector tiles (`openfreemap`: no key, no limits, each request naming
+  the app) until its own basemap file is there, and asks Nominatim through the same proxy as one
+  client (`docs/reference/desktop.md`, **The basemap**).
 - Downloads happen only through `pipeline download`, `tools/fetch_census.sh` and
-  `tools/fetch_basemap.sh`, run by a person, never by the gate.
+  `tools/fetch_basemap.sh`, run by a person, never by the gate; on a user's computer the desktop
+  app fetches its basemap file from our release once (never headless, never in a test).
 
 ## Folder layout
 
@@ -254,10 +271,13 @@ frontend/        Vite + TS app: src/{main,state,api,map,stops,settings,run,toast
 tests/           fixtures/osm/*.osm, unit/, graph/, pipeline/, engine/, api/, property/, golden/, bench/
 tools/           gates.sh, land_series.sh, acceptance.py (the M1 acceptance run), fetch_census.sh,
                  bench_build.py (a region's pipeline, measured), fetch_basemap.sh,
-                 parity.py (the two pipeline engines compared), build_regions.py (regions built in turn)
+                 parity.py (the two pipeline engines compared), build_regions.py (regions built in turn),
+                 desktop_data.py, build_desktop.sh, desktop_smoke.py (the desktop app's)
+packaging/       desktop/: the PyInstaller spec, its launcher, the Inno Setup script, the data pin
 Dockerfile       the image; compose.yaml, one machine's service (docs/reference/hosting.md)
 .claude/agents/  scout, researcher, developer, reviewer
-.github/         workflows/gate.yml: the gate on every push and pull request
+.github/         workflows/gate.yml: the gate on every push and pull request; release.yml: the
+                 desktop app's installers on a tag
 ```
 
 ## Python and TypeScript gotchas for this project
@@ -279,6 +299,15 @@ Dockerfile       the image; compose.yaml, one machine's service (docs/reference/
 - MapLibre GL JS 6 is ES modules only and finds its worker beside its own module, which a Vite
   bundle does not keep: `map/map.ts` imports the worker `?url` and calls `setWorkerUrl`. It needs
   WebGL2 (headless Chrome: SwiftShader).
+- A frozen app (PyInstaller) starts its spawned job workers as its own executable again:
+  `multiprocessing.freeze_support()` comes first in `desktop.main`, and the launcher is guarded.
+  A frozen module's code names a file that does not exist, for which Numba ignores
+  `NUMBA_CACHE_DIR` (it caches under `~/Library/Caches/numba` instead): the spec collects
+  `graph/kernels.py` as its source file. PyInstaller's runtime hook sets `MPLCONFIGDIR` to a new
+  temporary directory at each start, which `desktop.prepare_environment` replaces in a frozen app
+  (else matplotlib builds its font cache every time). pywebview's `closing` event is the one hook
+  Cmd+Q passes through (`webview.start` never returns then). Numba publishes no Intel macOS
+  wheels since 0.63.
 - 4 spaces in Python, 2 in TypeScript (`.editorconfig`); ruff formats Python.
 
 ## Seeing the app

@@ -21,13 +21,14 @@ snapped stops, the baseline, the worst route, the ratio and the time ratio (of t
 time, with its drive and delays), its turns and delays, the target and what was achieved (for
 `--target ratio:<x>` or `duration:<time>`), the search, the backend it searched with and the
 validator's report, with a progress line on stderr on an accepted splice, at most one every
-2 s, and writes `route.json` and GeoJSON when asked; a stop that cannot be snapped or reached,
-or a missing build (or one without an array of the format, which names its remedy: the rebuild
-from `filter` when another pipeline version wrote it, which a plain `save` names too;
-`validate`, `serve` and `qa` say the same), is one line and exit 1, and a route that fails the
-validator is never printed. `--base route.json` continues a saved route ("make it worse",
-toward the new target): its stops, tier, leash, objective and constraints come from the file,
-which must have been planned on the build at its graph_version by this engine version.
+2 s, and writes `route.json` (with its directions, toasts and extra metrics,
+`presentation.document`) and GeoJSON when asked; a stop that cannot be snapped or reached, or a
+missing build (or one without an array of the format, which names its remedy: the rebuild from
+`filter` when another pipeline version wrote it, which a plain `save` names too; `validate`,
+`serve` and `qa` say the same), is one line and exit 1, and a route that fails the validator is
+never printed. `--base route.json` continues a saved route ("make it worse", toward the new
+target): its stops, tier, leash, objective and constraints come from the file, which must have
+been planned on the build at its graph_version by this engine version.
 `validate` re-checks a saved `route.json` against the build it names, with its stops re-derived
 from its request (`resolve_stops`), and exits 1 when a check fails; a file made by another
 engine version is one line and exit 1 (its stops could be re-derived differently).
@@ -931,7 +932,24 @@ def plan(
     names = ", ".join(c.name for c in result.report.checks)
     typer.echo(f"validator: ok ({names})")
     if out is not None:
-        out.write_text(json.dumps(route_document(data, result), indent=2) + "\n")
+        from worst_route.presentation.document import present, with_presentation
+        from worst_route.presentation.places import PlaceIndex
+
+        document = route_document(data, result)
+        presented = present(
+            data,
+            route.nodes,
+            route.edges,
+            route.stop_idx,
+            document["metrics"],
+            active=masks.active,
+            banned=masks.banned,
+            seed=request.seed,
+            labels=[None] * len(result.snaps),
+            vehicle=None,
+            places=PlaceIndex.load(meta["region"]),
+        )
+        out.write_text(json.dumps(with_presentation(document, presented), indent=2) + "\n")
         typer.echo(f"wrote {out}")
     if geojson is not None:
         geojson.write_text(json.dumps(route_geojson(data, result)) + "\n")

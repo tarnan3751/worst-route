@@ -192,6 +192,29 @@ export interface DocumentMetrics {
   delay_s?: number; // absent from servers older than the turn counts
   turns?: Turns;
   items?: ItemCounts; // absent from servers older than the collectibles
+  // The presentation's, absent from servers older than it; null where unknown: the fuel
+  // without the request's vehicle, the states and towns without the places index (the share
+  // of the roads is always known).
+  extra_fuel_gal?: number | null;
+  extra_cost_usd?: number | null;
+  states?: string[] | null;
+  towns?: string[] | null;
+  towns_n?: number | null;
+  network_fraction?: number;
+}
+
+export type StepKind =
+  "depart" | "continue" | "turn" | "ramp" | "roundabout" | "stop" | "arrive" | "joke";
+
+/** One turn-by-turn step; `edge_range` is half-open, [a, b) over the route's edges, empty for a
+ * stop, the arrival and a joke. */
+export interface DirectionStep {
+  step: number;
+  text: string;
+  distance_m: number;
+  time_s: number;
+  edge_range: [number, number];
+  kind: StepKind;
 }
 
 export interface Run {
@@ -223,6 +246,14 @@ export interface RouteDocument {
   metrics: DocumentMetrics;
   run: Run;
   validation: Validation;
+  directions?: DirectionStep[]; // absent from servers older than them
+  toasts?: string[];
+}
+
+/** `GET /routes/{id}/directions`. */
+export interface DirectionsResult {
+  route_id: string;
+  directions: DirectionStep[];
 }
 
 /** One feature of `GET /routes/{id}/geojson`: the route, the baseline or a stop. */

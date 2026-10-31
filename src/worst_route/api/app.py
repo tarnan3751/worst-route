@@ -6,10 +6,10 @@ route store, builds the geocoding service (Nominatim, with its cache `geocode.sq
 the route store; none when the geocoder is `none`; a test passes its own), loads the region's
 places index (`presentation.places`; none when `worst-route aux places` has not written it) and
 mounts the endpoints (`routes_api`, `geocode_api`, `share_api`, whose images are cached in
-`share/` beside the route store). Its lifespan starts and stops the job manager, and
-closes the geocoder's client. `ApiSettings` says which build, which backend, where the store
-is, the job limits, and the geocoder: which, at what URL, with what contact in its User-Agent
-(`geocoder_user_agent`).
+`share/` beside the route store, and `directions_api`). Its lifespan starts and stops the job
+manager, and closes the geocoder's client. `ApiSettings` says which build, which backend, where
+the store is, the job limits, and the geocoder: which, at what URL, with what contact in its
+User-Agent (`geocoder_user_agent`).
 
 Every error answers an `ErrorBody` (`{code, message, ...}`): an endpoint refuses with
 `routes_api.ApiError(status, code, message, **fields)`, a malformed request is 422
@@ -32,7 +32,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from worst_route import __version__, config
-from worst_route.api import geocode_api, routes_api, share_api
+from worst_route.api import directions_api, geocode_api, routes_api, share_api
 from worst_route.api.jobs import JobManager, JobSettings
 from worst_route.api.routes_api import ApiError
 from worst_route.api.schemas import ErrorBody
@@ -116,6 +116,7 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
     app.include_router(routes_api.router)
     app.include_router(geocode_api.router)
     app.include_router(share_api.router)
+    app.include_router(directions_api.router)
 
     @app.exception_handler(ApiError)
     async def refused(request: Request, error: ApiError) -> JSONResponse:

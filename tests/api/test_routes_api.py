@@ -161,8 +161,8 @@ async def test_a_job_streams_its_route_and_stores_it(data: Path) -> None:
         assert doc["run"]["attempts"] == 300 and doc["run"]["backend"] == "python"
         assert doc["run"]["stopped_because"] == "budget" and doc["validation"]["ok"] is True
         assert doc["geometry"]["type"] == "LineString"
-        for absent in ("directions", "toasts", "comparisons"):
-            assert absent not in doc
+        assert doc["directions"][0]["kind"] == "depart" and doc["toasts"]  # test_directions_api
+        assert "comparisons" not in doc
 
         geojson = (await client.get(f"/routes/{route_id}/geojson")).json()
         api: Api = app.state.api

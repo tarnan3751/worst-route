@@ -170,7 +170,8 @@ later.
 | GET | `/jobs/{id}/events` | the job's events (**Events**); `Last-Event-ID` resumes |
 | GET | `/jobs/{id}` | the job's status with its route's current snapshot (polling) |
 | DELETE | `/jobs/{id}` | cancels it (**Jobs**); answers its status, without the snapshot |
-| GET | `/routes/{id}` | the route document |
+| GET | `/routes/{id}` | the route document, with its directions and toasts |
+| GET | `/routes/{id}/directions` | `{route_id, directions: [{step, text, distance_m, time_s, edge_range, kind}]}`: the document's directions alone |
 | GET | `/routes/{id}/geojson` | the FeatureCollection `engine.io.feature_collection` makes: the route, the baseline (null for a round trip) and the stops |
 | POST | `/routes/{id}/validate` | `{route_id, graph_version, ok, checks: [{name, ok, index, detail}]}`, the stops re-derived from the stored request (by this engine version only) |
 | GET | `/geocode` | `{query, region, candidates: [{label, lat, lon, category}], cached}`, for `?q=&region=` (**Geocoding**) |
@@ -198,9 +199,12 @@ of the last splice applied; `elapsed_s` the wall time since it started.
  metrics:    {length_m, baseline_length_m, ratio, time_s, baseline_time_s, baseline_delay_s,
               time_ratio, departure, arrival, target, delay_s,
               turns: {left, right, straight, u_turn},
-              items: {toll_booth, level_crossing, roundabout, bridge}},
+              items: {toll_booth, level_crossing, roundabout, bridge},
+              extra_fuel_gal, extra_cost_usd, states, towns, towns_n, network_fraction},
  run:        {attempts, accepted, stopped_because, elapsed_s, backend},
- validation: {ok: true, checked_at}}
+ validation: {ok: true, checked_at},
+ directions: [{step, text, distance_m, time_s, edge_range: [a, b], kind}],
+ toasts:     [text]}
 ```
 
 Time, wherever a ratio or an arrival is shown, is the experienced time: the driving (`time_s`)
@@ -221,8 +225,30 @@ a route stored before the collectibles was planned on a build without `node_roun
 older `graph_version`, so it answers `BUILD_UNAVAILABLE` (its build lacks the array, or is
 rebuilt at another version);
 `stopped_because` is `target` (within it),
-`budget`, `converged`, `cancelled` or `timeout`. The presentation's fields (directions, toasts, comparisons, fuel,
-states, towns) arrive with M4.
+`budget`, `converged`, `cancelled` or `timeout`.
+
+The presentation's fields (`docs/reference/presentation.md`, **Directions**, **Jokes**, **Stats and
+toasts**) are worked out again from the build on every request (`presentation.document.present`),
+none of them stored, so a route stored before they existed has them too:
+
+- `directions`, the route's turn-by-turn steps: `step` numbers them from 1; `kind` is `depart`,
+  `continue`, `turn`, `ramp`, `roundabout`, `stop` (a stop between the ends), `arrive` or `joke`;
+  `edge_range` is half-open, `[a, b)` over the route's edges, edge k running from route node k
+  to node k + 1 (so a step covers nodes a to b, as `legs`' `node_range` counts them). The
+  driving steps' ranges tile the route's edges in order; a `stop`, the `arrive` and a `joke`
+  drive nothing, an empty range where they come. A step's `distance_m` and `time_s` are its
+  edges', its time with the delays of the nodes it arrives at, so the steps add up to `length_m`
+  and to `time_s` plus `delay_s`. The stops' labels name them ("Arrive at work"). The jokes are
+  drawn from the route's seed: the same every time.
+- `toasts`, at most ten one-line facts about the route, the most striking first.
+- `extra_fuel_gal` and `extra_cost_usd`, the length beyond the baseline's at the request's
+  `vehicle`'s `mpg` and `gas_price_usd`, null without a vehicle; `states` and `towns`, the
+  Census names of the states and towns the route passes through in the order it enters them,
+  and `towns_n`, null when the region has no places index (**Share image**); and
+  `network_fraction`, the share of the road units within the request's reach (its leash, tier
+  and bubbles) that the route drives.
+
+The document has no comparison line: the share image has it.
 
 ## Events
 

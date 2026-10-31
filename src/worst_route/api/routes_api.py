@@ -7,7 +7,7 @@
     GET    /jobs/{id}/events           the job's events (SSE; Last-Event-ID resumes)
     GET    /jobs/{id}                  its status and current snapshot (polling)
     DELETE /jobs/{id}                  cancel it; its route so far is stored
-    GET    /routes/{id}                a stored route's document
+    GET    /routes/{id}                a stored route's document, with its directions and toasts
     GET    /routes/{id}/geojson        its FeatureCollection
     POST   /routes/{id}/validate       the validator's report on it
 
@@ -27,6 +27,12 @@ errors are
 made), `BASE_ROUTE_MISMATCH`; 429 `TOO_MANY_JOBS`; 404
 `NOT_FOUND`; 409 `BUILD_UNAVAILABLE` (a stored route whose build is no longer on disk at its
 graph_version).
+
+A route's document adds what the presentation says about it (`presentation.document.present`:
+its directions, its toasts, and its fuel, states, towns and share of the roads), worked out
+again on every request from its build, its request, its seed and the region's places index
+(`presentation_of`); `directions_of` gives its directions alone, the same ones, for
+`GET /routes/{id}/directions` (`directions_api`).
 
 `/snap` judges the stop in the tier's nodes and the nodes within `BUBBLE_KM` of it (as a job's
 masks would near a stop; `auto` is T4); a job's `snapped` event, which also keeps stops apart
@@ -50,6 +56,7 @@ from worst_route.api.schemas import (
     PLANNED_OBJECTIVES,
     BuildOut,
     CheckOut,
+    DirectionStep,
     DocumentMetrics,
     ErrorBody,
     Health,
@@ -65,7 +72,6 @@ from worst_route.api.schemas import (
     SnapIn,
     SnapOut,
     TierOut,
-    Turns,
     Validation,
     ValidationOut,
 )
@@ -87,6 +93,8 @@ from worst_route.engine.validator import validate_route
 from worst_route.graph.data import GraphData
 from worst_route.graph.loader import BuildNotFound, Loaded, load_build
 from worst_route.graph.spatial import SnapError
+from worst_route.presentation.directions import Step
+from worst_route.presentation.document import present, route_directions
 
 if TYPE_CHECKING:
     from worst_route.api.app import Api
@@ -401,10 +409,11 @@ async def cancel_job(job_id: str, request: Request) -> JobStatus:
 
 @router.get("/routes/{route_id}")
 def route(route_id: str, request: Request) -> RouteDocument:
-    """A stored route's document (the presentation's fields arrive with M4)."""
+    """A stored route's document, with its directions and toasts."""
     api = api_of(request)
     stored = stored_route(api, route_id)
-    data = build_of(api, stored).data
+    loaded = build_of(api, stored)
+    data = loaded.data
     asked = RouteRequestIn.model_validate(stored.input)
     labels = [s.label for s in asked.stops or []]
     m = stored.metrics_json
@@ -412,6 +421,22 @@ def route(route_id: str, request: Request) -> RouteDocument:
     delay_s, baseline_delay_s = stored_delays(data, stored)
     departure = asked.departure
     arrival = departure + timedelta(seconds=time_s + delay_s) if departure else None
+    metrics: dict[str, Any] = {
+        "length_m": m["length_m"],
+        "baseline_length_m": m["baseline_length_m"],
+        "ratio": m["ratio"],
+        "time_s": time_s,
+        "baseline_time_s": baseline_time_s,
+        "baseline_delay_s": baseline_delay_s,
+        "time_ratio": time_ratio(time_s, delay_s, baseline_time_s, baseline_delay_s),
+        "departure": departure,
+        "arrival": arrival,
+        "target": m.get("target"),
+        "delay_s": delay_s,
+        "turns": count_turns(data, stored.edges),
+        "items": count_items(data, stored.nodes, stored.edges),
+    }
+    presented = presentation_of(api, loaded, stored, asked, metrics)
     return RouteDocument(
         route_id=stored.route_id,
         created=stored.created,
@@ -438,23 +463,46 @@ def route(route_id: str, request: Request) -> RouteDocument:
             Leg(from_stop=k, to_stop=k + 1, node_range=(a, b))
             for k, (a, b) in enumerate(pairwise(stored.stop_idx))
         ],
-        metrics=DocumentMetrics(
-            length_m=m["length_m"],
-            baseline_length_m=m["baseline_length_m"],
-            ratio=m["ratio"],
-            time_s=time_s,
-            baseline_time_s=baseline_time_s,
-            baseline_delay_s=baseline_delay_s,
-            time_ratio=time_ratio(time_s, delay_s, baseline_time_s, baseline_delay_s),
-            departure=departure,
-            arrival=arrival,
-            target=m.get("target"),
-            delay_s=delay_s,
-            turns=Turns(**count_turns(data, stored.edges)),
-            items=count_items(data, stored.nodes, stored.edges),
-        ),
+        metrics=DocumentMetrics(**metrics, **presented["metrics_extra"]),
         run=Run(**stored.run),
         validation=Validation(ok=True, checked_at=stored.created),
+        directions=[DirectionStep(**step) for step in presented["directions"]],
+        toasts=presented["toasts"],
+    )
+
+
+def presentation_of(
+    api: "Api", loaded: Loaded, stored: StoredRoute, asked: RouteRequestIn, metrics: dict[str, Any]
+) -> dict[str, Any]:
+    """What the presentation adds to a stored route's document (`present`), from its request's
+    masks, labels and vehicle, its seed and the region's places index."""
+    masks = request_masks(loaded.spatial, loaded.data, stored.request)
+    return present(
+        loaded.data,
+        stored.nodes,
+        stored.edges,
+        stored.stop_idx,
+        metrics,
+        active=masks.active,
+        banned=masks.banned,
+        seed=stored.seed,
+        labels=[s.label for s in asked.stops or []],
+        vehicle=asked.vehicle,
+        places=api.places,
+    )
+
+
+def directions_of(data: GraphData, stored: StoredRoute) -> list[Step]:
+    """A stored route's directions, the ones its document has."""
+    asked = RouteRequestIn.model_validate(stored.input)
+    return route_directions(
+        data,
+        stored.nodes,
+        stored.edges,
+        stored.stop_idx,
+        labels=[s.label for s in asked.stops or []],
+        seed=stored.seed,
+        ratio=stored.metrics_json["ratio"],
     )
 
 

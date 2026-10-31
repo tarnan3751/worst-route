@@ -1,14 +1,16 @@
 // The hand-written types against the API: each type has a runtime spec whose keys the compiler
 // holds to the type's (`object<T>` needs exactly T's keys); the specs are checked against the
 // shapes docs/reference/api.md writes down (its JSON request example, and the field lists of
-// the events, /regions, the 202, the job status, the route document and /geocode) and against
-// every payload of the streams recorded from the server.
+// the events, /regions, the 202, the job status, the route document, its directions and
+// /geocode) and against every payload of the streams recorded from the server.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { RECORDINGS, loadStream } from "../__fixtures__/stream";
 import type {
   Baseline,
   Constraints,
+  DirectionStep,
+  DirectionsResult,
   DocumentMetrics,
   Done,
   DoneMetrics,
@@ -276,6 +278,15 @@ const jobStatus = object<JobStatus>({
   snapshot: nullable(snapshot),
 });
 
+const directionStep = object<DirectionStep>({
+  step: "integer",
+  text: "string",
+  distance_m: "number",
+  time_s: "number",
+  edge_range: { tuple: ["integer", "integer"] },
+  kind: literal("depart", "continue", "turn", "ramp", "roundabout", "stop", "arrive", "joke"),
+});
+
 const routeDocument = object<RouteDocument>({
   route_id: "string",
   created: "string",
@@ -318,6 +329,13 @@ const routeDocument = object<RouteDocument>({
     delay_s: optional("number"), // the recordings predate the delays and the turns
     turns: optional(turns),
     items: optional(itemCounts),
+    // the recordings predate the presentation's numbers, directions and toasts
+    extra_fuel_gal: optional(nullable("number")),
+    extra_cost_usd: optional(nullable("number")),
+    states: optional(nullable(array("string"))),
+    towns: optional(nullable(array("string"))),
+    towns_n: optional(nullable("integer")),
+    network_fraction: optional("number"),
   }),
   run: object<Run>({
     attempts: "integer",
@@ -327,6 +345,12 @@ const routeDocument = object<RouteDocument>({
     backend: "string",
   }),
   validation: object<Validation>({ ok: "boolean", checked_at: "string" }),
+  directions: optional(array(directionStep)),
+  toasts: optional(array("string")),
+});
+const directionsResult = object<DirectionsResult>({
+  route_id: "string",
+  directions: array(directionStep),
 });
 
 const geocodeResult = object<GeocodeResult>({
@@ -478,6 +502,11 @@ describe("the types against docs/reference/api.md", () => {
     const status = /\*\*The job status\*\*[^`]*`[^`]*`[^`]*`(\{[^`]*\})`/.exec(reference)?.[1];
     expect(status).toBeDefined();
     expect(differences(parseFields(status!), jobStatus, "status")).toEqual([]);
+  });
+
+  it("has the fields of /routes/{id}/directions", () => {
+    const row = documentedOn("| GET | `/routes/{id}/directions` |");
+    expect(differences(row, directionsResult, "directions")).toEqual([]);
   });
 
   it("has the fields of /geocode", () => {

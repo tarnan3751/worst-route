@@ -14,14 +14,16 @@ The responses: `Health`, `RegionOut`, `SnapOut`, `JobCreated`, `JobStatus`, `Rou
 (its metrics with `TargetMetrics` for a ratio or duration target, and `ItemCounts`, the route's
 collectibles), `ValidationOut`, and `ErrorBody` (`{code, message}` and the error's own fields)
 for every error. The document's metrics count the route's turns (`Turns`), its delays and its
-collectibles; `Done`'s metrics (`DoneMetrics`) carry the target, the turns and the delays too,
-and the stored route's other metrics (its item counts, a collecting route's item) as extra
-fields.
+collectibles, and with the presentation's numbers (fuel, states and towns, the share of the
+roads) it carries its directions (`DirectionStep`s) and toasts; `Done`'s metrics
+(`DoneMetrics`) carry the target, the turns and the delays too, and the stored route's other
+metrics (its item counts, a collecting route's item) as extra fields.
 The SSE events' payloads are `Snapped`, `BaselineOut`, `Progress` (with `SpliceOut`s),
 `Snapshot`, `Done` and `ErrorBody`. Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in
 requests; every number is metric.
 
-`GeocodeOut`, with its `GeocodeCandidateOut`s, answers `GET /geocode` (at the end of the module).
+`GeocodeOut`, with its `GeocodeCandidateOut`s, answers `GET /geocode`, and `DirectionsOut`
+`GET /routes/{id}/directions` (at the end of the module).
 """
 
 from datetime import datetime
@@ -34,6 +36,7 @@ from worst_route.engine.constraints import NO_CONSTRAINTS, Constraints
 from worst_route.engine.objectives.collect import CollectItem
 from worst_route.engine.request import ObjectiveKey, RouteRequest, TierChoice
 from worst_route.engine.target import Target as EngineTarget
+from worst_route.presentation.directions import StepKind
 
 # Modes the plan describes that the engine does not have yet: asked for, they are NOT_YET.
 PLANNED_OBJECTIVES = ("brand", "alphabet")
@@ -366,6 +369,13 @@ class DocumentMetrics(_Out):
     delay_s: float
     turns: Turns
     items: ItemCounts
+    # the presentation's (`presentation.stats`), null where they cannot be known
+    extra_fuel_gal: float | None
+    extra_cost_usd: float | None
+    states: list[str] | None
+    towns: list[str] | None
+    towns_n: int | None
+    network_fraction: float
 
 
 class Run(_Out):
@@ -381,8 +391,20 @@ class Validation(_Out):
     checked_at: datetime
 
 
+class DirectionStep(_Out):
+    """One step of a route's directions (`presentation.directions`): `edge_range` is half-open,
+    [a, b) over the route's edge positions, empty for a stop, the arrival and a joke."""
+
+    step: int
+    text: str
+    distance_m: float
+    time_s: float
+    edge_range: tuple[int, int]
+    kind: StepKind
+
+
 class RouteDocument(_Out):
-    """`GET /routes/{id}`: a stored route (the presentation's fields arrive with M4)."""
+    """`GET /routes/{id}`: a stored route, with its directions and its toasts."""
 
     route_id: str
     created: datetime
@@ -398,6 +420,8 @@ class RouteDocument(_Out):
     metrics: DocumentMetrics
     run: Run
     validation: Validation
+    directions: list[DirectionStep]
+    toasts: list[str]
 
 
 class CheckOut(_Out):
@@ -436,3 +460,13 @@ class GeocodeOut(_Out):
     region: str
     candidates: list[GeocodeCandidateOut]
     cached: bool
+
+
+# --- Directions (`GET /routes/{id}/directions`) ---------------------------------------------
+
+
+class DirectionsOut(_Out):
+    """`GET /routes/{id}/directions`: the route's directions alone, as its document has them."""
+
+    route_id: str
+    directions: list[DirectionStep]

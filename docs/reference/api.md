@@ -78,7 +78,7 @@ what the API and the presentation need:
  "stops": [{"lat": 45.5231, "lon": -122.6765, "label": "Powell's"},
            {"lat": 45.4817, "lon": -122.6263, "label": "Reed College"}],
  "objective": "distance",
- "constraints": {"no_left": false, "no_right": false, "strict": false},
+ "constraints": {"no_left": false, "no_right": false, "strict": false, "hard": false},
  "tier": "auto", "leash_km": "auto",
  "budget_s": 20, "max_iterations": 1000000, "seed": 12345,
  "target": {"kind": "max"},
@@ -102,16 +102,21 @@ what the API and the presentation need:
   a brand none of whose locations the request's area holds ("no Starbucks within reach", from
   the pre-flight), both on `field: "brand"`. `brand` takes no ratio target: it counts visits,
   not metres.
-- `constraints`: `{no_left, no_right, strict}`, all false by default (and left out of the
-  engine's request then). `no_left` makes each left turn (and U-turn) cost the route a
-  kilometre's worth of its score (1,000 m, or 90 s under `time`: `TURN_PENALTY_M`,
-  `TURN_PENALTY_S`), so they are rare; `no_right` the same for right turns; both at once is
-  `INVALID_REQUEST` ("straight only is not a route"). With `strict`, none at all: a trip that
-  cannot be driven so, but can without `strict`, is `INFEASIBLE_TURN_CONSTRAINT`, which on a
+- `constraints`: `{no_left, no_right, strict, hard}`, all false by default (and left out of the
+  engine's request then; `hard` is in a stored request only when set). `no_left` makes each left
+  turn (and U-turn) cost the route a kilometre's worth of its score (1,000 m, or 90 s under `time`:
+  `TURN_PENALTY_M`, `TURN_PENALTY_S`), so they are rare; `no_right` the same for right turns; both
+  at once is `INVALID_REQUEST` ("straight only is not a route"). With `strict`, none at all: a trip
+  that cannot be driven so, but can without `strict`, is `INFEASIBLE_TURN_CONSTRAINT`, which on a
   street grid is most trips (one that cannot be driven either way is
-  `STOP_UNREACHABLE_WITHOUT_REPEAT`, as without the constraint)
-  (`docs/reference/engine.md`, **Constraints**); `strict` without `no_left` or `no_right` is
-  `INVALID_REQUEST` ("strict needs no_left or no_right"). Both name `field: "constraints"`.
+  `STOP_UNREACHABLE_WITHOUT_REPEAT`, as without the constraint) (`docs/reference/engine.md`,
+  **Constraints**); `strict` without `no_left` or `no_right` is `INVALID_REQUEST` ("strict needs
+  no_left or no_right"). Both name `field: "constraints"`. `hard` is hard mode: each road (a ref,
+  else the normalised name) in one stretch, so once the route leaves a road it never comes back to
+  it (`docs/reference/engine.md`, **Constraints**), alone or with a turn constraint; a trip whose
+  seed the engine finds no way to build under it, but can without it, is
+  `STOP_UNREACHABLE_WITHOUT_REPEAT` with the message "the seed found no way from stop 0 to stop 1
+  under hard mode, …; try without hard" (the seed is a heuristic: a legal route may exist).
 - `tier`: `auto` or `T0`..`T4`. `leash_km`: `auto` or in (0, 150].
 - `budget_s`: in (0, 120] (over 120 is `BUDGET_TOO_LARGE`), default 20.
 - `max_iterations`: default 1,000,000, so the seconds budget ends a run. The CLI keeps the
@@ -138,13 +143,13 @@ FastAPI's `detail`):
 | 422 | `UNKNOWN_REGION` | a region this server does not serve |
 | 422 | `STOP_OUTSIDE_REGION` (+ `stop_index`) | outside the region's bbox: the build's `params.bbox`, else its nodes' extent |
 | 422 | `NO_NODE_NEAR` (+ `stop_index`, null when no single stop is to blame) | no node within 5 km can play the stop's role |
-| 422 | `STOP_UNREACHABLE_WITHOUT_REPEAT` (+ `leg`, `stop_index`) | no route covers the leg without repeating a road, after the re-snap fallback (`stop_index` is the leg's later stop), with or without a strict turn constraint: under one, when the seed's legs cannot be built without it either |
-| 422 | `INFEASIBLE_TURN_CONSTRAINT` (+ `leg`, `stop_index`, `constraint`) | under a strict turn constraint (`constraint`: `no_left` or `no_right`), no route covers the leg without repeating a road or turning that way, after the re-snap fallback, while the seed's legs can be built without the constraint (one more build, on failure only); the message ends "under the strict no-left constraint; try without strict" |
+| 422 | `STOP_UNREACHABLE_WITHOUT_REPEAT` (+ `leg`, `stop_index`) | no route covers the leg without repeating a road, after the re-snap fallback (`stop_index` is the leg's later stop), with or without a strict turn constraint: under one, when the seed's legs cannot be built without it either; under hard mode, also when they can be built without hard mode (alone, or with the strict constraint alone), the message then "the seed found no way from stop 0 to stop 1 under hard mode, …; try without hard" |
+| 422 | `INFEASIBLE_TURN_CONSTRAINT` (+ `leg`, `stop_index`, `constraint`) | under a strict turn constraint (`constraint`: `no_left` or `no_right`), no route covers the leg without repeating a road or turning that way, after the re-snap fallback, while the seed's legs can be built without the constraint (one more build, on failure only; under hard mode too, when they can be built under hard mode alone); the message ends "under the strict no-left constraint; try without strict" |
 | 422 | `BUDGET_TOO_LARGE` (+ `max_s`) | `budget_s` over 120 |
 | 422 | `NOT_YET` (+ `field`) | an objective the engine does not have yet |
 | 422 | `UNKNOWN_ROUTE` (+ `base_route_id`) | a base route that is not stored |
 | 422 | `BUILD_MISMATCH` | a base route planned on another region, `graph_version` or engine version; `/validate` on a route another engine version made (its stops could be re-derived differently: re-plan it), as `worst-route validate` refuses one |
-| 422 | `BASE_ROUTE_MISMATCH` (+ `field`) | stops, tier or leash given that differ from the base route's; or a base route `plan.check_base` refuses under its request's resolved stops and masks (`field` `stops`: its stops are not where they resolve now; `route`: a node outside the area, an edge the request bans, or a turn its strict constraint refuses) |
+| 422 | `BASE_ROUTE_MISMATCH` (+ `field`) | stops, tier or leash given that differ from the base route's; or a base route `plan.check_base` refuses under its request's resolved stops and masks (`field` `stops`: its stops are not where they resolve now; `route`: a node outside the area, an edge the request bans, a turn its strict constraint refuses, or under hard mode a road it comes back to) |
 | 429 | `TOO_MANY_JOBS` | every worker busy and the queue full |
 | 429 | `RATE_LIMITED` (+ `retry_after_s`) | a place search that finds the geocoder's queue full: five already queued for a turn (**Geocoding**); the message is "the geocoder is busy, try again in a few seconds" |
 | 502 | `GEOCODER_ERROR` | Nominatim failed: an error status, a timeout, no connection, an answer that does not parse; or refused (429, 403), which pauses the geocoder 60 s, during which a search the cache cannot answer gets this at once ("the geocoder refused; paused for N s") |
@@ -405,8 +410,9 @@ stops, tier and leash come from the base route's request; given ones must match 
 been planned on this region's build at its `graph_version` and by this engine version
 (`BUILD_MISMATCH`), and `plan.check_base` must accept it under the request's resolved stops and
 masks: its stop nodes where the stops resolve now, every node in the active area, no edge the
-request bans, under a strict turn constraint no turn it refuses (a soft one takes any base;
-`BASE_ROUTE_MISMATCH`, in the pre-flight and again in the worker). The objective and the
+request bans, under a strict turn constraint no turn it refuses (a soft one takes any base),
+under hard mode no road it comes back to (`BASE_ROUTE_MISMATCH`, in the pre-flight and again in
+the worker). The objective and the
 constraints are the new request's. The new
 route's document records `base_route_id` in its `request`; it is reproduced by the base route,
 the seed and the request. A continuation that changes nothing (no splice accepted, as with

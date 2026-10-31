@@ -1,11 +1,11 @@
 # Powell's Books → Reed College on Portland's latest build, read through WORST_ROUTE_DATA: on both
-# backends, then the slowest time and the turn constraints, collecting each item, and a pilgrimage
-# to the brand with the most locations. Run on demand with `uv run pytest -m data`; skipped when
-# there is no build.
+# backends, then the slowest time, the turn constraints and hard mode, collecting each item, and a
+# pilgrimage to the brand with the most locations. Run on demand with `uv run pytest -m data`;
+# skipped when there is no build.
 import numpy as np
 import pytest
 
-from worst_route.engine.constraints import Constraints
+from worst_route.engine.constraints import Constraints, returning
 from worst_route.engine.objectives.brand import brand_counts
 from worst_route.engine.objectives.collect import ITEMS, CollectItem, count_items
 from worst_route.engine.plan import plan_route
@@ -97,6 +97,22 @@ def test_strict_no_left_refuses_powells_to_reed_in_one_line(portland: GraphData)
     message = str(refused.value)
     assert "\n" not in message and message.endswith("under the strict no-left constraint")
     assert refused.value.constraint == "no_left"
+
+
+def test_hard_mode_keeps_each_road_one_stretch_on_portland(portland: GraphData) -> None:
+    # on builds 506f747d7458 and ffe2e7c881ca, seed 1: 9.68x (74.70 km), 223 roads in as many
+    # stretches, converged after 26,710 attempts; on both backends the same, splice for splice
+    request = RouteRequest(
+        stops=[POWELLS, REED], seed=1, budget_s=120, max_iterations=4000,
+        constraints=Constraints(hard=True),
+    )  # fmt: skip
+    one, two = (
+        plan_route(portland, request, backend=b(portland)) for b in (PythonBackend, CsrBackend)
+    )
+    assert one.route.edges.tobytes() == two.route.edges.tobytes()
+    assert one.report.ok and one.report.check("constraints").ok
+    assert returning(portland, one.route.edges) is None
+    assert one.route.metrics.length_m > 3 * one.baseline.length_m
 
 
 @pytest.fixture(scope="module")

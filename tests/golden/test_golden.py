@@ -7,8 +7,9 @@ same stops and seed (a ratio and a duration target, each stopping within it), an
 modes, with the same seed: the slowest time from the same stops on the lattice with a primary
 road every fourth row and column (signals where two cross, stop signs along them), and the
 distance with a soft no-left constraint between inner nodes; one a run collecting bridges on
-the lattice with a few roads made bridges; and one a pilgrimage to the second of two brands
-placed by hand on the lattice. A golden file
+the lattice with a few roads made bridges; one a pilgrimage to the second of two brands placed
+by hand on the lattice; and one the distance under hard mode, on the lattice with its rows and
+columns named. A golden file
 changes only under a tier A brief that says so; to rewrite one, run
 `WORST_ROUTE_REGEN_GOLDEN=1 uv run pytest tests/golden` and commit the file.
 """
@@ -154,3 +155,15 @@ def compare(path: Path, actual: dict[str, Any]) -> None:
         np.array(golden["edges"], dtype=np.int32).tobytes() == np.int32(actual["edges"]).tobytes()
     )
     assert golden == actual
+
+
+@pytest.mark.parametrize("backend_type", [PythonBackend, CsrBackend], ids=["python", "csr"])
+def test_grid_hard_route_is_golden(backend_type: Backend) -> None:
+    g = lattice(20, 20, rounded_lonlat=True, named=True)
+    stops = [at_node(g, v) for v in (0, 210, 399)]
+    request = RouteRequest(
+        stops=stops, seed=7, max_iterations=400, budget_s=120, constraints={"hard": True}
+    )
+    result = plan_route(g, request, backend=backend_type(g), check_delta=True)
+    assert result.report.ok
+    compare(Path(__file__).with_name("grid20_hard.json"), golden_of(g, request, result))

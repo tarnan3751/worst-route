@@ -43,18 +43,20 @@ Claude: Python for the pipeline, engine, API and rendering; TypeScript + MapLibr
   heuristic that makes it worse under a pluggable objective, with a validator that proves the
   result legal. `docs/PLAN.md` §3. Built for M1 with the distance mode, and searched with the
   CSR + Numba backend since M2's first step; targets by ratio or duration since M2's fourth;
-  the collect mode since M3; the other modes are later milestones.
+  the collect mode and hard mode since M3; the other modes are later milestones.
 - **API and frontend** (In progress): FastAPI jobs with Server-Sent Events progress, a MapLibre map
   that shows the route getting worse live, settings, reroll, make it worse. `docs/PLAN.md` §4–5.
   The API and the frontend are built for the distance, slowest-time and collect modes, the
-  turn constraints and the targets (`docs/reference/api.md`, `docs/reference/frontend.md`);
-  M2's acceptance is next.
+  turn constraints and the targets (`docs/reference/api.md`, `docs/reference/frontend.md`), the
+  API for hard mode too; M2's acceptance is next.
 - **Modes** (In progress): longest distance, slowest time, never/only turn left, collect toll
   booths / rail crossings / roundabouts / bridges, brand pilgrimage, alphabet route, hard mode.
   Built: longest distance, slowest time, and never turn left / right as constraints on either
   (soft: each such turn costs a kilometre; strict: none), with targets by ratio or duration, and
   collecting toll booths, level crossings, roundabouts or bridges (targets by duration); the
-  frontend offers each of them (its Mode and Turns rows).
+  frontend offers each of them (its Mode and Turns rows). Hard mode (each road in one stretch) is
+  built in the engine, the CLI and the API, with any of them; the frontend's control for it is
+  to come.
 - **Presentation** (Built): directions, stat toasts, comparisons, states and towns, share
   image. Built: the states and towns a route passes through (the Census places index), the
   comparison lines, the share image, and the directions with deadpan jokes, the stats and the
@@ -146,6 +148,16 @@ can, then drives as far, through `plan --objective brand --brand <id or name>` a
 whose `GET /brands?region=` lists the brands; the counts ride in `metrics.brand` and the
 validator recounts them. On Portland, Powell's → Reed (seed 1, 30 s) visits 17 of the 19
 Starbucks in reach at 61.90×. A seventh golden route freezes a pilgrimage.
+Hard mode is built (M3 step 5; `docs/reference/engine.md`, **Constraints**): `plan --hard` and
+the API's `constraints.hard` keep each road (a ref, else the normalised name) in one stretch, so
+once the route leaves a road it never comes back to it, alone or with a turn constraint: the
+searches are banned the roads the route drives outside each window, the window check is exact,
+a window drawn inside a road's stretch is widened to the stretch's ends (`Objective.window`),
+the seed re-solves a leg that comes back to a road (a heuristic, which may refuse a trip or
+move a stop where a legal route exists, and says only that it found no way: "try without
+--hard"), and the validator proves the rule from the build's identities. On
+Portland, Powell's → Reed reaches 9.68–11.97× under it (against 57.9–62.4× without), and 19 of
+the 20 acceptance pairs plan. An eighth golden route freezes a hard-mode run.
 The API is built (`docs/reference/api.md`, M2 step 2): `worst-route serve` runs a FastAPI app
 that plans each request as a job in a worker process of its own, streams the route as it grows
 over Server-Sent Events (splices, periodic snapshots, resumable with `Last-Event-ID`), stores
@@ -216,7 +228,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 |---|---|---|
 | M1 — Portland, distance mode, CLI | Built | bootstrap, every pipeline step (download to qa; Portland's build passes QA), the graph package and the engine (snapping, seed route, transition-aware searches, splice loop, distance objective, validator, `worst-route plan` / `validate`). The acceptance run (`docs/PLAN.md` §7 M1 step 9; `uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` on build e4b3b4ad90db, `graph_version` 45f650e868fa, the reference backend: 20 random Portland pairs 3–15 km apart): all 20 plan and the validator passes all 20; the median ratio is 21.5× (3.3–45.2×); seeds 1 and 2 share 10–16% of their edges (Jaccard on 5 pairs, all < 0.3); the cul-de-sac via moves 86 m to the nearest through street with its note. Powell's → Reed gives 58–62×, PDX → Beaverton 7.3× (`docs/reference/engine.md`, **On Portland**) |
 | M2 — API + map, live growth | In progress | CSR + Numba backend built, its transition-aware kernels included (the default on every build; byte-identical to the reference: on Portland the acceptance's 20 routes and Powell's → Reed reproduce exactly, at 7,200–8,200 attempts/s); the API built (jobs in worker processes, SSE progress, the route store, make it worse, `worst-route serve`); targets by ratio and duration built (engine, CLI `--target`/`--base`, API), a 13-minute Portland drive to 9 h within ±2 % in 1.8 s over the API; the MapLibre frontend built (stops by click, the route growing live, run controls, settings with the targets, links); remaining: the acceptance |
-| M3 — Modes and constraints | In progress | built: the turn classes, never turn left / right (soft by default, `strict` for none; engine, CLI, API), the kernels refusing banned turn classes, slowest time (engine, CLI, API), collectibles (the collect objective for toll booths, level crossings, roundabouts and bridges in the engine, `plan --objective collect --item` and the API; `node_roundabouts` in the build; on Portland 24–30 bridges where the distance route passes 16–17); the frontend's controls for them (the Mode and Turns rows, the request, the URL, the stat line's time ratio, delays, items and turns, the strict refusal's retry); the brand pilgrimage (the brand index at `enrich`, saved as build arrays at pipeline version 3; `plan --objective brand --brand`, the API's `brand` and `GET /brands`; on Portland 17 of the 19 Starbucks in reach); on Portland strict no-left plans 4 of the 20 acceptance pairs and soft no-left 20 at a median of 5.33× (§2.3; on a build re-enriched at pipeline version 2, whose bearings describe the roads, not cleanup's stubs); the search honouring stage B transitions was built at M1. Remaining: hard mode; alphabet search; the brand control in the frontend; the acceptance |
+| M3 — Modes and constraints | In progress | built: the turn classes, never turn left / right (soft by default, `strict` for none; engine, CLI, API), the kernels refusing banned turn classes, slowest time (engine, CLI, API), collectibles (the collect objective for toll booths, level crossings, roundabouts and bridges in the engine, `plan --objective collect --item` and the API; `node_roundabouts` in the build; on Portland 24–30 bridges where the distance route passes 16–17); the frontend's controls for them (the Mode and Turns rows, the request, the URL, the stat line's time ratio, delays, items and turns, the strict refusal's retry); the brand pilgrimage (the brand index at `enrich`, saved as build arrays at pipeline version 3; `plan --objective brand --brand`, the API's `brand` and `GET /brands`; on Portland 17 of the 19 Starbucks in reach); on Portland strict no-left plans 4 of the 20 acceptance pairs and soft no-left 20 at a median of 5.33× (§2.3; on a build re-enriched at pipeline version 2, whose bearings describe the roads, not cleanup's stubs); hard mode (engine, CLI, API; on Portland 19 of the 20 acceptance pairs plan under it, at a median of 4.73×); the search honouring stage B transitions was built at M1. Remaining: alphabet search; the brand and hard-mode controls in the frontend; the acceptance |
 | M4 — Presentation | Built | directions, stats, toasts, comparisons, share image, geocoding proxy, share links; built: the geocoding proxy (`GET /geocode`, Nominatim behind a cache and 1 request/s) and the place search in the stop list; the Census places index (`tools/fetch_census.sh`, `worst-route aux places`: the states and towns a route passes through), the comparison lines, and the share image (`GET /routes/{id}/share.png`, linked from the share section); the directions with deadpan jokes and the stats and toasts in the route documents (`GET /routes/{id}`, `GET /routes/{id}/directions`, route.json, `worst-route directions`); the frontend's directions panel (a step's edges highlighted on the map), toasts under the map, extra stat rows and vehicle setting; the departure setting with the arrival time, and the GeoJSON download |
 | M5 — Scaling up | Planned | Oregon; array-based simplify/consolidate; US at T1; the national decision gate; public-hosting prep |
 | M6 — Stretch | Planned | certified worst (CP-SAT), turn restrictions, stop reordering, portfolio runs |
@@ -485,6 +497,24 @@ brief):
   brand the build lacks or the area does not hold is `INVALID_REQUEST` on `field: "brand"`,
   not an `UNKNOWN_BRAND` code. The CLI takes a brand's id or its name in any case, refusing a
   name two brands share.
+- **Hard mode as built** (2026-10-30, at its plan; the coordinator): the rule is over the
+  positions of the whole route's edges, each identity's one run; an unnamed edge is free but not
+  transparent (a road on both sides of one is two stretches; on Portland's acceptance seeds the
+  two readings never differ); a stop splits nothing; a round trip is read from start to end, so
+  coming home on the road it left by is a return. `hard` is its own flag, in a request's JSON
+  only when set. Inside a road's stretch the searches are banned every other edge; the window
+  check is exact; `find_detour` asks every candidate the objective's `feasible_window`; the
+  objective interface gains `window(route, i, j)`, by which hard mode widens a window drawn
+  inside a stretch to the stretch's ends (no randomness drawn). The seed re-solves the leg where
+  a road comes back with it banned but for the stretch before, else the leg of that stretch with
+  it banned but for the one it comes back on, up to 16 rounds, a kept stretch free to grow by an
+  edge at either end, and once more with only the last return's ban when that fails (at the
+  review: the seed is a heuristic, and on lattices with repeated names it had refused trips a
+  legal route serves; the retry and the growth recover about a third of them, and its refusal
+  says only what it knows). An unreachable leg is blamed with at most two more seed builds:
+  under strict and hard, the strict constraint when hard mode alone builds, hard mode ("the
+  seed found no way from stop 0 to stop 1 under hard mode"; "try without --hard", "try without
+  hard" in the API) when the strict constraint alone does, else neither.
 - **Share image rendered from our own data** (route, faint network, Census outlines), no
   basemap of any kind; as built (2026-10-30, at its brief and plan): 1200 × 630, matplotlib Agg
   (the one new dependency), DejaVu Sans as matplotlib ships it rather than a bundled font, the

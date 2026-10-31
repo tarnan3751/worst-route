@@ -1,5 +1,6 @@
 # Both engines on Portland's filtered roads, read through WORST_ROUTE_DATA: the same simplified
-# and stage A graphs and twins, the same cleaned graph and report, the same build. Run on demand
+# and stage A graphs and twins, the same cleaned graph and report, the same enrich values and
+# report, the same build. Run on demand
 # with `uv run pytest -m data -k arrays` (a minute or two, most of it the networkx engine's stage
 # A); skipped when Portland has not been filtered. Nothing is written.
 import dataclasses
@@ -11,9 +12,11 @@ import pytest
 
 from tests.pipeline.parity import assert_same_build, assert_same_graph, read_back, same
 from tests.pipeline.test_arrays import assert_same_simplified, assert_same_stage_a
+from tests.pipeline.test_arrays_enrich import assert_same_values
 from worst_route.config import REGIONS
 from worst_route.graph.store import graph_version
 from worst_route.pipeline import PIPELINE_VERSION, layout
+from worst_route.pipeline.arrays import enrich as arrays_enrich
 from worst_route.pipeline.arrays.build import build_raw_arrays
 from worst_route.pipeline.arrays.simplify import simplify as arrays_simplify
 from worst_route.pipeline.arrays.stage_a import stage_a as arrays_stage_a
@@ -21,7 +24,7 @@ from worst_route.pipeline.arrays.to_nx import stage_a_graph
 from worst_route.pipeline.arrays.twins import find_twins as arrays_find_twins
 from worst_route.pipeline.build import build_raw_graph
 from worst_route.pipeline.carriageways import find_twins
-from worst_route.pipeline.cleanup import run_cleanup
+from worst_route.pipeline.cleanup import run_arrays_cleanup, run_cleanup
 from worst_route.pipeline.consolidate import stage_a
 from worst_route.pipeline.enrich import run_enrich
 from worst_route.pipeline.save import graph_data
@@ -64,10 +67,13 @@ def test_both_engines_build_portland_the_same() -> None:
         if saved.exists():
             meta = json.loads(saved.read_text())
     table = pq.read_table(pois)
-    builds = []
+    builds, enrich_reports = [], []
     for graph in (want, got):
-        run_enrich(graph, table)
+        enrich_reports.append(dataclasses.replace(run_enrich(graph, table), seconds=0.0))
         builds.append(graph_data(graph, [t.node_ids for t in run_tiers(graph).tiers], meta))
     assert_same_build(*builds)
+    enriched, report = arrays_enrich.run_enrich(run_arrays_cleanup(arrays)[0], table)
+    assert dataclasses.replace(report, seconds=0.0) == enrich_reports[0]
+    assert_same_values(want, enriched)
     if "graph_version" in meta and meta["pipeline_version"] == PIPELINE_VERSION:
         assert graph_version(builds[1]) == meta["graph_version"]

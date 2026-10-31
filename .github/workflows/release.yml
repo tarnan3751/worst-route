@@ -1,0 +1,157 @@
+# The desktop app's release (docs/reference/desktop.md, **Releasing it**). On a tag v<version>
+# (the package's `__version__`), or by hand: the app built on each platform's runner from the data
+# pack packaging/desktop/data.json names (a release asset a person uploaded), each frozen app
+# driven headless by tools/desktop_smoke.py (a first start and a second), signed when the
+# owner's certificates exist as secrets, and its installer attached, with its sha256, to a draft
+# release of the tag, which the owner publishes. Run by hand, the installers are the run's
+# artifacts for a day instead.
+#
+# macOS on Apple Silicon only: Numba ships no Intel macOS wheels since 0.63 (Intel Macs use the
+# hosted site). Repository variables: WORST_ROUTE_CONTACT (the contact in the app's User-Agent)
+# and WORST_ROUTE_BASEMAP_URL (where the app fetches its basemap file, in place of the pack's).
+# Secrets, all optional: MACOS_CERTIFICATE (a base64 .p12), MACOS_CERTIFICATE_PASSWORD and
+# MACOS_SIGNING_IDENTITY sign the macOS app, and APPLE_ID, APPLE_TEAM_ID and APPLE_APP_PASSWORD,
+# with them, notarize it; WINDOWS_CERTIFICATE (a base64 .pfx) and WINDOWS_CERTIFICATE_PASSWORD
+# sign the Windows one. Secrets and variables reach the scripts through `env`, never written into
+# them, so no character of theirs can break or change a command.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  draft:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag names the package's version, and its draft release exists
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/worst_route/__init__.py)"
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "the tag $GITHUB_REF_NAME is not the package's version $version" >&2
+            exit 1
+          fi
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --draft --title "Worst Route $version" \
+                 --notes "The desktop app. Unsigned for now: see docs/reference/desktop.md, **Opening it the first time**."
+
+  build:
+    needs: draft
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            app: "tools/out/desktop/dist/Worst Route.app/Contents/MacOS/Worst Route"
+          - os: windows-2025
+            app: tools/out/desktop/dist/worst-route-desktop/worst-route-desktop.exe
+          - os: ubuntu-24.04
+            app: tools/out/desktop/dist/worst-route-desktop/worst-route-desktop
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # Notarized only when the app is signed and the Apple account is there too (a step's `if`
+      # cannot read secrets).
+      NOTARIZE: ${{ secrets.MACOS_CERTIFICATE != '' && secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv python install 3.12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: The app's environment
+        run: uv sync --frozen --no-dev --group desktop
+      - name: The data pack, checked and staged
+        env:
+          BASEMAP_URL: ${{ vars.WORST_ROUTE_BASEMAP_URL }}
+          CONTACT: ${{ vars.WORST_ROUTE_CONTACT }}
+        run: |
+          read -r tag asset sha256 < <(uv run --no-sync python -c \
+            'import json; d = json.load(open("packaging/desktop/data.json")); print(d["tag"], d["asset"], d["sha256"])')
+          if [ "$tag" = None ]; then
+            echo "packaging/desktop/data.json names no data release yet" >&2
+            exit 1
+          fi
+          gh release download "$tag" --pattern "$asset" --dir "$RUNNER_TEMP"
+          uv run --no-sync python tools/desktop_data.py stage "$RUNNER_TEMP/$asset" \
+            "$RUNNER_TEMP/data" --sha256 "$sha256" --basemap-url "$BASEMAP_URL" --contact "$CONTACT"
+      - name: The signing certificates, when they exist
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+        run: |
+          if [ "$RUNNER_OS" = macOS ] && [ -n "$MACOS_CERTIFICATE" ]; then
+            keychain="$RUNNER_TEMP/signing.keychain-db"
+            security create-keychain -p "" "$keychain"
+            security set-keychain-settings "$keychain"
+            security unlock-keychain -p "" "$keychain"
+            echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+            security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" \
+              -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple: -s -k "" "$keychain"
+            security list-keychains -d user -s "$keychain"
+          fi
+          if [ "$RUNNER_OS" = Windows ] && [ -n "$WINDOWS_CERTIFICATE" ]; then
+            echo "$WINDOWS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.pfx"
+            echo "WINDOWS_CERTIFICATE=$RUNNER_TEMP/certificate.pfx" >> "$GITHUB_ENV"
+            dirname "$(ls "/c/Program Files (x86)/Windows Kits/10/bin/"*/x64/signtool.exe | tail -1)" >> "$GITHUB_PATH"
+          fi
+      - name: Build
+        env:
+          # The identity only with its certificate imported; the password read only with the
+          # .pfx written (tools/build_desktop.sh).
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_CERTIFICATE && secrets.MACOS_SIGNING_IDENTITY || '' }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          tools/build_desktop.sh "$RUNNER_TEMP/data" | tee "$RUNNER_TEMP/build.txt"
+          echo "PACKAGE=$(tail -1 "$RUNNER_TEMP/build.txt")" >> "$GITHUB_ENV"
+      - name: Smoke test, a first start then a second
+        run: |
+          uv run --no-sync python tools/desktop_smoke.py "${{ matrix.app }}" --home "$RUNNER_TEMP/home" --out tools/out/smoke-first.json
+          uv run --no-sync python tools/desktop_smoke.py "${{ matrix.app }}" --home "$RUNNER_TEMP/home" --out tools/out/smoke-second.json
+      - name: Notarize, when the app is signed and the Apple account exists
+        if: runner.os == 'macOS' && env.NOTARIZE == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          xcrun notarytool submit "$PACKAGE" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "$PACKAGE"
+      - name: The installer and its sha256
+        run: |
+          cd "$(dirname "$PACKAGE")"
+          name="$(basename "$PACKAGE")"
+          uv run --no-sync python -c 'import hashlib, sys; n = sys.argv[1]; print(hashlib.sha256(open(n, "rb").read()).hexdigest() + "  " + n)' "$name" > "$name.sha256"
+          cat "$name.sha256"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            gh release upload "$GITHUB_REF_NAME" "$name" "$name.sha256" --clobber
+          fi
+      - name: The installer, as the run's artifact (run by hand)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: tools/out/desktop/worst-route-*
+          retention-days: 1
+      - name: The smoke tests' reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ matrix.os }}
+          path: tools/out/smoke-*.json
+          retention-days: 7

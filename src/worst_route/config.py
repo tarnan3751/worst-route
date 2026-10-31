@@ -421,8 +421,10 @@ STATES: dict[str, tuple[str, str]] = {
 # when its change of bearing is at most DIRECTIONS_SLIGHT_DEG and "sharp" beyond
 # DIRECTIONS_SHARP_DEG (the turn classes themselves are TURN_STRAIGHT_DEG and TURN_UTURN_DEG's).
 # Jokes come after about every JOKE_EVERY-th driving step (more apart on a route with more such
-# steps than jokes), each gap drawn within ±JOKE_JITTER of the mean.
+# steps than jokes), each gap drawn within ±JOKE_JITTER of the mean. A route has at most
+# TOASTS_MAX toasts, as many as it can have at once, so none is ever dropped.
 DIRECTIONS_SLIGHT_DEG = 45
 DIRECTIONS_SHARP_DEG = 120
 JOKE_EVERY = 8
 JOKE_JITTER = 0.25
+TOASTS_MAX = 12

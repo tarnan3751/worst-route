@@ -17,6 +17,7 @@ else: every route it returns has passed the validator.
 | `ready_api.py` | `GET /ready` (**Endpoints**) |
 | `basemap_api.py` | `GET /config`, the basemap's files under `/basemap/` (`BasemapFiles`), `basemap_of` (**Basemap**) |
 | `logs.py` | `RequestLog` (request ids, access lines), `JsonFormatter`, `ContextFilter`, `json_log_config` (**Logs**) |
+| `static.py` | `create_site`: the frontend's build at `/` and the API under `/api` (`serve --frontend`) |
 | `limits.py` | `Limits` (`LOCAL`, `PUBLIC`), `GeocodeQuota`, `client_of` (who a client is), `client_hash` (**Public limits**, **Logs**) |
 | `schemas.py` | the request and response models (pydantic), the SSE payloads |
 | `jobs.py` | `JobManager`, `JobSettings`, `Job`, `Subscription`, `prepare`, `TooManyJobs` |
@@ -29,7 +30,9 @@ directions' and the document's presentation fields are the `presentation/` packa
 (`docs/reference/presentation.md`).
 
 Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in requests; every number is metric
-(metres, seconds). There is no `/api` prefix: the frontend's dev server proxies to the root.
+(metres, seconds). The API's paths have no `/api` prefix: the frontend's dev server proxies
+`/api` to the root, and `serve --frontend` mounts the API under `/api` beside the frontend's build
+(`api/static.py`, below).
 
 ## Running it
 
@@ -37,7 +40,7 @@ Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in requests; every numb
 worst-route serve --region R [--build-id ID] [--host 127.0.0.1] [--port 8000] [--workers N]
                   [--backend auto|csr|python] [--store PATH]
                   [--geocoder nominatim|none] [--nominatim-url URL]
-                  [--trust-proxy] [--log-format text|json] [--public]
+                  [--trust-proxy] [--log-format text|json] [--public] [--frontend DIR]
 ```
 
 It loads the region's build (`--build-id`, else the region's `latest`) before it listens, so a
@@ -79,6 +82,16 @@ them last: `public: a client runs 1 job at once with 3 waiting, budgets up to 60
 searches a minute`. The basemap the frontend draws is `WORST_ROUTE_BASEMAP`'s, `raster` (the
 default) or `pmtiles` (**Basemap**), and with `pmtiles` `serve` prints the file it serves,
 `basemap: pmtiles <data>/basemap/<region>.pmtiles`, before the proxy's and the public lines.
+
+`--frontend DIR` serves the frontend's build (`frontend/dist`, `npm run build`) too, from the
+same process: `api/static.py`'s `create_site` mounts the API, its paths unchanged, under `/api`
+(the prefix the frontend calls) and the build at `/` (`index.html` with `Cache-Control:
+no-cache`, the content-hashed `assets/` with `public, max-age=31536000, immutable`; a path the
+build does not have is 404). The site's lifespan runs the API's. A directory without
+`index.html` is one line (``no frontend build at DIR: run `npm run build` under frontend/``)
+and exit 1; it prints `frontend: DIR at /, the API under /api` last. The container runs so
+(`docs/reference/hosting.md`). The access lines then name the whole path, `/api/...`; the
+build's own files are not logged.
 
 `create_app(ApiSettings(data_dir, region, build_id="latest", backend, store_path, jobs,
 geocoder="nominatim", nominatim_url, contact, trust_proxy=False, public=False,
@@ -843,6 +856,7 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 | `test_limits.py` | each client's searches on a fake clock (ten in any minute, `retry_after_s`, other clients apart, idle ones forgotten); the manager's per-client jobs (one running and three waiting while workers are free, the fifth refused with its counts, another client and a job without a client unaffected, the next of a client starting in order when its running one ends, a waiting job whose client is busy letting the next one start, a full server's refusal without counts); over HTTP the public budget (and 120 s otherwise), a client's share of the jobs from one peer and behind a trusted proxy (the last forwarded address counting, an untrusted header ignored), a client's eleventh search refused, cached answers counted, none of it when not public |
 | `test_basemap_api.py` | `/config` for each basemap, with and without the labels' assets, and its public flag and limits; the basemap's file: whole, its first 127 bytes, a suffix, a range running past the end (cut), one starting past it (416 with the length), `If-Range` current and stale, `HEAD`, the media types and caching; a font; a missing file, a missing directory and a path leaving it, 404; a linked file served and ready, and a small one's first 16 kB read whole; `/ready`'s basemap check, failing without the file (no path in its detail) and naming the labels |
 | `test_ready_api.py` | `/ready`: 200 with the build, the store and the places index; 503 without the index, and once the build is replaced or gone (while `/health` answers), its details without a path on the server |
+| `test_static.py` | the site: the build at `/` and its caching, a module's media type, `/health` not at the root, the API under `/api` with its errors, a job run to its end through it (the lifespan ran), the access lines' whole paths |
 | `test_store.py` | the round trip (the stored route validates), unknown ids, the first record kept, what the id covers |
 | `test_sse.py` | path points and node indices, the per-edge simplification keeping nodes and original values, splices, metrics, the event encoding |
 | `test_jobs.py` | the manager with inline workers: event order and ids, a client replay equal to the stored route, late subscribers (after a worker that died with splices waiting too: they come before its `error`, ids rising strictly), `Last-Event-ID` resync, cancel (validated, stored, reproduced by its attempts), the queue and its limit, cancel before the route exists, continuations, the time limit, orphans running and queued, a worker that raises, a worker refusing a brand its request's area does not hold (`INVALID_REQUEST`), a store failure while cancelling (by hand and by the sweep, which goes on), a worker that does not start (the queue moves on), the TTL; a target run whose best is not its last route (an overshoot on a 5 × 5 lattice): a snapshot of the stored route before `done`, for live and late clients, and a cancel after the overshoot storing the closest route, reproduced by its attempts |
@@ -854,8 +868,8 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 
 `tests/engine/test_plan.py` covers `plan_route`'s hooks, `tests/graph/test_loader.py` the loader,
 and `tests/unit/test_cli.py` `serve`'s errors, options (the geocoder's included, with the line
-it prints; `--trust-proxy`, `--log-format`, `--public` and `WORST_ROUTE_BASEMAP`, uvicorn's proxy
-headers off) and its taking `csr` on a build with transition tables. `tests/geocode/` covers the
+it prints; `--trust-proxy`, `--log-format`, `--public`, `WORST_ROUTE_BASEMAP` and `--frontend`,
+uvicorn's proxy headers off) and its taking `csr` on a build with transition tables. `tests/geocode/` covers the
 geocoding package: `normalise`; the cache and its TTL on a fake clock; the rate limit on a fake
 clock (a burst of ten serving six and refusing four, requests the interval plus a 300 ms
 latency apart, the interval from the answer, a failure spacing the next request too, a turn
@@ -875,7 +889,8 @@ over a real socket by hand (**Measured**).
   loses running jobs (their routes so far are not stored) and ended jobs' records.
 - **The public limits are per process and per address** (**Public limits**): a restart forgets
   them, and a client with many addresses has many shares. There is no authentication and no
-  CORS (the frontend's dev server proxies).
+  CORS (the frontend is on the API's origin: the dev server proxies, `serve --frontend` serves
+  both).
 - **The geocoder's rate limit is per process**: one request at a time from this server, a
   second from each answer to the next request, which is the application's only while uvicorn
   runs one process and one server asks Nominatim (two servers, as the coordinator's and a lane's

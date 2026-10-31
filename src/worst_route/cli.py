@@ -53,7 +53,8 @@ the contact from `WORST_ROUTE_CONTACT` included. `--trust-proxy` believes a reve
 json` logs a JSON object a line on stdout, with request ids and without uvicorn's access lines
 (`api/logs.py`); `--public` applies the public limits (`api/limits.py`) and prints them. The
 basemap the frontend draws is `WORST_ROUTE_BASEMAP`'s (`raster` or `pmtiles`, whose file it then
-names).
+names). `--frontend DIR` serves the frontend's build at `/` and the API under `/api`
+(`api/static.py`), from one process; a directory without `index.html` is one line and exit 1.
 
 `aux places` writes the places index (`docs/reference/presentation.md`, **Places**) under
 `<WORST_ROUTE_DATA>/aux/places/` from the Census files `tools/fetch_census.sh` fetched into
@@ -1207,15 +1208,24 @@ def serve(
             "the place searches.",
         ),
     ] = False,
+    frontend: Annotated[
+        Path | None,
+        typer.Option(
+            help="The frontend's build (frontend/dist) to serve at /, the API then under /api.",
+            file_okay=False,
+        ),
+    ] = None,
 ) -> None:
     """Serve the API."""
     import copy
 
     import uvicorn
+    from starlette.applications import Starlette
 
     from worst_route.api.app import ApiSettings, create_app, geocoder_user_agent
     from worst_route.api.jobs import JobSettings
     from worst_route.api.logs import json_log_config
+    from worst_route.api.static import create_site
     from worst_route.graph.loader import BuildNotFound
 
     config = ApiSettings(
@@ -1232,6 +1242,8 @@ def serve(
         public=public,
         basemap=settings().basemap,
     )
+    if frontend is not None and not (frontend / "index.html").is_file():
+        _fail(f"no frontend build at {frontend}: run `npm run build` under frontend/")
     try:
         application = create_app(config)
     except BuildNotFound as error:
@@ -1255,6 +1267,10 @@ def serve(
             f"{limits.queued_per_client} waiting, budgets up to {limits.budget_max_s:g} s, "
             f"{limits.geocode_per_minute} place searches a minute"
         )
+    site: Starlette = application
+    if frontend is not None:
+        site = create_site(application, frontend)
+        typer.echo(f"frontend: {frontend} at /, the API under /api")
     if log_format == "json":
         log_config = json_log_config()
     else:
@@ -1263,7 +1279,7 @@ def serve(
         log_config["loggers"]["worst_route.access"] = {"level": "WARNING", "propagate": False}
     # uvicorn's own proxy headers off: --trust-proxy alone decides whom X-Forwarded-For names
     uvicorn.run(
-        application,
+        site,
         host=host,
         port=port,
         log_config=log_config,

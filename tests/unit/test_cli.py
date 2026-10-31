@@ -223,4 +223,16 @@ def test_serve_takes_the_proxy_log_and_public_options(
         f"basemap: pmtiles {tmp_path / 'basemap' / 'portland.pmtiles'}"
     )
     assert ran["app"].state.api.settings.basemap == "pmtiles"
+    monkeypatch.delenv("WORST_ROUTE_BASEMAP")
+    settings.cache_clear()
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    unbuilt = runner.invoke(app, [*base, "--frontend", str(dist)])
+    assert unbuilt.exit_code == 1
+    assert unbuilt.output.strip().endswith("run `npm run build` under frontend/")
+    (dist / "index.html").write_text("<!doctype html>")
+    site = runner.invoke(app, [*base, "--frontend", str(dist)])
+    assert site.exit_code == 0, site.output
+    assert site.stdout.splitlines()[-1] == f"frontend: {dist} at /, the API under /api"
+    assert [getattr(r, "path", None) for r in ran["app"].routes] == ["/api", ""]
     settings.cache_clear()

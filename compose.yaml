@@ -1,0 +1,36 @@
+# worst-route on one machine (docs/reference/hosting.md): the image built from this tree, the
+# data directory mounted read only, the service's own state in a named volume, the port open on
+# this machine only, for a reverse proxy in front of it that terminates TLS and appends
+# X-Forwarded-For (--trust-proxy). `docker compose up -d --build`; the region is the command's.
+services:
+  worst-route:
+    build: .
+    image: worst-route:latest
+    command:
+      - serve
+      - --region
+      - portland
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --store
+      - /state/routes.sqlite
+      - --frontend
+      - /app/frontend
+      - --public
+      - --trust-proxy
+      - --log-format
+      - json
+    environment:
+      WORST_ROUTE_BASEMAP: pmtiles
+      WORST_ROUTE_CONTACT: ${WORST_ROUTE_CONTACT:-}
+    volumes:
+      - ./data:/data:ro
+      - state:/state
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+
+volumes:
+  state:

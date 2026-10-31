@@ -62,7 +62,13 @@ import numpy as np
 import shapely
 from numpy.typing import NDArray
 
-from worst_route.config import GEOMETRY_SIMPLIFY_M, TIERS, HighwayClass, Region
+from worst_route.config import (
+    DEFAULT_PIPELINE_ENGINE,
+    GEOMETRY_SIMPLIFY_M,
+    TIERS,
+    HighwayClass,
+    Region,
+)
 from worst_route.graph.data import (
     ARRAY_SPECS,
     FORMAT_VERSION,
@@ -79,8 +85,15 @@ from worst_route.pipeline.arrays.enrich import EnrichedGraph
 type EdgeKey = tuple[int, int, int]
 
 
-# The steps whose sidecar's configuration goes into the build's params, with their outputs.
-STEP_OUTPUTS = (("cleanup", "cleanup.pkl"), ("enrich", "enrich.pkl"), ("tiers", "tiers.json"))
+def step_outputs(build_dir: Path) -> list[tuple[str, str]]:
+    """The steps whose sidecar's configuration goes into the build's params, with the outputs
+    of the engine the build's cleanup ran (the default's before it has)."""
+    engine = layout.cleanup_engine(build_dir) or DEFAULT_PIPELINE_ENGINE
+    return [
+        ("cleanup", layout.CLEANUP_STAGES[engine][0]),
+        ("enrich", layout.ENRICH_STAGES[engine][0]),
+        ("tiers", "tiers.json"),
+    ]
 
 
 class EmptyTransitionsError(ValueError):
@@ -471,7 +484,7 @@ def build_params(region: Region, build_dir: Path) -> dict[str, Any]:
         "bbox": None if region.bbox is None else list(region.bbox),
         "crs_epsg": region.crs_epsg,
     }
-    for step, output in STEP_OUTPUTS:
+    for step, output in step_outputs(build_dir):
         sidecar = layout.sidecar(layout.stage_file(build_dir, output))
         recorded = json.loads(sidecar.read_text())["params"]
         params[step] = {k: v for k, v in recorded.items() if k != "pipeline_version"}

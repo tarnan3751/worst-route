@@ -2,7 +2,8 @@
 
 `docs/PLAN.md` §2.8; `docs/reference/pipeline.md`, qa. `run_qa(build_dir)` reads the saved build,
 the stage reports (`cleanup.json`, `enrich.json`, `tiers.json`, `save.json`) and the
-super-junction records in `stages/enrich.pkl`, and writes under `qa/`:
+super-junction records (`superjunctions`: the networkx engine's `stages/enrich.pkl`, the arrays
+engine's `stages/cleanup/`), and writes under `qa/`:
 
 - `twins.geojson`: one feature per twin pair, a MultiLineString of the two edges (along the
   build's geometry);
@@ -47,6 +48,7 @@ from worst_route.graph.data import GraphData, NodeKind
 from worst_route.graph.geometry import Geometry, edge_points, read_geometry
 from worst_route.graph.store import read_build
 from worst_route.pipeline import layout
+from worst_route.pipeline.arrays import cleaned
 
 LAYERS = ("twins", "superjunctions", "dropped_components", "tiers")
 
@@ -98,8 +100,7 @@ def run_qa(build_dir: Path) -> QaReport:
         name: json.loads(layout.stage_file(build_dir, f"{name}.json").read_text())
         for name in ("cleanup", "enrich", "tiers", "save")
     }
-    with layout.stage_file(build_dir, "enrich.pkl").open("rb") as f:
-        records: dict[int, dict[str, Any]] = pickle.load(f).graph["superjunctions"]
+    records = superjunctions(build_dir)
     cleanup, tiers = stages["cleanup"], stages["tiers"]
     report = QaReport(
         region=data.meta["region"],
@@ -116,8 +117,8 @@ def run_qa(build_dir: Path) -> QaReport:
         save=stages["save"],
     )
     histogram: dict[str, Counter[int]] = {"interchange": Counter(), "roundabout": Counter()}
-    for record in records.values():
-        histogram[record["kind"]][len(record["parts"])] += 1
+    for kind, parts in records.values():
+        histogram[kind][parts] += 1
     report.superjunctions = {kind: dict(sorted(c.items())) for kind, c in histogram.items()}
 
     coverage = cleanup["twins"]["coverage"]
@@ -234,16 +235,29 @@ def _twins(data: GraphData, geometry: Geometry) -> list[dict[str, Any]]:
     return features
 
 
-def _superjunctions(data: GraphData, records: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
+def superjunctions(build_dir: Path) -> dict[int, tuple[str, int]]:
+    """Each super-junction's kind and number of parts, from the records of the build's stages:
+    the networkx engine's enriched graph, or the arrays engine's cleaned graph."""
+    if layout.cleanup_engine(build_dir) == "arrays":
+        graph = cleaned.load_stage(build_dir)
+        parts = np.diff(graph.part_indptr).tolist()
+        kinds = [NodeKind(k).name.lower() for k in graph.node_kind[graph.super_node].tolist()]
+        return dict(zip(graph.super_node.tolist(), zip(kinds, parts, strict=True), strict=True))
+    with layout.stage_file(build_dir, "enrich.pkl").open("rb") as f:
+        records: dict[int, dict[str, Any]] = pickle.load(f).graph["superjunctions"]
+    return {node: (record["kind"], len(record["parts"])) for node, record in records.items()}
+
+
+def _superjunctions(data: GraphData, records: dict[int, tuple[str, int]]) -> list[dict[str, Any]]:
     rows = Counter(data.trans_node.tolist())
     features = []
-    for node, record in sorted(records.items()):
+    for node, (kind, parts) in sorted(records.items()):
         ins = int(data.in_indptr[node + 1] - data.in_indptr[node])
         outs = int(data.out_indptr[node + 1] - data.out_indptr[node])
         properties = {
             "node": node,
-            "kind": record["kind"],
-            "parts": len(record["parts"]),
+            "kind": kind,
+            "parts": parts,
             "members": int(data.member_indptr[node + 1] - data.member_indptr[node]),
             "transitions": rows[node],
             "in": ins,

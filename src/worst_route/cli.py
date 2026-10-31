@@ -182,6 +182,13 @@ def _inputs(path: Path) -> list[dict[str, str]]:
     return [{"file": path.name, "md5": layout.file_md5(path)}]
 
 
+def _stage_inputs(directory: Path, names: list[str]) -> list[dict[str, str]]:
+    """The build's stage files `names` (as `layout` names them) as a sidecar records them."""
+    return [
+        {"file": name, "md5": layout.file_md5(layout.stage_file(directory, name))} for name in names
+    ]
+
+
 def _up_to_date(output: Path, record: dict[str, Any]) -> bool:
     """Whether a step that records its engine (`build`, `cleanup`) is up to date: its output
     written (an arrays stage once its manifest is) and its sidecar holding `record`. A sidecar
@@ -192,6 +199,33 @@ def _up_to_date(output: Path, record: dict[str, Any]) -> bool:
         return True
     legacy = {key: value for key, value in record.items() if key != "engine"}
     return record["engine"] == "networkx" and layout.sidecar_matches(output, legacy)
+
+
+def _written(output: Path) -> bool:
+    """Whether a stage is written: a file, or an arrays stage directory with its manifest."""
+    return (output / layout.STAGE_MANIFEST).exists() if output.is_dir() else output.exists()
+
+
+def _remove(output: Path) -> None:
+    """Remove a stage, file or directory, and its sidecar."""
+    import shutil
+
+    layout.sidecar(output).unlink(missing_ok=True)
+    if output.is_dir():
+        shutil.rmtree(output)
+    else:
+        output.unlink(missing_ok=True)
+
+
+def _cleaned(region: str, directory: Path) -> PipelineEngine:
+    """The engine the build's cleanup ran; exit 1, naming the step, before it has run."""
+    engine = layout.cleanup_engine(directory)
+    if engine is None:
+        _require(
+            layout.stage_file(directory, layout.CLEANUP_STAGES[DEFAULT_PIPELINE_ENGINE][1]),
+            f"run `worst-route pipeline cleanup --region {region}` first",
+        )
+    return cast(PipelineEngine, engine)
 
 
 def _size(path: Path) -> str:
@@ -332,7 +366,8 @@ def cleanup(
     import pickle
 
     from worst_route.pipeline import cleanup as step
-    from worst_route.pipeline.arrays.build import RawGraph, load_stage
+    from worst_route.pipeline.arrays import cleaned
+    from worst_route.pipeline.arrays.build import load_stage
 
     hint = f"run `worst-route pipeline build --region {region} --engine {engine}` first"
     if build_id is None:
@@ -342,7 +377,7 @@ def cleanup(
     _, recorded = layout.BUILD_STAGES[cast(PipelineEngine, engine)]
     source = layout.stage_file(directory, recorded)
     _require(source, hint)
-    output = layout.stage_file(directory, "cleanup.pkl")
+    output = layout.stage_file(directory, layout.CLEANUP_STAGES[cast(PipelineEngine, engine)][0])
     record: dict[str, Any] = {
         "step": "cleanup",
         "engine": engine,
@@ -358,21 +393,23 @@ def cleanup(
             f"skipped: cleanup of build {build_id} is up to date at {output} (--force to redo)"
         )
         return
-    layout.sidecar(output).unlink(missing_ok=True)
-    output.unlink(missing_ok=True)
+    for stage, _ in layout.CLEANUP_STAGES.values():  # a build holds one engine's cleaned graph
+        _remove(layout.stage_file(directory, stage))
     layout.stage_file(directory, "cleanup.json").unlink(missing_ok=True)
-    raw: RawGraph | Any
-    if engine == "arrays":
-        raw = load_stage(directory)
-    else:
-        with source.open("rb") as f:
-            raw = pickle.load(f)
     try:
-        graph, report = step.run_cleanup(raw, allow_fragmented=allow_fragmented)
+        if engine == "arrays":
+            cleaned_graph, report = step.run_arrays_cleanup(
+                load_stage(directory), allow_fragmented=allow_fragmented
+            )
+            cleaned.save_stage(cleaned_graph, report, directory)
+        else:
+            with source.open("rb") as f:
+                raw = pickle.load(f)
+            graph, report = step.run_cleanup(raw, allow_fragmented=allow_fragmented)
+            step.save_stage(graph, report, directory)
     except step.FragmentedGraphError as error:
         typer.echo(f"cleanup failed: {error}", err=True)
         raise typer.Exit(code=1) from None
-    step.save_stage(graph, report, directory)
     layout.write_sidecar(output, record)
     simplified, a, b, twins, scc = (
         report.simplify,
@@ -409,7 +446,7 @@ def cleanup(
         f"{scc.dropped_nodes} nodes and {scc.dropped_length_m / 1000:.1f} km "
         f"in {scc.dropped_components} components{no_turn}"
     )
-    typer.echo(f"nodes {graph.number_of_nodes()}, edges {graph.number_of_edges()}")
+    typer.echo(f"nodes {scc.nodes_after}, edges {scc.edges_after}")
 
 
 @pipeline_app.command()
@@ -423,31 +460,40 @@ def enrich(
     import pyarrow.parquet as pq
 
     from worst_route.pipeline import enrich as step
+    from worst_route.pipeline.arrays import cleaned
+    from worst_route.pipeline.arrays import enrich as arrays_enrich
 
     build_id, directory = _build_of(region, build_id)
-    source = layout.stage_file(directory, "cleanup.pkl")
-    _require(source, f"run `worst-route pipeline cleanup --region {region}` first")
+    engine = _cleaned(region, directory)
+    recorded = layout.CLEANUP_STAGES[engine][1]
+    source = layout.stage_file(directory, recorded)
     _require_fresh(region, directory, "enrich")
     pois = layout.pois_parquet(region)
     _require(pois, f"run `worst-route pipeline filter --region {region}` first")
-    output = layout.stage_file(directory, "enrich.pkl")
+    output = layout.stage_file(directory, layout.ENRICH_STAGES[engine][0])
     record: dict[str, Any] = {
         "step": "enrich",
-        "inputs": _inputs(source) + _inputs(pois),
+        "inputs": [{"file": recorded, "md5": layout.file_md5(source)}, *_inputs(pois)],
         "params": {"config": step.parameters(), "pipeline_version": PIPELINE_VERSION},
     }
-    if not force and layout.sidecar_matches(output, record):
+    if not force and _written(output) and layout.sidecar_matches(output, record):
         typer.echo(
             f"skipped: enrich of build {build_id} is up to date at {output} (--force to redo)"
         )
         return
-    layout.sidecar(output).unlink(missing_ok=True)
-    output.unlink(missing_ok=True)
+    for stage, _ in layout.ENRICH_STAGES.values():  # and one engine's enriched graph
+        _remove(layout.stage_file(directory, stage))
     layout.stage_file(directory, "enrich.json").unlink(missing_ok=True)
-    with source.open("rb") as f:
-        graph = pickle.load(f)
-    report = step.run_enrich(graph, pq.read_table(pois))
-    step.save_stage(graph, report, directory)
+    if engine == "arrays":
+        enriched, report = arrays_enrich.run_enrich(
+            cleaned.load_stage(directory), pq.read_table(pois)
+        )
+        arrays_enrich.save_stage(enriched, report, directory)
+    else:
+        with source.open("rb") as f:
+            graph = pickle.load(f)
+        report = step.run_enrich(graph, pq.read_table(pois))
+        step.save_stage(graph, report, directory)
     layout.write_sidecar(output, record)
     typer.echo(f"enrich {build_id}: wrote {output} ({_size(output)})")
     parsed = sum(report.speed_parsed.values())
@@ -499,15 +545,18 @@ def tiers(
     import pickle
 
     from worst_route.pipeline import tiers as step
+    from worst_route.pipeline.arrays import cleaned
+    from worst_route.pipeline.arrays import tiers as arrays_tiers
 
     build_id, directory = _build_of(region, build_id)
-    source = layout.stage_file(directory, "enrich.pkl")
+    engine = _cleaned(region, directory)
+    source = layout.stage_file(directory, layout.ENRICH_STAGES[engine][1])
     _require(source, f"run `worst-route pipeline enrich --region {region}` first")
     _require_fresh(region, directory, "tiers")
     output = layout.stage_file(directory, "tiers.json")
     record: dict[str, Any] = {
         "step": "tiers",
-        "inputs": _inputs(source),
+        "inputs": _stage_inputs(directory, layout.enriched_stages(engine)),
         "params": {
             "allow_fragmented": allow_fragmented,
             "config": step.parameters(),
@@ -521,10 +570,15 @@ def tiers(
         return
     layout.sidecar(output).unlink(missing_ok=True)
     output.unlink(missing_ok=True)
-    with source.open("rb") as f:
-        graph = pickle.load(f)
     try:
-        report = step.run_tiers(graph, allow_fragmented=allow_fragmented)
+        if engine == "arrays":  # the tiers read only the cleaned graph's roads
+            report = arrays_tiers.run_tiers(
+                cleaned.load_stage(directory), allow_fragmented=allow_fragmented
+            )
+        else:
+            with source.open("rb") as f:
+                graph = pickle.load(f)
+            report = step.run_tiers(graph, allow_fragmented=allow_fragmented)
     except step.FragmentedTierError as error:
         typer.echo(f"tiers failed: {error}", err=True)
         raise typer.Exit(code=1) from None
@@ -546,16 +600,22 @@ def save(region: RegionOption, build_id: BuildIdOption = None, force: ForceOptio
 
     from worst_route.graph.store import outdated
     from worst_route.pipeline import save as step
+    from worst_route.pipeline.arrays import cleaned
+    from worst_route.pipeline.arrays import enrich as arrays_enrich
 
     build_id, directory = _build_of(region, build_id)
     spec = REGIONS[region]
-    source = layout.stage_file(directory, "enrich.pkl")
+    engine = _cleaned(region, directory)
+    source = layout.stage_file(directory, layout.ENRICH_STAGES[engine][1])
     tiers_json = layout.stage_file(directory, "tiers.json")
     reads = [  # (file, the step that writes it)
         (source, "enrich"),
         (tiers_json, "tiers"),
         (layout.sidecar(layout.build_stage(directory)), "build"),
-        *((layout.sidecar(layout.stage_file(directory, out)), s) for s, out in step.STEP_OUTPUTS),
+        *(
+            (layout.sidecar(layout.stage_file(directory, out)), s)
+            for s, out in step.step_outputs(directory)
+        ),
         (layout.roads_pbf(region), "filter"),
         (layout.sidecar(layout.roads_pbf(region)), "filter"),
     ]
@@ -570,7 +630,7 @@ def save(region: RegionOption, build_id: BuildIdOption = None, force: ForceOptio
     output = layout.stage_file(directory, "save.json")
     record: dict[str, Any] = {
         "step": "save",
-        "inputs": _inputs(source) + _inputs(tiers_json),
+        "inputs": [*_stage_inputs(directory, layout.enriched_stages(engine)), *_inputs(tiers_json)],
         "params": {"meta": params, "pipeline_version": PIPELINE_VERSION},
     }
     if not force and (directory / "meta.json").exists():
@@ -588,15 +648,21 @@ def save(region: RegionOption, build_id: BuildIdOption = None, force: ForceOptio
     step.remove_build(directory)
     layout.sidecar(output).unlink(missing_ok=True)
     output.unlink(missing_ok=True)
-    with source.open("rb") as f:
-        graph = pickle.load(f)
-    tiers = json.loads(tiers_json.read_text())["tiers"]
+    tier_nodes = [t["node_ids"] for t in json.loads(tiers_json.read_text())["tiers"]]
     meta = step.build_meta(spec, build_id, params, sources)
     try:
-        data = step.graph_data(graph, [t["node_ids"] for t in tiers], meta)
+        if engine == "arrays":
+            enriched = arrays_enrich.load_stage(cleaned.load_stage(directory), directory)
+            data = step.graph_data_of(enriched, tier_nodes, meta)
+            geometry = step.graph_geometry_of(enriched, data)
+        else:
+            with source.open("rb") as f:
+                graph = pickle.load(f)
+            data = step.graph_data(graph, tier_nodes, meta)
+            geometry = step.graph_geometry(graph, data)
     except (step.EmptyTransitionsError, step.ShapePointError, step.TooManySpeedsError) as error:
         _fail(f"save failed: {error}")
-    report = step.save_build(data, directory, step.graph_geometry(graph, data))
+    report = step.save_build(data, directory, geometry)
     layout.write_sidecar(output, record)
     c = report.counts
     typer.echo(
@@ -619,18 +685,28 @@ def qa(region: RegionOption, build_id: BuildIdOption = None, force: ForceOption 
     from worst_route.pipeline import qa as step
 
     build_id, directory = _build_of(region, build_id)
-    inputs = [directory / "meta.json"] + [
-        layout.stage_file(directory, name)
-        for name in ("cleanup.json", "enrich.json", "enrich.pkl", "tiers.json", "save.json")
-    ]
-    writers = ("save", "cleanup", "enrich", "enrich", "tiers", "save")
+    engine = layout.cleanup_engine(directory) or DEFAULT_PIPELINE_ENGINE
+    # The super-junction records: networkx's enriched graph holds them, as its cleaned graph
+    # does, and the arrays engine's cleaned graph.
+    records, writer = (
+        (layout.ENRICH_STAGES[engine][1], "enrich")
+        if engine == "networkx"
+        else (layout.CLEANUP_STAGES[engine][1], "cleanup")
+    )
+    names = ("cleanup.json", "enrich.json", records, "tiers.json", "save.json")
+    inputs = [directory / "meta.json"] + [layout.stage_file(directory, name) for name in names]
+    writers = ("save", "cleanup", "enrich", writer, "tiers", "save")
     for path, writer in zip(inputs, writers, strict=True):
         _require(path, f"run `worst-route pipeline {writer} --region {region}` first")
     _require_fresh(region, directory, "qa")
     output = layout.qa_file(directory, "qa.json")
+    files = ["meta.json", *names]
     record: dict[str, Any] = {
         "step": "qa",
-        "inputs": [entry for path in inputs for entry in _inputs(path)],
+        "inputs": [
+            {"file": name, "md5": layout.file_md5(path)}
+            for name, path in zip(files, inputs, strict=True)
+        ],
         "params": {"config": step.parameters(), "pipeline_version": PIPELINE_VERSION},
     }
     if not force and layout.sidecar_matches(output, record):

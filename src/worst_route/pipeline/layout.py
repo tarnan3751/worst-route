@@ -15,9 +15,10 @@ inputs' md5s and its parameters in the sidecar `<output>.inputs.json`; the step 
 its output exists and the sidecar matches what it would record now. `stale_stages` walks a
 build's stages in order (`STAGE_CHAIN`) and names those whose recorded inputs no longer match
 the files there, so a step never reads a stage made from inputs that have since changed.
-The two engines' `build` stages differ (`BUILD_STAGES`): networkx's `build.pkl`, the arrays
-engine's `build/` directory, which its `manifest.json` stands for in a sidecar; `build_stage`
-names the one a build's cleanup read.
+The two engines' stages differ (`BUILD_STAGES`, `CLEANUP_STAGES`, `ENRICH_STAGES`): networkx's
+pickles, the arrays engine's directories, each of which its `manifest.json` stands for in a
+sidecar. A build holds one engine's cleanup stage, which `cleanup_engine` names and the steps
+after cleanup follow; `build_stage` names the build stage its cleanup read.
 """
 
 import hashlib
@@ -68,18 +69,46 @@ def stage_file(build: Path, name: str) -> Path:
 
 # The file an arrays engine stage directory is complete with, written last (`arrays/stage.py`).
 STAGE_MANIFEST = "manifest.json"
-# The stage each engine's `build` writes, and the file that stands for it in cleanup's sidecar.
+# The stage each engine's `build`, `cleanup` and `enrich` write, and the file that stands for it
+# in the next step's sidecar: networkx's pickles, the arrays engine's directories.
 BUILD_STAGES: dict[PipelineEngine, tuple[str, str]] = {
     "networkx": ("build.pkl", "build.pkl"),
     "arrays": ("build", f"build/{STAGE_MANIFEST}"),
 }
+CLEANUP_STAGES: dict[PipelineEngine, tuple[str, str]] = {
+    "networkx": ("cleanup.pkl", "cleanup.pkl"),
+    "arrays": ("cleanup", f"cleanup/{STAGE_MANIFEST}"),
+}
+ENRICH_STAGES: dict[PipelineEngine, tuple[str, str]] = {
+    "networkx": ("enrich.pkl", "enrich.pkl"),
+    "arrays": ("enrich", f"enrich/{STAGE_MANIFEST}"),
+}
+
+
+def enriched_stages(engine: PipelineEngine) -> list[str]:
+    """The stages the enriched graph is read from, as sidecars name them: the networkx engine's
+    `enrich.pkl`, which holds the whole graph; the arrays engine's enrich stage and the cleanup
+    stage it lies on."""
+    if engine == "arrays":
+        return [ENRICH_STAGES[engine][1], CLEANUP_STAGES[engine][1]]
+    return [ENRICH_STAGES[engine][1]]
+
+
+def cleanup_engine(build: Path) -> PipelineEngine | None:
+    """The engine the build's cleanup ran, whose stage the build holds (cleanup removes the
+    other engine's), or None before cleanup has run."""
+    for engine, (_, recorded) in CLEANUP_STAGES.items():
+        if stage_file(build, recorded).exists():
+            return engine
+    return None
 
 
 def build_stage(build: Path) -> Path:
     """The build stage the build's cleanup read, as its sidecar records (the default engine's
     before cleanup has run)."""
-    side = sidecar(stage_file(build, "cleanup.pkl"))
-    if side.exists():
+    engine = cleanup_engine(build)
+    side = sidecar(stage_file(build, CLEANUP_STAGES[engine][0])) if engine else None
+    if side is not None and side.exists():
         read = {i["file"] for i in json.loads(side.read_text())["inputs"]}
         for stage, recorded in BUILD_STAGES.values():
             if recorded in read:
@@ -108,13 +137,19 @@ def sidecar(output: Path) -> Path:
     return output.with_name(f"{output.name}.inputs.json")
 
 
-# A build's stages in order: each step, the stage file it writes, and the stage files its
-# sidecar may record as its inputs (cleanup reads one engine's build stage or the other's).
+# A build's stages in order: each step, a stage it writes (either engine's), and the stage files
+# its sidecar may record as its inputs (cleanup reads one engine's build stage or the other's,
+# and each later step its own engine's stages; tiers and save read the enriched graph from
+# `enriched_stages`).
+_ENRICHED = tuple(dict.fromkeys(name for e in ENRICH_STAGES for name in enriched_stages(e)))
 STAGE_CHAIN: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    ("cleanup", "cleanup.pkl", tuple(recorded for _, recorded in BUILD_STAGES.values())),
-    ("enrich", "enrich.pkl", ("cleanup.pkl",)),
-    ("tiers", "tiers.json", ("enrich.pkl",)),
-    ("save", "save.json", ("enrich.pkl", "tiers.json")),
+    *(
+        ("cleanup", stage, tuple(recorded for _, recorded in BUILD_STAGES.values()))
+        for stage, _ in CLEANUP_STAGES.values()
+    ),
+    *(("enrich", ENRICH_STAGES[e][0], (CLEANUP_STAGES[e][1],)) for e in ENRICH_STAGES),
+    ("tiers", "tiers.json", _ENRICHED),
+    ("save", "save.json", (*_ENRICHED, "tiers.json")),
 )
 
 

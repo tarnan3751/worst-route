@@ -1,3 +1,4 @@
+import dataclasses
 import functools
 import hashlib
 import json
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import numpy as np
 import pyarrow.parquet as pq
 import pytest
 from typer.testing import CliRunner
@@ -22,7 +24,9 @@ from worst_route.cli import app
 from worst_route.config import REGIONS
 from worst_route.graph.store import read_build
 from worst_route.pipeline import PIPELINE_VERSION, download, layout
+from worst_route.pipeline.arrays import cleaned
 from worst_route.pipeline.arrays.build import load_stage
+from worst_route.pipeline.cleanup import run_arrays_cleanup
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "osm"
 runner = CliRunner()
@@ -238,9 +242,9 @@ def test_cleanup_after_build(data_dir: Path) -> None:
     code, output = pipeline("cleanup", "--region", "portland")  # the latest build: b1
     assert code == 0, output
     stages = data_dir / "graphs" / "portland" / "b1" / "stages"
+    size = sum(f.stat().st_size for f in (stages / "cleanup").iterdir())
     assert output.splitlines() == [
-        f"cleanup b1: wrote {stages / 'cleanup.pkl'} "
-        f"({(stages / 'cleanup.pkl').stat().st_size / 1e6:.1f} MB)",
+        f"cleanup b1: wrote {stages / 'cleanup'} ({size / 1e6:.1f} MB)",
         "simplify: dropped 0 self-loops, removed 1 nodes",
         "stage A: 1 clusters from 4 nodes",
         "twins: 7 of 7 candidate edges paired; motorway and trunk coverage n/a",
@@ -249,15 +253,10 @@ def test_cleanup_after_build(data_dir: Path) -> None:
         "connectivity: kept 15 of 15 nodes; dropped 0 nodes and 0.0 km in 0 components",
         "nodes 15, edges 25",
     ]
-    assert {p.name for p in stages.iterdir()} >= {
-        "cleanup.pkl",
-        "cleanup.json",
-        "cleanup.pkl.inputs.json",
-    }
-    with (stages / "cleanup.pkl").open("rb") as f:
-        assert pickle.load(f).number_of_nodes() == 15
+    assert {p.name for p in stages.iterdir()} >= {"cleanup", "cleanup.json", "cleanup.inputs.json"}
+    assert len(cleaned.load_stage(stages.parent).node_x) == 15
     assert json.loads((stages / "cleanup.json").read_text())["stage_a"]["clusters"] == 1
-    sidecar = json.loads((stages / "cleanup.pkl.inputs.json").read_text())
+    sidecar = json.loads((stages / "cleanup.inputs.json").read_text())
     manifest = stages / "build" / "manifest.json"
     assert sidecar["inputs"] == [{"file": "build/manifest.json", "md5": layout.file_md5(manifest)}]
     assert sidecar["params"]["allow_fragmented"] is False
@@ -292,11 +291,11 @@ def test_cleanup_skips_unless_forced(data_dir: Path) -> None:
     source = str(FIXTURES / "diamond.osm")
     assert pipeline("build", "--region", "portland", "--source", source, "--build-id", "b2")[0] == 0
     assert pipeline("cleanup", "--region", "portland", "--build-id", "b2")[0] == 0
-    pkl = data_dir / "graphs" / "portland" / "b2" / "stages" / "cleanup.pkl"
-    written = pkl.stat().st_mtime_ns
+    manifest = data_dir / "graphs" / "portland" / "b2" / "stages" / "cleanup" / "manifest.json"
+    written = manifest.stat().st_mtime_ns
     code, output = pipeline("cleanup", "--region", "portland", "--build-id", "b2")
     assert code == 0 and output.startswith("skipped: cleanup of build b2 is up to date")
-    assert pkl.stat().st_mtime_ns == written
+    assert manifest.stat().st_mtime_ns == written
     code, output = pipeline("cleanup", "--region", "portland", "--build-id", "b2", "--force")
     assert code == 0 and output.startswith("cleanup b2: wrote ")
     assert (
@@ -317,11 +316,11 @@ def test_cleanup_of_a_fragmented_graph(data_dir: Path) -> None:
         "cleanup failed: the largest strongly connected component keeps 3 of 13 nodes (23.08%)"
     )
     assert result.stderr.count("\n") == 1 and "Traceback" not in result.stderr
-    assert not (stages / "cleanup.pkl").exists() and not (stages / "cleanup.json").exists()
+    assert not (stages / "cleanup").exists() and not (stages / "cleanup.json").exists()
     code, output = pipeline("cleanup", "--region", "portland", "--allow-fragmented")
     assert code == 0, output
     assert "connectivity: kept 3 of 13 nodes; dropped 10 nodes" in output
-    assert (stages / "cleanup.pkl").exists()
+    assert (stages / "cleanup" / "manifest.json").exists()
 
 
 def test_cleanup_needs_a_build(data_dir: Path) -> None:
@@ -333,8 +332,10 @@ def test_cleanup_needs_a_build(data_dir: Path) -> None:
 
 
 def test_the_arrays_engine_through_the_cli(data_dir: Path) -> None:
-    """`build` and `cleanup` with `--engine arrays` write and read their own stage, record the
-    engine outside the params, and the steps after them save the networkx engine's build."""
+    """`build` and `cleanup` with `--engine` write and read their own engine's stages, and
+    `enrich`, `tiers` and `save` follow the engine cleanup ran: the arrays engine's stages are
+    directories, no pickle among them, and both engines save one build. Switching a build's
+    engine in place reruns the stages after cleanup, each engine's own, to the same build."""
     diamond = str(FIXTURES / "diamond.osm")
     assert pipeline("filter", "--region", "portland", "--source", diamond)[0] == 0
     versions = {}
@@ -352,12 +353,16 @@ def test_the_arrays_engine_through_the_cli(data_dir: Path) -> None:
         )
     assert versions["arrays"]["graph_version"] == versions["networkx"]["graph_version"]
     assert versions["arrays"]["params"] == versions["networkx"]["params"]
+    names = {p.name for p in (layout.build_dir("portland", "networkx") / "stages").iterdir()}
+    assert {"build.pkl", "cleanup.pkl", "enrich.pkl"} <= names
+    assert not names & {"build", "cleanup", "enrich"}
 
     stages = layout.build_dir("portland", "arrays") / "stages"
-    assert {"build", "build.inputs.json", "build.json"} <= {p.name for p in stages.iterdir()}
-    assert not (stages / "build.pkl").exists() and (stages / "build" / "manifest.json").exists()
+    names = {p.name for p in stages.iterdir()}
+    assert {"build", "cleanup", "enrich", "build.inputs.json", "cleanup.inputs.json"} <= names
+    assert not {name for name in names if name.endswith(".pkl")}
     assert json.loads((stages / "build.inputs.json").read_text())["engine"] == "arrays"
-    sidecar = json.loads((stages / "cleanup.pkl.inputs.json").read_text())
+    sidecar = json.loads((stages / "cleanup.inputs.json").read_text())
     manifest = stages / "build" / "manifest.json"
     assert sidecar["engine"] == "arrays"
     assert sidecar["inputs"] == [{"file": "build/manifest.json", "md5": layout.file_md5(manifest)}]
@@ -366,9 +371,55 @@ def test_the_arrays_engine_through_the_cli(data_dir: Path) -> None:
     assert code == 0 and output.startswith("skipped: ")
     code, output = pipeline("cleanup", *flags, "--engine", "networkx")  # its input is not there
     assert code == 1 and "build.pkl" in output and "--engine networkx" in output
-    manifest.write_text(manifest.read_text() + "\n")  # the build stage changed since cleanup
+
+    # The same build switched to the networkx engine in place: its stages after cleanup rerun.
+    assert pipeline("build", *flags, "--engine", "networkx")[0] == 0
+    assert pipeline("cleanup", *flags, "--engine", "networkx")[0] == 0
+    assert not (stages / "cleanup").exists() and (stages / "cleanup.pkl").exists()
+    code, output = pipeline("tiers", *flags)  # networkx's enrich stage is not there yet
+    assert code == 1 and "enrich.pkl" in output and "pipeline enrich --region" in output
+    assert pipeline("enrich", *flags)[0] == 0
+    assert not (stages / "enrich").exists() and (stages / "enrich.pkl").exists()
+    assert pipeline("tiers", *flags, "--allow-fragmented")[0] == 0
+    assert pipeline("save", *flags, "--force")[0] == 0
+    meta = json.loads((stages.parent / "meta.json").read_text())
+    assert meta["graph_version"] == versions["arrays"]["graph_version"]
+    manifest.write_text(manifest.read_text() + "\n")  # the arrays build stage, not read now
+    assert pipeline("enrich", *flags)[1].startswith("skipped: ")
+    (stages / "build.pkl").write_bytes((stages / "build.pkl").read_bytes() + b"\n")
     code, output = pipeline("enrich", *flags, "--force")
     assert code == 1 and "stage cleanup is stale" in output
+
+
+@pytest.mark.parametrize("engine", ["arrays", "networkx"])
+def test_a_cleanup_changing_only_what_enrich_never_reads(data_dir: Path, engine: str) -> None:
+    """The cleanup stage written again with its twins gone, which enrich never reads: enrich runs
+    again, tiers too, and save refuses to keep the build it wrote from the old stage, on both
+    engines (the arrays engine's enrich stage records the cleanup stage it lies on, and tiers and
+    save record it)."""
+    stages = cleaned_build(str(FIXTURES / "divided.osm"), "b1", "--engine", engine)
+    for step in ("enrich", "tiers", "save"):
+        assert pipeline(step, "--region", "portland")[0] == 0
+    if engine == "arrays":
+        graph, report = run_arrays_cleanup(load_stage(stages.parent))
+        twins = {
+            "twin_indptr": np.zeros_like(graph.twin_indptr),
+            "twin_edges": graph.twin_edges[:0],
+        }
+        cleaned.save_stage(dataclasses.replace(graph, **twins), report, stages.parent)
+    else:
+        with (stages / "cleanup.pkl").open("rb") as f:
+            networkx_graph = pickle.load(f)
+        networkx_graph.graph["twins"] = {}
+        with (stages / "cleanup.pkl").open("wb") as f:
+            pickle.dump(networkx_graph, f, protocol=pickle.HIGHEST_PROTOCOL)
+    assert pipeline("enrich", "--region", "portland")[1].startswith("enrich b1: wrote ")
+    assert pipeline("tiers", "--region", "portland")[1].startswith("tiers b1: wrote ")
+    result = runner.invoke(app, ["pipeline", "save", "--region", "portland"])
+    assert result.exit_code == 1 and "already written" in result.stderr
+    assert pipeline("save", "--region", "portland", "--force")[0] == 0
+    meta = json.loads((stages.parent / "meta.json").read_text())
+    assert meta["counts"]["twin_pairs"] == 0
 
 
 def test_sidecars_from_before_the_engine_are_the_networkx_engines(data_dir: Path) -> None:
@@ -409,9 +460,9 @@ def test_enrich_after_cleanup(data_dir: Path) -> None:
     stages = cleaned_build(str(FIXTURES / "grid.osm"))
     code, output = pipeline("enrich", "--region", "portland")  # the latest build: b1
     assert code == 0, output
-    pkl = stages / "enrich.pkl"
+    size = sum(f.stat().st_size for f in (stages / "enrich").iterdir())
     assert output.splitlines() == [
-        f"enrich b1: wrote {pkl} ({pkl.stat().st_size / 1e6:.1f} MB)",
+        f"enrich b1: wrote {stages / 'enrich'} ({size / 1e6:.1f} MB)",
         "speeds: 10 edges from maxspeed, 100 at their class default",
         "identities: 12 on 110 edges; units: 60 (50 two-way pairs)",
         "flags: bridge 0, tunnel 0, toll 0, roundabout 0, link 0",
@@ -425,8 +476,9 @@ def test_enrich_after_cleanup(data_dir: Path) -> None:
         "brand-node rows on 0 nodes",
     ]
     assert json.loads((stages / "enrich.json").read_text())["units"] == 60
-    sidecar = json.loads((stages / "enrich.pkl.inputs.json").read_text())
-    assert [i["file"] for i in sidecar["inputs"]] == ["cleanup.pkl", "portland.pois.parquet"]
+    sidecar = json.loads((stages / "enrich.inputs.json").read_text())
+    files = [i["file"] for i in sidecar["inputs"]]
+    assert files == ["cleanup/manifest.json", "portland.pois.parquet"]
     assert sidecar["params"]["config"]["BEARING_SAMPLE_M"] == 20.0
     assert sidecar["params"]["config"]["BRAND_SNAP_M"] == 100.0
 
@@ -434,10 +486,10 @@ def test_enrich_after_cleanup(data_dir: Path) -> None:
 def test_enrich_skips_unless_forced_or_changed(data_dir: Path) -> None:
     stages = cleaned_build(str(FIXTURES / "divided.osm"))
     assert pipeline("enrich", "--region", "portland")[0] == 0
-    written = (stages / "enrich.pkl").stat().st_mtime_ns
+    written = (stages / "enrich" / "manifest.json").stat().st_mtime_ns
     code, output = pipeline("enrich", "--region", "portland", "--build-id", "b1")
     assert code == 0 and output.startswith("skipped: enrich of build b1 is up to date")
-    assert (stages / "enrich.pkl").stat().st_mtime_ns == written
+    assert (stages / "enrich" / "manifest.json").stat().st_mtime_ns == written
     code, output = pipeline("enrich", "--region", "portland", "--force")
     assert code == 0 and output.startswith("enrich b1: wrote ")
     # Other POIs are another input: enrich runs again.
@@ -457,7 +509,7 @@ def test_enrich_refuses_a_stale_cleanup(data_dir: Path) -> None:
     assert result.stderr == (
         "stage cleanup is stale: rerun `worst-route pipeline cleanup --region portland`\n"
     )
-    assert not (stages / "enrich.pkl").exists()
+    assert not (stages / "enrich").exists()
     assert pipeline("cleanup", "--region", "portland")[0] == 0
     assert pipeline("enrich", "--region", "portland")[0] == 0
 
@@ -468,7 +520,7 @@ def test_enrich_needs_its_inputs(data_dir: Path) -> None:
     source = str(FIXTURES / "culdesac.osm")
     assert pipeline("build", "--region", "portland", "--source", source, "--build-id", "b1")[0] == 0
     code, output = pipeline("enrich", "--region", "portland")
-    assert code == 1 and "cleanup.pkl" in output and "pipeline cleanup --region" in output
+    assert code == 1 and "cleanup/manifest.json" in output and "pipeline cleanup --region" in output
     assert pipeline("cleanup", "--region", "portland")[0] == 0
     code, output = pipeline("enrich", "--region", "portland")
     assert code == 1 and "pois.parquet" in output and "pipeline filter --region" in output
@@ -489,7 +541,7 @@ def test_tiers_after_enrich(data_dir: Path) -> None:
         "T4: kept 15 of 15 nodes (100.00%) and 25 of 25 edges; 1 components",
     ]
     sidecar = json.loads((stages / "tiers.json.inputs.json").read_text())
-    assert sidecar["inputs"][0]["file"] == "enrich.pkl"
+    assert sidecar["inputs"][0]["file"] == "enrich/manifest.json"
     assert sidecar["params"]["allow_fragmented"] is False
     code, output = pipeline("tiers", "--region", "portland")
     assert code == 0 and output.startswith("skipped: tiers of build b1 are up to date")
@@ -525,7 +577,7 @@ def test_tiers_refuse_a_stale_enrich(data_dir: Path) -> None:
 def test_tiers_need_enrich(data_dir: Path) -> None:
     cleaned_build(str(FIXTURES / "culdesac.osm"))
     code, output = pipeline("tiers", "--region", "portland")
-    assert code == 1 and "enrich.pkl" in output and "pipeline enrich --region" in output
+    assert code == 1 and "enrich/manifest.json" in output and "pipeline enrich --region" in output
 
 
 def saved_build(source: str, *, allow_fragmented: bool = False) -> Path:
@@ -668,7 +720,7 @@ def test_save_refuses_sources_of_another_extract(data_dir: Path) -> None:
 
 def test_save_needs_the_sidecars_it_reads(data_dir: Path) -> None:
     directory = saved_build(str(FIXTURES / "divided.osm"))
-    sidecar = directory / "stages" / "cleanup.pkl.inputs.json"
+    sidecar = directory / "stages" / "cleanup.inputs.json"
     sidecar.unlink()
     result = runner.invoke(app, ["pipeline", "save", "--region", "portland", "--force"])
     assert result.exit_code == 1
@@ -680,7 +732,7 @@ def test_save_needs_the_sidecars_it_reads(data_dir: Path) -> None:
 def test_save_needs_its_inputs(data_dir: Path) -> None:
     cleaned_build(str(FIXTURES / "culdesac.osm"))
     code, output = pipeline("save", "--region", "portland")
-    assert code == 1 and "enrich.pkl" in output and "pipeline enrich --region" in output
+    assert code == 1 and "enrich/manifest.json" in output and "pipeline enrich --region" in output
     assert pipeline("enrich", "--region", "portland")[0] == 0
     code, output = pipeline("save", "--region", "portland")
     assert code == 1 and "tiers.json" in output and "pipeline tiers --region" in output

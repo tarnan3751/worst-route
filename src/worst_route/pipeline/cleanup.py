@@ -3,25 +3,26 @@
 `docs/PLAN.md` §2.4; `docs/reference/pipeline.md`, cleanup. `run_cleanup` takes the raw graph
 `build` wrote (networkx's graph, or the arrays engine's `RawGraph`, which `run_arrays_cleanup`
 takes through `arrays.simplify`, `arrays.stage_a`, `arrays.twins`, `arrays.stage_b` and
-`arrays.connectivity` to the cleaned graph as arrays, a `StageBGraph`, before `run_cleanup` hands
-it on as networkx would hold it) and runs, in order: `simplify` (self-loops dropped, degree-2
-chains collapsed), `consolidate.stage_a` (signal clusters and divided crossings),
-`carriageways.find_twins` (on the stage A graph, so stretches stage B makes internal keep their
-twins), `consolidate.stage_b` (interchanges and roundabouts as super-junctions with their
-transitions, the twins carried across, then nodes numbered 0..n-1) and
-`connectivity.largest_component`, which keeps the largest strongly connected component and numbers
-the nodes 0..n-1 again. Connectivity does not read the turn tables, and dropping an edge drops the
-transitions that name it, so a super-junction can be left with edges in and out and no allowed pair
-between them: where a region's edge cuts an interchange, its pairs ran through the stubs beyond it.
-No route can pass through such a node, and a build cannot say so (a node without transition rows
-allows every turn), so it is dropped with its edges, connectivity runs again on what is left, and
-so on until none remains; the connectivity report adds the rounds up (`dropped_no_turn` counts
-those super-junctions). It raises `FragmentedGraphError`, before writing anything, when the kept
-share of the stage B graph's nodes is below `config.SCC_MIN_RETAINED`, or a component it drops
-holds more than `config.SCC_MAX_DROPPED_NODES`, and `allow_fragmented` is not set. `save_stage`
-pickles the graph, with its `superjunctions` and `twins` tables in `G.graph`, to
-`stages/cleanup.pkl` and writes the report to `stages/cleanup.json`. `parameters` is what the
-step's sidecar records beside the input, so a changed threshold reruns it.
+`arrays.connectivity` to the cleaned graph as arrays, a `StageBGraph`, which `pipeline cleanup`
+writes as `stages/cleanup/` (`arrays.cleaned`) and `run_cleanup` hands on as networkx would hold
+it, for the tests) and runs, in order: `simplify` (self-loops dropped, degree-2 chains collapsed),
+`consolidate.stage_a` (signal clusters and divided crossings), `carriageways.find_twins` (on the
+stage A graph, so stretches stage B makes internal keep their twins), `consolidate.stage_b`
+(interchanges and roundabouts as super-junctions with their transitions, the twins carried across,
+then nodes numbered 0..n-1) and `connectivity.largest_component`, which keeps the largest strongly
+connected component and numbers the nodes 0..n-1 again. Connectivity does not read the turn tables,
+and dropping an edge drops the transitions that name it, so a super-junction can be left with edges
+in and out and no allowed pair between them: where a region's edge cuts an interchange, its pairs
+ran through the stubs beyond it. No route can pass through such a node, and a build cannot say so
+(a node without transition rows allows every turn), so it is dropped with its edges, connectivity
+runs again on what is left, and so on until none remains; the connectivity report adds the rounds
+up (`dropped_no_turn` counts those super-junctions). It raises `FragmentedGraphError`, before
+writing anything, when the kept share of the stage B graph's nodes is below
+`config.SCC_MIN_RETAINED`, or a component it drops holds more than `config.SCC_MAX_DROPPED_NODES`,
+and `allow_fragmented` is not set. `save_stage` pickles the graph, with its `superjunctions` and
+`twins` tables in `G.graph`, to `stages/cleanup.pkl` and writes the report to
+`stages/cleanup.json`. `parameters` is what the step's sidecar records beside the input, so a
+changed threshold reruns it.
 """
 
 import json

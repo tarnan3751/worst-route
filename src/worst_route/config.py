@@ -507,9 +507,11 @@ STATES: dict[str, tuple[str, str]] = {
 
 # Regions of several states (M5.3; `docs/reference/pipeline.md`, **Regions of several states**):
 # their extracts are read in this order and merged at `filter`. `us-t1` is the 48 contiguous
-# states and DC at T1, the national build that validates the pipeline before the decision on an
-# all-roads one (`us`, kept for it); Alaska and Hawaii have no road to them and lie outside
-# CONUS Albers (EPSG:5070), so they would be regions of their own.
+# states and DC at T1, the national build that validated the pipeline; `us` is the same states at
+# every road class, the all-roads master graph M5.3's decision weighs; `west-coast` (California,
+# Oregon and Washington, about eight times Oregon) is the intermediate scale between a state and
+# the country that its measurements are taken at. Alaska and Hawaii have no road to them and lie
+# outside CONUS Albers (EPSG:5070), so they would be regions of their own.
 _CONUS = tuple(state for state in STATES if state not in ("alaska", "hawaii"))
 REGIONS["oregon-washington"] = Region(
     name="oregon-washington", states=("oregon", "washington"), crs_epsg=32610
@@ -518,6 +520,10 @@ REGIONS["oregon-washington-t1"] = Region(
     name="oregon-washington-t1", states=("oregon", "washington"), crs_epsg=32610, classes="T1"
 )
 REGIONS["us-t1"] = Region(name="us-t1", states=_CONUS, crs_epsg=5070, classes="T1")
+REGIONS["us"] = Region(name="us", states=_CONUS, crs_epsg=5070)
+REGIONS["west-coast"] = Region(
+    name="west-coast", states=("california", "oregon", "washington"), crs_epsg=5070
+)
 
 # Presentation (`docs/reference/presentation.md`). Directions: a left or right turn is "slight"
 # when its change of bearing is at most DIRECTIONS_SLIGHT_DEG and "sharp" beyond

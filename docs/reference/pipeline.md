@@ -1163,11 +1163,15 @@ sitting (`download --force`).
 | `oregon-washington` | oregon, washington | all | EPSG:32610 |
 | `oregon-washington-t1` | oregon, washington | T1 | EPSG:32610 |
 | `us-t1` | the 48 contiguous states and DC, in `config.STATES`' order | T1 | EPSG:5070 |
+| `us` | the same | all | EPSG:5070 |
+| `west-coast` | california, oregon, washington | all | EPSG:5070 |
 
 **The class ceiling.** A region's `classes` (`T0`–`T3`) keeps only that tier's road classes from
 `filter` on, so the national T1 build never reads a residential street into memory; the steps
 after `build` are unchanged, and on such a build the tiers above the ceiling hold the same roads
-as it. `us` stays the name of an all-roads national region, for after the decision M5.3 informs.
+as it. `us` is the all-roads national region, the master graph M5.3's decision weighs, and
+`west-coast` (about eight times Oregon) the scale between a state and the country at which its
+memory is measured.
 Alaska and Hawaii are left out of `us-t1`: no road reaches them, so connectivity would drop them,
 and CONUS Albers does not cover them; they would be regions of their own.
 

@@ -63,6 +63,14 @@ def test_the_national_t1_region() -> None:
     assert REGIONS["oregon-washington"].road_classes is None
 
 
+def test_the_all_roads_national_region_and_its_intermediate_scale() -> None:
+    us, west = REGIONS["us"], REGIONS["west-coast"]
+    assert us.states == REGIONS["us-t1"].states and us.classes is None
+    assert us.road_classes is None and us.bbox is None and us.crs_epsg == 5070
+    assert west.states == ("california", "oregon", "washington")
+    assert west.classes is None and west.bbox is None and west.crs_epsg == 5070
+
+
 def test_a_region_names_a_state() -> None:
     with pytest.raises(ValidationError):
         Region(name="nowhere", states=(), crs_epsg=32610)

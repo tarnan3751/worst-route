@@ -1,7 +1,7 @@
 # Both engines on Portland's filtered roads, read through WORST_ROUTE_DATA: the same simplified
-# and stage A graphs, the same cleaned graph and report, the same build. Run on demand with
-# `uv run pytest -m data -k arrays` (about a minute, most of it the networkx engine's stage A);
-# skipped when Portland has not been filtered. Nothing is written.
+# and stage A graphs and twins, the same cleaned graph and report, the same build. Run on demand
+# with `uv run pytest -m data -k arrays` (a minute or two, most of it the networkx engine's stage
+# A); skipped when Portland has not been filtered. Nothing is written.
 import dataclasses
 import json
 import pickle
@@ -9,7 +9,7 @@ import pickle
 import pyarrow.parquet as pq
 import pytest
 
-from tests.pipeline.parity import assert_same_build, assert_same_graph, read_back
+from tests.pipeline.parity import assert_same_build, assert_same_graph, read_back, same
 from tests.pipeline.test_arrays import assert_same_simplified, assert_same_stage_a
 from worst_route.config import REGIONS
 from worst_route.graph.store import graph_version
@@ -17,7 +17,10 @@ from worst_route.pipeline import PIPELINE_VERSION, layout
 from worst_route.pipeline.arrays.build import build_raw_arrays
 from worst_route.pipeline.arrays.simplify import simplify as arrays_simplify
 from worst_route.pipeline.arrays.stage_a import stage_a as arrays_stage_a
+from worst_route.pipeline.arrays.to_nx import stage_a_graph
+from worst_route.pipeline.arrays.twins import find_twins as arrays_find_twins
 from worst_route.pipeline.build import build_raw_graph
+from worst_route.pipeline.carriageways import find_twins
 from worst_route.pipeline.cleanup import run_cleanup
 from worst_route.pipeline.consolidate import stage_a
 from worst_route.pipeline.enrich import run_enrich
@@ -37,7 +40,12 @@ def test_both_engines_build_portland_the_same() -> None:
     arrays, _ = build_raw_arrays(roads, crs)
     simplified, arrays_simplified = simplify(raw)[0], arrays_simplify(arrays)[0]
     assert_same_simplified(simplified, arrays_simplified)
-    assert_same_stage_a(stage_a(simplified)[0], arrays_stage_a(arrays_simplified)[0])
+    want_a, got_a = stage_a(simplified)[0], arrays_stage_a(arrays_simplified)[0]
+    assert_same_stage_a(want_a, got_a)
+    twin_indptr, twin_edges, got_twins = arrays_find_twins(got_a)
+    assert got_twins == find_twins(want_a)
+    got_table = stage_a_graph(got_a, (twin_indptr, twin_edges)).graph["twins"]
+    assert same(want_a.graph["twins"], got_table)
 
     want, want_report = run_cleanup(raw)
     got, got_report = run_cleanup(arrays)

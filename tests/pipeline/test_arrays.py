@@ -21,7 +21,8 @@ import pytest
 from tests.pipeline.chain import FIXTURES, UTM_10N, pois_of
 from tests.pipeline.invariants import check_all
 from tests.pipeline.osm import write_osm
-from tests.pipeline.parity import assert_same_build, assert_same_graph, raw_graph, read_back
+from tests.pipeline.parity import assert_same_build, assert_same_graph, raw_graph, read_back, same
+from tests.pipeline.random_roads import random_roads
 from tests.pipeline.test_consolidate import _near_pair
 from worst_route.graph.data import GraphData
 from worst_route.pipeline.arrays.build import build_raw_arrays, load_stage, save_stage
@@ -30,7 +31,9 @@ from worst_route.pipeline.arrays.simplify import simplify as arrays_simplify
 from worst_route.pipeline.arrays.stage_a import StageAGraph
 from worst_route.pipeline.arrays.stage_a import stage_a as arrays_stage_a
 from worst_route.pipeline.arrays.to_nx import simplified_graph, stage_a_graph
+from worst_route.pipeline.arrays.twins import find_twins as arrays_find_twins
 from worst_route.pipeline.build import build_raw_graph
+from worst_route.pipeline.carriageways import find_twins
 from worst_route.pipeline.cleanup import run_cleanup
 from worst_route.pipeline.consolidate import stage_a, stage_a_tolerances
 from worst_route.pipeline.enrich import run_enrich
@@ -44,8 +47,8 @@ META |= {"pipeline_version": "", "sources": []}
 
 
 def assert_same_cleanup(source: Path) -> nx.MultiDiGraph:
-    """Both engines' simplified, stage A and cleaned graphs and reports are the same; the
-    simplified graph."""
+    """Both engines' simplified and stage A graphs, twins, and cleaned graphs and reports are the
+    same; the simplified graph."""
     raw = read_back(build_raw_graph(source, UTM_10N)[0])
     arrays, _ = build_raw_arrays(source, UTM_10N)
     simplified, _ = simplify(raw)
@@ -55,6 +58,11 @@ def assert_same_cleanup(source: Path) -> nx.MultiDiGraph:
     got_a, got_a_stats = arrays_stage_a(arrays_simplified)
     assert got_a_stats == want_a_stats
     assert_same_stage_a(want_a, got_a)
+    want_twins = find_twins(want_a)
+    twin_indptr, twin_edges, got_twins = arrays_find_twins(got_a)
+    assert got_twins == want_twins
+    got_table = stage_a_graph(got_a, (twin_indptr, twin_edges)).graph["twins"]
+    assert same(want_a.graph["twins"], got_table)
     want, want_report = run_cleanup(raw, allow_fragmented=True)
     got, got_report = run_cleanup(arrays, allow_fragmented=True)
     assert_same_graph(want, got)
@@ -360,3 +368,57 @@ def test_a_split_group(tmp_path: Path) -> None:
     its points' centroid, as OSMnx places a split group, on both engines."""
     simplified = assert_same_cleanup(_near_pair(tmp_path, overpass=True))
     assert stage_a(simplified)[1].cluster_sizes == {2: 1}
+
+
+# Twins' own cases -------------------------------------------------------------------------
+
+
+def test_a_stub_is_not_a_carriageway(tmp_path: Path) -> None:
+    """An eastbound carriageway ends at a junction merged into a cluster just east of it, and a
+    westbound one of the same road runs 10 m north from beyond the cluster: only the stub to the
+    cluster's position runs beside it, and a stub is left out, so they are no twins."""
+    nodes = {1: (-100.0, 0.0), 2: (0.0, 0.0), 3: (12.0, 0.0), 4: (50.0, 10.0), 5: (-1.0, 10.0)}
+    road = {"highway": "primary", "ref": "OR 99W", "oneway": "yes"}
+    ways = [(1, [1, 2], road), (2, [2, 3], STREET), (3, [4, 5], road)]
+    simplified = assert_same_cleanup(write_osm(tmp_path / "stub.osm", nodes, ways))
+    merged, stats = stage_a(simplified)
+    assert stats.cluster_sizes == {2: 1}
+    assert find_twins(merged).candidates == 2 and merged.graph["twins"] == {}
+
+
+def test_a_way_beside_itself_is_one_road(tmp_path: Path) -> None:
+    """A one-way way out 200 m east and back west 20 m north of itself, split where a street
+    leaves it: its two edges run side by side in opposite directions, but share their way."""
+    nodes = {1: (0.0, 0.0), 2: (200.0, 0.0), 3: (200.0, 20.0), 4: (0.0, 20.0), 5: (300.0, 20.0)}
+    road = {"highway": "primary", "ref": "OR 8", "oneway": "yes"}
+    ways = [(1, [1, 2, 3, 4], road), (2, [3, 5], STREET)]
+    simplified = assert_same_cleanup(write_osm(tmp_path / "hairpin.osm", nodes, ways))
+    merged, _ = stage_a(simplified)
+    assert find_twins(merged).candidates == 2 and merged.graph["twins"] == {}
+
+
+def test_a_road_mapped_twice(tmp_path: Path) -> None:
+    """Two one-way ways over the same nodes in opposite directions, beside a divided road: one
+    road mapped twice is no twin pair but a count, and the divided road's pair is still found."""
+    nodes = {1: (0.0, 0.0), 2: (200.0, 0.0), 3: (0.0, 30.0), 4: (200.0, 30.0)}
+    nodes |= {5: (0.0, 100.0), 6: (100.0, 100.0), 7: (200.0, 100.0)}
+    road = {"highway": "primary", "ref": "OR 8", "oneway": "yes"}
+    ways = [(1, [1, 2], road), (2, [4, 3], road), (3, [5, 6, 7], road), (4, [7, 6, 5], road)]
+    simplified = assert_same_cleanup(write_osm(tmp_path / "twice.osm", nodes, ways))
+    merged, _ = stage_a(simplified)
+    stats = find_twins(merged)
+    assert stats.same_road_pairs == 1 and stats.pairs == 1
+
+
+@pytest.mark.parametrize("seed", [13, 26, 48])
+def test_the_reviewers_random_roads(tmp_path: Path, seed: int) -> None:
+    """The random graphs of the review (`random_roads.py`) that map a road twice: cleanup and
+    the build are the same on both engines, the road counted once in each."""
+    nodes, ways = random_roads(seed)
+    source = write_osm(tmp_path / f"random-{seed}.osm", nodes, ways)
+    assert_same_cleanup(source)
+    assert_same_build(
+        build_of(source, tmp_path, arrays=False), build_of(source, tmp_path, arrays=True)
+    )
+    _, report = run_cleanup(build_raw_arrays(source, UTM_10N)[0], allow_fragmented=True)
+    assert report.twins.same_road_pairs > 0

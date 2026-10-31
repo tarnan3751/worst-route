@@ -25,7 +25,11 @@ from worst_route.pipeline.arrays.build import RawGraph
 
 def same(a: Any, b: Any) -> bool:
     """Whether two attribute values are the same: a geometry by its coordinates, a dict with its
-    keys in the same order, anything else of the same type and equal."""
+    keys in the same order, an integer by its value (OSMnx's graph holds some node labels as
+    NumPy integers), anything else of the same type and equal."""
+    integers = (int, np.integer)
+    if isinstance(a, integers) and isinstance(b, integers) and not isinstance(a, bool):
+        return not isinstance(b, bool) and int(a) == int(b)
     if isinstance(a, shapely.Geometry) or isinstance(b, shapely.Geometry):
         return type(a) is type(b) and np.array_equal(
             shapely.get_coordinates(a), shapely.get_coordinates(b)

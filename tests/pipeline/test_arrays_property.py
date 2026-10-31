@@ -4,8 +4,9 @@ Each example is a lattice of streets split into ways at random, each way with a 
 name, speed limit and one-way rule, drawn either way along its street, its node ids shuffled (so
 simplification visits them in no particular order); with spurs to a node a few metres from a
 crossing (stage A's clusters, whole or split by the edge test), duplicate ways, closed loops,
-and a few ramps and roundabout edges for stage B. Both engines must give the same simplified
-graph, the same cleaned graph and the same report.
+a divided road whose carriageways are split at different places (twins), and a few ramps and
+roundabout edges for stage B. Both engines must give the same simplified and stage A graphs, the
+same twins, the same cleaned graph and the same report.
 """
 
 import tempfile
@@ -85,6 +86,18 @@ def lattices(draw: st.DrawFn) -> tuple[dict[int, tuple[float, float]], Ways]:
         nodes[far] = (i * spacing + dx + 150.0, j * spacing + dy + 150.0)
         refs = [grid[i, j], node, far] if draw(st.booleans()) else [node, far]
         ways.append((len(ways) + 1, refs, draw(tags())))
+    if draw(st.booleans()):  # a divided road south of the lattice, its carriageways split apart
+        gap = draw(st.sampled_from([20.0, 30.0, 45.0]))
+        road = {"highway": draw(st.sampled_from(["primary", "trunk", "motorway"]))}
+        road |= {"ref": "OR 99W", "oneway": "yes"}
+        for side, y in ((1, -60.0), (-1, -60.0 - gap)):
+            line = [next(ids) for _ in range(6)]
+            for k, node in enumerate(line):
+                nodes[node] = (k * spacing * 0.7 + draw(st.floats(0, 5)), y)
+            line = line if side > 0 else line[::-1]
+            cuts = sorted(draw(st.sets(st.integers(1, 4), max_size=3)))
+            for a, b in zip([0, *cuts], [*cuts, 5], strict=True):
+                ways.append((len(ways) + 1, line[a : b + 1], dict(road)))
     if draw(st.booleans()):  # a closed loop off a lattice node, of one way or of several
         corner = draw(st.sampled_from(sorted(grid)))
         a, b, c = next(ids), next(ids), next(ids)

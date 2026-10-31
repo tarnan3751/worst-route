@@ -10,10 +10,12 @@ merges), so that each node's successors and predecessors, and the keys of parall
 ... per pair of nodes: an edge between two nodes that both stay is never removed), come out as
 networkx's.
 
-`stage_a_graph(graph)` is the `MultiDiGraph` that `consolidate.stage_a` makes, the same way: its
-nodes keyed and ordered as OSMnx numbers them, with `kind` and `members` too; its edges added
-in the order OSMnx adds them (the simplified graph's), with the same keys and attributes, up to
-the integer type of the labels (OSMnx keys some by NumPy integers, of the same value).
+`stage_a_graph(graph, twins)` is the `MultiDiGraph` that `consolidate.stage_a` makes, the same
+way: its nodes keyed and ordered as OSMnx numbers them, with `kind` and `members` too; its edges
+added in the order OSMnx adds them (the simplified graph's), with the same keys and attributes,
+up to the integer type of the labels (OSMnx keys some by NumPy integers, of the same value);
+with `twins` (`twins.find_twins`'s table), the `G.graph["twins"]` that `carriageways.find_twins`
+sets.
 
 A pickle writes a string several dicts share once, so to make the stage files the networkx
 engine writes, byte for byte, the strings are shared as there: each way's tag values objects of
@@ -36,6 +38,7 @@ from worst_route.pipeline import PIPELINE_VERSION
 from worst_route.pipeline.arrays.build import Tagset
 from worst_route.pipeline.arrays.simplify import SimplifiedGraph
 from worst_route.pipeline.arrays.stage_a import CLUSTER, StageAGraph
+from worst_route.pipeline.arrays.twins import edge_keys
 from worst_route.pipeline.build import EDGE_TAGS
 
 
@@ -65,8 +68,10 @@ def simplified_graph(graph: SimplifiedGraph) -> nx.MultiDiGraph:
     return result
 
 
-def stage_a_graph(graph: StageAGraph) -> nx.MultiDiGraph:
-    """The stage A graph as networkx holds it."""
+def stage_a_graph(
+    graph: StageAGraph, twins: tuple[NDArray[np.int64], NDArray[np.int32]] | None = None
+) -> nx.MultiDiGraph:
+    """The stage A graph as networkx holds it, with its twins table when given one."""
     keys = _raw_keys()
     result = _empty(graph.crs_epsg, keys)
     labels = graph.node_label.tolist()
@@ -98,6 +103,18 @@ def stage_a_graph(graph: StageAGraph) -> nx.MultiDiGraph:
         (labels[graph.edge_u[e]], labels[graph.edge_v[e]], data[e])
         for e in np.argsort(graph.edge_from).tolist()
     )
+    if twins is not None:
+        indptr, twin_edges = twins
+        ranks = edge_keys(graph).tolist()
+        key = [
+            (labels[u], labels[v], k)
+            for u, v, k in zip(graph.edge_u.tolist(), graph.edge_v.tolist(), ranks, strict=True)
+        ]
+        table = {
+            key[e]: tuple(sorted(key[f] for f in twin_edges[indptr[e] : indptr[e + 1]].tolist()))
+            for e in np.flatnonzero(np.diff(indptr)).tolist()
+        }
+        result.graph["twins"] = dict(sorted(table.items()))
     return result
 
 

@@ -21,6 +21,7 @@ limits and streaming cadence (`docs/reference/api.md`); the `GEOCODE_*` numbers 
 proxy's rate, cache and limits; the `PUBLIC_*` numbers the limits of a public server.
 """
 
+import math
 import os
 from enum import IntEnum
 from functools import cache
@@ -171,8 +172,9 @@ DEFAULT_BACKEND: BackendName = "auto"
 # The engine (`docs/reference/engine.md`). A request's defaults and the masks it implies: the
 # tier is chosen by the straight-line length of the polyline through the stops (T4 below the
 # first threshold, T0 beyond the last), the leash is LEASH_FACTOR × that length within
-# [LEASH_MIN_KM, LEASH_MAX_KM], and every road within BUBBLE_KM of a stop stays usable. A
-# request's own leash is at most LEASH_MAX_KM and its budget at most BUDGET_MAX_S.
+# [LEASH_MIN_KM, LEASH_MAX_KM], or LEASH_LONG_FACTOR × it when that is more (from 750 km), and
+# every road within BUBBLE_KM of a stop stays usable. A request's own leash is at most
+# LEASH_MAX_KM and its budget at most BUDGET_MAX_S.
 DEFAULT_BUDGET_S = 20.0
 BUDGET_MAX_S = 120.0
 DEFAULT_MAX_ITERATIONS = 5000
@@ -182,12 +184,24 @@ DEFAULT_MAX_ITERATIONS = 5000
 # more: four named trips of 166-592 km made 3.56-10.99x on T4 against 1.32-5.31x on T2 and
 # 3.35-6.73x on T3, ten random pairs of 71-403 km planned 8 of 10 on T4 (6.10-10.85x), 7 on T3,
 # 4 on T2 (a rural stop's 3 km bubble seldom meets a sparser tier's roads), and T1 refused two
-# trips over I-5. Before: (15, 60, 250, 800), T4, T3, T2, T1 below each, T0 beyond. The bands
-# above a state's span wait for a national build (M5.3).
-TIER_AUTO_KM = (800.0, 800.0, 800.0, 800.0)
+# trips over I-5. Before: (15, 60, 250, 800), T4, T3, T2, T1 below each, T0 beyond. From 800 km
+# T1, and T0 by override only (engine version 5), tuned on the national T1 build (c4a85b3d36d0,
+# docs/reference/engine.md, **On the national T1 build**): Portland to Chicago, New York to Los
+# Angeles, Chicago to Miami and Miami to Seattle made 1.0-2.8x in 60 s on T0 at every leash
+# tried (150 km, a tenth and a fifth of the trip), the motorways and trunks holding few loops a
+# detour can take, against 8.6-11.1x on T1 with a fifth of the trip as leash (the plan's runs,
+# windows widened by its prototype; 6.19-10.26x as built); at 150 km both refused Miami to
+# Seattle and T0 Portland to Chicago. That build holds T1's roads only, so on an
+# all-roads national build T1 from 800 km, and whether a rural stop's 3 km bubble meets its
+# roads, is untested (on Oregon a stop in the Ochoco National Forest lies 7.1 km from T1 or T2).
+TIER_AUTO_KM = (800.0, 800.0, 800.0, math.inf)
 LEASH_FACTOR = 0.6
 LEASH_MIN_KM = 3.0
 LEASH_MAX_KM = 150.0
+# A fifth of the trip, past LEASH_MAX_KM from 750 km: on the national T1 build at 150 km (3% of
+# a 4,500 km trip) the four trips above made 3.4-6.3x on T1 and Miami to Seattle was refused, at
+# a tenth of the trip 4.9-8.6x, at a fifth 8.6-11.1x (the plan's runs, as above).
+LEASH_LONG_FACTOR = 0.2
 BUBBLE_KM = 3.0
 
 # The seed route (`docs/PLAN.md` §3.2-3.3): a leg that cannot be built re-snaps a stop up to
@@ -450,7 +464,9 @@ GEOCODE_MAX_QUERY_CHARS = 200
 # with `serve --public`: a client (`api/limits.py`) runs at most PUBLIC_RUNNING_PER_CLIENT jobs at
 # once and has at most PUBLIC_QUEUED_PER_CLIENT more waiting, a budget is at most
 # PUBLIC_BUDGET_MAX_S (BUDGET_MAX_S otherwise), and a client searches places at most
-# PUBLIC_GEOCODE_PER_MINUTE times in any minute. The leash stays at most LEASH_MAX_KM.
+# PUBLIC_GEOCODE_PER_MINUTE times in any minute. A request's own leash stays at most LEASH_MAX_KM;
+# the automatic leash follows the trip (LEASH_LONG_FACTOR of it beyond 750 km), and the budget
+# bounds the job.
 PUBLIC_RUNNING_PER_CLIENT = 1
 PUBLIC_QUEUED_PER_CLIENT = 3
 PUBLIC_BUDGET_MAX_S = 60.0

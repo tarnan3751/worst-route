@@ -754,7 +754,7 @@ from one file the server holds, `<WORST_ROUTE_DATA>/basemap/<region>.pmtiles`, w
 ```
 
 `public` is `--public`'s, `limits` the budget and leash a request may ask for (**Public
-limits**). `basemap.kind` is `raster` or `pmtiles`; with `raster` the other three are null.
+limits**); an auto leash on a trip of more than 750 km is longer than `leash_max_km`. `basemap.kind` is `raster` or `pmtiles`; with `raster` the other three are null.
 With `pmtiles`, `tiles` is the file's path; `glyphs` (a MapLibre template of the labels' fonts)
 is given when `<data>/basemap/fonts/` exists, and `sprite` (the base of the icons' files, of
 Protomaps' grayscale flavor, the one the frontend draws: `basemap_api.SPRITE`) when
@@ -787,9 +787,12 @@ and a local server have always had them. Off by default.
 
 - **A budget of at most 60 s** (`PUBLIC_BUDGET_MAX_S`, against `BUDGET_MAX_S`'s 120): more is
   `BUDGET_TOO_LARGE` with `max_s: 60`, in the same place among the checks.
-- **The leash stays at most 150 km** (`LEASH_MAX_KM`), the request's schema's limit for every
-  server, auto leashes included; a public server adds nothing to it (the plan's "≤ 300 km" is
-  more than any request can ask).
+- **A request's leash stays at most 150 km** (`LEASH_MAX_KM`), the request's schema's limit for
+  every server; a public server adds nothing to it (the plan's public limit since 2026-10-31: a
+  request's own leash at most 150 km, the automatic one following the trip). An auto leash is a
+  fifth of the trip from 750 km on (`docs/reference/engine.md`, **Requests**), so a
+  cross-country job's is longer, up to about 900 km, its searches larger; the budget still
+  bounds the job.
 - **Each client's share of the jobs**: a client (`limits.client_of`: the peer, or behind a
   trusted proxy the last address of `X-Forwarded-For`, an IPv6 one by its /64; **Logs**) runs at
   most one job at once (`PUBLIC_RUNNING_PER_CLIENT`) and has at most three more waiting

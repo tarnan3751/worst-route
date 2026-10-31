@@ -193,7 +193,8 @@ def test_round_trips_through_json() -> None:
         (14_999, "T4"),
         (15_000, "T4"),
         (799_999, "T4"),
-        (800_000, "T0"),
+        (800_000, "T1"),
+        (5_000_000, "T1"),
     ],
 )
 def test_auto_tier(trip_m: float, tier: str) -> None:
@@ -203,7 +204,10 @@ def test_auto_tier(trip_m: float, tier: str) -> None:
 def test_auto_leash() -> None:
     assert auto_leash_m(0) == 3000
     assert auto_leash_m(10_000) == pytest.approx(6000)
-    assert auto_leash_m(1e6) == 150_000
+    assert auto_leash_m(250_000) == 150_000
+    assert auto_leash_m(750_000) == 150_000  # a fifth of the trip from here on
+    assert auto_leash_m(1e6) == pytest.approx(200_000)
+    assert auto_leash_m(4.4e6) == pytest.approx(880_000)
 
 
 def test_masks_of_a_short_trip_cover_the_grid() -> None:

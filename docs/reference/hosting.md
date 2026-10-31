@@ -208,7 +208,9 @@ it but no proxy, a visitor could name any address. The API's stream already send
 ## Limits, logs, readiness
 
 - **The public limits** (`docs/reference/api.md`, **Public limits**): budgets up to 60 s (120
-  locally), the leash at most 150 km as everywhere, and for each client one job running and three
+  locally), a request's own leash at most 150 km as everywhere (the automatic leash follows the
+  trip, a fifth of it beyond 750 km, and the budget bounds the job), and for each client one job
+  running and three
   waiting (`TOO_MANY_JOBS` with its counts) and ten place searches a minute (`RATE_LIMITED` with
   `retry_after_s`). They are per process and per address; there is no authentication.
 - **The logs** (`docs/reference/api.md`, **Logs**): one JSON object a line on stdout (`docker

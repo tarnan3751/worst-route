@@ -20,11 +20,11 @@ reads as it did before they existed.
 so the validator can recompute them from a saved route. The stops are projected and the trip
 length is the straight-line length of the polyline through them.
 
-- tier auto: below 800 km T4, else T0 (`config.TIER_AUTO_KM`, four thresholds, T4 below the
-  first and T0 from the last; they coincide since the Oregon build's tuning, so T1-T3 are
-  override-only);
-- leash auto: 0.6 × the trip length within [3, 150] km; `leash` the nodes within it of the
-  polyline;
+- tier auto: below 800 km T4, else T1 (`config.TIER_AUTO_KM`, four thresholds, T4 below the
+  first and T0 from the last; the first three coincide since the Oregon build's tuning and the
+  last is infinite since the national T1 build's, so T0, T2 and T3 are override-only);
+- leash auto: 0.6 × the trip length within [3, 150] km, or 0.2 × it when that is more (from
+  750 km); `leash` the nodes within it of the polyline;
 - `bubbles`: the nodes within 3 km of a stop;
 - `active`, the node mask every search runs in: leash & (the tier's nodes | bubbles);
 - `banned`, the edges every search and every splice refuses: those outside the tier's edge
@@ -56,6 +56,7 @@ from worst_route.config import (
     DEFAULT_BUDGET_S,
     DEFAULT_MAX_ITERATIONS,
     LEASH_FACTOR,
+    LEASH_LONG_FACTOR,
     LEASH_MAX_KM,
     LEASH_MIN_KM,
     TIER_AUTO_KM,
@@ -183,7 +184,8 @@ def auto_tier(trip_m: float) -> str:
 
 def auto_leash_m(trip_m: float) -> float:
     """The leash for a trip of `trip_m` straight-line metres."""
-    return min(max(LEASH_FACTOR * trip_m, LEASH_MIN_KM * 1000), LEASH_MAX_KM * 1000)
+    longest = max(LEASH_MAX_KM * 1000, LEASH_LONG_FACTOR * trip_m)
+    return min(max(LEASH_FACTOR * trip_m, LEASH_MIN_KM * 1000), longest)
 
 
 def request_masks(spatial: SpatialIndex, data: GraphData, request: RouteRequest) -> RequestMasks:

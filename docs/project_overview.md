@@ -385,9 +385,10 @@ Found on the Oregon build (M5.1, 2026-10-31; the inputs to M5.2's decision):
   for M5.2 nationally. A request's masks are computed over the whole build, the leash's
   distances by NumPy (1 ms on Oregon's 237,581 nodes, 4–10 ms on the national T1 build's 887,737,
   where shapely's had taken 83–166 ms and 22–159 ms).
-- **The tiers above a state's span are untested on all roads**: T4 below 800 km and T0 beyond;
-  T1–T3 are taken only when asked for. A rural stop's 3 km bubble seldom meets the T1 or T2
-  network (a stop in the Ochoco National Forest is 7.1 km from it).
+- **The tiers above a state's span are untested on all roads**: T4 below 800 km and T1 beyond
+  (engine version 5, tuned on the national T1 build, which holds T1's roads only); T0, T2 and T3
+  are taken only when asked for. A rural stop's 3 km bubble seldom meets the T1 or T2 network (a
+  stop in the Ochoco National Forest is 7.1 km from it).
 
 Found on the national T1 build (M5.3, 2026-10-31; `docs/reference/engine.md`, **On the national
 T1 build**; the inputs to the decision gate, §3.2):
@@ -515,7 +516,10 @@ brief):
   all-roads bubbles around stops and a leash along the stop polyline. As tuned on the Oregon
   build (M5.1, 2026-10-31, engine version 3): T4 below 800 km, T0 beyond, T1–T3 by override;
   the leash (0.6 × the trip, 3–150 km) and the 3 km bubbles unchanged. Accepted by the
-  coordinator for now, with the version bump; revisited at M5.3 with national data. Connectivity, at the same
+  coordinator for now, with the version bump; revisited at M5.3 with national data: as tuned on
+  the national T1 build (2026-10-31, engine version 5, the coordinator at its plan), T1 from 800
+  km and T0 by override only, the leash a fifth of the trip when that is more than 150 km (from
+  750 km), a request's own leash still at most 150 km. Connectivity, at the same
   time, fails a build below a 98% share of nodes kept or with a dropped component of more than
   200 nodes (it was a 99% share).
 - **Enrich, tiers, save and qa as built for M1** (2026-10-30, at their plan): bearings follow

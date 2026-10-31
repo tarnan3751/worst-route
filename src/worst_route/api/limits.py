@@ -3,9 +3,11 @@
 `Limits` is what a server allows: `LOCAL`, the CLI's and a local server's (a budget up to
 `BUDGET_MAX_S`, nothing per client), or `PUBLIC`, a server run with `serve --public` (the
 `config.PUBLIC_*` numbers: a budget up to 60 s, one job running and three waiting a client, ten
-place searches a minute a client). The leash is `LEASH_MAX_KM` at most in both, as the request's
-schema has it. The job manager counts each client's jobs (`JobSettings.running_per_client`,
-`queued_per_client`); `GeocodeQuota` counts its searches, over a sliding minute.
+place searches a minute a client). A request's own leash is `LEASH_MAX_KM` at most in both, as
+the request's schema has it; the automatic leash follows the trip (a fifth of it beyond 750 km)
+and the budget bounds the job. The job manager counts each client's jobs
+(`JobSettings.running_per_client`, `queued_per_client`); `GeocodeQuota` counts its searches,
+over a sliding minute.
 
 `client_of(scope, trust_proxy)` names the client of a request: its peer's address, or behind a
 reverse proxy (`ApiSettings.trust_proxy`) the last address of `X-Forwarded-For`, the one that

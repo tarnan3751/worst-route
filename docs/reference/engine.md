@@ -107,13 +107,20 @@ the request's area holds any of its locations, is planning's to check (**Plannin
 route can be checked against the same masks later. The trip length is the straight-line length
 of the polyline through the projected stops.
 
-- **Tier auto**: below 800 km T4, else T0 (`TIER_AUTO_KM`, four thresholds, T4 below the first,
-  T0 from the last; they coincide, so T1–T3 are taken only when asked for). Engine version 3,
-  tuned on the Oregon build (**On Oregon**); before, below 15 km T4, below 60 km T3, below 250 km
-  T2, below 800 km T1, else T0. The golden routes ask for `tier: auto` on lattices about 2 km
-  across, T4 under both rules, so the tuning leaves them as they were.
-- **Leash auto**: 0.6 × the trip length within [3, 150] km; `leash` is the nodes within it of
-  the polyline.
+- **Tier auto**: below 800 km T4, else T1 (`TIER_AUTO_KM`, four thresholds, T4 below the first,
+  T0 from the last; the first three coincide and the last is infinite, so T0, T2 and T3 are
+  taken only when asked for). Engine version 3, tuned on the Oregon build (**On Oregon**), made
+  it T4 below 800 km and T0 beyond; engine version 5, tuned on the national T1 build (**On the
+  national T1 build**), T1 beyond, where T0's motorways and trunks gave 1.0–2.8× and T1 6.2–10.3×
+  on four cross-country trips. Before version 3, below 15 km T4, below 60 km T3, below 250 km T2,
+  below 800 km T1, else T0. The golden routes ask for `tier: auto` on lattices about 2 km across,
+  T4 under every rule. No two nodes of the Oregon build lie 800 km apart (the farthest 727.6
+  km), so only a trip with stops between its ends reaches T1 there.
+- **Leash auto**: 0.6 × the trip length within [3, 150] km, or a fifth of it
+  (`LEASH_LONG_FACTOR`) when that is more, from 750 km on (engine version 5: on the national T1
+  build a 150 km leash, 3% of a 4,500 km trip, refused Miami → Seattle and left little room);
+  `leash` is the nodes within it of the polyline. A request's own leash stays at most 150 km
+  (`LEASH_MAX_KM`), so an auto leash can be longer than any a request asks for.
 - **Bubbles**: the nodes within 3 km of a stop (`BUBBLE_KM`).
 - **`active`**, the node mask of every search: `leash & (tier_node_mask[t] | bubbles)`.
 - **`banned`**, the request's edge bans for every search, every splice, the seed and the

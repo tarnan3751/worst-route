@@ -15,4 +15,4 @@ engine works: `docs/reference/engine.md`; the design: `docs/PLAN.md` §3.
 would give a different route.
 """
 
-ENGINE_VERSION = "5"  # 5: seed legs by a tree over bans (config.LEG_SEARCHES)
+ENGINE_VERSION = "5"  # 5: seed legs by a tree, windows to junctions, T1 from 800 km (config)

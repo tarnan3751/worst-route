@@ -247,9 +247,10 @@ The split is by judgment required, and by how much context each seat can afford 
   does), and does not write feature code in the main tree: trivial edits only, when spawning an
   agent would cost more than the edit.
 - **`developer`** (Opus) — works in a clone of its own (**Lanes**), implements the brief, runs
-  `tools/gates.sh` at every commit, verifies behaviour through the CLI, the tests and the API in
-  its clone, updates the docs the change invalidates, and delivers a patch series on the current
-  `main` with the tree it reproduces. Never writes to the main working tree. Plans first only
+  the quick checks (`ruff`, `mypy`, the touched tests) at every commit and the full `tools/gates.sh`
+  once on the series' tip in a fresh clone (the landing runs it again), verifies behaviour through
+  the CLI, the tests and the API in its clone, updates the docs the change invalidates, and
+  delivers a patch series on the current `main` with the tree it reproduces. Never writes to the main working tree. Plans first only
   when the brief asks (tier A) or when it meets an open decision. **Continue the same agent from
   plan to implementation** (`SendMessage`); respawning loses what it learned planning.
 - **`reviewer`** (Opus) — independent review of the series, applied in a clone of its own: the
@@ -301,8 +302,8 @@ brief and one review.
 **Lanes.** The main working tree is the coordinator's and stays at `HEAD`: no agent writes to
 it, its index, its `.venv` or its `data/`. A developer or a reviewer works in a `git clone` of
 its own under its scratch directory; `uv sync` there builds the virtualenv from the lockfile
-(the uv cache makes it seconds) and `npm ci` under `frontend/` when the frontend exists. Three
-developers may run at once on disjoint areas, under these rules: a lane reads built graphs
+(the uv cache makes it seconds) and `npm ci` under `frontend/` when the frontend exists. Up to
+five developers may run at once on disjoint areas, under these rules: a lane reads built graphs
 through `WORST_ROUTE_DATA` pointing at the main tree's `data/` (builds are immutable unless
 `pipeline save --force` replaces one, which changes its `graph_version`) and writes pipeline
 output only under its own `data/`; nothing in a lane downloads from

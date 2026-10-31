@@ -1,6 +1,6 @@
 ---
 name: developer
-description: Implements a scoped change in the worst-route codebase, in a git clone of its own. Plans first for a tier A brief (and after the coordinator approves, implements it), implements a tier B brief directly, runs the gate at every commit, verifies behaviour through the CLI, the tests and the API in its clone, updates the docs the change invalidates, and delivers a patch series with proof. Never writes to the main working tree.
+description: Implements a scoped change in the worst-route codebase, in a git clone of its own. Plans first for a tier A brief (and after the coordinator approves, implements it), implements a tier B brief directly, runs the quick checks at every commit and the full gate on the series' tip, verifies behaviour through the CLI, the tests and the API in its clone, updates the docs the change invalidates, and delivers a patch series with proof. Never writes to the main working tree.
 model: opus
 ---
 
@@ -80,16 +80,19 @@ decisions; when the brief leaves one open, stop and ask rather than guess.
   returning nothing. A fixture, a test or a tool the brief asks you to commit is part of the
   change, not instrumentation, and stays.
 
-## Gates — at every commit of the series
+## Gates — quick checks at every commit, the full gate on the tip
 
 ```
+uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest -q -m "not data" tests/<the touched areas>
 tools/gates.sh
 ```
 
-One command, in order: `uv sync --frozen`, `ruff check` and `ruff format --check`, `mypy src`,
-`pytest -m "not data"`, the frontend's `npm run typecheck` and `npm run build` when `frontend/`
-exists, and the `[verify]` leftover scan. Run it at each commit of the series (a fresh clone with
-`git am` of the patches so far is the clean way) and paste its tail per commit into your report.
+At each commit of the series run the quick checks (ruff, mypy, the tests of the areas the
+commit touches; `npm run typecheck` and `npm test` when it touches `frontend/`). Run the full
+gate, `tools/gates.sh`, once on the series' tip in a fresh clone with `git am` of all the patches
+(it runs `uv sync --frozen`, ruff, `mypy src`, `pytest -m "not data"`, the frontend's typecheck,
+build and tests, and the `[verify]` leftover scan), and paste its tail into your report; the
+landing runs it again. A per-commit full gate is only for a tier A series whose brief asks for it.
 "It parses" is the floor, not proof.
 
 ## Verifying behaviour
@@ -131,7 +134,7 @@ docs. Do not rewrite docs beyond what your change invalidates.
 ## Report format (after implementing)
 
 - **What changed** — per file, in plain language.
-- **Gates** — the tail of `tools/gates.sh` per commit.
+- **Gates** — the tail of `tools/gates.sh` on the tip, and which quick checks ran per commit.
 - **Behaviour verified** — what you ran and what you observed (commands, validator reports,
   test names, screenshots). Say "not run" plainly if that is the case, and why.
 - **Adjacent changes** — anything outside the brief, each on its own line, or "none".

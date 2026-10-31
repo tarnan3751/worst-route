@@ -1,7 +1,8 @@
 // Running a job (docs/reference/frontend.md, **Run**): `JobRunner`, a job's lifecycle, which the
 // tests drive without a DOM, and `mountRunControls`, the Go, Cancel, Reroll and Make it worse
 // buttons and the live stat line (ratio, length, drive time, attempts, elapsed; the drive and
-// the delays under the slowest time, the items collected, the turns; once stored, its arrival,
+// the delays under the slowest time, the items collected, a pilgrimage's visits, an alphabet
+// route's letters, the turns; once stored, its arrival,
 // the towns and states it passes through, its extra fuel and its share of the roads within
 // reach).
 //
@@ -14,9 +15,11 @@
 // stops, tier and leash; the settings' seed follows the route shown, so it changes only when a
 // worse route is found. Then the job's events: `snapped` says where the stops went, `baseline`
 // draws the sensible route, each `snapshot` replaces the route and each `progress` applies its
-// splices in order; `done` shows the stored route whole, and for a ratio or duration target
+// splices in order (the alphabet route sends each better route as a snapshot, then a progress
+// without splices); `done` shows the stored route whole, and for a ratio or duration target
 // what it achieved; `error` shows its code and message. The stat line follows the run's own
-// objective and constraints, or a stored route's request.
+// objective and constraints, or a stored route's request. A refusal under strict, or under hard
+// mode, can be sent again without it.
 // Cancel sends DELETE, and the stream then ends with `done` (the route so far, stored) or
 // `error`. Every error ends the run with its code in the banner and the controls unlocked: the
 // API's, or CLIENT_ERROR for one of the app's own (a running job is then cancelled). Leaving the
@@ -32,6 +35,7 @@ import {
   subscribe,
 } from "../api/client";
 import type {
+  AlphabetLetters,
   Done,
   ErrorBody,
   LineString,
@@ -64,6 +68,7 @@ import {
   vehicleOf,
   type AppState,
   type RequestMode,
+  type RunMetrics,
   type Store,
 } from "../state";
 import { busy, stopLabel } from "../stops/stopList";
@@ -167,6 +172,19 @@ export class JobRunner {
     );
   }
 
+  /** Untick hard mode and send the last request again without it, as `withoutStrict` does (its
+   * turn constraint kept; no constraints left when it had no side): the banner's answer to a leg
+   * the seed cannot build under hard mode, or to a base route that comes back to a road. */
+  withoutHard(): Promise<void> {
+    if (this.#sent === null) return Promise.resolve();
+    const { request, base } = this.#sent;
+    this.#store.updateSettings({ hard: false });
+    const { constraints: given, ...rest } = request;
+    const { hard: _, ...constraints } = given ?? {};
+    const sided = constraints.no_left === true || constraints.no_right === true;
+    return this.#start(sided ? { ...rest, constraints } : rest, base);
+  }
+
   worse(): Promise<void> {
     const { route } = this.#store.state;
     if (route === null) return Promise.resolve();
@@ -196,7 +214,8 @@ export class JobRunner {
     const { baseline, note = null } = shown;
     if (baseline !== undefined) this.#view.setBaseline(baseline);
     this.#view.setFinal(route.geometry);
-    const { length_m, time_s, ratio, items, time_ratio, delay_s, turns } = route.metrics;
+    const { length_m, time_s, ratio, items, time_ratio, delay_s, turns, brand, alphabet } =
+      route.metrics;
     this.#store.updateSettings({ seed: route.seed });
     this.#store.update({
       route,
@@ -206,7 +225,7 @@ export class JobRunner {
         seed: route.seed,
         iteration: route.run.attempts,
         elapsedS: route.run.elapsed_s,
-        metrics: { length_m, time_s, ratio, items, time_ratio, delay_s, turns },
+        metrics: { length_m, time_s, ratio, items, time_ratio, delay_s, turns, brand, alphabet },
         stoppedBecause: route.run.stopped_because,
         resolved: this.#store.state.run.resolved,
         goal: shown.goal !== undefined ? shown.goal : goalOf(route.request.target),
@@ -372,6 +391,7 @@ export function mountRunControls(root: HTMLElement, store: Store, runner: JobRun
     worse.title = refused ?? "";
     cancel.disabled = state.run.phase !== "running";
     statLines(state).forEach((text, k) => (rows[k].textContent = text));
+    items.title = countsTitle(state);
     routeLines(state).forEach(({ text, title }, k) => {
       routeRows[k].textContent = text;
       routeRows[k].title = title;
@@ -413,12 +433,43 @@ function turnsLine({ left, right, u_turn }: Turns, mode: RequestMode): string {
   return `${lefts} · ${rights}`;
 }
 
+/** An alphabet route's letters: how many, and the laps of the alphabet they run, as the CLI
+ * writes them: "letters: 23 (A–W)", one letter "(A)", and past Z "(A–Z, A–C)" or "(A–Z, A)". */
+function lettersLine({ letters, sequence }: AlphabetLetters): string {
+  if (letters === 0) return "letters: 0";
+  const last = sequence.at(-1);
+  const laps = Array<string>(Math.floor((letters - 1) / 26)).fill("A–Z");
+  laps.push(last === "A" ? "A" : `A–${last}`);
+  return `letters: ${formatCount(letters)} (${laps.join(", ")})`;
+}
+
+/** The objective's counter: the items a collecting route collects, the locations a pilgrimage
+ * visits of those within reach ("17 of 19 Starbucks"), an alphabet route's letters. */
+function countsLine(metrics: RunMetrics, { objective, item }: RequestMode): string {
+  const { items, brand, alphabet } = metrics;
+  if (objective === "collect" && item && items) return formatItems(items[item], item);
+  if (objective === "brand" && brand) {
+    return `${formatCount(brand.visits)} of ${formatCount(brand.of)} ${brand.name}`;
+  }
+  if (objective === "alphabet" && alphabet) return lettersLine(alphabet);
+  return "";
+}
+
+/** The counter row's tooltip: an alphabet route's first road of each letter, one a line
+ * ("A: Southwest Alder Street"); none for the other objectives. */
+export function countsTitle({ run }: Readonly<AppState>): string {
+  const alphabet = run.mode.objective === "alphabet" ? run.metrics?.alphabet : null;
+  if (!alphabet) return "";
+  return alphabet.roads.map((road, k) => `${alphabet.sequence[k]}: ${road}`).join("\n");
+}
+
 type StatLines = [string, string, string, string, string, string, string];
 
 /** The stat line's rows: the ratio (under the slowest time, of experienced times once stored);
  * the length and drive time; the target; the run; and, shown between the second and the third,
  * the drive and the delays (the slowest time, live from each progress event, then the stored
- * route's), the items collected (live), and the turns (once stored). */
+ * route's), the objective's counter (live: the items collected, a pilgrimage's visits, an
+ * alphabet route's letters), and the turns (once stored). */
 export function statLines(state: Readonly<AppState>): StatLines {
   const { run, settings } = state;
   const only = (line: string): StatLines => ["", line, "", "", "", "", ""];
@@ -430,9 +481,8 @@ export function statLines(state: Readonly<AppState>): StatLines {
       state.stops.length < 2 ? "Click the map to set a start and an end." : "Ready when you are.",
     );
   }
-  const { length_m, time_s, ratio, items, time_ratio, delay_s, turns } = run.metrics;
-  const { objective, item } = run.mode;
-  const slowest = objective === "time";
+  const { length_m, time_s, ratio, time_ratio, delay_s, turns } = run.metrics;
+  const slowest = run.mode.objective === "time";
   const numbers = `${formatDistance(length_m, settings.units)} · ${formatDuration(time_s)}`;
   const attempts =
     run.phase === "done"
@@ -456,7 +506,7 @@ export function statLines(state: Readonly<AppState>): StatLines {
     slowest && delay_s !== undefined
       ? `drive ${formatDuration(time_s)} + delays ${formatDuration(delay_s)}`
       : "",
-    objective === "collect" && item && items ? formatItems(items[item], item) : "",
+    countsLine(run.metrics, run.mode),
     turns ? turnsLine(turns, run.mode) : "",
   ];
 }

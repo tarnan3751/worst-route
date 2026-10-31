@@ -12,7 +12,14 @@ import type { RouteDocument, RouteRequest } from "../api/types";
 import { isoWithOffset } from "../format";
 import { DEFAULT_SETTINGS, IDLE_RUN, Store, type Settings } from "../state";
 import { busy } from "../stops/stopList";
-import { JobRunner, awaitingBrand, routeLines, statLines, worseRefused } from "./controls";
+import {
+  JobRunner,
+  awaitingBrand,
+  countsTitle,
+  routeLines,
+  statLines,
+  worseRefused,
+} from "./controls";
 
 const fixture = loadStream();
 
@@ -483,6 +490,161 @@ describe("modes and turn constraints", () => {
     expect(calls[1].body).toEqual({ ...(calls[0].body as RouteRequest), constraints: soft });
     expect(calls[1].body).not.toHaveProperty("seed"); // the server picks one, not seed 41
     expect(s.state.settings.seed).toBe(77);
+  });
+});
+
+describe("a pilgrimage's visits, an alphabet route's letters and hard mode's refusal", () => {
+  const metrics = { length_m: 2000, time_s: 200, ratio: 2 };
+  const brand = { id: 229, name: "Starbucks", visits: 17, of: 19 };
+  const alphabet = (sequence: string) => ({
+    letters: sequence.length,
+    sequence,
+    roads: [...sequence].map((letter) => `${letter} Street`),
+    alpha_from: 3,
+    free_from: 40,
+  });
+
+  it("counts a pilgrimage's visits of those within reach, and an alphabet route's letters", () => {
+    const s = store();
+    const counts = (objective: RouteRequest["objective"], patch: object) => {
+      s.updateRun({ phase: "running", mode: { objective }, metrics: { ...metrics, ...patch } });
+      return [statLines(s.state)[5], countsTitle(s.state)];
+    };
+    expect(counts("brand", { brand })).toEqual(["17 of 19 Starbucks", ""]);
+    expect(counts("brand", { brand: null })).toEqual(["", ""]); // a document's for another mode
+    expect(counts("distance", { brand })).toEqual(["", ""]); // the run's own mode
+    const letters = "ABCDEFGHIJKLMNOPQRSTUVW";
+    expect(counts("alphabet", { alphabet: alphabet(letters) })).toEqual([
+      "letters: 23 (A–W)",
+      [...letters].map((letter) => `${letter}: ${letter} Street`).join("\n"), // one a line
+    ]);
+    expect(counts("alphabet", { alphabet: alphabet("A") })).toEqual([
+      "letters: 1 (A)",
+      "A: A Street",
+    ]);
+    expect(counts("alphabet", { alphabet: alphabet("") })).toEqual(["letters: 0", ""]);
+    // Past Z the letters wrap to A: each lap of the alphabet, as the CLI writes them.
+    const laps = (n: number) => {
+      const sequence = Array.from({ length: n }, (_, k) => String.fromCharCode(65 + (k % 26)));
+      return counts("alphabet", { alphabet: alphabet(sequence.join("")) })[0];
+    };
+    expect([1, 15, 26, 27, 29].map(laps)).toEqual([
+      "letters: 1 (A)",
+      "letters: 15 (A–O)",
+      "letters: 26 (A–Z)",
+      "letters: 27 (A–Z, A)",
+      "letters: 29 (A–Z, A–C)",
+    ]);
+    expect(counts("time", { alphabet: alphabet("AB") })).toEqual(["", ""]);
+  });
+
+  // As the API refuses a leg the seed cannot build under hard mode (tests/api/test_routes_api.py).
+  const refusal = {
+    code: "STOP_UNREACHABLE_WITHOUT_REPEAT",
+    message:
+      "the seed found no way from stop 0 to stop 1 under hard mode, after moving stop 1 up to 10 " +
+      "times; try without hard",
+    leg: [0, 1],
+    stop_index: 1,
+  };
+
+  it("tries again without hard mode when the seed finds no way under it", async () => {
+    const calls = stubFetch((call) =>
+      calls.length === 1 ? json(refusal, 422) : created(call, "jh"),
+    );
+    const s = store();
+    s.updateSettings({ seed: 1, hard: true });
+    const runner = new JobRunner(s, fakeView(), () => {});
+    await runner.go();
+    const refused = calls[0].body as RouteRequest;
+    expect(refused.constraints).toEqual({
+      no_left: false,
+      no_right: false,
+      strict: false,
+      hard: true,
+    });
+    expect(s.state.error).toEqual(refusal);
+    expect(busy(s)).toBe(false);
+    await runner.withoutHard();
+    expect(s.state.settings.hard).toBe(false);
+    const { constraints: _, ...plain } = refused; // no side: no constraints left
+    expect(calls[1].body).toEqual(plain);
+    expect(calls[1].body).toMatchObject({ seed: 1 });
+    expect(s.state.error).toBeNull();
+    expect(s.state.run.phase).toBe("running");
+  });
+
+  it("keeps the turn constraint, the base route and the seed it was refused with", async () => {
+    const time = loadStream("portland-time-stream");
+    const calls = stubFetch((call) =>
+      calls.length % 2 === 1 ? json(refusal, 422) : created(call, `jh${calls.length}`),
+    );
+    const s = store(time.route); // seed 1
+    s.updateSettings({ seed: 41, turns: "no_left", strict: true, hard: true });
+    const runner = new JobRunner(s, fakeView(), () => {});
+    await runner.worse();
+    await runner.withoutHard();
+    const refused = calls[0].body as RouteRequest;
+    expect(refused).toMatchObject({ base_route_id: time.route.route_id, seed: 2 });
+    const strict = { no_left: true, no_right: false, strict: true };
+    expect(calls[1].body).toEqual({ ...refused, constraints: strict });
+    s.update({ run: IDLE_RUN });
+    s.updateSettings({ hard: true });
+    await runner.reroll();
+    await runner.withoutHard();
+    expect(calls[3].body).toEqual({ ...(calls[2].body as RouteRequest), constraints: strict });
+    expect(calls[3].body).not.toHaveProperty("seed"); // a Reroll: the server picks one
+  });
+
+  it("makes the same route worse without hard mode when hard mode refuses it as a base", async () => {
+    const time = loadStream("portland-time-stream");
+    // As the API refuses a base route that comes back to a road (tests/api/test_routes_api.py).
+    const mismatch = {
+      code: "BASE_ROUTE_MISMATCH",
+      message:
+        "the base route comes back to northeast multnomah street at edge 59, which hard mode refuses",
+      field: "route",
+    };
+    const calls = stubFetch((call) =>
+      calls.length === 1 ? json(mismatch, 422) : created(call, "jhb"),
+    );
+    const s = store(time.route); // seed 1
+    s.updateSettings({ hard: true });
+    const runner = new JobRunner(s, fakeView(), () => {});
+    await runner.worse();
+    expect(s.state.error).toEqual(mismatch);
+    expect(s.state.route).toBe(time.route); // still shown
+    await runner.withoutHard();
+    const { constraints: _, ...plain } = calls[0].body as RouteRequest;
+    expect(plain).toMatchObject({ base_route_id: time.route.route_id, seed: 2 });
+    expect(calls[1].body).toEqual(plain);
+    expect(s.state.settings.hard).toBe(false);
+  });
+
+  it("keeps hard mode when it tries again without strict", async () => {
+    const infeasible = {
+      code: "INFEASIBLE_TURN_CONSTRAINT",
+      message:
+        "no route from stop 0 to stop 1 ..., under hard mode and the strict no-left constraint; try without strict",
+      leg: [0, 1],
+      stop_index: 1,
+      constraint: "no_left",
+    };
+    const calls = stubFetch((call) =>
+      calls.length === 1 ? json(infeasible, 422) : created(call, "jhs"),
+    );
+    const s = store();
+    s.updateSettings({ turns: "no_left", strict: true, hard: true });
+    const runner = new JobRunner(s, fakeView(), () => {});
+    await runner.go();
+    await runner.withoutStrict();
+    expect((calls[1].body as RouteRequest).constraints).toEqual({
+      no_left: true,
+      no_right: false,
+      strict: false,
+      hard: true,
+    });
+    expect(s.state.settings).toMatchObject({ strict: false, hard: true });
   });
 });
 

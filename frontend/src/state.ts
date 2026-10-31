@@ -3,7 +3,9 @@
 // which tells the watchers of the keys the patch touches. The route's geometry is not here: it
 // changes ten times a second and lives in the route layer (map/routeLayer.ts).
 import type {
+  AlphabetLetters,
   BrandEntry,
+  BrandVisits,
   CollectItem,
   ErrorBody,
   Metrics,
@@ -159,12 +161,15 @@ export function modeOf(settings: Settings): RequestMode {
 
 export type Phase = "idle" | "starting" | "running" | "done" | "failed";
 
-/** A route's numbers as the stat line shows them: while it grows (a collecting route's `items`
- * among them), and once stored its experienced time's ratio, delays and turns. */
+/** A route's numbers as the stat line shows them: while it grows (a collecting route's `items`,
+ * a pilgrimage's `brand` and an alphabet route's `alphabet` among them), and once stored its
+ * experienced time's ratio, delays and turns. */
 export type RunMetrics = Pick<Metrics, "length_m" | "time_s" | "ratio" | "items"> & {
   time_ratio?: number | null;
   delay_s?: number;
   turns?: Turns;
+  brand?: BrandVisits | null;
+  alphabet?: AlphabetLetters | null;
 };
 
 /** The job being run, or the last one, as the stat line shows it. */

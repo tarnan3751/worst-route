@@ -42,7 +42,10 @@ function edit(stops: Stop[]): void {
   store.update({ stops, error: null, route: null, run: IDLE_RUN });
 }
 
-mountBanner(byId("banner"), store, () => void runner?.withoutStrict());
+mountBanner(byId("banner"), store, {
+  strict: () => void runner?.withoutStrict(),
+  hard: () => void runner?.withoutHard(),
+});
 const placeSearch = document.createElement("div");
 const place = (lat: number, lon: number): boolean => placeStop(store, edit, lat, lon);
 mountPlaceSearch(placeSearch, store, new PlaceSearch(store, place));

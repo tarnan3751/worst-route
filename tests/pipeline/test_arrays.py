@@ -9,6 +9,7 @@ ways overlapping in part, a road mapped several times over one run of nodes.
 """
 
 import dataclasses
+import json
 import math
 import pickle
 from pathlib import Path
@@ -38,6 +39,7 @@ from tests.pipeline.random_roads import random_roads
 from tests.pipeline.test_consolidate import _near_pair
 from worst_route.graph.data import FORMAT_VERSION, GraphData
 from worst_route.pipeline import cleanup
+from worst_route.pipeline.arrays import cleaned
 from worst_route.pipeline.arrays import connectivity as arrays_connectivity
 from worst_route.pipeline.arrays.build import build_raw_arrays, load_stage, save_stage
 from worst_route.pipeline.arrays.simplify import SimplifiedGraph
@@ -55,7 +57,7 @@ from worst_route.pipeline.arrays.to_nx import (
 from worst_route.pipeline.arrays.twins import find_twins as arrays_find_twins
 from worst_route.pipeline.build import build_raw_graph
 from worst_route.pipeline.carriageways import find_twins
-from worst_route.pipeline.cleanup import FragmentedGraphError, run_cleanup
+from worst_route.pipeline.cleanup import FragmentedGraphError, run_arrays_cleanup, run_cleanup
 from worst_route.pipeline.connectivity import largest_component
 from worst_route.pipeline.consolidate import relabel, stage_a, stage_a_tolerances, stage_b
 from worst_route.pipeline.enrich import run_enrich
@@ -671,3 +673,23 @@ def test_super_junctions_left_without_a_turn_round_by_round(
     assert got_report == want_report and got_report.dropped_no_turn == rounds
     assert_same_graph(want, got)
     assert pickle.dumps(got, pickle.HIGHEST_PROTOCOL) == pickle.dumps(want, pickle.HIGHEST_PROTOCOL)
+
+
+def test_the_cleanup_stage_reads_back(tmp_path: Path) -> None:
+    """The cleaned graph written as `stages/cleanup/` reads back the same, both its graphs."""
+    raw = build_raw_arrays(FIXTURES / "diamond.osm", UTM_10N)[0]
+    graph, report = run_arrays_cleanup(raw, allow_fragmented=True)
+    cleaned.save_stage(graph, report, tmp_path)
+    back = cleaned.load_stage(tmp_path)
+    for want, got in ((graph, back), (graph.stage_a, back.stage_a)):
+        for field in dataclasses.fields(want):
+            if field.name != "stage_a":
+                a, b = getattr(want, field.name), getattr(got, field.name)
+                same = (
+                    np.array_equal(a, b) and a.dtype == b.dtype
+                    if isinstance(a, np.ndarray)
+                    else a == b
+                )
+                assert same, field.name
+    written = (tmp_path / "stages" / "cleanup.json").read_text()
+    assert written == json.dumps(dataclasses.asdict(report), indent=2) + "\n"  # as networkx's

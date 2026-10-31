@@ -416,3 +416,13 @@ STATES: dict[str, tuple[str, str]] = {
     "wisconsin": ("WI", "55"),
     "wyoming": ("WY", "56"),
 }
+
+# Presentation (`docs/reference/presentation.md`). Directions: a left or right turn is "slight"
+# when its change of bearing is at most DIRECTIONS_SLIGHT_DEG and "sharp" beyond
+# DIRECTIONS_SHARP_DEG (the turn classes themselves are TURN_STRAIGHT_DEG and TURN_UTURN_DEG's).
+# Jokes come after about every JOKE_EVERY-th driving step (more apart on a route with more such
+# steps than jokes), each gap drawn within ±JOKE_JITTER of the mean.
+DIRECTIONS_SLIGHT_DEG = 45
+DIRECTIONS_SHARP_DEG = 120
+JOKE_EVERY = 8
+JOKE_JITTER = 0.25

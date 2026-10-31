@@ -52,6 +52,12 @@ places of every state's file present that meet the region's bbox (its latest bui
 `params.bbox`, else `config.REGIONS`'s). It prints what it wrote, with a warning line on stderr
 for each state the bbox meets whose places file is absent; a missing state file is one line and
 exit 1.
+
+`directions` prints a saved `route.json`'s turn-by-turn directions
+(`docs/reference/presentation.md`, **Directions**), one numbered line a step, a driving step with
+its distance and time, with the route's seed's jokes unless `--no-jokes`. It loads the build the
+file names (or `--region` / `--build-id`), as `validate` does; a file it cannot read, or a build
+at another graph_version, is one line and exit 1.
 """
 
 import json
@@ -1106,3 +1112,46 @@ def aux_places(
     by_state = ", ".join(f"{usps} {n}" for usps, n in written.by_state.items())
     total = sum(written.by_state.values())
     typer.echo(f"wrote {written.places} ({total} places{': ' + by_state if by_state else ''})")
+
+
+@app.command()
+def directions(
+    route_file: Annotated[
+        Path, typer.Argument(help="A route.json written by plan.", exists=True, dir_okay=False)
+    ],
+    region: Annotated[str | None, typer.Option(help="Region (default: the file's).")] = None,
+    build_id: Annotated[str | None, typer.Option(help="Build id (default: the file's).")] = None,
+    jokes: Annotated[bool, typer.Option(help="Tell the route's jokes.")] = True,
+) -> None:
+    """Print a saved route's turn-by-turn directions."""
+    from pydantic import ValidationError
+
+    from worst_route.engine.io import read_route
+    from worst_route.presentation.document import route_directions
+
+    try:
+        saved = read_route(route_file)
+    except (KeyError, TypeError, ValueError, OverflowError, ValidationError) as error:
+        _fail(f"cannot read {route_file}: {type(error).__name__}: {error}")
+    data = _load_build(region or saved.region, build_id or saved.build_id)
+    if data.meta["graph_version"] != saved.graph_version:
+        _fail(
+            f"{route_file} was planned on graph_version {saved.graph_version[:12]}, "
+            f"the build has {data.meta['graph_version'][:12]}"
+        )
+    steps = route_directions(
+        data,
+        saved.nodes,
+        saved.edges,
+        saved.stop_idx,
+        labels=[None] * len(saved.stop_idx),
+        seed=saved.seed,
+        ratio=saved.document["metrics"]["ratio"],
+        jokes=jokes,
+    )
+    width = len(str(len(steps)))
+    for step in steps:
+        line = f"{step.step:>{width}}. {step.text}"
+        if step.edge_range[0] < step.edge_range[1]:
+            line += f"  ({step.distance_m / 1000:.2f} km, {_duration(step.time_s)})"
+        typer.echo(line)

@@ -2,14 +2,17 @@
 
 `docs/PLAN.md` §2.4; `docs/reference/pipeline.md`, cleanup. `run_cleanup` takes the raw graph
 `build` wrote (networkx's graph, or the arrays engine's `RawGraph`, which `run_arrays_cleanup`
-takes through `arrays.simplify`, `arrays.stage_a`, `arrays.twins`, `arrays.stage_b` and
-`arrays.connectivity` to the cleaned graph as arrays, a `StageBGraph`, which `pipeline cleanup`
-writes as `stages/cleanup/` (`arrays.cleaned`) and `run_cleanup` hands on as networkx would hold
-it, for the tests) and runs, in order: `simplify` (self-loops dropped, degree-2 chains collapsed),
-`consolidate.stage_a` (signal clusters and divided crossings), `carriageways.find_twins` (on the
-stage A graph, so stretches stage B makes internal keep their twins), `consolidate.stage_b`
-(interchanges and roundabouts as super-junctions with their transitions, the twins carried across,
-then nodes numbered 0..n-1) and `connectivity.largest_component`, which keeps the largest strongly
+takes through `arrays.simplify`, `arrays.stage_a`, `arrays.twins`, `arrays.restrictions`,
+`arrays.stage_b` and `arrays.connectivity` to the cleaned graph as arrays, a `StageBGraph`, which
+`pipeline cleanup` writes as `stages/cleanup/` (`arrays.cleaned`) and `run_cleanup` hands on as
+networkx would hold it, for the tests), with the filter's turn restrictions table, and runs, in
+order: `simplify` (self-loops dropped, degree-2 chains collapsed), `consolidate.stage_a` (signal
+clusters and divided crossings), `carriageways.find_twins` (on the stage A graph, so stretches
+stage B makes internal keep their twins), `restrictions.turn_tables` (the turn restrictions as
+turn tables at the stage A nodes holding their via nodes, read off the simplified graph),
+`consolidate.stage_b` (interchanges and roundabouts as super-junctions with their transitions,
+the tables honoured inside them and kept at the other nodes, the twins carried across, then nodes
+numbered 0..n-1) and `connectivity.largest_component`, which keeps the largest strongly
 connected component and numbers the nodes 0..n-1 again. Connectivity does not read the turn tables,
 and dropping an edge drops the transitions that name it, so a node with a table (a super-junction,
 or a node outside them that a turn table is kept at, `G.graph["restricted"]`) can be left with
@@ -35,10 +38,12 @@ from pathlib import Path
 from typing import Any
 
 import networkx as nx
+import pyarrow as pa
 
 from worst_route import config
 from worst_route.pipeline import layout
 from worst_route.pipeline.arrays import connectivity as arrays_connectivity
+from worst_route.pipeline.arrays import restrictions as arrays_restrictions
 from worst_route.pipeline.arrays import simplify as arrays_simplify
 from worst_route.pipeline.arrays import stage_a as arrays_stage_a
 from worst_route.pipeline.arrays import stage_b as arrays_stage_b
@@ -53,6 +58,7 @@ from worst_route.pipeline.connectivity import (
     largest_component,
 )
 from worst_route.pipeline.consolidate import StageAStats, StageBStats, relabel, stage_a, stage_b
+from worst_route.pipeline.restrictions import RestrictionStats, rules_of, turn_tables
 from worst_route.pipeline.simplify import SimplifyStats, simplify
 
 PARAMETERS = (
@@ -86,6 +92,7 @@ class CleanupReport:
     stage_a: StageAStats = field(default_factory=StageAStats)
     stage_b: StageBStats = field(default_factory=StageBStats)
     twins: TwinStats = field(default_factory=TwinStats)
+    restrictions: RestrictionStats = field(default_factory=RestrictionStats)
     connectivity: ConnectivityReport = field(default_factory=ConnectivityReport)
     seconds: dict[str, float] = field(default_factory=dict)
 
@@ -131,24 +138,33 @@ def parameters() -> dict[str, Any]:
 
 
 def run_cleanup(
-    raw: nx.MultiDiGraph | RawGraph, *, allow_fragmented: bool = False
+    raw: nx.MultiDiGraph | RawGraph,
+    *,
+    allow_fragmented: bool = False,
+    restrictions: pa.Table | None = None,
 ) -> tuple[nx.MultiDiGraph, CleanupReport]:
-    """The cleaned graph and what each step did."""
+    """The cleaned graph and what each step did, with the filter's turn `restrictions`."""
     if isinstance(raw, RawGraph):
-        cleaned, report = run_arrays_cleanup(raw, allow_fragmented=allow_fragmented)
+        cleaned, report = run_arrays_cleanup(
+            raw, allow_fragmented=allow_fragmented, restrictions=restrictions
+        )
         clock = time.perf_counter()
         graph = cleanup_graph(cleaned)
         report.seconds["handover"] = round(time.perf_counter() - clock, 3)
         return graph, report
     report = CleanupReport(input={"nodes": raw.number_of_nodes(), "edges": raw.number_of_edges()})
     lap = _laps(report)
-    graph, report.simplify = simplify(raw)
+    simplified, report.simplify = simplify(raw)
     lap("simplify")
-    graph, report.stage_a = stage_a(graph)
+    graph, report.stage_a = stage_a(simplified)
     lap("stage_a")
     report.twins = find_twins(graph)
     lap("twins")
-    graph, report.stage_b = stage_b(graph)
+    rules = {} if restrictions is None else rules_of(restrictions)
+    turns, report.restrictions = turn_tables(simplified, graph, rules)
+    del simplified
+    lap("restrictions")
+    graph, report.stage_b = stage_b(graph, turns)
     lap("stage_b")
     keep, report.connectivity = largest_component(graph)
     graph = _without_no_turn(relabel(graph, keep), report.connectivity)
@@ -158,9 +174,10 @@ def run_cleanup(
 
 
 def run_arrays_cleanup(
-    raw: RawGraph, *, allow_fragmented: bool = False
+    raw: RawGraph, *, allow_fragmented: bool = False, restrictions: pa.Table | None = None
 ) -> tuple[StageBGraph, CleanupReport]:
-    """The arrays engine's cleaned graph, as arrays, and what each step did."""
+    """The arrays engine's cleaned graph, as arrays, and what each step did, with the filter's
+    turn `restrictions`."""
     report = CleanupReport(input={"nodes": len(raw.node_id), "edges": raw.edges})
     lap = _laps(report)
     simplified, report.simplify = arrays_simplify.simplify(raw)
@@ -170,7 +187,11 @@ def run_arrays_cleanup(
     twins = arrays_twins.find_twins(merged)
     report.twins = twins[2]
     lap("twins")
-    consolidated, report.stage_b = arrays_stage_b.stage_b(merged, twins[:2])
+    rules = {} if restrictions is None else rules_of(restrictions)
+    turns, report.restrictions = arrays_restrictions.turn_tables(simplified, merged, rules)
+    del simplified
+    lap("restrictions")
+    consolidated, report.stage_b = arrays_stage_b.stage_b(merged, twins[:2], turns)
     lap("stage_b")
     component, report.connectivity = arrays_connectivity.largest_component(consolidated)
     consolidated = arrays_connectivity.without_no_turn(

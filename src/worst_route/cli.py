@@ -413,8 +413,10 @@ def cleanup(
     ] = False,
     engine: EngineOption = DEFAULT_PIPELINE_ENGINE,
 ) -> None:
-    """Simplification, consolidation, carriageway twins, connectivity."""
+    """Simplification, consolidation, carriageway twins, turn restrictions, connectivity."""
     import pickle
+
+    import pyarrow.parquet as pq
 
     from worst_route.pipeline import cleanup as step
     from worst_route.pipeline.arrays import cleaned
@@ -428,11 +430,13 @@ def cleanup(
     _, recorded = layout.BUILD_STAGES[cast(PipelineEngine, engine)]
     source = layout.stage_file(directory, recorded)
     _require(source, hint)
+    restrictions = layout.restrictions_parquet(region)
+    _require(restrictions, f"run `worst-route pipeline filter --region {region}` first")
     output = layout.stage_file(directory, layout.CLEANUP_STAGES[cast(PipelineEngine, engine)][0])
     record: dict[str, Any] = {
         "step": "cleanup",
         "engine": engine,
-        "inputs": [{"file": recorded, "md5": layout.file_md5(source)}],
+        "inputs": [{"file": recorded, "md5": layout.file_md5(source)}, *_inputs(restrictions)],
         "params": {
             "allow_fragmented": allow_fragmented,
             "config": step.parameters(),
@@ -447,26 +451,30 @@ def cleanup(
     for stage, _ in layout.CLEANUP_STAGES.values():  # a build holds one engine's cleaned graph
         _remove(layout.stage_file(directory, stage))
     layout.stage_file(directory, "cleanup.json").unlink(missing_ok=True)
+    table = pq.read_table(restrictions)
     try:
         if engine == "arrays":
             cleaned_graph, report = step.run_arrays_cleanup(
-                load_stage(directory), allow_fragmented=allow_fragmented
+                load_stage(directory), allow_fragmented=allow_fragmented, restrictions=table
             )
             cleaned.save_stage(cleaned_graph, report, directory)
         else:
             with source.open("rb") as f:
                 raw = pickle.load(f)
-            graph, report = step.run_cleanup(raw, allow_fragmented=allow_fragmented)
+            graph, report = step.run_cleanup(
+                raw, allow_fragmented=allow_fragmented, restrictions=table
+            )
             step.save_stage(graph, report, directory)
     except step.FragmentedGraphError as error:
         typer.echo(f"cleanup failed: {error}", err=True)
         raise typer.Exit(code=1) from None
     layout.write_sidecar(output, record)
-    simplified, a, b, twins, scc = (
+    simplified, a, b, twins, turns, scc = (
         report.simplify,
         report.stage_a,
         report.stage_b,
         report.twins,
+        report.restrictions,
         report.connectivity,
     )
     coverage = "n/a" if twins.coverage is None else f"{twins.coverage:.3f}"
@@ -482,6 +490,12 @@ def cleanup(
     typer.echo(
         f"twins: {twins.paired} of {twins.candidates} candidate edges paired; "
         f"motorway and trunk coverage {coverage}{same_road}"
+    )
+    typer.echo(
+        f"restrictions: {turns.applied} of {turns.read} applied, turn tables at "
+        f"{turns.junctions} junctions ({turns.pairs_banned} pairs banned); skipped: "
+        f"{turns.unmatched} unmatched, {turns.way_through_via} way through via, "
+        f"{turns.via_inside_edge} via inside an edge, {turns.via_not_found} via not found"
     )
     kinds = ", ".join(f"{kind} {n}" for kind, n in b.superjunctions.items())
     typer.echo(

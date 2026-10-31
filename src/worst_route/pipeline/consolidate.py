@@ -70,7 +70,12 @@ reachability above, computed as before. The twins carried along a passage's inte
 (below) follow the same walk. A node outside the super-junctions keeps its table, its pairs in
 stage B's keys: `G.graph["restricted"][node]`, the sorted allowed pairs, as a super-node's
 `transitions` are (the table is absent when no such node has one, so a graph without turn
-restrictions is the graph it was before them).
+restrictions is the graph it was before them). There a route passes the node by one in-edge and
+one out-edge and never back over the OSM nodes it came by (it would pass the node before twice),
+so the table allows those U-turns too, and a table that then allows every pair is none: a dead end
+with a `no_u_turn` keeps no table, which would leave it no pair, and cleanup's no-turn rule would
+drop it with the road to it. Inside a super-junction its parts' tables are kept as they are, since
+a passage may turn back at a part.
 
 Twins (`carriageways.find_twins`) are found on the stage A graph, so a carriageway stretch that
 stage B makes internal still has its twins; `stage_b` carries the table across (`_carry_twins`).
@@ -430,11 +435,16 @@ def stage_b(
         kinds[kind] += 1
         stats.internal_edges += len(edges)
     result.graph["superjunctions"] = superjunctions
-    restricted = {
-        node: tuple(sorted((new_key[a], new_key[b]) for a, b in table))
-        for node, table in sorted(turns.items())
-        if node not in super_of
-    }
+    restricted = {}
+    for node, table in sorted(turns.items()):
+        if node in super_of:
+            continue
+        into: list[EdgeKey] = list(graph.in_edges(node, keys=True))
+        out_of: list[EdgeKey] = list(graph.out_edges(node, keys=True))
+        run = {key: graph.edges[key]["osm_nodes"] for key in into + out_of}
+        allowed = table | {(a, b) for a in into for b in out_of if run[b] == run[a][::-1]}
+        if len(allowed) < len(into) * len(out_of):
+            restricted[node] = tuple(sorted((new_key[a], new_key[b]) for a, b in allowed))
     if restricted:  # absent when no node outside the super-junctions has a table
         result.graph["restricted"] = restricted
     if "twins" in graph.graph:

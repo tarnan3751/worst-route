@@ -3,9 +3,10 @@
     uv run python tools/parity.py --region portland [--engines networkx,arrays]
         [--allow-fragmented] [--work DIR] [--out tools/out/parity-REGION.json]
 
-It reads the region's filtered roads and POIs under `WORST_ROUTE_DATA` (`pipeline filter` first)
-and writes nothing there: each engine runs `build`, `cleanup` and then enrich, tiers and save's
-build (its arrays and geometry, by `pipeline.save`'s own functions), each on its own engine's
+It reads the region's filtered roads, POIs and turn restrictions under `WORST_ROUTE_DATA`
+(`pipeline filter` first) and writes nothing there: each engine runs `build`, `cleanup` and then
+enrich, tiers and save's build (its arrays and geometry, by `pipeline.save`'s own functions),
+each on its own engine's
 stages as the CLI runs them, into its own directory under `--work` (a temporary directory,
 removed at the end, unless given). Each step runs in a process of its own, so its seconds and
 its peak resident memory are its own; the step after it reads the stage it wrote, as the
@@ -60,14 +61,19 @@ def run_step(engine: str, step: str, region: str, work: Path, allow_fragmented: 
             )
             build.save_stage(graph, stats, directory)
     elif step == "cleanup":
+        restrictions = pq.read_table(layout.restrictions_parquet(region))
         if engine == "arrays":
             raw = arrays_build.load_stage(directory)
-            arrays, report = cleanup.run_arrays_cleanup(raw, allow_fragmented=allow_fragmented)
+            arrays, report = cleanup.run_arrays_cleanup(
+                raw, allow_fragmented=allow_fragmented, restrictions=restrictions
+            )
             cleaned.save_stage(arrays, report, directory)
         else:
             with layout.stage_file(directory, "build.pkl").open("rb") as f:
                 source = pickle.load(f)
-            graph, report = cleanup.run_cleanup(source, allow_fragmented=allow_fragmented)
+            graph, report = cleanup.run_cleanup(
+                source, allow_fragmented=allow_fragmented, restrictions=restrictions
+            )
             cleanup.save_stage(graph, report, directory)
     else:  # enrich, tiers and the build, as `pipeline enrich`, `tiers` and `save` run them
         pois = pq.read_table(layout.pois_parquet(region))

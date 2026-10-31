@@ -29,6 +29,7 @@ from worst_route.pipeline import PIPELINE_VERSION, download, layout
 from worst_route.pipeline.arrays import cleaned
 from worst_route.pipeline.arrays.build import load_stage
 from worst_route.pipeline.cleanup import run_arrays_cleanup
+from worst_route.pipeline.filter import RESTRICTION_SCHEMA
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "osm"
 runner = CliRunner()
@@ -37,6 +38,15 @@ runner = CliRunner()
 def pipeline(*args: str) -> tuple[int, str]:
     result = runner.invoke(app, ["pipeline", *args])
     return result.exit_code, result.output
+
+
+def no_restrictions() -> Path:
+    """The empty turn restrictions table `filter` writes for roads without any, for a build made
+    from `--source` without a filter."""
+    path = layout.restrictions_parquet("portland")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(RESTRICTION_SCHEMA.empty_table(), path)
+    return path
 
 
 def test_download_skips_a_current_extract(data_dir: Path) -> None:
@@ -352,6 +362,9 @@ def test_importing_the_cli_does_not_load_the_geo_stack() -> None:
 def test_cleanup_after_build(data_dir: Path) -> None:
     source = str(FIXTURES / "divided.osm")
     assert pipeline("build", "--region", "portland", "--source", source, "--build-id", "b1")[0] == 0
+    code, output = pipeline("cleanup", "--region", "portland")
+    assert code == 1 and "restrictions.parquet" in output and "pipeline filter --region" in output
+    restrictions = no_restrictions()
     code, output = pipeline("cleanup", "--region", "portland")  # the latest build: b1
     assert code == 0, output
     stages = data_dir / "graphs" / "portland" / "b1" / "stages"
@@ -361,6 +374,8 @@ def test_cleanup_after_build(data_dir: Path) -> None:
         "simplify: dropped 0 self-loops, removed 1 nodes",
         "stage A: 1 clusters from 4 nodes",
         "twins: 7 of 7 candidate edges paired; motorway and trunk coverage n/a",
+        "restrictions: 0 of 0 applied, turn tables at 0 junctions (0 pairs banned); skipped: "
+        "0 unmatched, 0 way through via, 0 via inside an edge, 0 via not found",
         "stage B: 0 super-junctions (interchange 0, roundabout 0), 0 internal edges, "
         "5 twin pairs carried, 0 joins along a carriageway",
         "connectivity: kept 15 of 15 nodes; dropped 0 nodes and 0.0 km in 0 components",
@@ -371,7 +386,10 @@ def test_cleanup_after_build(data_dir: Path) -> None:
     assert json.loads((stages / "cleanup.json").read_text())["stage_a"]["clusters"] == 1
     sidecar = json.loads((stages / "cleanup.inputs.json").read_text())
     manifest = stages / "build" / "manifest.json"
-    assert sidecar["inputs"] == [{"file": "build/manifest.json", "md5": layout.file_md5(manifest)}]
+    assert sidecar["inputs"] == [
+        {"file": "build/manifest.json", "md5": layout.file_md5(manifest)},
+        {"file": "portland.restrictions.parquet", "md5": layout.file_md5(restrictions)},
+    ]
     assert sidecar["params"]["allow_fragmented"] is False
     assert sidecar["params"]["config"]["STAGE_B_JOIN_M"] == 500.0
 
@@ -381,17 +399,19 @@ def test_cleanup_counts_the_super_junctions_dropped_with_no_allowed_turn(
 ) -> None:
     source = str(cut_interchange(tmp_path))
     assert pipeline("build", "--region", "portland", "--source", source, "--build-id", "b1")[0] == 0
+    no_restrictions()
     code, output = pipeline("cleanup", "--region", "portland", "--allow-fragmented")
     assert code == 0, output
     lines = output.splitlines()
-    assert lines[4].startswith("stage B: 1 super-junctions (interchange 1, roundabout 0)")
-    assert lines[5].startswith("connectivity: kept 2 of ")
-    assert lines[5].endswith(" components, 1 junctions dropped with no allowed turn")
+    assert lines[5].startswith("stage B: 1 super-junctions (interchange 1, roundabout 0)")
+    assert lines[6].startswith("connectivity: kept 2 of ")
+    assert lines[6].endswith(" components, 1 junctions dropped with no allowed turn")
 
 
 def test_cleanup_counts_the_pairs_of_one_road_mapped_twice(data_dir: Path, tmp_path: Path) -> None:
     source = str(mapped_twice(tmp_path))
     assert pipeline("build", "--region", "portland", "--source", source, "--build-id", "b1")[0] == 0
+    no_restrictions()
     code, output = pipeline("cleanup", "--region", "portland")
     assert code == 0, output
     assert output.splitlines()[3] == (
@@ -403,6 +423,7 @@ def test_cleanup_counts_the_pairs_of_one_road_mapped_twice(data_dir: Path, tmp_p
 def test_cleanup_skips_unless_forced(data_dir: Path) -> None:
     source = str(FIXTURES / "diamond.osm")
     assert pipeline("build", "--region", "portland", "--source", source, "--build-id", "b2")[0] == 0
+    no_restrictions()
     assert pipeline("cleanup", "--region", "portland", "--build-id", "b2")[0] == 0
     manifest = data_dir / "graphs" / "portland" / "b2" / "stages" / "cleanup" / "manifest.json"
     written = manifest.stat().st_mtime_ns
@@ -421,6 +442,7 @@ def test_cleanup_skips_unless_forced(data_dir: Path) -> None:
 def test_cleanup_of_a_fragmented_graph(data_dir: Path) -> None:
     source = str(FIXTURES / "oneway.osm")
     assert pipeline("build", "--region", "portland", "--source", source, "--build-id", "b3")[0] == 0
+    no_restrictions()
     stages = data_dir / "graphs" / "portland" / "b3" / "stages"
     result = runner.invoke(app, ["pipeline", "cleanup", "--region", "portland"])
     assert result.exit_code == 1
@@ -478,7 +500,11 @@ def test_the_arrays_engine_through_the_cli(data_dir: Path) -> None:
     sidecar = json.loads((stages / "cleanup.inputs.json").read_text())
     manifest = stages / "build" / "manifest.json"
     assert sidecar["engine"] == "arrays"
-    assert sidecar["inputs"] == [{"file": "build/manifest.json", "md5": layout.file_md5(manifest)}]
+    restrictions = layout.restrictions_parquet("portland")
+    assert sidecar["inputs"] == [
+        {"file": "build/manifest.json", "md5": layout.file_md5(manifest)},
+        {"file": restrictions.name, "md5": layout.file_md5(restrictions)},
+    ]
     flags = ["--region", "portland", "--build-id", "arrays"]
     code, output = pipeline("cleanup", *flags, "--engine", "arrays")
     assert code == 0 and output.startswith("skipped: ")
@@ -634,6 +660,7 @@ def test_enrich_needs_its_inputs(data_dir: Path) -> None:
     assert pipeline("build", "--region", "portland", "--source", source, "--build-id", "b1")[0] == 0
     code, output = pipeline("enrich", "--region", "portland")
     assert code == 1 and "cleanup/manifest.json" in output and "pipeline cleanup --region" in output
+    no_restrictions()
     assert pipeline("cleanup", "--region", "portland")[0] == 0
     code, output = pipeline("enrich", "--region", "portland")
     assert code == 1 and "pois.parquet" in output and "pipeline filter --region" in output

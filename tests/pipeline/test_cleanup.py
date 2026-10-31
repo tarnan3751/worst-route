@@ -60,7 +60,8 @@ def test_cleanup_of_each_fixture(name: str, nodes: int, edges: int, kinds: dict[
     assert report.input == {"nodes": before.number_of_nodes(), "edges": before.number_of_edges()}
     assert report.connectivity.retained == 1.0
     assert (report.connectivity.nodes_after, report.connectivity.edges_after) == (nodes, edges)
-    assert set(report.seconds) == {"simplify", "stage_a", "stage_b", "twins", "connectivity"}
+    seconds = {"simplify", "stage_a", "twins", "restrictions", "stage_b", "connectivity"}
+    assert set(report.seconds) == seconds
     assert set(graph.graph) == {"crs", "pipeline_version", "superjunctions", "twins"}
     assert report.connectivity.dropped_no_turn == 0
 
@@ -247,6 +248,7 @@ def test_save_stage(tmp_path: Path) -> None:
         "stage_a",
         "stage_b",
         "twins",
+        "restrictions",
         "connectivity",
         "seconds",
     }

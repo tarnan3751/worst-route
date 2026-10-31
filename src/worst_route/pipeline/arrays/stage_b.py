@@ -517,7 +517,16 @@ def _rebuild(
     )
     stats.superjunctions = {"interchange": kinds[INTERCHANGE], "roundabout": kinds[ROUNDABOUT]}
     stats.sizes = dict(sorted(sizes.items()))
-    restricted = {node: table for node, table in turns.items() if super_of[node] < 0}
+    restricted = {}  # `consolidate.stage_b`'s, U-turns back over the same OSM nodes allowed
+    for node, table in turns.items():
+        if super_of[node] >= 0:
+            continue
+        into = view.in_order[view.in_ptr[node] : view.in_ptr[node + 1]].tolist()
+        out_of = list(view.outs(node))
+        run = {e: _osm_nodes(graph, e) for e in into + out_of}
+        allowed = table | {(a, b) for a in into for b in out_of if run[b] == run[a][::-1]}
+        if len(allowed) < len(into) * len(out_of):
+            restricted[node] = allowed
     return _relabel(view, supers, records, sx, sy, kept, pu, pv, key, pairs, restricted, stats)
 
 

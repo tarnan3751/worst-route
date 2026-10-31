@@ -10,7 +10,8 @@ Built: every step, `download`, `filter`, `build`, `cleanup`, `enrich`, `tiers`, 
 plan` reads. Portland and the whole of Oregon (**Oregon**) build and pass QA. Every step from
 `build` to `save` runs on arrays, the default engine (**The arrays engine**), to the networkx
 engine's build (`--engine networkx`). A region may name several states, whose extracts
-`filter` merges (**Regions of several states**).
+`filter` merges (**Regions of several states**): Oregon and Washington, and the 48 contiguous
+states and DC at T1, build and pass QA too.
 
 ## Commands
 
@@ -1132,8 +1133,9 @@ more states joins up (`docs/reference/testing-tools.md`; **Oregon and Washington
 numbers).
 
 The merge holds every per-extract roads file in memory while it sorts them (`MergeInputReader`),
-which suits a region's chosen roads but not every road of the country: an all-roads national
-region would need a streaming merge.
+which suits a region's chosen roads but not every road of the country: the national T1 filter,
+merging 49 files into a 196 MB roads file, peaks at 2.32 GB, while an all-roads national region
+(about 26 times Oregon and Washington's 74.9 MB roads file) would need a streaming merge.
 
 Extracts of one day are cut from one snapshot. Extracts of different days still merge into a
 reference-complete file, since each per-extract file is complete, but a border way edited between
@@ -1201,6 +1203,65 @@ Washington 37c7424efddc9f4cbe0c77f28422929c), at pipeline version 5, measured wi
   points. Connectivity drops three super-junctions with no allowed turn, interchanges whose cross
   road is above the ceiling, and QA passes every threshold (largest dropped component 33 nodes).
   Brands: 432 of 2,202 kept, on 3,952 nodes.
+
+**The national T1 build** (`us-t1`, build c4a85b3d36d0 at `graph_version` 8846d0d4ab7a,
+pipeline version 7, format 4), from the 49 extracts of 2026-10-29 (11.87 GB, or 11.05 GiB, one
+snapshot), on the dev machine at load averages of 20–26. The filtered roads went through `build`
+and `cleanup` on both engines; networkx's cleanup did not finish (at pipeline version 6, build
+c67d3da6cb6a, the same roads), arrays' took three minutes, and the build was written from the
+arrays run, with enrich, tiers and save still on networkx. It was made with `--allow-fragmented`,
+as every measurement build of several states is (its `meta.params` record it for cleanup and
+tiers, so it enters the `graph_version`), though its connectivity and tiers pass the thresholds
+anyway:
+
+```
+uv run python tools/bench_build.py --region us-t1 --allow-fragmented
+uv run python tools/bench_build.py --region us-t1 --steps build,cleanup,enrich,tiers,save,qa \
+    --force --allow-fragmented
+```
+
+The second command reran it from `build` on the first's filtered roads, once the arrays engine
+was the default. The build predates the class ceiling's entry in a build's params (`save`,
+`params.classes`), so its `meta.params` do not say T1 and a rebuild gets another
+`graph_version`.
+
+| Step | networkx | arrays |
+|---|---|---|
+| filter | 743 s (1,039 s CPU), 2.32 GB: roads 196.0 MB, POIs 61.6 MB | (the same step) |
+| build | 290 s (209 s CPU), 3.85 GB, `build.pkl` 998 MB | 50 s (50 s CPU), 2.03 GB, `stages/build/` 555 MB |
+| cleanup | did not finish: stopped after 7,372 s (2.05 h; 4,600 s CPU), 3.67 GB, in pure-Python code | 198 s (178 s CPU), 3.69 GB: simplify 1.7 s, stage A 11.9 s, twins 56 s, stage B 51 s, connectivity 1.2 s, the handover to networkx for the steps after it 46 s |
+| enrich | | 173 s, 4.73 GB (networkx) |
+| tiers | | 61 s, 5.22 GB (networkx) |
+| save | | 46 s, 4.95 GB: the build, 178.1 MB of arrays and strings plus 23.1 MB of geometry, 201.2 MB in all |
+| qa | | 65 s, 4.41 GB: every threshold passes |
+
+- **The filter** reads 51,971,904 highway ways, keeps 1,864,378 at T1, excludes 37,674,756 and
+  drops 12,425,597 above T1; 7,173 were in two extracts. Its POI table has 2,593,833 rows (712,781
+  brand, 1,059,481 stop signs, 546,043 signals, 271,763 level crossings, 3,765 toll booths). The
+  ways kept and above T1, 14,289,975, are what an all-roads national region would keep: 70.6
+  times Oregon's 202,420 and 26.6 times Oregon and Washington's 537,773.
+- **The graph.** The raw graph has 1,845,797 nodes and 2,613,372 edges (2,082,086 segments).
+  Simplify removes 354,005 nodes; stage A makes 124,355 clusters of 295,275 nodes; twins pair
+  577,534 couples (motorway and trunk coverage 0.9847; no copy of a road paired with itself,
+  `same_road_pairs` 0); stage B makes 140,010 super-junctions (138,407 interchanges, 1,603
+  roundabouts); connectivity keeps 887,737 of 893,286 nodes (99.38%), dropping 4,634 components,
+  the largest of 69 nodes, and 33 super-junctions with no allowed turn. The build has 887,737 nodes
+  and 1,324,013 edges, 822,866 km of road (motorway 247,194, trunk 210,731, primary 352,628, and
+  12,313 of links: motorway_link 11,894, trunk_link 313, primary_link 106),
+  1,033,413 road units (290,547 two-way pairs), 534,690 twin pairs and 514,360 transitions at
+  139,166 super-junctions, about 134 B an edge of arrays and strings. Tiers: T0 keeps 99.18% of its nodes (2,607
+  components), T1 to T4 all. Brands: 185,087 of the 712,781 brand POIs snap, and 2,431 of 12,036
+  brands are kept, on 107,054 nodes.
+- **Dead ends.** The national roads have 95,453; 429 lie beyond the 49 states, every one outside
+  every state (Canada, Mexico, the sea), and none in a state outside the region.
+- **After cleanup**, with build and cleanup on arrays, the handover of the cleaned graph to
+  networkx (46–53 s) and enrich and tiers on networkx (234–389 s over two runs) were most of the
+  time after the filter; they have run on arrays since (**The arrays engine**).
+- **A road mapped twice** stopped the version 6 run at `save`: OSM node 106661013 (40.9309,
+  −78.2796), on US 322 in Clearfield County, Pennsylvania, where two pairs of one-way trunk ways
+  (425447408 and 425447409, 1534168462 and 1534168463) each close a loop through it, lay inside
+  one edge and inside another road (`ShapePointError`). Pipeline version 7 keeps such a node, and
+  the build saves.
 
 ## Fixtures
 

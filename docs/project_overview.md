@@ -270,7 +270,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 | M2 — API + map, live growth | Built | CSR + Numba backend built, its transition-aware kernels included (the default on every build; byte-identical to the reference: on Portland the acceptance's 20 routes and Powell's → Reed reproduce exactly, at 7,200–8,200 attempts/s); the API built (jobs in worker processes, SSE progress, the route store, make it worse, `worst-route serve`); targets by ratio and duration built (engine, CLI `--target`/`--base`, API), a 13-minute Portland drive to 9 h within ±2 % in 1.8 s over the API; the MapLibre frontend built (stops by click, the route growing live, run controls, settings with the targets, links). The acceptance (`docs/PLAN.md` §7 M2 step 5; 2026-10-31, the version 6 build 3a4a3df6269f, engine version 4, `worst-route plan --target duration:9h --budget 30`, `docs/reference/engine.md`, **Targets**): Powell's → Reed, a 13-minute drive (22 minutes with its delays), becomes 8 h 56 min of experienced time (−0.7 %, within ±2 %) at seed 1 after 3,354 attempts in 1.3–2.0 s of search (the whole `plan` process 3.1 s, 38 s once at a load average of 113), 8 h 51 min and 8 h 50 min at seeds 2 and 3 in 1.0–1.2 s, and Powell's → Multnomah Village (45.4790, −122.7080), a 14-minute drive, 8 h 49 min (−1.9 %) in 1.6 s at the API's 1,000,000 attempts (the CLI's 5,000 stop it at 8 h 34 min), every route validated, while two rural acceptance pairs of 13.5 and 16 minutes at the region's south-west edge converge short, at 7 h 13 min and 3 h 14 min, their leashed area holding no more; the route drawn growing and the job cancelled when the tab closes are proven by the frontend's recorded-stream replay (`map/routeLayer.test.ts`, "replaying the recorded stream") and its "leaving the page" tests (`run/controls.test.ts`, run on `pagehide`), and by the API's `tests/api/test_routes_api.py::test_closing_the_stream_cancels_the_job` |
 | M3 — Modes and constraints | Built | built: the turn classes, never turn left / right (soft by default, `strict` for none; engine, CLI, API), the kernels refusing banned turn classes, slowest time (engine, CLI, API), collectibles (the collect objective for toll booths, level crossings, roundabouts and bridges in the engine, `plan --objective collect --item` and the API; `node_roundabouts` in the build; on Portland 24–30 bridges where the distance route passes 16–17); the frontend's controls for them (the Mode and Turns rows, the request, the URL, the stat line's time ratio, delays, items and turns, the strict refusal's retry); the brand pilgrimage (the brand index at `enrich`, saved as build arrays at pipeline version 3; `plan --objective brand --brand`, the API's `brand` and `GET /brands`; on Portland 17 of the 19 Starbucks in reach); the frontend's controls for the brand pilgrimage, the alphabet route and hard mode (a Brand mode with its picker, an Alphabet mode, a Hard mode checkbox, the request, the URL, the visits and letters live in the stat line, the alphabet route's better routes drawn in place, the hard-mode refusal's retry); on Portland strict no-left plans 7 of the 20 acceptance pairs (engine version 4) and soft no-left 20 at a median of 5.33× (§2.3; on a build re-enriched at pipeline version 2, whose bearings describe the roads, not cleanup's stubs); hard mode (engine, CLI, API; on Portland 19 of the 20 acceptance pairs plan under it, at a median of 4.73×); the alphabet route (its own search, a new tree search on both backends, `plan --objective alphabet` and the API; on Portland Powell's → Reed A to M, Powell's → PDX A to W, the acceptance pairs a median of 1 letter); the search honouring stage B transitions was built at M1. The acceptance (`docs/PLAN.md` §7 M3 step 7; 2026-10-31): each mode's invariant has its fixture tests, on every route along a run, and the validator's `constraints`, `alphabet` and `metrics` checks prove it of any route: no left turn under strict no-left (and no right under strict no-right; `tests/engine/test_constraints.py::test_the_strict_loop_never_turns_the_way_the_constraint_refuses`, `tests/engine/test_validator.py::test_a_strict_turn_constraint_is_proven_from_the_bearings`), each road in one stretch (`tests/engine/test_hard_mode.py::test_the_loop_under_hard_mode_keeps_every_road_one_stretch_on_both_backends`, `tests/engine/test_hard_mode.py::test_the_validator_proves_each_road_one_stretch`), the letters strictly in order (`tests/engine/test_alphabet.py::test_every_route_along_the_way_is_legal_and_better_than_the_last`, `tests/engine/test_validator.py::test_a_route_out_of_order_fails_the_alphabet_check`), and every counted item and brand visit on the route's own edges and nodes (`tests/engine/test_collect.py::test_count_items_counts_every_item_on_a_route`, `tests/engine/test_collect.py::test_a_run_collects_and_never_gives_an_item_back`, `tests/engine/test_validator.py::test_reported_items_are_recounted`, `tests/engine/test_brand.py::test_the_validator_recounts_a_reported_brand`); the goldens `grid20_noleft` (soft, 7 left turns kept), `grid20_hard`, `grid20_alphabet`, `grid20_collect_bridge` and `grid20_brand` hold on both backends; `uv run pytest tests/engine -k "constraint or hard or alphabet or collect or brand"` passes 186 (8 skipped, the Portland data tests, which pass all 13 of `tests/engine/test_portland_data.py` on build 3a4a3df6269f), `uv run pytest tests/golden` 18 |
 | M4 — Presentation | Built | directions, stats, toasts, comparisons, share image, geocoding proxy, share links; built: the geocoding proxy (`GET /geocode`, Nominatim behind a cache and 1 request/s) and the place search in the stop list; the Census places index (`tools/fetch_census.sh`, `worst-route aux places`: the states and towns a route passes through), the comparison lines, and the share image (`GET /routes/{id}/share.png`, linked from the share section); the directions with deadpan jokes and the stats and toasts in the route documents (`GET /routes/{id}`, `GET /routes/{id}/directions`, route.json, `worst-route directions`); the frontend's directions panel (a step's edges highlighted on the map), toasts under the map, extra stat rows and vehicle setting; the departure setting with the arrival time, and the GeoJSON download |
-| M5 — Scaling up | In progress | built: the compact build format (format 4, pipeline version 6: on Portland the arrays the engine maps 15.0 MB where format 3's were 39.1 MB, the whole build 17.2 MB where it was 39.9 MB, every acceptance route the same; the shapes simplified to 2 m apart, read only to draw a route; the validator's OSM-node proof from the nodes' members); Oregon (M5.1; `docs/reference/pipeline.md`, **Oregon**; `docs/reference/engine.md`, **On Oregon**): the whole state builds in 6–11 min with the OSMnx path (237,581 nodes, 593,555 edges, 174 MB; peak 2.6–3.9 GB, in cleanup), measured by `tools/bench_build.py`, and passes QA (connectivity judged by a 98% share and its largest dropped component, at most 200 nodes); the automatic tier is the all-roads graph below 800 km (engine version 3), giving Portland → Bend 10.47×, Astoria → Ontario 4.03×, Eugene → Portland 14.00× and Medford → Portland 8.17× in 30 s, and 8 of 10 random statewide pairs at a median of 8.88×; served, a job's worker peaks at 374–399 MB. built: the public-hosting preparation (M5.4; `docs/reference/hosting.md`): the image serving the frontend and the API from one process, the Protomaps basemap, per-client limits, JSON logs with request ids, `/ready`, the attribution, MapLibre GL JS 6. built: M5.2, the array pipeline (`docs/reference/pipeline.md`, **The arrays engine**): every step from `build` to `save` on arrays, the default engine (`--engine networkx` for the other), its stages directories of `.npy` files, the same build byte for byte (`tools/parity.py`; on Oregon cleanup 5 s against 91 s, enrich, tiers and save 6.5 s against 23 s). Remaining: US at T1; the national decision gate |
+| M5 — Scaling up | In progress | built: the compact build format (format 4, pipeline version 6: on Portland the arrays the engine maps 15.0 MB where format 3's were 39.1 MB, the whole build 17.2 MB where it was 39.9 MB, every acceptance route the same; the shapes simplified to 2 m apart, read only to draw a route; the validator's OSM-node proof from the nodes' members); Oregon (M5.1; `docs/reference/pipeline.md`, **Oregon**; `docs/reference/engine.md`, **On Oregon**): the whole state builds in 6–11 min with the OSMnx path (237,581 nodes, 593,555 edges, 174 MB; peak 2.6–3.9 GB, in cleanup), measured by `tools/bench_build.py`, and passes QA (connectivity judged by a 98% share and its largest dropped component, at most 200 nodes); the automatic tier is the all-roads graph below 800 km (engine version 3), giving Portland → Bend 10.47×, Astoria → Ontario 4.03×, Eugene → Portland 14.00× and Medford → Portland 8.17× in 30 s, and 8 of 10 random statewide pairs at a median of 8.88×; served, a job's worker peaks at 374–399 MB. built: the public-hosting preparation (M5.4; `docs/reference/hosting.md`): the image serving the frontend and the API from one process, the Protomaps basemap, per-client limits, JSON logs with request ids, `/ready`, the attribution, MapLibre GL JS 6. built: M5.2, the array pipeline (`docs/reference/pipeline.md`, **The arrays engine**): every step from `build` to `save` on arrays, the default engine (`--engine networkx` for the other), its stages directories of `.npy` files, the same build byte for byte (`tools/parity.py`; on Oregon cleanup 5 s against 91 s, enrich, tiers and save 6.5 s against 23 s). built: US at T1 (M5.3; `docs/reference/pipeline.md`, **Regions of several states**; `docs/reference/engine.md`, **On the national T1 build**): regions of several states, merged at `filter` (Oregon and Washington stitched across the Columbia: 66 of the 118 roads Oregon's extract cut off in Washington continue), a class ceiling, and the 48 contiguous states and DC at T1 from the 49 extracts: filter 12 min, build and cleanup on arrays 4 min (on networkx, cleanup did not finish in 2 h), the whole build in 22 min; 887,737 nodes, 1,324,013 edges, 178.1 MB of arrays and strings (201.2 MB with the geometry), QA passed; masks 12–138 ms; cross-country trips 1.11–1.87× on T1, refused at the automatic tier. Remaining: the national decision gate (§3.2, its numbers) |
 | M6 — Stretch | Planned | certified worst (CP-SAT), turn restrictions, stop reordering, portfolio runs |
 
 ### 2.3 Known limitations
@@ -383,11 +383,29 @@ Found on the Oregon build (M5.1, 2026-10-31; the inputs to M5.2's decision):
   min) and cleanup's networkx graphs its peak memory (2.6–3.9 GB): fine for a state, the reason
   for M5.2 nationally. A request's masks are computed over the whole build (83–166 ms on
   Oregon's 237,581 nodes), which a national build would make about a hundred times slower.
-- **The tiers above a state's span are untested**: T4 below 800 km and T0 beyond; T1–T3 are
-  taken only when asked for until a national build tunes them (M5.3). A rural stop's 3 km bubble
-  seldom meets the T1 or T2 network (a stop in the Ochoco National Forest is 7.1 km from it).
-- **Towns beyond Oregon and Washington are not named**: the places index has only those two
-  states' files; California's, Idaho's and Nevada's are not fetched.
+- **The tiers above a state's span are untested on all roads**: T4 below 800 km and T0 beyond;
+  T1–T3 are taken only when asked for. A rural stop's 3 km bubble seldom meets the T1 or T2
+  network (a stop in the Ochoco National Forest is 7.1 km from it).
+
+Found on the national T1 build (M5.3, 2026-10-31; `docs/reference/engine.md`, **On the national
+T1 build**; the inputs to the decision gate, §3.2):
+
+- **Cross-country trips are refused at the automatic tier**: on T0 with a 150 km leash, no
+  motorway or trunk route from Portland to Chicago or from Miami to Seattle stays within the
+  leash, and from New York to Los Angeles, reachable within the masks, the seed's
+  transition-aware search finds no legal path. On the whole T1 network Portland → Chicago and New
+  York → Los Angeles plan, at 1.11× and 1.26×, converging in seconds; Miami → Seattle stays out of
+  reach of a 150 km leash.
+- **A T1-only graph refuses one town in five as a stop**: 81.8% of the Census places have a node
+  within 5 km a trip can start from (52–55% in the Dakotas and Nebraska).
+- **The share image takes 3.9 s** to draw a 4,168 km route over every T1 road in its bounding box
+  (the T0–T2 thinning keeps them all in a T1 build).
+- **Washington's ferry islands fail the 200-node connectivity rule**: San Juan Island (1,154
+  nodes), Vashon–Maury, Lopez, Orcas, Anderson Island and the Point Roberts exclave; the rule is
+  kept, the measurement builds run with `--allow-fragmented`, and the thresholds are revisited at
+  the decision gate.
+- **The no-turn rule's second round of connectivity** costs 162 s on Oregon and Washington's
+  networkx graph against 17 s for the first; the array pipeline's connectivity removes it.
 
 In the frontend (`docs/reference/frontend.md`, **Limitations**):
 
@@ -445,7 +463,12 @@ brief):
   cannot reproduce at scale; placing each cluster from its own buffers in both pipelines keeps
   their builds byte-identical. On Portland it moves 3,977 clusters by at most 1.5e-8 m, which
   changes about 3,200 node positions and six float32 lengths and times, and nothing else.
-- **State extracts, never the full US file**; cross-border ways deduplicated by id.
+- **State extracts, never the full US file**; cross-border ways deduplicated by id. As built at
+  M5.3 (2026-10-31, at its plan): a region names its Geofabrik states and an optional class
+  ceiling (`T0`–`T3`); `filter` merges the extracts in process (a border way taken once, from the
+  first extract in the region's order; each node once, its newest version) and warns when their
+  data dates differ; `us-t1` is the 48 contiguous states and DC at T1 in EPSG:5070, and `us`
+  stays the name of an all-roads national region.
 - **On-disk format: one `.npy` per array + `strings.json` + `meta.json`, memory-mapped**; not
   GraphML or pickle, and not NPZ (whose members NumPy cannot map) or Parquet for the graph.
 - **The compact build format (format 4)** (2026-10-31, the owner's, before any state or national
@@ -760,8 +783,46 @@ The plan's assumed defaults, each open until the owner confirms (`docs/PLAN.md` 
 - Alphabet mode: unnamed roads, ramps and numbered streets are free connectors; wrap Z→A; the
   first and final legs are free; one letter's roads in a row count once (built so, §3.1).
 - National end state: one US all-roads master graph if the array pipeline is fast enough,
-  otherwise T3 national plus per-state all-roads builds.
-- Alaska and Hawaii in national builds.
+  otherwise T3 national plus per-state all-roads builds. The decision gate's numbers (M5.3,
+  2026-10-31; `docs/reference/pipeline.md`, **The national T1 build**):
+  - (a) **One all-roads master graph.** The national filter keeps 14.3 M ways at every class, 70.6
+    times Oregon's (26.6 times Oregon and Washington's), so about 17 M nodes and 42 M edges. Sizes
+    in decimal units, scaled from Oregon's build ea3b18096e8b (55.3 MB of arrays and strings plus
+    11.3 MB of geometry): about 3.9 GB of arrays and strings, which the engine maps, and 4.7 GB
+    with the geometry, where format 3 (Oregon's 174 MB) would take about 12 GB. On networkx it is
+    out of reach: the T1 build's 2.6 M raw edges did not finish cleanup in two hours. On arrays,
+    scaled from the runs measured (about 49 M raw edges, 18.7 times the T1 build's): the filter
+    25–35 min, build about 16 min (50 s for T1), cleanup 20–60 min (Oregon 15 s, the T1 build 198
+    s, their costs per raw edge bracketing it), and enrich, tiers, save and qa about 30–40 min
+    (on networkx they took 345 s for the T1 build's 1.3 M edges, about 3 h scaled to 42 M, and
+    tens of GB; the array pipeline's speed-up on Portland is about 8×): about 1.5–2.5 h in all,
+    now that enrich, tiers and save run on arrays too, once `filter` merges in a stream (the
+    in-memory merge would hold about 190 M nodes), the peak memory to be measured against the
+    machine's 24 GB (the T1 build's arrays cleanup peaked at 3.7 GB, most of it the handover to
+    networkx, which the steps after cleanup on arrays no longer need). The engine at 17 M nodes
+    would need the leash's distances in NumPy (0.16–0.3 µs a node measured: seconds for a
+    coast-to-coast trip) and searches whose set-up does not grow with the build (the kernels
+    allocate per-node or per-edge work arrays on each call; at 887,737 nodes runs still made
+    1,070–1,170 attempts a second).
+  - (b) **T1 nationally plus all-roads builds per state.** The T1 build: 887,737 nodes, 1,324,013
+    edges, 178.1 MB of arrays and strings (201.2 MB with the geometry), 22 minutes from the
+    extracts with build and cleanup on arrays; the state builds together about (a)'s size (3.9 GB,
+    4.7 GB with the geometry), the largest, California's, about 0.29 GB (0.35 GB). A trip within a state runs
+    on its state's build; a cross-state trip on T1 converges at 1.1–1.9× in seconds, and is
+    refused at T0 with a 150 km leash; one town in five (81.8% kept) has no primary road within 5
+    km to start from.
+  - Either national graph is projected to CONUS Albers (EPSG:5070), whose scale is off by up to
+    ±1.4% (lengths and ratios, near Key West and the northern border) and whose grid north is up
+    to 17° from true north near the coasts (the first step's compass word); turns, measured as
+    differences of bearing, are unaffected. Geodesic lengths and bearings corrected for it would be
+    a pipeline version of their own.
+  - The plan's rule (`docs/PLAN.md` §7 M5.3) recommends (a) if the array pipeline makes it a few
+    hours, which its numbers point to, once a streaming merge exists and the memory is measured
+    (the rest of the array pipeline has landed since); the automatic tier for trips beyond a state (T0 and the 150
+    km leash) needs retuning either way.
+- Alaska and Hawaii in national builds: left out of `us-t1` and of `us` for now (the coordinator,
+  2026-10-31, for the owner to revisit): no road reaches them and CONUS Albers does not cover
+  them; they would be regions of their own.
 - Round trips exposed in the UI.
 - Vehicle stats: MPG and gas price only, or EV too.
 - Public geocoder: self-hosted Photon or a paid provider (the trade-off in

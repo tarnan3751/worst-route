@@ -266,6 +266,11 @@ wrote data/aux/places/portland.parquet (68 places: OR 53, WA 15)
 Without Washington's file it writes Oregon's 53 places and warns
 `missing places for WA: run tools/fetch_census.sh 53`.
 
+For `us-t1`, the 48 contiguous states and DC, it reads the 49 places files and writes 31,540
+places (a 30.5 MB file) in 4.4 s, peaking at 0.33 GB. Loading that index takes 0.75 s and 279 MB
+of the API process, and a 50,000-point line from coast to coast meets its 12–15 states and up to
+235 towns in 0.13–0.14 s.
+
 **Asking it.** `PlaceIndex.load(region, data_dir=None)` reads the three files (pyarrow and
 shapely, no geopandas) into two shapely STRtrees, the states and the region's places, and keeps
 the outlines to draw; it returns None when any file is missing, and callers then know no states

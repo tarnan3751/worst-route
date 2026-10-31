@@ -1492,6 +1492,38 @@ Seattle 104 ms, Astoria → Spokane (514 km, T4, leash 150 km) 153 ms, Brookings
 km, T0) 151 ms, nearly all of it the leash, about 0.3 µs a node inside the leash's bounding box;
 the spatial index builds in 0.14 s (+20 MB).
 
+**On the national T1 build** (M5.3; build c4a85b3d36d0 at `graph_version` 8846d0d4ab7a,
+pipeline version 7, engine version 4, `docs/reference/pipeline.md`, **The national T1 build**:
+887,737 nodes, 1,324,013 edges, primary roads and above only; `CsrBackend`; seed 1, 60 s,
+`--max-iterations 1000000`; load average 5–8). Its spatial index builds in 0.20 s (+54 MB), and a
+request's masks take 12–138 ms (median of five), all of it the leash: Powell's → Reed 12 ms,
+Portland → Chicago 37 ms, Chicago → Miami 79 ms, New York → Los Angeles 99 ms, Miami → Seattle
+138 ms (its leash's bounding box holds the whole build). The three long trips at the automatic
+tier (T0, the motorways and trunks, beyond 800 km, with a 150 km leash) are refused in about 4 s
+("no route from stop 0 to stop 1 without repeating a road, after moving stop 1 up to 10 times"):
+from Portland to Chicago and from Miami to Seattle no motorway or trunk route stays within 150 km
+of the straight line (the end is unreachable in the request's masks; without the leash it is),
+and from New York to Los Angeles it is reachable within the masks (95,623 nodes) but the seed's
+transition-aware search finds no legal path. On the whole T1 network (`--tier T1`):
+
+| Trip | Baseline | Worst | Ratio | Attempts | Stopped | Peak memory |
+|---|---|---|---|---|---|---|
+| Pioneer Courthouse Square → Chicago (41.8781, −87.6298) | 3,507.79 km | 3,892.95 km | 1.11× | 3,974 (5 accepted) | converged in 3.4 s | 0.68 GB |
+| New York (40.7128, −74.0060) → Los Angeles (34.0522, −118.2437) | 4,513.45 km | 5,675.45 km | 1.26× | 8,356 (17) | converged in 7.8 s | 0.88 GB |
+| Miami (25.7617, −80.1918) → Seattle | refused: the end is unreachable within the 150 km leash on T1 too | | | | | |
+
+Of the places index's 31,540 towns (`docs/reference/presentation.md`, **Places**), 25,793
+(81.8%; incorporated places 83.7%) have a node a trip can start from within 5 km of a point
+inside them, the snap moving a median 782 m (p90 3.1 km); the rest are refused ("no node within
+5000 m … can be a start stop"), most in the plains (North Dakota 52%, Nebraska 54%, South Dakota
+55%), least in the Northeast (96–97%). Primary roads and above within 150 km of a straight line
+give few node-disjoint detours, so the runs converge in seconds; both routes validate (`worst-route validate`, 0.8–1.1 s). Served
+(`serve --port 0 --geocoder none --workers 1`), the API process holds 549 MB idle (the build
+mapped, its spatial index, the national places index) and 1.2 GB after a route document and a
+share image; a job's worker peaked at 694 MB. Chicago → Miami on T1, a 4,168 km route (1.87×,
+converged): `GET /routes/{id}` 0.18 s (0.53 MB), `GET /routes/{id}/share.png` 3.87 s on its first
+render (0.41 MB; it draws every T1 road in the route's bounding box), then cached.
+
 ## Limitations
 
 - **Transitions.** The searches see the transition tables (**Searches**), and a leg or a part

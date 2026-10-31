@@ -215,7 +215,8 @@ export class JobRunner {
     const store = this.#store;
     const before = store.state.run;
     this.#sent = { request, base };
-    store.update({ error: null, run: { ...before, phase: "starting" } });
+    // The last run's numbers are not this one's (the toasts' live ratio reads them).
+    store.update({ error: null, run: { ...before, phase: "starting", metrics: null } });
     let created;
     try {
       created = await createJob(request);

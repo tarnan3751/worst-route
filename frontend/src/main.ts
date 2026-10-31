@@ -1,8 +1,8 @@
 // Bootstrap and wiring (docs/reference/frontend.md): the store, from the URL's state; the map
 // and the panel's parts (the directions, which highlight their steps on the route layer, among
-// them); the region's bbox from /regions; a stored route when the URL names one, the URL left
-// alone until it has opened; clicks on the map and a place search's picks add stops, the same way
-// (placeStop); leaving the page cancels a running job.
+// them); the toasts under the map; the region's bbox from /regions; a stored route when the URL
+// names one, the URL left alone until it has opened; clicks on the map and a place search's
+// picks add stops, the same way (placeStop); leaving the page cancels a running job.
 import "./style.css";
 import { errorBody, getRegions } from "./api/client";
 import { mountBanner } from "./banner";
@@ -16,6 +16,7 @@ import { UrlSync, decodeUrlState, mountShare, openRoute, settingsFrom } from "./
 import { DEFAULT_SETTINGS, IDLE_RUN, Store, type Stop } from "./state";
 import { PlaceSearch, mountPlaceSearch } from "./stops/search";
 import { mountStopList, placeStop } from "./stops/stopList";
+import { Toasts, mountToasts } from "./toasts";
 import { bboxBounds } from "./util/geo";
 
 const byId = (id: string): HTMLElement => document.getElementById(id) as HTMLElement;
@@ -47,6 +48,7 @@ mountPlaceSearch(placeSearch, store, new PlaceSearch(store, place));
 mountStopList(byId("stops"), store, edit, placeSearch);
 mountSettings(byId("settings"), store);
 mountShare(byId("share"), store);
+mountToasts(byId("toasts"), new Toasts(store));
 new StopsLayer(map, store, edit);
 const urlSync = new UrlSync(store, (query) => {
   if (query !== location.search) history.replaceState(null, "", location.pathname + query);

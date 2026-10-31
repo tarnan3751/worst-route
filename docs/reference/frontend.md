@@ -28,6 +28,7 @@ nothing there.
 | `banner.ts` | the error banner, with "Try without strict" or "Try without hard mode" when the refusal says either is why (`retryOf`) |
 | `format.ts` | distances (mi/km), durations, ratios, counts, items collected; fuel and its cost, percentages, states by their codes; times of day (`isoWithOffset`, `parseIsoTime`, `formatClock`) |
 | `util/geo.ts`, `util/dom.ts` | rounding and bounds; building DOM with text, never HTML |
+| `public/notices.html` | "Data sources and notices", the page the footer links to (**Basemap**) |
 
 ## Running it
 
@@ -350,8 +351,12 @@ and a `pmtiles` answer without its file draws none either (and logs an error on 
 
 The URLs are made absolute under the page's origin and `/api` (MapLibre needs absolute ones,
 and the templates' braces must stay unencoded). Below the panel a footer credits the data: "Road
-data © OpenStreetMap contributors (ODbL) · Towns and states: U.S. Census Bureau", linked; the
-basemap's own credit is in the map's attribution control. Agents verifying the app block the
+data © OpenStreetMap contributors (ODbL) · Towns and states: U.S. Census Bureau · Data sources",
+linked, the last to `notices.html` (relative, in a new tab): "Data sources and notices", every
+source with its licence and a link (`docs/reference/hosting.md`, **Attribution**), a plain page
+in `public/` that Vite copies into `dist/` as it is, the app's colours inline. The basemap's own
+credit is in the map's attribution control, its "OpenStreetMap" linked to
+openstreetmap.org/copyright. Agents verifying the app block the
 tile server (**Seeing it**), so their screenshots show the route on a blank background with
 `raster`, or on a basemap of their own making with `pmtiles` (**Measured**).
 
@@ -413,6 +418,7 @@ follows the app again from the next change. The units are not in the URL.
 | `api/client.test.ts` | the API's error bodies, `BAD_RESPONSE` for an HTML success, `HTTP_<status>`, `NETWORK`, `CLIENT_ERROR` |
 | `stops/search.test.ts` | `PlaceSearch` with `fetch` stubbed and a real store: nothing asked while typing, one `GET /api/geocode?q=&region=` on Search, nothing for a blank text or before the region; the candidates listed, an empty answer said; a pick placing the stop exactly as `placeStop` (a click) does, as the start and as a stop before the end, and clearing the field; nothing placed or asked while a job runs; a 429 in the banner, and a search closing it |
 | `share/share.test.ts` | the URL state round trip (every field, `auto`, seeds 0 and 2⁵³ − 1, clicked coordinates exactly), values it ignores, the app's state to the URL and back; a `?route=` link at startup: the URL untouched until the route opens, then written from its request, and kept, with the banner, when it does not open; targets in the URL, values ignored, and a ratio-target route opened by link; every mode and turn setting round-tripped, values ignored (strict without a side among them), a ratio beside a collect mode read as max, the defaults left out, the settings given back; a brand (`brand:229`, `brand:0`), the alphabet route and hard mode round-tripped with every turn setting, malformed brands ignored (none, a name, negative, a fraction, an exponent, a space, beyond 2⁵³ − 1), `alphabet:1` and a `hard` other than 1 ignored, a ratio beside a brand and any target beside the alphabet route read as max, a pilgrimage whose brand is not known yet written without a mode, the brand kept under another mode; a slowest-time and a collecting route opened by link (mode, item and turns into the settings, the URL and the stat line, the panel's item kept), the recorded pilgrimage and alphabet route (`mode=brand:229` and "14 of 19 Starbucks", `mode=alphabet` and "letters: 15 (A–O)" with its roads); a pilgrimage, an alphabet route and a hard-mode route (alone and beside a side) opened by link, hard mode unticked by a route without it; the share image's URL; the vehicle round-tripped, at its limits, the default left out, values ignored; a route opened by link putting its request's vehicle into the settings and the URL (the default not written), and one without a vehicle, or with one outside the panel's limits, keeping the panel's; the departure round-tripped with its offset (encoded), what is not an ISO time with an offset ignored, a route's link putting its request's departure into the settings and the URL, and one without keeping the panel's; the GeoJSON's URL |
+| `notices.test.ts` | the footer's "Data sources" link (relative, `notices.html`, in a new tab) beside the two credits; the notices page's title and its nine sources, each with its licence and link, in order; a build (Vite's own, into a temporary directory) holding `notices.html` as it is |
 | `format.test.ts` | distances in both units and their thresholds, durations, ratios, counts, items one and many; drive times typed as a target, read and written back; fuel and its cost, percentages ("under 1 %"), states by their codes and a name not known; a time written at the browser's offset to the second and read back, ISO times with an offset read and others (a day the month lacks among them) refused, a time shown as a clock at its own offset |
 
 The drawn points are not the stored geometry point for point: a snapshot is simplified

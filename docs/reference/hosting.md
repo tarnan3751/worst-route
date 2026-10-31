@@ -267,12 +267,30 @@ the search off, and `--nominatim-url` points the proxy at a self-hosted Nominati
   basemap is an ODbL Produced Work). The strings are the app's own: a tileset's metadata is never
   shown, so no third party's HTML reaches the attribution control.
 - **Under the panel**, a footer: "Road data © OpenStreetMap contributors (ODbL) · Towns and
-  states: U.S. Census Bureau", linked: the routes are OpenStreetMap's roads, the towns and states
-  the Census Bureau's boundaries.
+  states: U.S. Census Bureau · Data sources", linked: the routes are OpenStreetMap's roads, the
+  towns and states the Census Bureau's boundaries, and "Data sources" opens the notices page.
+- **The notices page**, `notices.html` beside the app (`frontend/public/notices.html`, which the
+  build copies into `dist/` and `serve --frontend` serves; linked relatively, so it works under
+  any prefix): "Data sources and notices", each source with its licence and a link: the road
+  data (OpenStreetMap contributors, ODbL), the towns and states (U.S. Census Bureau, public
+  domain), the basemap tiles (Protomaps' daily builds of OpenStreetMap data, ODbL) and their
+  style (`@protomaps/basemaps`, BSD-3-Clause), the land cover (ESA WorldCover, CC BY 4.0, in
+  Protomaps' builds), the map icons (derived from `tangrams/icons`, MIT, Copyright (c) 2017
+  Mapzen), the fonts (Noto Sans, SIL OFL 1.1), MapLibre GL JS and `pmtiles` (BSD-3-Clause).
+  It is the "(more)" the Protomaps maintainer suggests for the credits the attribution control
+  has no room for.
+- **The land cover is not drawn**: `@protomaps/basemaps` 5.7's grayscale flavor has no
+  `landcover` colours, and its layers (with or without labels) read only the `earth`,
+  `landuse`, `roads`, `water`, `buildings`, `boundaries` and (with labels) `places` layers of the
+  tiles, never `landcover` (the light flavor draws it). ESA WorldCover's CC BY 4.0 credit is due
+  only where it is drawn; the notices page credits it anyway, since the tiles we serve carry it.
 - **On the share image**, its footer: "worst-route · © OpenStreetMap contributors (ODbL) ·
   Boundaries: U.S. Census Bureau" (`docs/reference/presentation.md`, **Share image**).
-- The labels' fonts are under the SIL Open Font License, whose text `--assets` copies beside
-  them.
+- **Beside the assets**, the licences `--assets` copies: the fonts' SIL Open Font License
+  (`fonts/OFL.txt`) and the icons' MIT License (`sprites/LICENSE-mapzen-icons.txt`, from
+  `tangrams/icons`, since `basemaps-assets`' sprites carry none; **The basemap**). Protomaps asks
+  for a visible "© OpenStreetMap", which the attribution control gives, and a credit to
+  Protomaps, which it gives too.
 
 ## Tests
 
@@ -280,7 +298,7 @@ The hosting pieces are tested with the API's (`docs/reference/api.md`, **Tests**
 `test_logs.py`, `test_limits.py`, `test_ready_api.py`, `test_basemap_api.py`,
 `test_static.py`, and `tests/unit/test_cli.py` for `serve`'s options), the frontend's
 (`docs/reference/frontend.md`, **Tests**: `map/basemap.test.ts`, `api/types.test.ts`'s
-`/config`), and `tests/unit/test_fetch_basemap.py`, which runs `tools/fetch_basemap.sh` against
+`/config`, `notices.test.ts`), and `tests/unit/test_fetch_basemap.py`, which runs `tools/fetch_basemap.sh` against
 a stand-in for `pmtiles` on `PATH` and local git repositories standing for the assets' and the
 icons' licence's. The gate
 builds no image; `docker build` and a run are checked by hand (**The image**).

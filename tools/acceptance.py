@@ -2,7 +2,8 @@
 
     uv run python tools/acceptance.py --region portland [--build-id ID] [--pairs 20] [--seed 1]
         [--budget 30] [--backend auto|csr|python] [--min-km 3] [--max-km 15] [--jaccard 5]
-        [--pair-seed 2026] [--near-m 250] [--out tools/out/acceptance.json]
+        [--pair-seed 2026] [--near-m 250] [--tier auto|T0..T4] [--leash-km auto|X] [--places]
+        [--out tools/out/acceptance.json]
 
 It needs a build under `WORST_ROUTE_DATA`, so it is not part of the gate. M1's acceptance is
 `--region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` (the other options at their
@@ -19,10 +20,14 @@ then up to 200 ends: the first end whose straight-line distance from the start l
 [`--min-km`, `--max-km`] completes the pair; when none does, the start is dropped and the pair
 drawn again. The distance is Euclidean between the two points projected into the build's CRS
 (`SpatialIndex.project`), the measure a request's tier is chosen by, taken before the points are
-rounded to 5 decimals (about 1 m) for the request and the report.
+rounded to 5 decimals (about 1 m) for the request and the report. With `--places` a point is a
+place of the region's places index instead (`worst-route aux places`; towns and CDPs alike),
+drawn uniformly by its row and put at its polygon's `point_on_surface`, with the same rejection
+by `--near-m`.
 
 Each pair is planned with `plan_route` and `--seed`, `--budget` seconds and no attempt limit, so
-the budget is what bounds a run. The first `--jaccard` pairs that plan are planned again with
+the budget is what bounds a run, at `--tier` and `--leash-km` (both `auto` by default; a leash of
+at most 150 km, as a request's). The first `--jaccard` pairs that plan are planned again with
 `--seed` + 1 and the two routes compared (Jaccard of their edge ids and of their road units). A
 pair that cannot be planned is resolved again on the build without its transition rows, so the
 report says whether the transition tables are what stopped it; a stop moved by the re-snap
@@ -44,11 +49,13 @@ from pathlib import Path
 from typing import Any, get_args
 
 import numpy as np
+import pyarrow.parquet as pq
+import shapely
 from scipy.spatial import cKDTree
 
-from worst_route.config import DEFAULT_BACKEND, REGIONS, BackendName
+from worst_route.config import DEFAULT_BACKEND, LEASH_MAX_KM, REGIONS, BackendName
 from worst_route.engine.plan import PlanResult, plan_route
-from worst_route.engine.request import RouteRequest, request_masks
+from worst_route.engine.request import RouteRequest, TierChoice, request_masks
 from worst_route.engine.seed_route import resolve_stops
 from worst_route.engine.snap import StopUnreachable
 from worst_route.engine.validator import ValidationFailed
@@ -58,6 +65,7 @@ from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import SnapError, SpatialIndex
 from worst_route.graph.store import MissingArray, read_build
 from worst_route.pipeline import layout
+from worst_route.presentation.places import places_dir
 
 UNLIMITED = 10**9  # attempts: the budget in seconds bounds a run
 RESNAP_NOTE = "nearer nodes cannot be reached"
@@ -65,20 +73,32 @@ RESNAP_NOTE = "nearer nodes cannot be reached"
 type Point = tuple[float, float]  # (lat, lon)
 
 
+def place_points(region: str) -> np.ndarray:
+    """(lon, lat) of each place of the region's places index, inside its polygon."""
+    table = pq.read_table(places_dir() / f"{region}.parquet", columns=["geometry"])
+    shapes = shapely.from_wkb(np.array(table.column("geometry").to_pylist(), dtype=object))
+    return shapely.get_coordinates(shapely.point_on_surface(shapes))
+
+
 def draw_pairs(
     data: GraphData,
     spatial: SpatialIndex,
     bbox: tuple[float, float, float, float],
     args: argparse.Namespace,
+    places: np.ndarray | None = None,
 ) -> list[tuple[Point, Point, float]]:
-    """(start, end, straight-line metres) for each pair, drawn as the module docstring says."""
+    """(start, end, straight-line metres) for each pair, drawn as the module docstring says:
+    within `bbox`, or at `places` ((lon, lat) rows) when given."""
     rng = np.random.Generator(np.random.PCG64(args.pair_seed))
     tree = cKDTree(np.column_stack([data.node_x, data.node_y]))
     lon0, lat0, lon1, lat1 = bbox
 
     def point() -> tuple[Point, np.ndarray]:
         while True:
-            lat, lon = rng.uniform(lat0, lat1), rng.uniform(lon0, lon1)
+            if places is None:
+                lat, lon = rng.uniform(lat0, lat1), rng.uniform(lon0, lon1)
+            else:
+                lon, lat = places[rng.integers(len(places))]
             xy = np.array(spatial.project(lat, lon))
             if tree.query(xy)[0] <= args.near_m:
                 return (round(float(lat), 5), round(float(lon), 5)), xy
@@ -101,10 +121,17 @@ def plan(
     spatial: SpatialIndex,
     stops: list[Point],
     seed: int,
-    budget: float,
+    args: argparse.Namespace,
 ) -> tuple[PlanResult | None, str | None]:
     """The planned route, or None and the error that stopped it."""
-    request = RouteRequest(stops=stops, seed=seed, budget_s=budget, max_iterations=UNLIMITED)
+    request = RouteRequest(
+        stops=stops,
+        seed=seed,
+        budget_s=args.budget,
+        max_iterations=UNLIMITED,
+        tier=args.tier,
+        leash_km=args.leash_km,
+    )
     try:
         return plan_route(data, request, backend=backend, spatial=spatial), None
     except (SnapError, StopUnreachable) as error:
@@ -115,12 +142,17 @@ def plan(
 
 
 def transitions_matter(
-    data: GraphData, backend: GraphBackend, spatial: SpatialIndex, stops: list[Point], seed: int
+    data: GraphData,
+    backend: GraphBackend,
+    spatial: SpatialIndex,
+    stops: list[Point],
+    seed: int,
+    args: argparse.Namespace,
 ) -> bool:
     """Whether the stops resolve differently on the build without its transition rows."""
     empty = np.zeros(0, dtype=np.int32)
     free = dataclasses.replace(data, trans_node=empty, trans_in=empty, trans_out=empty)
-    request = RouteRequest(stops=stops, seed=seed)
+    request = RouteRequest(stops=stops, seed=seed, tier=args.tier, leash_km=args.leash_km)
     masks = request_masks(spatial, data, request)
     outcomes: list[object] = []
     for graph in (data, free):
@@ -153,20 +185,27 @@ def main(args: argparse.Namespace) -> int:
         float(data.node_lon.max()),
         float(data.node_lat.max()),
     )
-    pairs = draw_pairs(data, spatial, bbox, args)
+    places = None
+    if args.places:
+        try:
+            places = place_points(args.region)
+        except FileNotFoundError:
+            print(f"no places index: run `worst-route aux places --region {args.region}`")
+            return 1
+    pairs = draw_pairs(data, spatial, bbox, args, places)
 
     runs: list[dict[str, Any]] = []
     routes: dict[int, PlanResult] = {}
     print("| # | Stops | km | Baseline km | Worst km | Ratio | Attempts / time | Result |")
     print("|---|---|---|---|---|---|---|---|")
     for k, (start, end, distance) in enumerate(pairs):
-        result, error = plan(data, backend, spatial, [start, end], args.seed, args.budget)
+        result, error = plan(data, backend, spatial, [start, end], args.seed, args)
         run: dict[str, Any] = {"pair": k, "start": start, "end": end, "km": distance / 1000}
         if result is None:
             run |= {"planned": False, "error": error}
             if error is not None and error.startswith("StopUnreachable"):
                 run["transitions_matter"] = transitions_matter(
-                    data, backend, spatial, [start, end], args.seed
+                    data, backend, spatial, [start, end], args.seed, args
                 )
             row = f"– | – | – | – | {error}"
         else:
@@ -190,7 +229,7 @@ def main(args: argparse.Namespace) -> int:
             }
             if any(RESNAP_NOTE in note for note in notes):
                 run["transitions_matter"] = transitions_matter(
-                    data, backend, spatial, [start, end], args.seed
+                    data, backend, spatial, [start, end], args.seed, args
                 )
             rate = result.run.attempts / max(result.run.elapsed_s, 1e-9)
             row = (
@@ -206,7 +245,7 @@ def main(args: argparse.Namespace) -> int:
     comparisons: list[dict[str, Any]] = []
     for k in sorted(routes)[: args.jaccard]:
         start, end, _ = pairs[k]
-        other, error = plan(data, backend, spatial, [start, end], args.seed + 1, args.budget)
+        other, error = plan(data, backend, spatial, [start, end], args.seed + 1, args)
         if other is None:
             comparisons.append({"pair": k, "error": error})
             continue
@@ -262,6 +301,16 @@ def main(args: argparse.Namespace) -> int:
     return 1 if summary["validator_passed"] < len(planned) else 0
 
 
+def leash_km(text: str) -> float | str:
+    """`auto`, or a leash in km within (0, LEASH_MAX_KM], as a request takes it."""
+    if text == "auto":
+        return text
+    km = float(text)
+    if not 0 < km <= LEASH_MAX_KM:
+        raise argparse.ArgumentTypeError(f"a leash is auto or within (0, {LEASH_MAX_KM:g}] km")
+    return km
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--region", required=True, choices=sorted(REGIONS))
@@ -275,6 +324,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jaccard", type=int, default=5, help="pairs planned with seed + 1")
     parser.add_argument("--pair-seed", type=int, default=2026)
     parser.add_argument("--near-m", type=float, default=250.0, help="a node within this")
+    parser.add_argument("--tier", choices=get_args(TierChoice), default="auto")
+    parser.add_argument("--leash-km", type=leash_km, default="auto", help="auto or km")
+    parser.add_argument("--places", action="store_true", help="draw points at Census places")
     parser.add_argument("--out", type=Path, default=Path("tools/out/acceptance.json"))
     return parser.parse_args()
 

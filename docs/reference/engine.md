@@ -1700,7 +1700,8 @@ needs `WORST_ROUTE_DATA` and is not part of the gate:
 ```
 uv run python tools/acceptance.py --region portland [--build-id ID] [--pairs 20] [--seed 1]
     [--budget 30] [--backend auto|csr|python] [--min-km 3] [--max-km 15] [--jaccard 5]
-    [--pair-seed 2026] [--near-m 250] [--out tools/out/acceptance.json]
+    [--pair-seed 2026] [--near-m 250] [--tier auto|T0..T4] [--leash-km auto|X] [--places]
+    [--out tools/out/acceptance.json]
 ```
 
 Its `--backend` is `make_backend`'s, `auto` by default, which is `csr` when numba imports (M1's
@@ -1709,8 +1710,12 @@ time goes further on a faster backend, so the backends give different routes onl
 stops on time rather than converging.
 
 The pairs are uniform points in the region's bbox with a node within `--near-m`, the end at a
-straight-line distance within the bounds, drawn from `PCG64(--pair-seed)`; each is planned with
-`plan_route` and no attempt limit, so the budget bounds every run. The first `--jaccard` pairs
+straight-line distance within the bounds, drawn from `PCG64(--pair-seed)`; with `--places`, the
+places of the region's places index instead (`worst-route aux places`, towns and CDPs alike, one
+drawn uniformly by its row and put at its polygon's `point_on_surface`), with the same rejection
+and bounds. Each is planned with `plan_route` and no attempt limit, so the budget bounds every
+run, at `--tier` and `--leash-km` (`auto` both by default; a leash within (0, 150] km, as a
+request's). The first `--jaccard` pairs
 that plan are planned again with the next seed and compared (Jaccard of edges and of road
 units). A pair that cannot be planned, or whose stop the re-snap fallback moved, is resolved
 again on the build without its transition rows, to tell whether the tables stopped it. It prints

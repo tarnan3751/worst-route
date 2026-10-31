@@ -312,6 +312,11 @@ body {
   font: inherit;
 }
 
+.radios select {
+  padding: 1px 4px;
+  font: inherit;
+}
+
 /* Run */
 
 .buttons {

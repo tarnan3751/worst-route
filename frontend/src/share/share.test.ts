@@ -22,6 +22,9 @@ const full: UrlState = {
   tier: "T2",
   leashKm: 6.5,
   target: { kind: "duration", seconds: 32400 },
+  mode: null,
+  turns: null,
+  strict: null,
   stops: [
     { lat: 45.5231, lon: -122.6765 },
     { lat: 45.519368, lon: -122.662765 },
@@ -36,6 +39,9 @@ const nothing: UrlState = {
   tier: null,
   leashKm: null,
   target: null,
+  mode: null,
+  turns: null,
+  strict: null,
   stops: null,
 };
 

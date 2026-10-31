@@ -1,6 +1,7 @@
 // Numbers for people (docs/reference/frontend.md). The API's numbers are metric; miles are the
 // default, kilometres the toggle. A drive time typed as a target reads `9h`, `90m`, `2h30m` or
 // a number of minutes.
+import type { CollectItem } from "./api/types";
 
 export type Units = "mi" | "km";
 
@@ -48,6 +49,14 @@ export function formatRatio(ratio: number | null): string {
 export function formatCount(n: number): string {
   return grouped.format(n);
 }
+
+// What a collect run collects, one and many.
+export const ITEM_NAMES: Record<CollectItem, [string, string]> = {
+  toll_booth: ["toll booth", "toll booths"],
+  level_crossing: ["level crossing", "level crossings"],
+  roundabout: ["roundabout", "roundabouts"],
+  bridge: ["bridge", "bridges"],
+};
 
 /** A coordinate as the stop list shows it. */
 export function formatLatLon(lat: number, lon: number): string {

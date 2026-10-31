@@ -3,11 +3,12 @@
 // which tells the watchers of the keys the patch touches. The route's geometry is not here: it
 // changes ten times a second and lives in the route layer (map/routeLayer.ts).
 import type {
+  CollectItem,
   ErrorBody,
   Metrics,
-  Objective,
   Region,
   RouteDocument,
+  RouteRequest,
   StopReason,
   Target,
   TargetKind,
@@ -38,10 +39,24 @@ export const BUDGET_MAX_S = 120; // BUDGET_TOO_LARGE above
 export const LEASH_MAX_KM = 150;
 export const TARGET_TOLERANCE = 0.02; // a target is reached within ±2 %
 export const TARGET_MAX_DURATION_S = 7 * 24 * 3600;
+export const MODES = ["distance", "time", "collect"] as const; // the objectives built
+export const ITEMS: readonly CollectItem[] = [
+  "toll_booth",
+  "level_crossing",
+  "roundabout",
+  "bridge",
+];
+
+/** The objective: the longest, the slowest, or the most of an item. */
+export type Mode = (typeof MODES)[number];
+/** The turn constraint: none, or left (right) turns avoided, at a kilometre each or, `strict`,
+ * none at all. */
+export type TurnSetting = "any" | "no_left" | "no_right";
 
 /** The request's settings; null seed is a random one, picked by the server. The target is
  * `target`, with `ratio` (×, more than 1) or `durationS` as its number; each keeps its value
- * while another kind is chosen. */
+ * while another kind is chosen. `item` is what `collect` collects, kept while another objective
+ * is chosen; `strict` counts only with a side to avoid. */
 export interface Settings {
   seed: number | null;
   budgetS: number;
@@ -50,7 +65,10 @@ export interface Settings {
   target: TargetKind;
   ratio: number;
   durationS: number;
-  objective: Objective;
+  objective: Mode;
+  item: CollectItem;
+  turns: TurnSetting;
+  strict: boolean;
   units: Units;
 }
 
@@ -63,6 +81,9 @@ export const DEFAULT_SETTINGS: Settings = {
   ratio: 20,
   durationS: 9 * 3600,
   objective: "distance",
+  item: "bridge",
+  turns: "any",
+  strict: false,
   units: "mi",
 };
 
@@ -71,6 +92,24 @@ export function targetOf(settings: Settings): Target {
   if (settings.target === "ratio") return { kind: "ratio", value: settings.ratio };
   if (settings.target === "duration") return { kind: "duration", seconds: settings.durationS };
   return { kind: "max" };
+}
+
+/** A request's objective, item and turn constraints. */
+export type RequestMode = Pick<RouteRequest, "objective" | "item" | "constraints">;
+
+/** The request's mode for `settings`: the item only under collect, the constraints only when a
+ * side is avoided (the API's own request leaves them out then). */
+export function modeOf(settings: Settings): RequestMode {
+  const mode: RequestMode = { objective: settings.objective };
+  if (settings.objective === "collect") mode.item = settings.item;
+  if (settings.turns !== "any") {
+    mode.constraints = {
+      no_left: settings.turns === "no_left",
+      no_right: settings.turns === "no_right",
+      strict: settings.strict,
+    };
+  }
+  return mode;
 }
 
 export type Phase = "idle" | "starting" | "running" | "done" | "failed";

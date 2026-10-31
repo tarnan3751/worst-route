@@ -1,18 +1,22 @@
 // The settings (docs/reference/frontend.md, **Settings**): the request's seed (empty: random,
 // picked by the server), time budget, tier and leash (empty: auto, with what auto became once a
-// job has said), the inefficiency target (as bad as possible, a ratio to the sensible route, or
-// a drive time typed as `9h`, `90m`, `2h30m` or minutes; typing a number picks its kind), the
-// objective ("longest distance" is built; the others are shown, disabled), and the units the
-// panel shows. Locked while a job runs, except the units.
-import type { Objective, TargetKind, Tier } from "../api/types";
-import { formatDurationInput, parseDuration, type Units } from "../format";
+// job has said), the mode (the longest, the slowest, or collecting an item, picked under it),
+// the turns (any, or left or right turns avoided, `strict` for none at all), the inefficiency
+// target (as bad as possible, a ratio to the sensible route, or a drive time typed as `9h`,
+// `90m`, `2h30m` or minutes; typing a number picks its kind; no ratio under collect), and the
+// units the panel shows. Locked while a job runs, except the units.
+import type { CollectItem, TargetKind, Tier } from "../api/types";
+import { ITEM_NAMES, formatDurationInput, parseDuration, type Units } from "../format";
 import {
   BUDGET_MAX_S,
+  ITEMS,
   LEASH_MAX_KM,
   TARGET_MAX_DURATION_S,
   TIERS,
+  type Mode,
   type Settings,
   type Store,
+  type TurnSetting,
 } from "../state";
 import { busy } from "../stops/stopList";
 import { el } from "../util/dom";
@@ -22,12 +26,15 @@ const TARGETS: [TargetKind, string, boolean][] = [
   ["ratio", "A ratio", true],
   ["duration", "A drive time", true],
 ];
-const OBJECTIVES: [Objective, string, boolean][] = [
-  ["distance", "Longest distance", true],
-  ["time", "Slowest time — soon", false],
-  ["collect", "Collect things — soon", false],
-  ["brand", "Brand pilgrimage — soon", false],
-  ["alphabet", "Alphabet route — soon", false],
+const MODE_OPTIONS: [Mode, string, boolean][] = [
+  ["distance", "Longest", true],
+  ["time", "Slowest", true],
+  ["collect", "Collect", true],
+];
+const TURNS: [TurnSetting, string, boolean][] = [
+  ["any", "Any", true],
+  ["no_left", "Avoid left turns", true],
+  ["no_right", "Avoid right turns", true],
 ];
 const UNITS: [Units, string][] = [
   ["mi", "Miles"],
@@ -93,11 +100,31 @@ export function mountSettings(root: HTMLElement, store: Store): void {
   Object.assign(duration, { type: "text", placeholder: "9h" });
   target.inputs[1].parentElement?.append(" ", ratio, " ×");
   target.inputs[2].parentElement?.append(" ", duration);
-  const objective = select(OBJECTIVES);
+  const targetNote = el("span", "resolved", "a collect run takes a drive-time target only");
+  const mode = radios("mode", MODE_OPTIONS);
+  const item = select(
+    ITEMS.map((i): [CollectItem, string, boolean] => [i, ITEM_NAMES[i][1], true]),
+  );
+  mode.inputs[2].parentElement?.append(" ", item);
+  const turns = radios("turns", TURNS);
+  const strict = el("input");
+  strict.type = "checkbox";
+  const strictLabel = el("label");
+  strictLabel.append(strict, " strict");
+  turns.group.append(strictLabel);
+  const strictNote = el(
+    "span",
+    "resolved",
+    "strict rarely finds a route on a street grid: the route may not exist",
+  );
   const units = radios(
     "units",
     UNITS.map(([u, text]): [Units, string, boolean] => [u, text, true]),
   );
+
+  const modeRow = field("Mode", mode.group);
+  const turnsRow = field("Turns", turns.group, strictNote);
+  const targetRow = field("How bad", target.group, targetNote);
 
   root.replaceChildren(
     el("h2", "", "Settings"),
@@ -105,8 +132,9 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     field("Time budget (s)", budget),
     field("Road tier", tier, tierNote),
     field("Leash (km)", leash, leashNote),
-    field("How bad", target.group),
-    field("Make it", objective),
+    modeRow,
+    turnsRow,
+    targetRow,
     field("Units", units.group),
   );
 
@@ -120,7 +148,11 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     for (const input of target.inputs) input.checked = input.value === settings.target;
     ratio.value = String(settings.ratio);
     duration.value = formatDurationInput(settings.durationS);
-    objective.value = settings.objective;
+    for (const input of mode.inputs) input.checked = input.value === settings.objective;
+    item.value = settings.item;
+    item.hidden = settings.objective !== "collect";
+    for (const input of turns.inputs) input.checked = input.value === settings.turns;
+    strict.checked = settings.strict;
     for (const input of units.inputs) input.checked = input.value === settings.units;
   };
 
@@ -153,7 +185,22 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     if (seconds === null || seconds <= 0 || seconds > TARGET_MAX_DURATION_S) render();
     else set({ target: "duration", durationS: seconds });
   });
-  objective.addEventListener("change", () => set({ objective: objective.value as Objective }));
+  // Collect takes no ratio: picking it from a ratio target makes the target as bad as possible.
+  for (const input of mode.inputs) {
+    input.addEventListener("change", () => {
+      const objective = input.value as Mode;
+      const ratioOut = objective === "collect" && store.state.settings.target === "ratio";
+      set(ratioOut ? { objective, target: "max" } : { objective });
+    });
+  }
+  item.addEventListener("change", () => set({ item: item.value as CollectItem }));
+  for (const input of turns.inputs) {
+    input.addEventListener("change", () => {
+      const side = input.value as TurnSetting;
+      set(side === "any" ? { turns: side, strict: false } : { turns: side });
+    });
+  }
+  strict.addEventListener("change", () => set({ strict: strict.checked }));
   for (const input of units.inputs) {
     input.addEventListener("change", () => set({ units: input.value as Units }));
   }
@@ -163,13 +210,23 @@ export function mountSettings(root: HTMLElement, store: Store): void {
   store.watch(["run", "settings"], (state) => {
     const locked = busy(store);
     const { resolved } = state.run;
-    const key = [locked, resolved, state.settings.tier, state.settings.leashKm];
+    const { objective, turns: side } = state.settings;
+    const key = [locked, resolved, state.settings.tier, state.settings.leashKm, objective, side];
     if (key.every((value, k) => value === shown[k])) return;
     shown = key;
-    for (const control of [seed, budget, tier, leash, ratio, duration, objective]) {
+    for (const control of [seed, budget, tier, leash, duration, item]) {
       control.disabled = locked;
     }
-    for (const input of target.inputs) input.disabled = locked;
+    for (const input of [...target.inputs, ...mode.inputs, ...turns.inputs]) {
+      input.disabled = locked;
+    }
+    const collecting = objective === "collect";
+    ratio.disabled = target.inputs[1].disabled = locked || collecting;
+    target.inputs[1].parentElement?.classList.toggle("disabled", collecting);
+    targetNote.hidden = !collecting;
+    strict.disabled = locked || side === "any";
+    strictLabel.classList.toggle("disabled", side === "any");
+    strictNote.hidden = side === "any";
     tierNote.textContent =
       resolved && state.settings.tier === "auto" ? `auto was ${resolved.tier}` : "";
     leashNote.textContent =

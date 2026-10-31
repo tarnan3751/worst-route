@@ -2,7 +2,8 @@
 // tests drive without a DOM, and `mountRunControls`, the Go, Cancel, Reroll and Make it worse
 // buttons and the live stat line (ratio, length, drive time, attempts, elapsed).
 //
-// Go posts the stops and settings (the target among them), and Reroll the same without a seed,
+// Go posts the stops and settings (the target, the objective with its item, and the turn
+// constraints among them), and Reroll the same without a seed,
 // so the server picks one; the 202's seed goes into the settings. Make it worse posts the shown route as `base_route_id`
 // with the seed after the last one tried on it (its own at first), the base route giving the
 // stops, tier and leash; the settings' seed follows the route shown, so it changes only when a
@@ -34,7 +35,7 @@ import type {
 } from "../api/types";
 import { formatCount, formatDistance, formatDuration, formatElapsed, formatRatio } from "../format";
 import type { RouteLayer } from "../map/routeLayer";
-import { IDLE_RUN, TARGET_TOLERANCE, targetOf, type AppState, type Store } from "../state";
+import { IDLE_RUN, TARGET_TOLERANCE, modeOf, targetOf, type AppState, type Store } from "../state";
 import { busy } from "../stops/stopList";
 import { el } from "../util/dom";
 import { lineBounds, type Bounds } from "../util/geo";
@@ -51,7 +52,7 @@ function jobRequest(state: Readonly<AppState>, seed: number | null): RouteReques
   const request: RouteRequest = {
     region: state.region?.region ?? "",
     stops: state.stops.map(({ lat, lon }) => ({ lat, lon })),
-    objective: settings.objective,
+    ...modeOf(settings),
     tier: settings.tier,
     leash_km: settings.leashKm,
     budget_s: settings.budgetS,
@@ -68,7 +69,7 @@ function worseRequest(state: Readonly<AppState>, route: RouteDocument, seed: num
     region: route.region,
     base_route_id: route.route_id,
     seed,
-    objective: settings.objective,
+    ...modeOf(settings),
     budget_s: settings.budgetS,
     target: targetOf(settings),
   };

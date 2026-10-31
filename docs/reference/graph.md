@@ -1,7 +1,8 @@
 # Graph
 
 The routing graph of one build: its arrays (`GraphData`), the on-disk build format and its
-`graph_version`, the `GraphBackend` protocol the engine searches through, the pure-Python
+`graph_version`, the build's geometry (the edges' shapes, apart from the arrays), the
+`GraphBackend` protocol the engine searches through, the pure-Python
 reference backend and the CSR + Numba production backend, the spatial helpers (projection,
 snapping, leash and bubble masks), loading saved builds for the API, and the builders tests use
 to make small graphs by hand.
@@ -10,8 +11,9 @@ Code: `src/worst_route/graph/`. The design it implements is `docs/PLAN.md` §2.6
 
 | Module | What it holds |
 |---|---|
-| `data.py` | `GraphData`, `Strings`, `ARRAY_SPECS` (the format), `NodeKind`, `EdgeFlag`, `validate()` |
-| `store.py` | `write_build`, `read_build`, `graph_version` |
+| `data.py` | `GraphData`, `Strings`, `ARRAY_SPECS` (the format), `FORMAT_VERSION`, `MAX_SPEEDS`, `NodeKind`, `EdgeFlag`, `validate()` |
+| `store.py` | `write_build`, `read_build`, `graph_version`, `MissingArray`, `outdated` |
+| `geometry.py` | `Geometry`, `GEOMETRY_SPECS`, `encode`, `straight`, `edge_xy`, `edge_points`, `lonlat_to_xy`, `geometry_version`, `read_geometry` (**Geometry**) |
 | `backend.py` | the `GraphBackend` protocol, the `Path` and `EdgeTree` types, and what every backend shares: `check_ends`, `WeightCheck`, `as_cost`, `as_limits`, `enterable`, `banned_mask`, `final_mask`, `largest_scc_mask`, the turn classes (`TURN_CLASS`, `as_turn_classes`, `check_turn_edges`) |
 | `python_backend.py` | `PythonBackend`, the reference implementation |
 | `csr_backend.py` | `CsrBackend`, the production implementation, over `kernels.py` |
@@ -29,22 +31,28 @@ each tier containing the one before it, T4 every class), and `BackendName` and
 
 `GraphData` is a frozen dataclass of NumPy arrays plus `strings` and `meta`. n is the node
 count, m the edge count, T = 5 tiers, k the number of transition rows, b the number of brands
-(the length of `strings.brands`) and r the number of brand rows (the length of `brand_nodes`). Every array is
-read-only: memory-mapped when read from disk, flagged read-only when built in memory, so a
-stray write into the graph raises instead of corrupting every worker's view. `ARRAY_SPECS`
-lists the arrays in a fixed order, the order of the fields, the files and the hash.
+(the length of `strings.brands`), r the number of brand rows (the length of `brand_nodes`) and
+s the number of distinct speeds (at most `MAX_SPEEDS`, 256). Every array is read-only:
+memory-mapped when read from disk, flagged read-only when built in memory, so a stray write into
+the graph raises instead of corrupting every worker's view. `ARRAY_SPECS` lists the arrays in a
+fixed order, the order of the fields, the files and the hash (format 4, `FORMAT_VERSION`, with
+`PIPELINE_VERSION` 6). They are what the engine and the validator read, with a few the
+presentation reads (`node_kind`, also qa's; `edge_tier`, the share image's thinning) and two
+nothing reads at run time (`node_pass_through`, which snapping judges within the request's mask
+instead, and `brand_locations`): nothing that only draws a route, which is the build's geometry
+(**Geometry**), nor what only the pipeline needs, the OSM nodes along each edge and its way ids,
+which stay in the stages.
 
 | Group | Array | dtype, shape | Meaning |
 |---|---|---|---|
-| nodes | `node_lon`, `node_lat` | f64[n] | position |
-| | `node_x`, `node_y` | f64[n] | projected metres in `meta["crs_epsg"]` |
+| nodes | `node_x`, `node_y` | f64[n] | position, projected metres in `meta["crs_epsg"]` |
 | | `node_kind` | u8[n] | `NodeKind`: 0 plain, 1 cluster (stage A), 2 interchange, 3 roundabout (stage B) |
-| | `node_state` | i16[n] | state FIPS, −1 unknown |
 | | `node_pass_through` | bool[n] | some u → v → w exists with u ≠ w (self-loops ignored), on the whole graph; snapping judges via stops within the request's mask instead |
 | | `node_delay_s` | f32[n] | stop sign / signal delay |
-| | `member_indptr`, `member_osm_ids` | i64[n+1], i64[] | original OSM node ids merged into each node (≥ 1 each); each id belongs to one node only, which the validator's proof from original ids relies on |
+| | `member_indptr`, `member_osm_ids` | i64[n+1], i64[] | original OSM node ids merged into each node (≥ 1 each); each id belongs to one node only, which the validator's proof from original ids rests on (`docs/reference/engine.md`, `osm_ids`) |
 | edges | `edge_u`, `edge_v` | i32[m] | tail, head |
-| | `edge_length_m`, `edge_speed_kmh`, `edge_time_s` | f32[m] | length and time finite and ≥ 0 |
+| | `edge_length_m`, `edge_time_s` | f32[m] | length and time, finite and ≥ 0 |
+| | `edge_speed`, `speed_kmh` | u8[m], f32[s] | each edge's index into `speed_kmh`, the build's distinct speeds in km/h, finite, positive and strictly ascending (a build's speeds are few, and not whole km/h: Portland's thirteen are whole mph) |
 | | `edge_highway` | u8[m] | `HighwayClass` |
 | | `edge_tier` | u8[m] | the first tier whose classes contain the edge's class |
 | | `edge_name`, `edge_ref`, `edge_identity` | i32[m] | index into `strings.names`, `.refs`, `.identities`; −1 none |
@@ -52,17 +60,24 @@ lists the arrays in a fixed order, the order of the fields, the files and the ha
 | | `edge_flags` | u8[m] | `EdgeFlag` bits: 1 bridge, 2 tunnel, 4 toll, 8 roundabout, 16 link |
 | | `edge_toll_booths`, `edge_level_crossings` | u8[m] | counts on the edge |
 | | `edge_bearing_in`, `edge_bearing_out` | i16[m] | degrees clockwise from north, 0–359: arriving at v, leaving u, over the road's last and first 20 m (the road, not the stub cleanup added to reach a merged node: `docs/reference/pipeline.md`, enrich) |
-| | `way_indptr`, `way_osm_ids` | i64[m+1], i64[] | original OSM way ids of each edge (≥ 1 each) |
 | adjacency | `out_indptr`, `out_edges` | i64[n+1], i32[m] | each node's out-edges, ascending edge id |
 | | `in_indptr`, `in_edges` | i64[n+1], i32[m] | each node's in-edges, ascending edge id |
-| geometry | `coord_indptr`, `coords` | i64[m+1], f32[*, 2] | (lon, lat) along each edge, endpoints included (≥ 2 each) |
-| | `osmnode_indptr`, `osmnode_ids` | i64[m+1], i64[] | original OSM node ids along each edge, endpoints included (≥ 2 each) |
 | twins | `twin_indptr`, `twin_edges` | i64[m+1], i32[] | using an edge bans every edge in its row; symmetric, rows strictly ascending, never itself |
 | transitions | `trans_node`, `trans_in`, `trans_out` | i32[k] each | allowed (in, out) pairs at a node, sorted by (node, in, out), no duplicates; a node with no rows allows every pair |
 | tiers | `tier_node_mask`, `tier_edge_mask` | bool[T, n], bool[T, m] | tier membership (the pipeline's after per-tier SCC) |
 | collectibles | `node_roundabouts` | u8[n] | the roundabout rings a super-junction holds (a roundabout's one, sometimes two; an interchange that holds a ring counts it), 0 at every other node; the collect mode's roundabouts (`docs/reference/engine.md`, **Objectives**). Added after the first builds (with `PIPELINE_VERSION` 2): a build saved before it lacks the file and is made again (**The build format**) |
 | brands | `brand_indptr`, `brand_nodes` | i64[b+1], i32[r] | the brand index: brand k's nodes are `brand_nodes[brand_indptr[k]:brand_indptr[k + 1]]` (`nodes_of_brand(k)`), at least one each, strictly ascending; the nodes a route can pass through nearest the brand's POIs (`docs/reference/pipeline.md`, **enrich**); the brand mode's locations (`docs/reference/engine.md`, **Objectives**). A brand's id is its run's index; its name and wikidata id are in `strings` |
 | | `brand_locations` | i32[r] | the POIs snapped to each of those nodes (≥ 1). The three arrays were added with `PIPELINE_VERSION` 3 |
+
+Three arrays are derived, not stored: `node_lon` and `node_lat` (f64[n]), the inverse
+projection of `node_x` and `node_y` from `meta["crs_epsg"]` (pyproj, `always_xy`), and
+`edge_speed_kmh` (f32[m]), `speed_kmh[edge_speed]`. Each is a `cached_property`, worked out once
+per `GraphData` on first use (once per process for a loaded build) and read-only. The engine
+reads x/y, which are stored exactly as the pipeline computed them; lon/lat are the
+presentation's (a snapped stop's position, the drawn lines' ends, the region's extent) and
+differ from the pipeline's by at most 2e-14 degrees on Portland, the same at 7 decimals on
+every node. Stored the other way round, x/y derived from lon/lat would move the merged nodes'
+x/y by up to 2e-9 m, enough to change three of the golden routes on the lattice.
 
 A node with no transition rows allows every pair, so an empty table cannot be written: stage B
 drops a super-junction with edges in and out whose table would be empty (no pair allowed),
@@ -76,18 +91,19 @@ on.
 `strings` is `Strings(names, refs, identities, brands, brand_wikidata)`: the three lists of str
 the edges index into, then each brand's display name and its wikidata id (str, or None when its
 POIs carry none), by brand id (the last two empty by default). `meta` is a dict with
-`region`, `build_id`, `crs_epsg`, `created` (ISO time), `pipeline_version`, `graph_version`,
-`counts` (at least `nodes` and `edges`), `params` (the build parameters: free-form, but
+`region`, `build_id`, `crs_epsg`, `created` (ISO time), `pipeline_version`, `format` (4),
+`graph_version`, `counts` (at least `nodes` and `edges`), `params` (the build parameters: free-form, but
 JSON-native with string keys, so no int keys, tuples, NaN or other objects; `pipeline save`
 puts the `region`, its `bbox` and `crs_epsg` there with each step's configuration, so they
 enter `graph_version`, `docs/reference/pipeline.md`) and `sources` (a list).
 
 `validate()` raises `ValueError` naming the array at fault. `validate(deep=False)` checks only
 what costs nothing to read: every array present as a NumPy array of its dtype and shape, the
-meta keys, `counts` against n and m, and `params` surviving a JSON round trip unchanged. The
-default also checks contents: the indptr runs (from 0 to the values' length, each at least its
-minimum above), id and enum ranges, `member_osm_ids` unique, edges sorted by (u, v), both
-adjacency lists exactly as defined, twins and transitions as above, a transition's edges
+meta keys, `format` 4, `counts` against n and m, at most 256 speeds, and `params` surviving a
+JSON round trip unchanged. The default also checks contents: the indptr runs (from 0 to the
+values' length, each at least its minimum above), id and enum ranges (`edge_speed` within the
+speeds), the speeds finite, positive and ascending, `member_osm_ids` unique, edges sorted by
+(u, v), both adjacency lists exactly as defined, twins and transitions as above, a transition's edges
 meeting at its node, roundabout rings counted at super-junctions (interchanges and
 roundabouts) only, and each brand's nodes in range and strictly ascending, each with at least
 one location. The cheap check holds `brand_indptr` to one more than the brand names and
@@ -99,41 +115,53 @@ One directory per build, `data/graphs/<region>/<build_id>/`, which the pipeline'
 steps already use for their `stages/` and sidecars (`docs/reference/pipeline.md`):
 
 ```
-meta.json            the meta dict, graph_version filled in (sorted keys, indented)
-strings.json         {"names": [...], "refs": [...], "identities": [...], "brands": [...],
-                      "brand_wikidata": [...]} (UTF-8, compact)
-arrays/<name>.npy    one file per array of ARRAY_SPECS, written by np.save without pickles
+meta.json              the meta dict, graph_version and geometry_version filled in (sorted keys,
+                       indented)
+strings.json           {"names": [...], "refs": [...], "identities": [...], "brands": [...],
+                        "brand_wikidata": [...]} (UTF-8, compact)
+arrays/<name>.npy      one file per array of ARRAY_SPECS, written by np.save without pickles:
+                       what the engine and the validator read
+geometry/<name>.npy    geom_indptr and geom_dxy, the edges' shapes (**Geometry**): what only the
+                       drawing of a route reads
 ```
 
-- `write_build(data, path) -> str` runs `validate()` and writes the build into `path`, which
-  may already exist and hold other files. A `path` that has `meta.json` raises
-  `FileExistsError`: a written build is never overwritten. Builds are immutable unless
-  `pipeline save --force` deletes one and writes it again, which changes its `graph_version`
-  when its contents or params differ.
-  It stages all three in a sibling `.<name>.tmp` directory, moves `strings.json` and `arrays/`
-  into `path`, then moves `meta.json` in last as the commit marker: `read_build` needs
-  `meta.json`, so a reader never sees half a build. What a crashed write leaves is replaced by
-  the next one: a staging directory (a crash while staging leaves `path` as it was), or
-  `arrays/` and `strings.json` without `meta.json` (a crash between the moves). It returns the
-  `graph_version` and writes it into `meta.json`; it does not change the caller's `meta`.
+- `write_build(data, path, geometry=None) -> str` runs `validate()` (and the geometry's) and
+  writes the build into `path`, which may already exist and hold other files; `geometry` None
+  writes straight edges (`geometry.straight`), as the test builders make them. A `path` that
+  has `meta.json` raises `FileExistsError`: a written build is never overwritten. Builds are
+  immutable unless `pipeline save --force` deletes one and writes it again, which changes its
+  `graph_version` when its contents or params differ.
+  It stages everything in a sibling `.<name>.tmp` directory, moves `strings.json`, `arrays/`
+  and `geometry/` into `path`, then moves `meta.json` in last as the commit marker:
+  `read_build` needs `meta.json`, so a reader never sees half a build. What a crashed write
+  leaves is replaced by the next one: a staging directory (a crash while staging leaves `path`
+  as it was), or `arrays/`, `geometry/` and `strings.json` without `meta.json` (a crash between
+  the moves). It returns the `graph_version` and writes it and the `geometry_version` into
+  `meta.json`; it does not change the caller's `meta`. It imports `graph/geometry.py` only
+  inside the call, so the engine and the job workers, which read builds through this module,
+  never import it.
 - `read_build(path, mmap=True) -> GraphData` loads every array with
   `np.load(mmap_mode="r", allow_pickle=False)`: worker processes share one copy through the OS
   page cache, and loading costs nearly nothing. `mmap=False` loads read-only copies. It runs
   `validate(deep=False)` only: a deep validation or a re-hash would read every page of the
-  build in every worker. A build it cannot take raises `MissingArray` (a
+  build in every worker; it reads no geometry. A build it cannot take raises `MissingArray` (a
   `FileNotFoundError`), one line naming the remedy for the build's state (`store.outdated`):
   for a build another pipeline version wrote (its `meta.pipeline_version` is not
   `PIPELINE_VERSION`), whatever arrays it holds, the rebuild ("the build at PATH was written by
-  pipeline 3 (now 5): rebuild the region with `worst-route pipeline filter --region R` and the
+  pipeline 3 (now 6): rebuild the region with `worst-route pipeline filter --region R` and the
   steps after it"), which gives the build a new id, so this code never reads a build another
-  version made; for this version's build lacking an array, the array and the save that writes
+  version made; for this version's build of another format (its `meta.format` is not
+  `FORMAT_VERSION`), the format and the save that writes it again, before its arrays are read;
+  for this version's build lacking an array, the array and the save that writes
   it again ("the build at PATH lacks the array node_roundabouts: rebuild it with `worst-route
   pipeline save --force --region R`"). `plan`, `validate`, `serve`, `pipeline qa` and the
   acceptance tool print it and exit 1, and a plain `pipeline save` refuses another version's
   build with the same rebuild line. `PIPELINE_VERSION` 2 (M3) covered the bearings without
-  cleanup's stubs and `node_roundabouts`, 3 (M3) the brand arrays and strings, so a build made
-  at an earlier version is rebuilt from `filter` (`docs/reference/pipeline.md`, **Build ids,
-  sidecars, skipping**).
+  cleanup's stubs and `node_roundabouts`, 3 (M3) the brand arrays and strings, 4 (M5) stage A's
+  cluster positions, 6 (M5) the compact format (format 4: x/y without lon/lat, the speed table,
+  no way ids, OSM node runs, states or shapes among the arrays, the geometry apart), so a build
+  made at an earlier version is rebuilt from `filter` (`docs/reference/pipeline.md`, **Build
+  ids, sidecars, skipping**).
 - `.npy` per array, not `.npz` or Parquet: NumPy memory-maps `.npy` files only (`.npz`
   members are read whole). Parquet exports for DuckDB or QGIS are a `qa` convenience for later.
 
@@ -145,14 +173,63 @@ of `meta["params"]` with sorted keys and compact separators (which stands for th
 exactly because `validate()` requires them JSON-native). Nothing else in `meta` enters it
 (not `created`, `build_id`, `pipeline_version`, `sources`, `counts`, nor the top-level
 `region` and `crs_epsg`, though a pipeline build's `params` repeat those two, so they enter
-through them), so rewriting the same build reproduces it. A test pins its value for a small build (`tests/graph/test_store.py`);
+through them), so rewriting the same build reproduces it. The geometry is not in it: a route
+depends on the arrays alone, and the geometry's own digest is `meta["geometry_version"]`
+(**Geometry**). A test pins its value for a small build (`tests/graph/test_store.py`);
 changing the array order, a dtype or the hash recipe changes every version and is a format
 change (tier A, a new build id).
 
 The version hashes bytes, so it is exact per platform: projected coordinates from PROJ can
 differ in their last bits between machines, and a build made on macOS and on Linux from the
 same input may carry different versions. Routes do not depend on those bits (the engine works
-on x/y and lengths), but a golden test should record the version of the build it ran on.
+on x/y and lengths), but a golden test should record the version of the build it ran on. A
+test build's positions are given in metres (`make_graph`), so its version is the same on every
+machine.
+
+## Geometry
+
+The edges' shapes, which only the drawing of a route reads, live apart from the arrays:
+`geometry/` in the build directory, `graph/geometry.py`'s `Geometry` (`GEOMETRY_SPECS`):
+
+| Array | dtype, shape | Meaning |
+|---|---|---|
+| `geom_indptr` | i32[m+1] | edge e's interior points are `geom_dxy[geom_indptr[e]:geom_indptr[e + 1]]` (0 or more each; at most 2³¹ − 1 in all, which `encode` holds to) |
+| `geom_dxy` | i16[*, 2] | the steps (dx, dy) in whole metres in `meta["crs_epsg"]` |
+
+An edge's line runs from its tail's position to its head's (`node_x`, `node_y`): those ends are
+not stored. Its interior points are steps, the first from the tail, each next from the point
+before it, every step the difference of two points' offsets from the tail rounded to the metre
+(`np.rint`): adding them up gives each point's rounded offset without drift, so a point decodes
+to within half a metre of where it was on each axis (0.71 m). A step longer than `MAX_STEP_M`
+(32,000 m) on either axis is split by points evenly placed on its segment, so every step fits
+an int16. `pipeline save` simplifies each shape first, Douglas–Peucker to
+`config.GEOMETRY_SIMPLIFY_M` (2 m) with its ends kept, after `enrich` measured the lengths and
+bearings on the whole shape (`docs/reference/pipeline.md`, **save**): a drawn line lies within
+2.71 m of the road. On Portland the 729,489 interior points become 174,003, and the geometry
+is 1.4 MB.
+
+- `encode(data, points, indptr) -> Geometry`: each edge's line, `points[indptr[e]:indptr[e +
+  1]]` in projected metres; a line that does not run from its tail's position to its head's
+  exactly is a `ValueError`. `straight(m)`: no interior points.
+- `edge_xy(data, geometry, edges) -> (points, counts)`: the points along each of `edges` in
+  projected metres, its ends included, edge k's `counts[k]` of them in a row; `edge_points`
+  the same in (lon, lat), projected back with one transformer per CRS, so an edge's ends are
+  `node_lon`, `node_lat` bit for bit and consecutive edges share their junction point exactly.
+  `lonlat_to_xy` projects lon/lat into the build's CRS (the share image's extent).
+- `geometry_version(geometry)`: the sha256 over each array's `name|dtype.str|[shape]` line
+  and raw bytes, as `graph_version`'s recipe, pinned by a test (`tests/graph/test_geometry.py`).
+- `read_geometry(path, m, mmap=True)`: memory-maps the files read-only and checks their dtypes
+  and shapes; a missing file raises `MissingArray` ("the build at PATH lacks its geometry
+  (geom_dxy): rebuild it with `worst-route pipeline save --force --region R`").
+
+Who reads it: the API process (a stored route's document, GeoJSON and share image, a job's
+events, `Loaded.geometry`), the CLI's `plan --geojson` and, when a places index exists, `plan
+--out`'s states and towns, `pipeline qa`'s twin layer. The engine, the validator and a job's
+worker never import the module: a test plans in a fresh interpreter, as a worker does, on a
+build whose `geometry/` is gone, and checks its `sys.modules`; the CLI plans and validates on
+such a build too. Where drawing will need it, a build without its geometry fails at once:
+`serve` reads it before it listens, and `plan` before its search when it will write a GeoJSON,
+or route.json with a places index.
 
 ## Backends
 
@@ -414,9 +491,12 @@ take `--backend` (`docs/reference/engine.md`).
 ## Loading builds
 
 `load_build(data_dir, region, build_id="latest", *, backend=DEFAULT_BACKEND) -> Loaded(data,
-spatial, backend)` (`loader.py`) is how the API process and each job's worker process load a
-build: `read_build` of `<data_dir>/graphs/<region>/<build_id>/`, every array memory-mapped (the
-workers share the OS page cache), its `SpatialIndex`, and `make_backend(data, backend)`.
+spatial, backend, path)` (`loader.py`) is how the API process and each job's worker process
+load a build: `read_build` of `<data_dir>/graphs/<region>/<build_id>/`, every array
+memory-mapped (the workers share the OS page cache), its `SpatialIndex`, `make_backend(data,
+backend)` and the build's directory. `Loaded.geometry` reads the build's geometry on first use
+(`read_geometry`, memory-mapped) and keeps it: the API process draws with it, a worker never
+asks.
 `"latest"` is the id in `graphs/<region>/latest`, read on every call, so the cache never pins
 an old build under that name. The two builds used last stay loaded (`lru_cache(maxsize=2)` keyed
 by data directory, region, build id and backend: the region the API serves, and one other a
@@ -443,7 +523,8 @@ time, so one tree serves every request.
   node with a single neighbour). Excluded nodes are never chosen but still count as
   neighbours. Both masks are bool arrays of length n, else `ValueError`.
   `Snap(node, moved_m, lat, lon, note)`: the node, the distance from the query point, the
-  node's position, and `note` None when the nearest candidate was taken, else one of
+  node's position (its derived lon/lat rounded to 7 decimals, as OSM writes positions), and
+  `note` None when the nearest candidate was taken, else one of
   "moved N m to the nearest through street" (via), "… street you can leave by" (start),
   "… street you can arrive by" (end). Nothing qualifying raises `SnapError`.
   **Re-snapping** (a leg that cannot be built, `docs/PLAN.md` §3.2): snap again with the
@@ -473,24 +554,25 @@ time, so one tree serves every request.
 `worst_route.graph.testing` ships in the package so every area's tests can build graphs by
 hand; nothing outside tests uses it.
 
-- `make_graph(nodes, edges, *, twins=(), transitions=(), crs_epsg=32610, lonlat=None,
-  brands=None) -> GraphData`.
-  `nodes` are (x, y) in metres in `crs_epsg`; lon/lat are their inverse projection unless
-  `lonlat` is given. `edges` are `(u, v, length_m)` tuples or `Edge(u, v, length_m=None,
+- `make_graph(nodes, edges, *, twins=(), transitions=(), crs_epsg=32610, brands=None) ->
+  GraphData`.
+  `nodes` are (x, y) in metres in `crs_epsg`; lon/lat are derived from them, as in every build.
+  `edges` are `(u, v, length_m)` tuples or `Edge(u, v, length_m=None,
   highway=RESIDENTIAL, speed_kmh=40.0, name=None, ref=None, flags=0, toll_booths=0,
   level_crossings=0)`; a missing length is the straight-line distance. `twins` pairs edges and
   `transitions` lists allowed `((a, v), (v, b))` pairs, each edge named by its (u, v); naming
   no edge or several parallel ones raises `ValueError`. Edge ids are the positions after a
   stable sort by (u, v), as in a real build.
-  Defaults for everything else: time = length / speed; tier from `TIERS`; the link flag set for
-  `*_LINK` classes; identity = ref, else name (not normalised); unit = the edge id; bearings
-  from the coordinates (in = out); one member per node with OSM id = node index + 1; one way
-  per edge with id = input position + 1; geometry the two endpoints; pass-through from the
-  topology; state −1, kind plain, no delay, no roundabout rings; tier masks: edges of tier ≤ t
+  Defaults for everything else: time = length / speed; the speed table the distinct speeds;
+  tier from `TIERS`; the link flag set for `*_LINK` classes; identity = ref, else name (not
+  normalised); unit = the edge id; bearings from the coordinates (in = out); one member per
+  node with OSM id = node index + 1; pass-through from the topology; kind plain, no delay, no
+  roundabout rings; tier masks: edges of tier ≤ t
   and their endpoints (no SCC); no brands unless `brands` maps names to nodes (ids in name
   order, no wikidata id, one location at each node, the nodes sorted and each once); meta region
-  and build id `"test"`, a fixed `created`, and `graph_version` computed.
-  The result is validated and read-only.
+  and build id `"test"`, format 4, a fixed `created`, and `graph_version` computed.
+  The result is validated and read-only. Its edges are straight: `write_build` writes it with
+  `straight(m)` unless given a geometry, which `encode` makes from lines through the nodes.
 - `grid_graph(rows, cols, spacing_m, *, oneway_rows="", oneway_cols="") -> GraphData`: a
   lattice of residential streets at `GRID_ORIGIN` (UTM 10N, near downtown Portland); node
   `r * cols + c` at `(x0 + c * spacing, y0 + r * spacing)`, row 0 the southmost. One character
@@ -501,14 +583,20 @@ hand; nothing outside tests uses it.
 
 ## Tests
 
-`tests/graph/`: `test_data.py` (every malformation `validate` rejects, rings at a plain node and
-malformed brand runs among them), `test_testing.py` (the builders, brands included),
-`test_store.py` (round trips, a build with brands among them; the version, its pin, and its
-change with a brand's nodes, locations, name or wikidata id; refusals), `test_backends.py`,
-`test_edge_search.py`, `test_spatial.py` (snapping roles, masks, `exclude` and notes; leash and
-bubble masks; the masked balls against `bubble_mask`, radii on lattice nodes included), and
-`test_loader.py` (`latest`, the two builds kept, memory-mapped arrays, missing builds, a build
-missing an array).
+`tests/graph/`: `test_data.py` (every malformation `validate` rejects, rings at a plain node,
+malformed brand runs, the speed table and another format among them), `test_testing.py` (the
+builders, brands included; lon/lat the inverse projection, worked out once, read-only),
+`test_store.py` (round trips, a build with brands among them, its files, geometry/ included;
+the version, its pin, and its change with a brand's nodes, locations, name or wikidata id;
+refusals, an earlier format's rebuild line among them), `test_geometry.py` (hypothesis: steps
+round trip to the metre, ends exact; long steps split on their segment; the ends' lon/lat
+the nodes'; straight edges; refused lines and malformed geometries; the files beside the
+arrays and outside `graph_version`; the digest's pin; a build read and loaded without its
+geometry, which is asked for only on use), `test_backends.py`, `test_edge_search.py`,
+`test_spatial.py` (snapping roles, masks, `exclude` and notes; leash and bubble masks; the
+masked balls against `bubble_mask`, radii on lattice nodes included), and `test_loader.py`
+(`latest`, the two builds kept, memory-mapped arrays, missing builds, a build missing an array,
+the geometry read on first use and kept).
 
 `test_backends.py` runs the reference's tests on both backends through the `backend_type`
 fixture:

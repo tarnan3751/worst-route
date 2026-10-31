@@ -873,16 +873,23 @@ check reports `ok`, the first offending index and a detail. `report.ok` is their
 2. **`vertex_simple`**: no node twice, except a round trip's start at both ends. A route is a
    round trip when its first and last stop nodes are equal.
 3. **`edge_simple`**: no edge twice, no edge together with its twin, no road unit twice.
-4. **`osm_ids`**, the proof from the raw data. The route is expanded to original OSM node ids
-   along its edges' `osmnode_ids`; consecutive edges' shared junction id is kept once, and
-   different members of one cluster are kept both.
-   - No id appears twice.
-   - Each edge's first and last ids are members (`member_osm_ids`) of its tail and head.
-   - A node's members appear in one contiguous run (a round trip's start in its first and its
-     last run).
+4. **`osm_ids`**, the proof from the raw data. The route's nodes are expanded to the original
+   OSM node ids merged into each (`member_osm_ids`: a stage A cluster's or a super-junction's
+   members, a plain node's own id), a round trip's closing node left out, and no id may appear
+   twice: no OSM junction is passed twice, whatever the engine's bookkeeping says. The index is
+   the edge into the node that passes it again ("original OSM node 100 passed twice"). That a
+   junction is one build node, and not two that each hold it, is the build's guarantee: a
+   written build holds each original id in one node only (`write_build`'s deep `validate`), and
+   `pipeline save` refuses the graphs the proof below cannot cover (`ShapePointError`); the
+   check restates the proof from the route's data, and would fail on a build that broke them.
 
-   So no consolidated junction is entered twice, and no shape point is driven twice, whatever
-   the engine's bookkeeping says.
+   The OSM nodes inside edges, which the build does not keep, need no check. Simplification
+   removes only a node with one through path per direction (`docs/reference/pipeline.md`,
+   **cleanup**), so such a node lies once inside one edge, or inside the two directions of one
+   road unit, and is no node's member: passing it twice means driving an edge or a unit twice,
+   which `edge_simple` refuses. `pipeline save` checks that premise on every build, with each
+   edge starting and ending at its nodes' members (`ShapePointError`, **save**), so the proof
+   holds for every build the engine reads.
 5. **`transitions`**: every turn at a node with transition rows is listed.
 6. **`stops`**: `nodes[stop_idx[s]] == stop_nodes[s]`, with positions strictly increasing from
    the first node to the last. For a saved route, `stop_nodes` are re-derived from its request
@@ -982,10 +989,12 @@ import: …") and exits 1.
 `graphs/<region>/latest`. A missing `latest` or `meta.json` is one line on stderr ("... run
 `worst-route pipeline save --region R` first") and exit 1, and so is a build without an array
 of the format, naming its remedy (`docs/reference/graph.md`, **The build format**): one another
-pipeline version wrote is rebuilt ("... was written by pipeline 2 (now 5): rebuild the region
+pipeline version wrote is rebuilt ("... was written by pipeline 2 (now 6): rebuild the region
 with `worst-route pipeline filter --region R` and the steps after it"), one of this version is
 saved again ("... lacks the array node_roundabouts: rebuild it with `worst-route pipeline save
---force --region R`"); `validate` says the same. Without `--seed` it draws a random seed, which it
+--force --region R`"); `validate` says the same. With `--geojson`, or `--out` and a places
+index, a build without its geometry is one line too, before the search ("... lacks its geometry
+(geom_indptr): rebuild it with `worst-route pipeline save --force --region R`"). Without `--seed` it draws a random seed, which it
 prints and records. While it searches it writes `iteration N: ratio Rx, L km`
 to stderr on an accepted splice (`restart N: K letters, ratio Rx, L km` on an alphabet route's
 better route), at most one line every 2 s. On stdout it prints:
@@ -1494,13 +1503,14 @@ Portland (`docs/project_overview.md` §2.3).
 ## Tests
 
 `tests/engine/` builds its graphs with `worst_route.graph.testing` and the helpers in
-`tests/engine/graphs.py` (`lattice`, with twins, transitions and lon/lat rounded for stable
-bytes).
+`tests/engine/graphs.py` (`lattice`, with twins and transitions, its positions whole metres
+for stable bytes; `at_node`, a node's lon/lat rounded to 1e-7° as a request's stop, and
+`exactly_at_node`, unrounded, for a stop that must lie on the node itself).
 
 | Test file | What it covers |
 |---|---|
 | `test_route.py` | every refusal, round trips, and the release and the ban counts against a brute force on random twins |
-| `test_validator.py` | each violation caught by the right check, including a cluster entered twice through its members, a shared shape point, non-finite metrics and reported item counts that differ from the recount; a strict turn constraint proven from the bearings (a left turn failing strict no-left, a right turn strict no-right, nothing under a soft one); an alphabet route passing with any roads on its free first and last legs (the `alphabet` check only in an alphabet request's report, its detail saying so), one out of order failing `alphabet` at the road at fault, each edited field of its letters failing `metrics`, a `free_from` outside the route (or not an int) failing both, an alphabet request whose route reports no letters |
+| `test_validator.py` | each violation caught by the right check, including one OSM junction a cluster and its stub both hold, passed at each (failing at the edge into the second), a cluster's members met once, non-finite metrics and reported item counts that differ from the recount; a strict turn constraint proven from the bearings (a left turn failing strict no-left, a right turn strict no-right, nothing under a soft one); an alphabet route passing with any roads on its free first and last legs (the `alphabet` check only in an alphabet request's report, its detail saying so), one out of order failing `alphabet` at the road at fault, each edited field of its letters failing `metrics`, a `free_from` outside the route (or not an int) failing both, an alphabet request whose route reports no letters |
 | `test_alphabet.py` | the letters (unnamed edges, links and numbered streets free), the counts (the free first leg up to the first A, equal letters in a row once, a road of the same letter after another, letters out of order counted as they come, the wrap from Z to A, an empty part); the search on named lattices: an ordered town driven A to J, every better route legal (`check_route`) and replaying from the seed, each better than the last and in order, the same bytes twice and on both backends (another seed another route), a connector driving a road of the letter just completed, the free first leg, a town without an A road keeping the seed and converging after its first restart, a run converging after its patience, the build's letters passed in, no restart, a round trip, a strict constraint on every route, a soft one, hard mode on every route (no road come back to), turn tables kept; `plan_route` the same on both backends with the `alphabet` check, its route.json read back and validated (an edited sequence failing `metrics`), no continuation |
 | `test_request.py` | the request model and its bounds (its target's too, and no ratio target for a round trip; the item only and always with `collect`, which takes no ratio; the brand only and always with `brand`, which takes none either, and left out of the JSON when there is none; the alphabet route with two stops only, a round trip among them, and no target), tier and leash auto, the masks and the tier's edge bans; the objective's keys, the constraints left out of the JSON when there are none, both at once refused |
 | `test_target.py` | the target's bounds; the goal's rules on values (the band's edges, phases, the closer route better and a tie to the later, growing and shrinking acceptance at the band, a duration moving one way, a candidate's value equal to the re-scored route's, a ratio and a duration under the slowest time and a duration under the distance on the experienced time, delays included); and on lattices with `check_delta`: ratio and duration targets reached while only growing, a base past a target shrinking into it, a route already within it stopping before an attempt, an unreachable target converging with the closest route, the overshoot after an empty cycle (the closest route returned, and a run cut at its attempt the prefix ending with it), the same bytes on both backends and twice; the slowest time reaching ratio and duration targets on its experienced time |
@@ -1545,9 +1555,9 @@ per second, the failures the transitions caused, the Jaccards), writes the JSON 
 exits 1 only when a planned route fails the validator. On Portland it takes under two minutes.
 
 `tests/golden/` freezes nine routes (seed 7, three stops but the last's two) on a 20 × 20
-lattice whose lon/lat
-are rounded to 1e-7°, so their bytes and pinned `graph_version` do not depend on PROJ's last
-bits: a max run of 400 attempts (`grid20_distance.json`); runs to a 6× ratio and a 2,400 s
+lattice whose positions
+are whole metres and whose stops are its nodes' lon/lat rounded to 1e-7°, so their bytes and
+pinned `graph_version` do not depend on PROJ's last bits: a max run of 400 attempts (`grid20_distance.json`); runs to a 6× ratio and a 2,400 s
 duration target, each stopping within it (`grid20_ratio.json`, `grid20_duration.json`); the
 slowest time, 400 attempts, on the lattice with a primary road every fourth row and column, 30 s
 signals where two cross and 10 s stop signs along them (`grid20_time.json`); soft no-left,

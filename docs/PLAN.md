@@ -226,7 +226,7 @@ Built for M1 without brands, states and places (M3, M4); the brands since (M3); 
 - **Bearings:** `bearing_out` over the first 20 m of the geometry (leaving u) and `bearing_in` over the last 20 m (arriving at v), as §3.6's turn rule reads them. As built in M3, the geometry less the stubs cleanup added to reach a merged node, so that a turn there is the road's (`docs/reference/pipeline.md`, enrich).
 - **Collectibles:** toll booths and level crossings are nodes on ways; map each to the simplified edges whose original node list contains it (both directions of a two-way road; a route uses one) → `toll_booth_n`, `level_crossing_n` per edge; one at a junction counts on the node's lowest-id out-edge until node collectibles (M3). `bridge=yes` per edge. Roundabout → super-node flag; as built, `save` keeps each super-junction's count of rings as `node_roundabouts`, so an interchange that holds a ring counts it. Stop signs/signals → node delay.
 - **Brands:** POIs with `brand` or `brand:wikidata`; snap each to the nearest kept edge within 50 m (STRtree nearest on edge geometries). Table `pois(brand_key, wikidata, name, lon, lat, edge_id, offset_m)`; `brand_key` = `brand:wikidata` when present else normalized brand name. Index by brand for the `/brands` autocomplete. As built in M3 (`docs/reference/pipeline.md`, enrich): each brand POI (a node, or a way's mean position) snaps to the nearest **node** a route can pass through within 100 m (`BRAND_SNAP_M`; a node only a route's ends can use is skipped), grouped by `brand:wikidata` when present, else by the brand string casefolded with its whitespace collapsed, named by its most common spelling; a brand on fewer than 3 distinct nodes (`BRAND_MIN_LOCATIONS`) is left out. The index is saved as build arrays (§2.7), not a POI table; on Portland 287 brands on 2,411 nodes.
-- **States:** built outside the build, with the places (M4; `docs/reference/presentation.md`, **Places**): a route's states are the Census 5m state polygons (`cb_2025_us_state_5m`) its line intersects, in the order it first meets them (§3.9), not a `state_fips` per node; `node_state` stays −1 in the format.
+- **States:** built outside the build, with the places (M4; `docs/reference/presentation.md`, **Places**): a route's states are the Census 5m state polygons (`cb_2025_us_state_5m`) its line intersects, in the order it first meets them (§3.9), not a `state_fips` per node; the format has no `node_state` since format 4 (it held −1 everywhere until then).
 - **Places:** built outside the build, as the places index (M4; `docs/reference/presentation.md`, **Places**): `worst-route aux places` writes the Census cartographic boundary polygons (2025: the 5m states, the 20m outlines, and each state's `place_500k` places meeting the region's bbox, CDPs included) under `data/aux/places/`, and the route's states and towns are the polygons its line intersects, in the order it first meets them (§3.9). Not the Gazetteer's centres and radii.
 - **Pass-through capability** per node: exists `u→v→w` with `u ≠ w` (needed for intermediate stops, §3.2).
 
@@ -251,23 +251,26 @@ Each tier is an edge mask on the master graph plus a node mask after re-running 
 
 ```
 data/graphs/<region>/<build_id>/
-  meta.json          region, build_id, crs_epsg, created, pipeline_version, counts, params (build parameters),
-                     sources (files + md5 + OSM timestamp), sha256 "graph_version"
+  meta.json          region, build_id, crs_epsg, created, pipeline_version, format (4), counts, params (build
+                     parameters), sources (files + md5 + OSM timestamp), sha256 "graph_version", sha256
+                     "geometry_version"
   strings.json       names, refs, identities: the tables edge_name / edge_ref / edge_identity index into
-  arrays/<name>.npy  one file per array:
-    nodes            node_lon/lat/x/y, node_kind (plain|cluster|interchange|roundabout), node_state (FIPS),
+  arrays/<name>.npy  one file per array, the arrays the engine and the validator read:
+    nodes            node_x/y (float64; lon/lat derived from them), node_kind (plain|cluster|interchange|roundabout),
                      node_pass_through, node_delay_s; member_indptr + member_osm_ids (original OSM node ids per node);
                      node_roundabouts (the rings each super-junction holds; last in the array order, added in M3)
-    edges            edge_u/v (int32), length_m, speed_kmh, time_s (float32), highway (enum), tier, name, ref,
-                     identity, unit, flags (bridge, tunnel, toll, roundabout, link), toll_booths, level_crossings,
-                     bearing_in/out (int16 degrees); way_indptr + way_osm_ids
+    edges            edge_u/v (int32), length_m, time_s (float32), speed (uint8 index into speed_kmh, the build's
+                     distinct speeds), highway (enum), tier, name, ref, identity, unit, flags (bridge, tunnel, toll,
+                     roundabout, link), toll_booths, level_crossings, bearing_in/out (int16 degrees)
     adjacency        out_indptr + out_edges, in_indptr + in_edges (each node's edges in ascending edge id)
-    geometry         coord_indptr + coords (float32 [N,2] lon/lat), osmnode_indptr + osmnode_ids (int64)
     twins            twin_indptr + twin_edges: CSR adjacency edge → twin edges, symmetric
     transitions      trans_node, trans_in, trans_out: allowed (in_edge, out_edge) pairs at super-nodes, sorted
     tiers            tier_node_mask [T0..T4, n], tier_edge_mask [T0..T4, m], after SCC
     brands           brand_indptr + brand_nodes (each brand's nodes), brand_locations (POIs per node);
                      the names and wikidata ids in strings.json (added in M3)
+  geometry/          the edges' shapes, for drawing only (format 4): geom_indptr (int32) + geom_dxy (int16 [N,2]),
+                     each shape simplified to 2 m (Douglas–Peucker) and stored as whole-metre steps from its tail;
+                     the ends are the nodes. The engine, the validator and the job workers never read it
   stages/            the pipeline's intermediate state between its steps (docs/reference/pipeline.md)
   qa/                qa.json; GeoJSON: twin pairs, super-junctions, dropped components, nodes the tiers dropped
   later, with their steps:
@@ -275,7 +278,7 @@ data/graphs/<region>/<build_id>/
   qa/                snapping oddities; qa.html summary
 ```
 
-Built: `pipeline save` writes it from the enriched graph and the tiers (`docs/reference/pipeline.md`, **save**), with `params` holding the configuration each step ran with, and refuses a super-junction whose transition table allows no turn, which the format cannot say. Edge ids are sorted by (u, v, original order), so each node's out-edges are one contiguous run of ascending ids. `graph_version` is the sha256 over each array's name, dtype, shape and bytes in a fixed order, then `strings.json`, then the build `params`; nothing else in `meta` enters it, so rewriting the same build reproduces it. `graph/store.py` writes a build into its build directory, beside the pipeline's `stages/`: it stages the files in a temporary sibling directory, moves `strings.json` and `arrays/` in, and moves `meta.json` in last as the commit marker, so a reader never sees half a build. A directory that already has `meta.json` is refused, so a build is never overwritten; `arrays/` or `strings.json` without `meta.json` are a crashed write's leftovers and are replaced.
+Built: `pipeline save` writes it from the enriched graph and the tiers (`docs/reference/pipeline.md`, **save**), with `params` holding the configuration each step ran with, and refuses a super-junction whose transition table allows no turn, which the format cannot say, and a graph whose OSM nodes along the edges break the validator's proof (§8.1, check 4). The compact format (format 4, pipeline version 6, an M5 step) keeps in `arrays/` only what the engine and the validator read: lon/lat, the way ids, the OSM nodes along each edge and the states left the arrays, the shapes moved to `geometry/`, and on Portland `arrays/` went from 39.1 MB to 15.0 MB and the whole build from 39.9 MB to 17.2 MB, the routes unchanged. Edge ids are sorted by (u, v, original order), so each node's out-edges are one contiguous run of ascending ids. `graph_version` is the sha256 over each array's name, dtype, shape and bytes in a fixed order, then `strings.json`, then the build `params`; nothing else in `meta` enters it, so rewriting the same build reproduces it, and the geometry has its own digest, `geometry_version`. `graph/store.py` writes a build into its build directory, beside the pipeline's `stages/`: it stages the files in a temporary sibling directory, moves `strings.json`, `arrays/` and `geometry/` in, and moves `meta.json` in last as the commit marker, so a reader never sees half a build. A directory that already has `meta.json` is refused, so a build is never overwritten; `arrays/`, `geometry/` or `strings.json` without `meta.json` are a crashed write's leftovers and are replaced.
 
 Why: `np.load(mmap_mode="r")` makes load time ~0 and lets worker processes share memory; `.npy` is language-neutral if a Rust kernel ever replaces Numba. Parquet exports of the node and edge tables, for DuckDB and QGIS, become a `qa` convenience later.
 
@@ -738,7 +741,7 @@ Rough graph sizes after simplification and consolidation (±50%):
 | US, T3 (tertiary and up) | ~3.5M | ~8M | 4.2M ways |
 | US, all drivable | ~20M | ~55M | ~16M ways |
 
-Memory per directed edge: CSR + attributes ~40 B, geometry ~50 B (avg 6 coords, float32) → ~100 B/edge. networkx: ~1.5 KB/edge.
+Memory per directed edge: CSR + attributes ~40 B, geometry ~50 B (avg 6 coords, float32) → ~100 B/edge. networkx: ~1.5 KB/edge. As built, format 3 took 237 B/edge on Portland (shapes 59 B, the OSM node ids along each edge 57 B, way ids 17 B); the compact format 4 maps 89 B/edge for the engine (`arrays/`) and keeps 8 B/edge of simplified geometry beside it (§2.7).
 
 | | CSR (mmap) | networkx |
 |---|---|---|
@@ -849,7 +852,7 @@ Checks:
 1. **Edge chain:** `tail(edges[k]) == nodes[k]` and `head(edges[k]) == nodes[k+1]` for all k; every edge exists in the active mask; one-way direction is therefore enforced by construction.
 2. **Vertex-simple:** `len(set(nodes)) == len(nodes)` (round trips: allow `nodes[0] == nodes[-1]` only).
 3. **Edge-simple and no twin reuse:** for every pair of route edges `(e, f)`, `f ∉ twins(e)` and `e ≠ f`, and no road unit twice. Implemented as: mark `e ∪ twins(e)` while walking; any edge already marked fails.
-4. **Consolidated junctions (the proof at the raw-data level):** expand the route to original OSM node ids via each edge's `osmnode_ids` plus the super-junction internal paths; assert no original OSM node id appears twice, and assert every `members` group appears in at most one contiguous run. This proves that neither a merged carriageway crossing nor a consolidated interchange/roundabout is entered twice, independently of the engine's own bookkeeping.
+4. **Consolidated junctions (the proof at the raw-data level):** expand the route's nodes to the original OSM node ids merged into each (`member_osm_ids`: a cluster's or a super-junction's members, a plain node's own id; a round trip's closing node left out); assert no original OSM node id appears twice. This proves that neither a merged carriageway crossing nor a consolidated interchange/roundabout is entered twice, independently of the engine's own bookkeeping (that each junction is one build node is the build's guarantee, `write_build` holding each id to one node; the check restates it from the route's data). The OSM nodes inside edges need no expansion: simplification removes only a node with one through path per direction, so such a node lies once inside one edge, or inside the two directions of one road unit, and is no node's member; passing it twice means driving an edge or a unit twice, which check 3 refuses. `pipeline save` checks that premise on every build (every edge starting and ending at its nodes' members, every inner OSM node inside it once, no member and inside one road unit), since the build keeps only the members (format 4; as first built, the check expanded each edge's own `osmnode_ids`).
 5. **Transitions:** every `(edges[k], edges[k+1])` pair at a super-node is in its allowed set.
 6. **Stops:** `nodes[stop_idx[s]]` equals the snapped stop node, in order; no stop is interior to a removed run (checked by construction in `splice`, re-checked here). For a saved route the stop nodes are re-derived from its request, never read from the file.
 7. **Constraints:** turn classes against `no_left`/`no_right`; hard-mode stretches (`identity → number of maximal runs ≤ 1`); leash (every node within `L` of the stop polyline); tier/bubble membership of every node, and no edge the tier bans outside the bubbles.

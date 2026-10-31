@@ -57,6 +57,10 @@ image serving the built frontend and the API (under `/api`) from one process (`s
 `tools/fetch_basemap.sh`) on MapLibre GL JS 6, each client's share of the jobs and the place
 searches on a public server (`serve --public`), JSON logs with request ids, `/ready`, and the
 attribution.
+The compact build format (format 4, pipeline version 6) is built too: a build's `arrays/`
+hold only what the engine and the validator read, and the roads' shapes, simplified to 2 m,
+sit apart in `geometry/`, which only the drawing of a route reads (`docs/reference/graph.md`,
+**Geometry**).
 The plan (`docs/PLAN.md`,
 2026-10-30) is written and its open questions answered as far as `docs/project_overview.md` §3
 records. **M1 is built**: in the acceptance run on the
@@ -129,7 +133,7 @@ first built and listed here when it exists.
 | Area | Code | Plan | Reference |
 |---|---|---|---|
 | Pipeline: download, filter, build, exclusions, simplify, consolidate (stages A and B), carriageway twins, connectivity, enrich, tiers, save (to the graph package's build format), qa | `src/worst_route/pipeline/` | §2 | `docs/reference/pipeline.md` |
-| Graph: a build's arrays and on-disk format, the backend protocol, the reference and CSR backends, Numba kernels, spatial (snapping, leash, bubbles), test builders, loader | `src/worst_route/graph/` | §2.7, §3.5, §3.9, §3.10 | `docs/reference/graph.md` |
+| Graph: a build's arrays, geometry and on-disk format, the backend protocol, the reference and CSR backends, Numba kernels, spatial (snapping, leash, bubbles), test builders, loader | `src/worst_route/graph/` | §2.7, §3.5, §3.9, §3.10 | `docs/reference/graph.md` |
 | Engine: `Route`, snapping, the seed route, detours, the worsen loop, the validator, exact mode | `src/worst_route/engine/` | §3.1–3.4, §3.11–3.13 | `docs/reference/engine.md` |
 | Objectives and constraints: the interface, each mode, turns and the turn constraints, the alphabet search | `src/worst_route/engine/objectives/`, `turns.py`, `constraints.py`, `alphabet_search.py` | §3.6–3.8 | `docs/reference/engine.md` (**Objectives**, **Turns**, **Constraints**, **Alphabet**) |
 | API: jobs, SSE, routes, geocode proxy, workers | `src/worst_route/api/`, `geocode/` | §4 | `docs/reference/api.md` |

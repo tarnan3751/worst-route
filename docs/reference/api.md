@@ -43,9 +43,10 @@ worst-route serve --region R [--build-id ID] [--host 127.0.0.1] [--port 8000] [-
                   [--trust-proxy] [--log-format text|json] [--public] [--frontend DIR]
 ```
 
-It loads the region's build (`--build-id`, else the region's `latest`) before it listens, so a
-missing build, or one saved before an array of the format existed (`docs/reference/graph.md`,
-**The build format**), is one line on stderr and exit 1. Then uvicorn serves one process. The jobs live
+It loads the region's build (`--build-id`, else the region's `latest`) and its geometry before it
+listens, so a missing build, one saved before an array of the format existed
+(`docs/reference/graph.md`, **The build format**), or one without its geometry (the `save
+--force` that writes it again) is one line on stderr and exit 1. Then uvicorn serves one process. The jobs live
 in that process's memory, and each runs in a worker process of its own, `--workers` at once
 (default `API_MAX_JOBS`, cores − 2). The routes go to `--store`, by default
 `<WORST_ROUTE_DATA>/routes.sqlite`; a lane that reads the main tree's builds through
@@ -197,7 +198,7 @@ FastAPI's `detail`), but for the basemap's files' range errors: `/basemap/` answ
 | 503 | `GEOCODER_DISABLED` | a place search on a server whose geocoder is `none` |
 | 404 | `NOT_FOUND` | an unknown (or expired) job, an unknown route (for a share image, also an id that is not 12 lowercase hex digits), an unknown path |
 | 405 | `METHOD_NOT_ALLOWED` | a method a path does not take |
-| 409 | `BUILD_UNAVAILABLE` | a stored route whose build is no longer on disk at its `graph_version` |
+| 409 | `BUILD_UNAVAILABLE` | a stored route whose build is no longer on disk at its `graph_version`, or has lost its geometry (`geometry/`, which drawing it needs) |
 | any other | `HTTP_<status>` | any other HTTP error Starlette raises, its status in the code |
 | 500 | `INTERNAL_ERROR` | an exception nothing else answered (a bug): the message is only "internal error", the traceback goes to the log with the request's id, and the answer carries `X-Request-ID` (**Logs**) |
 
@@ -274,7 +275,7 @@ of the last splice applied; `elapsed_s` the wall time since it started.
  request:    the API request as planned (seed filled in; for "make it worse", base_route_id
              and the base route's stops, tier and leash),
  stops:      [{label, node, lat, lon, moved_m, note, route_index}],
- geometry:   LineString along every edge,
+ geometry:   LineString along every edge's shape in the build's geometry,
  legs:       [{from_stop, to_stop, node_range: [a, b]}],
  metrics:    {length_m, baseline_length_m, ratio, time_s, baseline_time_s, baseline_delay_s,
               time_ratio, departure, arrival, target, delay_s,
@@ -361,9 +362,12 @@ ends, so the client closes it on either. A client subscribes when its stream sta
 not when the request arrives, and unsubscribes when it ends, so a client gone before its stream
 starts leaves no subscriber behind (which would keep the job from ever being an orphan).
 
-**Applying the stream.** A route is drawn as `[lon, lat]` points along its edges; consecutive
-edges share their junction point, kept once (true of every build), and `node_index[k]` is the
-index of route node k among the points. A `snapshot` replaces the client's points and indices.
+**Applying the stream.** A route is drawn as `[lon, lat]` points along its edges' shapes in the
+build's geometry (`docs/reference/graph.md`, **Geometry**: simplified to 2 m at `save` and
+stored to the metre, so a drawn line lies within 2.71 m of the road; the API process reads it,
+never a job's worker); consecutive edges share their junction point, a node's position exactly,
+kept once, and `node_index[k]` is the index of route node k among the points. The route
+document, its GeoJSON and the share image draw the same points. A `snapshot` replaces the client's points and indices.
 Each splice in a `progress` event, in order, replaces route nodes `i..j` (positions before the
 splice) by `node_count` nodes:
 
@@ -382,7 +386,9 @@ vertex, and the kept points are the original values to the last digit, so the po
 indices of the snapshot and of later splices agree exactly. Across a north-south line the
 tolerance is 0.7 m at Portland's latitude. On Powell's → Reed (seed 1, converged: 4,913 nodes)
 the snapshot `GET /jobs/{id}` returns has 7,262 points where the route document's geometry has
-17,138; splices are not simplified.
+17,138 (format 3, whose shapes were unsimplified float32 lon/lat; with format 4's geometry the
+document's lines have about a third of the points: 32,131 where format 3 had 87,551 over the
+twenty acceptance routes at 2,000 attempts); splices are not simplified.
 
 **Ids and reconnecting.** Every event the job broadcasts takes the next id, and every splice
 is sent before the job's `done` or `error`. A subscriber gets, first, the `snapped` and
@@ -858,13 +864,13 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 | `test_ready_api.py` | `/ready`: 200 with the build, the store and the places index; 503 without the index, and once the build is replaced or gone (while `/health` answers), its details without a path on the server |
 | `test_static.py` | the site: the build at `/` and its caching, a module's media type, `/health` not at the root, the API under `/api` with its errors, a job run to its end through it (the lifespan ran), the access lines' whole paths |
 | `test_store.py` | the round trip (the stored route validates), unknown ids, the first record kept, what the id covers |
-| `test_sse.py` | path points and node indices, the per-edge simplification keeping nodes and original values, splices, metrics, the event encoding |
+| `test_sse.py` | path points and node indices along a bent geometry, the per-edge simplification keeping nodes and original values, splices, metrics, the event encoding |
 | `test_jobs.py` | the manager with inline workers: event order and ids, a client replay equal to the stored route, late subscribers (after a worker that died with splices waiting too: they come before its `error`, ids rising strictly), `Last-Event-ID` resync, cancel (validated, stored, reproduced by its attempts), the queue and its limit, cancel before the route exists, continuations, the time limit, orphans running and queued, a worker that raises, a worker refusing a brand its request's area does not hold (`INVALID_REQUEST`), a store failure while cancelling (by hand and by the sweep, which goes on), a worker that does not start (the queue moves on), the TTL; a target run whose best is not its last route (an overshoot on a 5 × 5 lattice): a snapshot of the stored route before `done`, for live and late clients, and a cancel after the overshoot storing the closest route, reproduced by its attempts |
-| `test_worker_process.py` (`slow`) | real spawned workers: a run to `done`, a cancel mid-run, a worker killed from outside (`WORKER_FAILED`), a fake worker that dies 60 kB into a 2 MB message (`WORKER_FAILED`, then a clean `stop()`), and a worker whose API process (a probe) is killed exiting within 3 s; about 4 s |
+| `test_worker_process.py` (`slow`) | real spawned workers: a run to `done`, a cancel mid-run, a worker killed from outside (`WORKER_FAILED`), a fake worker that dies 60 kB into a 2 MB message (`WORKER_FAILED`, then a clean `stop()`), a worker whose API process (a probe) is killed exiting within 3 s, and a worker run alone in a fresh interpreter on a build without its geometry, planning and never importing the geometry's or the GeoJSON's module; about 5 s |
 | `test_geocode_api.py` | `GET /geocode` with a `FakeGeocoder`: the answer's shape, at most five candidates, the cache across casing and spacing (one upstream call), each refusal (an empty, blank, missing or too long query; a missing or unknown region; `RATE_LIMITED` from a full queue with its `retry_after_s`, a cached query still answered; `GEOCODER_ERROR`; a 429 upstream, on an `httpx.MockTransport`, pausing the geocoder, the next search refused without a request; `GEOCODER_DISABLED`, with no cache file); the default service, its client on a `MockTransport` (`offline_clients`): Nominatim at its URL with the User-Agent and contact, the cache beside the store, the limits and the pause, its client closed by the lifespan. The other API tests serve with `geocoder="none"`, so they build no geocoder |
 | `test_directions_api.py` | the document's directions (numbered, the stops' labels, the arrival's empty range at the end, the distances adding up), toasts (the ratio first, six to twelve), the fuel from the request's vehicle and the states and towns from the census fixture's index, all null without them, and the network fraction; `/directions` the document's directions, twice the same, jokes included; a route stored before them (its stored metrics without them, and one without its delays and turns) getting them; unknown routes 404 and a route whose build is gone 409 on both |
 | `test_share_api.py` | `GET /routes/{id}/share.png` with and without a places index: a 1200 × 630 `image/png` with its Cache-Control, two concurrent first requests rendering once (a counted render) and getting the same bytes, one file, no lock left, a later request served from the file; `HEAD` first (it renders), its headers a GET's with no body; unknown and malformed ids (404, no file); a route whose build is gone (409, no lock left); a render that fails (no file, no lock, the next request draws it); two servers on one store rendering the same route at once, each part written before either rename (a barrier in `os.replace`), leaving one file and no part; on a lattice with signals, a slowest-time route's image headed by its document's `time_ratio`, "slower than the sensible route", and a distance route's by its `ratio`; `import worst_route.api.app` in a fresh interpreter leaving matplotlib out of `sys.modules` |
-| `test_routes_api.py` | every endpoint over `httpx.AsyncClient` in-process, every refusal code, cancel over HTTP, a closed stream cancelling its job, a stream that subscribes only once it runs, make it worse and its mismatches (a base outside its request's masks included), a continuation that changes nothing reporting the stored route; ratio and duration jobs ending `target` with the target in `done` and the document (none for max), a target out of bounds or a ratio for a round trip refused, make it worse with a smaller target shrinking; a stored route differing from the drawn one by a parallel edge sent as a snapshot before `done`, with `GET /jobs/{id}` agreeing; a ratio target for a round trip refused before anything else, for a base route too; `Infinity` and `NaN` in a body refused; a slowest-time job under a soft no-left constraint, its turns and delays in `done` and the document; a strict constraint refusing a base route that turns left, a soft one taking it; a leg a strict constraint cannot drive answered `INFEASIBLE_TURN_CONSTRAINT` with its leg and constraint, one no route covers without it either (two one-way rings) `STOP_UNREACHABLE_WITHOUT_REPEAT` with strict set too; a body cut short refused without a `field`; `strict` alone and both constraints refused on `field: "constraints"`; on a lattice with signals, the document's `time_ratio`, `done`'s, and `arrival` counting the delays, the route's and the baseline's, for a route stored before the documents carried `baseline_delay_s` too; a collect job counting its bridges in every `progress` and in `done`, the document's `items` agreeing (a distance job's too), and the item and target refusals naming their field; `/brands` (its order, an unknown or missing region), a pilgrimage counting its visits in every `progress` and in `done`, the document's `brand` agreeing and a distance route's null, and the brand refusals (missing, misplaced, a ratio, unknown, out of reach) naming their field; an alphabet job sending each better route as a `snapshot` then a `progress` without splices, its letters and score rising, `done` and the document's `alphabet` agreeing (a distance route's null), `/validate` ending with its `alphabet` check, the build's letters worked out once over two document requests; cancelling one, its best route so far stored and validated; the alphabet refusals (a via, a target, a base route) naming their field |
+| `test_routes_api.py` | every endpoint over `httpx.AsyncClient` in-process, every refusal code, a stored route drawn along its build's bent geometry (its document, GeoJSON and share image) and `BUILD_UNAVAILABLE` for a build without one, cancel over HTTP, a closed stream cancelling its job, a stream that subscribes only once it runs, make it worse and its mismatches (a base outside its request's masks included), a continuation that changes nothing reporting the stored route; ratio and duration jobs ending `target` with the target in `done` and the document (none for max), a target out of bounds or a ratio for a round trip refused, make it worse with a smaller target shrinking; a stored route differing from the drawn one by a parallel edge sent as a snapshot before `done`, with `GET /jobs/{id}` agreeing; a ratio target for a round trip refused before anything else, for a base route too; `Infinity` and `NaN` in a body refused; a slowest-time job under a soft no-left constraint, its turns and delays in `done` and the document; a strict constraint refusing a base route that turns left, a soft one taking it; a leg a strict constraint cannot drive answered `INFEASIBLE_TURN_CONSTRAINT` with its leg and constraint, one no route covers without it either (two one-way rings) `STOP_UNREACHABLE_WITHOUT_REPEAT` with strict set too; a body cut short refused without a `field`; `strict` alone and both constraints refused on `field: "constraints"`; on a lattice with signals, the document's `time_ratio`, `done`'s, and `arrival` counting the delays, the route's and the baseline's, for a route stored before the documents carried `baseline_delay_s` too; a collect job counting its bridges in every `progress` and in `done`, the document's `items` agreeing (a distance job's too), and the item and target refusals naming their field; `/brands` (its order, an unknown or missing region), a pilgrimage counting its visits in every `progress` and in `done`, the document's `brand` agreeing and a distance route's null, and the brand refusals (missing, misplaced, a ratio, unknown, out of reach) naming their field; an alphabet job sending each better route as a `snapshot` then a `progress` without splices, its letters and score rising, `done` and the document's `alphabet` agreeing (a distance route's null), `/validate` ending with its `alphabet` check, the build's letters worked out once over two document requests; cancelling one, its best route so far stored and validated; the alphabet refusals (a via, a target, a base route) naming their field |
 
 `tests/engine/test_plan.py` covers `plan_route`'s hooks, `tests/graph/test_loader.py` the loader,
 and `tests/unit/test_cli.py` `serve`'s errors, options (the geocoder's included, with the line

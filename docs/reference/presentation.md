@@ -124,7 +124,8 @@ are none (the CLI has none), its jokes the file's seed's:
 
 ## Stats and toasts
 
-`stats(data, edges, *, length_m, baseline_length_m, vehicle, places, active, banned) -> Stats`:
+`stats(data, edges, *, length_m, baseline_length_m, vehicle, places, geometry, active, banned)
+-> Stats` (`geometry`, the build's, which only the places need: None without them):
 
 - `extra_fuel_gal`: the length beyond the baseline's, in miles, over the vehicle's `mpg`;
   `extra_cost_usd`: that at its `gas_price_usd`. Both null without a vehicle (the API request's
@@ -167,10 +168,11 @@ way."
 ## The document
 
 `present(data, nodes, edges, stop_idx, metrics, *, active, banned, seed, labels, vehicle,
-places) -> {"directions": [...], "toasts": [...], "metrics_extra": {...}}` is what both route
-documents add to a route, from its arrays, its document's metrics (the ratio, the times and
-delays, the turns), its request's masks, its seed, its stops' labels, its request's vehicle and
-the region's places index; `metrics_extra` holds `extra_fuel_gal`, `extra_cost_usd`, `states`,
+places, geometry) -> {"directions": [...], "toasts": [...], "metrics_extra": {...}}` is what both
+route documents add to a route, from its arrays, its document's metrics (the ratio, the times
+and delays, the turns), its request's masks, its seed, its stops' labels, its request's
+vehicle, the region's places index and the build's geometry (only the places need it: the CLI
+reads it only when it has a places index); `metrics_extra` holds `extra_fuel_gal`, `extra_cost_usd`, `states`,
 `towns`, `towns_n` and `network_fraction`. Its two callers:
 
 - **`worst-route plan --out`** writes `with_presentation(route_document(...), present(...))`:
@@ -194,18 +196,21 @@ on a quiet machine and 1.8–2.6 s at load average 30, nine tenths of it the loo
 
 ## GeoJSON
 
-`route_geojson(data, result)` (`plan --geojson`) is a FeatureCollection:
+`route_geojson(data, geometry, result)` (`plan --geojson`) is a FeatureCollection:
 
-- the route and the baseline as LineStrings along their edges' `coords` (`[lon, lat]`, 7
+- the route and the baseline as LineStrings along their edges' shapes in the build's geometry
+  (`docs/reference/graph.md`, **Geometry**: within 2.71 m of the road; `[lon, lat]`, 7
   decimals; a point repeated where two edges meet is kept once);
 - one Point per stop, at its snapped node.
 
 Each feature has a `kind` property (`route`, `baseline`, `stop`). The lines carry `length_m`
 and `time_s`; the stops carry `index`, `node`, `moved_m` and `note`. A round trip's baseline
-has a null geometry. `feature_collection(data, *, edges, length_m, time_s, baseline_edges,
-baseline_length_m, baseline_time_s, snaps)` makes the same from a stored route's parts (the
-API's `GET /routes/{id}/geojson`), and `line_coordinates(data, edges)` is one line's points. The
-engine and the job workers never import the module.
+has a null geometry. `feature_collection(data, geometry, *, edges, length_m, time_s,
+baseline_edges, baseline_length_m, baseline_time_s, snaps)` makes the same from a stored route's
+parts (the API's `GET /routes/{id}/geojson`), and `line_coordinates(data, geometry, edges)` is
+one line's points. The engine and the job workers never import the module. Over the twenty
+acceptance routes on Portland (2,000 attempts each) the GeoJSON files take 1.00 MB where format
+3's unsimplified float32 shapes took 2.72 MB, with 32,131 points where those had 87,551.
 
 ## Places
 
@@ -264,7 +269,8 @@ Without Washington's file it writes Oregon's 53 places and warns
 shapely, no geopandas) into two shapely STRtrees, the states and the region's places, and keeps
 the outlines to draw; it returns None when any file is missing, and callers then know no states
 or towns and draw no outlines, never an error. For a route's line in lon/lat
-(`route_line(data, edges)`, the points `geojson.line_coordinates` gives):
+(`route_line(data, geometry, edges)`, the points `geojson.line_coordinates` gives, along the
+build's geometry):
 
 - `states_crossed(line) -> list[State(fips, usps, name)]` and `towns_passed(line) ->
   list[Town(name, lsad, usps, geoid)]` list every polygon the line **intersects** (a touch
@@ -333,9 +339,9 @@ which is 1.7 mi (2.7 km). It still counts."
 
 ## Share image
 
-`render_share_image(data, route_nodes, route_edges, metrics, places, comparison, *,
+`render_share_image(data, geometry, route_nodes, route_edges, metrics, places, comparison, *,
 baseline_edges=None, objective="distance") -> bytes` draws a route (its nodes and edges on its
-build, its document's `metrics`, the objective it was planned for) as a 1200 × 630 PNG, the
+build, along the build's geometry, its document's `metrics`, the objective it was planned for) as a 1200 × 630 PNG, the
 Open Graph size, from our own data only. The API serves it at `GET /routes/{id}/share.png`,
 rendered once and cached (`docs/reference/api.md`, **Share image**).
 
@@ -353,8 +359,10 @@ rendered once and cached (`docs/reference/api.md`, **Share image**).
 - **The map** fills the rest, edge to edge, with **no basemap of any kind**. Its extent is the
   route's bbox with 15 % of its width and height on each side (at least 1 km across), widened to
   the map's shape with x scaled by cos(mean latitude), so distances look the same both ways.
-  From the bottom up: the build's roads as light hairlines (one edge per road unit, those whose
-  bounds meet the extent; only T0–T2 when more than 50,000 would show), the state outlines from
+  From the bottom up: the build's roads as light hairlines along its geometry (one edge per road
+  unit, those whose bounds meet the extent, found first by their bounds in the build's CRS
+  against the extent's outline projected and grown by `NETWORK_MARGIN_M`, 50 m, then decoded
+  and tested in lon/lat; only T0–T2 when more than 50,000 would show), the state outlines from
   the places index's 20m file in a darker grey (none without an index), the route in red
   (`#e8452c`, the map's) on a white casing, the baseline dashed in grey over it (the sensible
   route through the mess; none for a round trip), a ring at the start and a smaller dot at the
@@ -387,7 +395,7 @@ data directory and holds a route over the API tests' 10 × 10 lattice):
 |---|---|
 | `test_places.py` | the index's rows; states and towns in route order, the CDP included, and reversed; a route that comes back into a town listed where it first met it; a point repeated (a zero-length segment) met where it is; a route touching nothing; a touch counting; places outside the bbox left out; a state the bbox meets without its places file reported missing; the state's bounds when there is no bbox; the files' columns and CRS; no index when a file is missing; `aux places` on the fixture zipped as the Census ships it (shapefiles), with the latest build's bbox and the warning, and its missing state file; `STATES` (51, unique, every region's state) |
 | `test_comparisons.py` | the four lines above; the things in order, each with both lines; a sweep from 0.1 to 500,000 mi reaching every thing, and every "N×" line but those the list makes unreachable (derived from it), deterministic; the boundaries (equal is not longer, 2× exactly, the shorter line); every distance's format |
-| `test_share_image.py` | a 1200 × 630 PNG (its IHDR), the same bytes twice, with and without the index (which differ), no Software stamp; `headline` for each objective and a round trip; a slowest-time route drawing its own headline, a distance route ignoring its time ratio; a round trip; no baseline; the extent's margin and shape, and its minimum; the network one line per road unit, thinned when too many |
+| `test_share_image.py` | a 1200 × 630 PNG (its IHDR), the same bytes twice, with and without the index (which differ), no Software stamp; `headline` for each objective and a round trip; a slowest-time route drawing its own headline, a distance route ignoring its time ratio; a round trip; no baseline; the extent's margin and shape, and its minimum; the network one line per road unit, thinned when too many, and drawn along a bent geometry, only the units near the map |
 | `test_fetch_census.py` | the script against a `curl` stand-in on PATH: the URLs and User-Agent, a file without a pinned sum kept with its sum printed, a pinned file whose sum differs deleted (exit 1), a failed fetch leaving no `.part` file and fetching no further (exit 1), a bad FIPS code fetching nothing (exit 2) |
 | `test_directions.py` | each step's words on small named graphs (`streets.py`): the town's turns, an interior stop with and without a label (the road going on as "Continue on"), a round trip's arrival, the turn words at the slight and sharp bands' ends, straight on continuing only on a new road, a turn on the same road its own step ("to stay on"), never "to stay on" an unnamed road, US 26 through downtown (a ref joining a name straight on unannounced, then each turn a step), unnamed roads and an alley in words, a ramp of two links toward the motorway's first ref and one the route ends on, a ramp carrying the ref of the road it joins (US 30) still ending, toward that road, an interchange on the ramp or where it meets the motorway adding no second ramp, an interchange without a link a junction like another and a roundabout node (the same road through it cut too), the diamond and roundabout fixtures through the pipeline; planned lattice routes with signals, a round trip included: the ranges tiling the edges, the distances adding up to the length and the times to the driving and delays; names, refs and the compass, half-way bearings clockwise |
 | `test_jokes.py` | forty distinct jokes and their placeholders, one turn counted as "1 turn"; the same seed the same jokes, another seed others; over 20 seeds no joke twice, every placeholder filled, the real steps kept in order and numbered again, each joke empty after a driving step, the gaps within their band; a long route spreading nearly all forty to its end; the ratio, the turns before and the step's distance filled in; a round trip without ratio jokes and a route without turns without turn counts; a short route without a joke; the distances' format; `route_directions` with and without jokes |

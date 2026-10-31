@@ -50,7 +50,7 @@ is the one place that names these paths.
 | `graphs/<region>/<build_id>/stages/cleanup.pkl`, `stages/cleanup.json` | `cleanup` |
 | `graphs/<region>/<build_id>/stages/enrich.pkl`, `stages/enrich.json` | `enrich` |
 | `graphs/<region>/<build_id>/stages/tiers.json` | `tiers` |
-| `graphs/<region>/<build_id>/meta.json`, `strings.json`, `arrays/`; `stages/save.json` | `save` (the build, through `graph.store.write_build`) |
+| `graphs/<region>/<build_id>/meta.json`, `strings.json`, `arrays/`, `geometry/`; `stages/save.json` | `save` (the build, through `graph.store.write_build`) |
 | `graphs/<region>/<build_id>/qa/qa.json`, `qa/*.geojson` | `qa` |
 | `<output>.inputs.json` beside a step's output (its sidecar) | every step but `download` |
 
@@ -77,6 +77,7 @@ report beside it in `qa/`.
   | 3 | M3: `enrich` indexes the brands, `save` writes them as arrays | ffe2e7c881ca (8867636799a6) |
   | 4 | M5: stage A places each cluster from its own buffers, not from OSMnx's union of every buffer (**cleanup**, step 2) | 4b8998deee9f (57e5deb43289) |
   | 5 | M5: stage B joins two clusters a carriageway leaves and comes back to, and its pockets follow a road by its name as well as its refs (**cleanup**, step 4). With them came the drop of a super-junction with edges in and out that allows no turn through it (step 4, No turn allowed), which needed no version of its own: no build that saved had one (`save` refuses them), so it changes no array of Portland's or Oregon's | c60bc0c9cb4a (0d4338234cae), under the connectivity rule of M5.1 |
+  | 6 | M5: `save` writes the compact format (format 4: the speed table; no lon/lat, way ids, OSM node runs, states or shapes among the arrays; the shapes simplified into `geometry/`; `docs/reference/graph.md`) | 3a4a3df6269f (04d2e06854dd) |
 
   Rows 1–4 were measured on Geofabrik's Oregon extract of 2026-10-28, rows from 5 on on that of
   2026-10-29 (md5 3c9bc0db9a4830d004044865fbecd965, data of 2026-10-29T21:21:26Z), which
@@ -85,7 +86,8 @@ report beside it in `qa/`.
   Version 4 moves 3,977 of Portland's 4,236 clusters by at most 1.5e-8 m: against version 3,
   the build's `node_x`, `node_y`, `node_lat` and `node_lon` differ in 3,216, 3,206, 3,020 and
   510 rows, `edge_length_m` in one and `edge_time_s` in five (each by one float32 step), and
-  every other array is identical.
+  every other array is identical. Version 6 changes no value the engine reads: from the same
+  extract, every route planned on it is the one the version before plans.
 - **Sidecar:** after `filter`, `build` or `cleanup` writes its output it records
   `{"step", "inputs": [{"file", "md5"}], "params"}` in `<output>.inputs.json` (filter: the
   bbox and the pipeline version; build: the region, bbox, CRS and pipeline version; cleanup:
@@ -520,7 +522,9 @@ constants are in `config.py`.
   Anything else (`signals`, `none`, `US:urban`, `0`, knots) falls back to the class default,
   `SPEED_DEFAULT_MPH` (motorway 65, trunk 55, primary 45, secondary 35, tertiary 30,
   unclassified and residential 25, living street 15, alley 10, every `_link` 35). `speed_kmh`
-  is stored, `speed_parsed` says which, and `time_s = length / (speed_kmh / 3.6)`.
+  is stored, `speed_parsed` says which, and `time_s = length / (speed_kmh / 3.6)`. Both are
+  float64 here; `save` stores the time as float32 and the speed as an index into the build's
+  table of distinct speeds, exactly.
 - **Identity** (hard mode, directions): `names.identity_of`, the highest-class ref (Interstate,
   then US, then a state's postal code or `SR`, then any other, such as a county's `CR`;
   alphabetical within a class), each ref keeping its `BUSINESS`, `SPUR` or `ALT` suffix so such a
@@ -547,11 +551,13 @@ constants are in `config.py`.
   `wrap(bearing_out(e_out) − bearing_in(e_in))`, needs. Before pipeline version 2 the 20 m
   included the stub (7 m median at a stage A cluster, 66 m to an interchange's centroid), and
   on Portland 21.5% of the turns between two roads at a stage A cluster classed differently
-  from the road's own, 63% at interchanges, 19% at roundabouts; now 0.2–0.5%, as at plain nodes
-  (0.07%): the build's float32 coordinates' rounding, a degree or two, flipping turns at a
-  class's threshold. `uv run python tools/turn_bearings.py --region portland` reports it for a
-  saved build, counting each edge's stubs from the build alone (its coordinates less its OSM
-  nodes).
+  from the road's own, 63% at interchanges, 19% at roundabouts; now none. `uv run python
+  tools/turn_bearings.py --region portland` reports it for a saved build, from the whole shapes
+  its enrich stage holds (the build's own geometry is simplified), counting each edge's stubs
+  (its coordinates less its OSM nodes): at version 6 the stored bearings are the road's at every
+  turn of every kind of node (measured on the build's float32 coordinates, as the tool did before
+  version 6, 0.2–0.5% of the turns differed, their rounding flipping turns at a class's
+  threshold).
 - **Collectibles**, from the POI table's node rows (a way row is not counted): a toll booth or
   level crossing whose OSM id lies inside edges counts on every edge that holds it, both
   directions of a two-way road, of which a legal route uses one; one that is a node's member (at
@@ -620,20 +626,27 @@ build c60bc0c9cb4a: 1,331, 5,169, 11,663, 20,173 of 20,184 and 65,779).
 
 ## `save`
 
-`save.graph_data(graph, tier_nodes, meta) -> GraphData`, then `save.save_build(data,
-build_dir)`. The arrays are `docs/reference/graph.md`'s; how they come from the enriched graph:
+`save.graph_data(graph, tier_nodes, meta) -> GraphData` and `save.graph_geometry(graph, data)
+-> Geometry`, then `save.save_build(data, build_dir, geometry)`. The arrays and the geometry are
+`docs/reference/graph.md`'s; how they come from the enriched graph:
 
 - **Edge ids** are the positions of the sorted edge keys `(u, v, key)`, the format's (u, v,
   original order); `out_edges` and `in_edges` list each node's edges in ascending id. A unit's
   id is the id of its key.
-- **Nodes**: `x, y, lon, lat`; `node_kind` from `kind` (`NodeKind`); `node_state` −1 (a route's
-  states come from the Census polygons at presentation time, `docs/reference/presentation.md`,
-  so it stays −1); `pass_through`; `delay_s`; `members`.
-- **Edges**: `length` and the enriched values; `edge_highway` from the class string
+- **Nodes**: `x, y` (the build derives lon/lat from them); `node_kind` from `kind`
+  (`NodeKind`); `pass_through`; `delay_s`; `members`. A route's states come from the Census
+  polygons at presentation time (`docs/reference/presentation.md`), so no node carries one.
+- **Edges**: `length`, `time_s` and the enriched values; `speed_kmh` the distinct speeds
+  (float32, ascending) and `edge_speed` each edge's index among them, more than 256 refused
+  with `TooManySpeedsError` (Portland has 13); `edge_highway` from the class string
   (`HighwayClass`); `edge_tier` the first tier holding the class; `edge_name` and `edge_ref`
-  index the raw `name` and `ref` tags, `edge_identity` the identities, each table sorted;
-  `way_osm_ids` from `osmids`, `osmnode_ids` from `osm_nodes`; `coords` the projected geometry
-  turned back into (lon, lat), float32, so each edge runs from its tail's position to its head's.
+  index the raw `name` and `ref` tags, `edge_identity` the identities, each table sorted. The
+  way ids (`osmids`) and the OSM nodes along each edge (`osm_nodes`) stay in the stages.
+- **Geometry** (`graph_geometry`): each edge's projected shape, which runs from its tail's
+  position to its head's, simplified by Douglas–Peucker (shapely's `simplify`,
+  `preserve_topology=False`) to `GEOMETRY_SIMPLIFY_M` (2 m) with its ends kept, then encoded as
+  whole-metre steps (`graph.geometry.encode`). The lengths and bearings were measured at
+  `enrich` on the whole shape, so nothing the engine reads depends on the simplification.
 - **Twins** and **transitions**: the cleaned graph's tables, keys turned into ids, rows sorted.
 - **Tiers**: `tier_node_mask[t]` what `tiers` kept, `tier_edge_mask[t]` the tier's classes with
   both ends kept.
@@ -649,25 +662,37 @@ say (a node without rows allows every turn): `graph_data` raises `EmptyTransitio
 the node and its position, and the CLI exits 1. It is a guard: stage B drops such super-nodes
 (**cleanup**, step 4).
 
+The validator proves a route passes no original OSM node twice from the nodes' members alone
+(`docs/reference/engine.md`, `osm_ids`), which rests on what lies along the edges, kept in the
+stages only. `graph_data` checks it on every build and raises `ShapePointError` (the CLI exits
+1): every edge starts and ends at OSM nodes merged into its tail and head, and every OSM node
+inside an edge lies inside it once, is no node's member and lies inside one road unit only (the
+edge, or the two directions of its road). Simplification removes only a node with one through
+path per direction, so it holds by construction; on Portland its 366,196 inner OSM nodes do.
+
 `save.build_meta` assembles `meta`: `region`, `build_id`, `crs_epsg`, `created` (UTC),
-`pipeline_version`, `sources` and `params`. `save.build_sources` gives the extract `filter`
+`pipeline_version`, `format` (4), `sources` and `params`. `save.build_sources` gives the extract `filter`
 read (file, md5 and `source_timestamp`) after checking that the filtered roads are still the
 ones `build` read (their md5 against `build.pkl`'s sidecar); otherwise it raises
 `SourcesChangedError` and the CLI says "the filtered extract changed since this build was
-built; rebuild". `save.build_params` gives the `region`, its `bbox` and `crs_epsg`, and the
-`config` and `allow_fragmented` the cleanup, enrich and tiers sidecars recorded, so
+built; rebuild". `save.build_params` gives the `region`, its `bbox` and `crs_epsg`, the
+`config` and `allow_fragmented` the cleanup, enrich and tiers sidecars recorded, and save's own
+`config` (`save.parameters()`: `GEOMETRY_SIMPLIFY_M`, the geometry's tolerance), so
 `graph_version` covers what the build was made with; `pipeline_version` stays out of
 `params`. `graph_data` fills `counts`: nodes, edges, twin
-pairs, transition rows, super-junctions. `save_build` writes the build with `write_build`
-(which validates it), reads it back with `read_build`, raises `RuntimeError` if any array, the
-strings or the meta differ, and writes `stages/save.json` (`graph_version`, the counts, the
-size, seconds). `save.remove_build` deletes a written build, `meta.json` first, for `--force`.
+pairs, transition rows, super-junctions. `save_build` writes the build and its geometry with
+`write_build` (which validates them), reads them back with `read_build` and `read_geometry`,
+raises `RuntimeError` if any array, the strings or the meta differ, and writes
+`stages/save.json` (`graph_version`, the counts, `megabytes` of the arrays and strings, which
+the engine reads, `geometry_megabytes`, seconds); the CLI prints both sizes. `save.remove_build` deletes a written build, `meta.json` first, for `--force`.
 
 **Portland** (2–4 s): 65,810 nodes, 168,167 edges, 3,353 twin pairs, 11,378 transition rows at
 657 super-junctions, 39.9 MB; 170 roundabout rings, at 165 roundabouts (one holds two) and 4
 interchanges (pipeline version 3). At version 5 (build c60bc0c9cb4a, the 2026-10-29 extract):
 65,779 nodes, 168,120 edges, 3,397 twin pairs, 11,455 transition rows at 642 super-junctions (477
-interchanges, 165 roundabouts), the same 170 rings.
+interchanges, 165 roundabouts), the same 170 rings. At version 6 (build 3a4a3df6269f, the same
+extract; about 4 s, the checks and the geometry included), the same nodes, edges and tables in
+15.8 MB of arrays and strings (39.9 MB at format 3) and 1.4 MB of geometry.
 
 ## `qa`
 
@@ -677,8 +702,8 @@ without an array of the format is one line naming its remedy, the rebuild from `
 another pipeline version wrote, and exit 1; a plain `save` refuses such a build with the same
 line):
 
-- `twins.geojson`: one feature per twin pair, a MultiLineString of the two edges, with their
-  ids, classes, identities and lengths;
+- `twins.geojson`: one feature per twin pair, a MultiLineString of the two edges (along the
+  build's geometry), with their ids, classes, identities and lengths;
 - `superjunctions.geojson`: a point per super-junction with its kind, parts (nodes replaced),
   members, transition rows, in- and out-edges and whether every turn is allowed;
 - `dropped_components.geojson`: a point per component cleanup dropped and listed (the 20
@@ -830,12 +855,15 @@ grouping by wikidata id or name, the display name, the cut on distinct nodes, th
 POI with only a dead end near), `test_tiers.py`
 (each fixture's tiers, the tie rule, the fragmented failure), `test_save.py` (every fixture saved,
 read back and checked with `check_build` and `check_saved`, the brand index saved and read back,
-the empty-transitions refusal, a stable `graph_version`), `test_qa.py` (a passing and a failing build, the layers),
+the speed table, the empty-transitions, too-many-speeds and shape-point refusals, a stable
+`graph_version`, and hypothesis: a shape drawn within the tolerance and the rounding, its ends
+exact), `test_qa.py` (a passing and a failing build, the layers),
 `test_cli_steps.py` (the steps through the CLI under a temporary `WORST_ROUTE_DATA`, including
 the sidecar skips, save's refusal, and `worst-route plan` and `validate` on a build the
 pipeline saved), and, marked `data`, `test_cleanup_data.py` (the invariants and the report on
 Portland's latest build) and `test_build_data.py` (Portland's saved build: valid, its
 `graph_version`, `check_build`, `check_saved` against `stages/enrich.pkl`, the tier masks, the
-brands (each on at least 3 pass-through nodes, ids in name order), QA passed). `invariants.py` holds the invariant checks the tests share (`check_build` and
-`check_saved` on a saved build's arrays), `chain.py` runs the steps in memory on a fixture, and
+brands (each on at least 3 pass-through nodes, ids in name order), QA passed). `invariants.py` holds the invariant checks the tests share (`check_build` on a saved build's
+arrays; `check_saved` of a build and its geometry against the enriched graph, the OSM nodes
+along the edges that the validator's proof assumes included), `chain.py` runs the steps in memory on a fixture, and
 `osm.py` writes the in-memory cases' OSM files from positions in metres.

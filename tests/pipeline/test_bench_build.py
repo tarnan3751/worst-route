@@ -5,6 +5,7 @@ step that fails, with its output kept, and an unknown step refused before anythi
 import argparse
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -41,6 +42,7 @@ def test_each_step_is_measured(
     for step in report["steps"]:
         assert step["exit_code"] == 0 and not step["skipped"]
         assert step["wall_s"] > 0 and step["max_rss_mb"] > 10  # an interpreter, at least
+        assert step["max_mem_mb"] > 10 and "killed_mem_mb" not in step
         assert step["outputs"] and all(size > 0 for size in step["outputs"].values())
     assert set(filter_["outputs"]) == {
         str(layout.roads_pbf("portland")),
@@ -51,7 +53,9 @@ def test_each_step_is_measured(
     assert build["outputs"] == {str(raw): sum(p.stat().st_size for p in raw.iterdir())}
     assert build["output"][1] == "ways: read 12, kept 12; segments 23, nodes 19, edges 30"
     printed = capsys.readouterr().out
-    assert "| Step | Wall | CPU (user + sys) | Peak RSS | Output | Result |" in printed
+    assert (
+        "| Step | Wall | CPU (user + sys) | Peak memory | Peak RSS | Output | Result |" in printed
+    )
     assert "| filter | " in printed and "| build | " in printed and f"wrote {out}" in printed
 
     # up to date: the CLI skips it, and the row says so; --force runs it again
@@ -82,12 +86,12 @@ def test_the_watchdog_stops_a_step_past_its_memory(
     tool.WATCH_INTERVAL_S = 0.01  # sample often: a fixture's step lasts a fraction of a second
     source = str(FIXTURES / "divided.osm")
     argv = ["--region", "portland", "--source", source, "--steps", "filter,build,cleanup"]
-    assert tool.main([*argv, "--max-rss-gb", "0.001", "--out", str(out)]) != 0
+    assert tool.main([*argv, "--max-mem-gb", "0.001", "--out", str(out)]) != 0
     # The first step the watchdog samples past 1 MB is stopped, and the run with it.
     *done, stopped = json.loads(out.read_text())["steps"]
-    assert all(step["exit_code"] == 0 and "killed_rss_mb" not in step for step in done)
+    assert all(step["exit_code"] == 0 and "killed_mem_mb" not in step for step in done)
     assert stopped["exit_code"] < 0  # by a signal
-    assert stopped["killed_rss_mb"] > 1 and stopped["killed_after_s"] >= 0
+    assert stopped["killed_mem_mb"] > 1 and stopped["killed_after_s"] >= 0
     assert f"| {stopped['step']} |" in capsys.readouterr().out
 
 
@@ -99,10 +103,10 @@ def test_the_watchdog_never_reaps_a_step(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(tool, "outputs", lambda step, region: {})
     monkeypatch.setattr(tool, "WATCH_INTERVAL_S", 0.0005)
     args = argparse.Namespace(
-        region="portland", source=None, force=False, allow_fragmented=False, max_rss_gb=100.0
+        region="portland", source=None, force=False, allow_fragmented=False, max_mem_gb=100.0
     )
     rows = [tool.run_step("filter", args) for _ in range(200)]
-    assert all(row["exit_code"] == 0 and "killed_rss_mb" not in row for row in rows)
+    assert all(row["exit_code"] == 0 and "killed_mem_mb" not in row for row in rows)
 
 
 def test_a_stopped_step_unwinds_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -121,11 +125,26 @@ def test_a_stopped_step_unwinds_first(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(tool, "outputs", lambda step, region: {})
     monkeypatch.setattr(tool, "WATCH_INTERVAL_S", 0.01)
     args = argparse.Namespace(
-        region="portland", source=None, force=False, allow_fragmented=False, max_rss_gb=0.05
+        region="portland", source=None, force=False, allow_fragmented=False, max_mem_gb=0.05
     )
     row = tool.run_step("filter", args)
-    assert row["killed_rss_mb"] > 50 and row["exit_code"] != 0
+    assert row["killed_mem_mb"] > 50 and row["exit_code"] != 0
     assert list(tmp_path.iterdir()) == []  # the step removed its temporary directory
+
+
+def test_the_memory_read_is_what_a_process_holds() -> None:
+    # On macOS the physical footprint (`proc_pid_rusage`), which counts the pages macOS has
+    # compressed or swapped out, unlike the resident set: a struct read at the wrong offsets would
+    # not give 200 MB here. Elsewhere the resident set. Checked once by hand against `footprint`.
+    hold = "b = bytearray(b'x') * 200_000_000\nprint('up', flush=True)\nimport time; time.sleep(30)"
+    process = subprocess.Popen([sys.executable, "-c", hold], stdout=subprocess.PIPE, text=True)
+    try:
+        assert process.stdout is not None and process.stdout.readline() == "up\n"
+        now, peak = bench().tree_memory_bytes(process.pid)
+    finally:
+        process.kill()
+        process.wait()
+    assert 200e6 <= now <= peak < 1e9
 
 
 def test_a_step_is_not_started_without_the_disk_it_asks_for(data_dir: Path, tmp_path: Path) -> None:

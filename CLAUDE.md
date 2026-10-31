@@ -30,7 +30,9 @@ inefficiency targets (M2's fourth step): a ratio or a duration, reached within �
 `plan --target` and the API. So are M3's first three modes: the slowest time (`--objective
 time`), the turn constraints (`--no-left`, `--no-right`, soft unless `--strict`) and collecting
 toll booths, level crossings, roundabouts or bridges (`--objective collect --item`), from `plan`,
-the API and the frontend's settings. So is the frontend (`docs/reference/frontend.md`, M2's third
+the API and the frontend's settings, and so is the fourth, the brand pilgrimage (`--objective
+brand --brand`, the API's `brand` and `GET /brands`, not yet in the frontend; its index built at
+`enrich`, pipeline version 3). So is the frontend (`docs/reference/frontend.md`, M2's third
 step): a MapLibre map on which stops are clicked, the route drawn growing live from the stream,
 the run controls, the settings (the targets among them) and links. So is the geocoding proxy
 (M4's first piece): a place search in the stop list, answered by `GET /geocode` from Nominatim
@@ -87,7 +89,7 @@ Every command below exists. One a later milestone adds is marked with that miles
 | Pipeline, one step (all eight are real, run in this order; `filter` and `build` also take `--source PATH`, `cleanup` and `tiers` take `--allow-fragmented`) | `uv run worst-route pipeline <download\|filter\|build\|cleanup\|enrich\|tiers\|save\|qa> --region portland` |
 | Fetch the Census boundary files (a person, never the gate or an agent; FIPS codes of the states whose places to fetch) | `tools/fetch_census.sh 41 53` |
 | Write the places index (states, outlines, the region's towns) from them | `uv run worst-route aux places --region portland` |
-| Plan a route from the CLI, validated (`--target ratio:20` or `duration:9h` aims for a target within ±2 %; `--base route.json` continues a saved route; `--objective time` the slowest; `--no-left` / `--no-right` such turns at a kilometre each, `--strict` none; `--objective collect --item bridge` collects bridges, or `toll_booth`, `level_crossing`, `roundabout`) | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
+| Plan a route from the CLI, validated (`--target ratio:20` or `duration:9h` aims for a target within ±2 %; `--base route.json` continues a saved route; `--objective time` the slowest; `--no-left` / `--no-right` such turns at a kilometre each, `--strict` none; `--objective collect --item bridge` collects bridges, or `toll_booth`, `level_crossing`, `roundabout`; `--objective brand --brand Starbucks` visits a brand's locations, by name or id) | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
 | Validate a saved route | `uv run worst-route validate route.json` |
 | Print a saved route's turn-by-turn directions (`--no-jokes` without the jokes) | `uv run worst-route directions route.json` |
 | API server (the coordinator only; agents use `--port 0` or a port of their own, `--store` in their own tree, and `--geocoder none` or `--nominatim-url` pointed at a local stub: no agent calls Nominatim) | `uv run worst-route serve --region portland` |

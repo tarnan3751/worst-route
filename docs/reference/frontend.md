@@ -99,7 +99,8 @@ is most of it), 290 kB gzipped.
   score, or 90 s under the slowest time) or "Avoid right turns" (`no_right`), and a "strict"
   checkbox (none at all), enabled only when a side is chosen, with the hint "strict rarely
   finds a route on a street grid: the route may not exist"; picking "Any" unticks it. The
-  brand pilgrimage and the alphabet route are not shown until the API plans them.
+  brand pilgrimage, which the API plans (`brand`, from `GET /brands`), is not shown until its
+  control is built; the alphabet route not until the API plans it.
 - **Run.** Go posts the stops and settings (the target as `{kind: "ratio", value}` or
   `{kind: "duration", seconds}`; the `objective`; the `item` only under collect; the
   `constraints` `{no_left, no_right, strict}` only when a side is avoided, the key left out

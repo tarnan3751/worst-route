@@ -65,14 +65,14 @@ report beside it in `qa/`.
   list `[md5 of the filtered roads file, region name, region bbox, region CRS (EPSG code),
   PIPELINE_VERSION]` (`layout.build_id_for`). `PIPELINE_VERSION` is in `config.py` (the
   `pipeline` package re-exports it, and `graph.store` reads it to name the remedy for another
-  version's build); bump it when a step's output changes for the same input. It is 2 since
-  M3, for two changes: `enrich`'s bearings leave out cleanup's stubs, and `save` writes
-  `node_roundabouts`. Every step's sidecar records it, so a region built at version 1 is
-  rebuilt from `filter` (which reads the raw extract again, no download) under a new build id,
-  and `latest` moves to it; a version 2 build saved before `node_roundabouts` existed is saved
-  again (`pipeline save --force`). Portland's build at version 2 is 506f747d7458, at the
-  `graph_version` ae1ce1e8289b; the main tree's e4b3b4ad90db (version 1) is rebuilt so after
-  this lands.
+  version's build); bump it when a step's output changes for the same input. It became 2 in
+  M3 for two changes (`enrich`'s bearings leave out cleanup's stubs, and `save` writes
+  `node_roundabouts`), and is 3 since the brand index (`enrich` indexes the brands, `save`
+  writes them as arrays). Every step's sidecar records it, so a region built at an earlier
+  version is rebuilt from `filter` (which reads the raw extract again, no download) under a new
+  build id, and `latest` moves to it. Portland's build at version 3 is ffe2e7c881ca, at the
+  `graph_version` 8867636799a6 (on the dev machine; the main tree's 506f747d7458, version 2, is
+  rebuilt so after this lands).
 - **Sidecar:** after `filter`, `build` or `cleanup` writes its output it records
   `{"step", "inputs": [{"file", "md5"}], "params"}` in `<output>.inputs.json` (filter: the
   bbox and the pipeline version; build: the region, bbox, CRS and pipeline version; cleanup:
@@ -475,19 +475,40 @@ constants are in `config.py`.
   signals in the node's members, so a signal cluster delays once. One that is a shape point adds
   none: most stop signs are mapped a few metres before the junction, on the approach.
 - **Pass-through**: some in-neighbour u and out-neighbour w with u ≠ w, self-loops ignored.
+- **Brands** (`index_brands`, the brand pilgrimage's index), from the POI table's `brand` rows
+  (a node, or a way at the mean of its nodes): each is projected and snapped to the nearest
+  node a route can pass through (pass-through, above) within `BRAND_SNAP_M` (100 m), ties to
+  the lower node. A node that is not pass-through can only start or end a route, so it is never
+  a brand's: a POI with only such nodes within 100 m is counted at a dead end, one with none
+  too far. POIs are grouped by `brand:wikidata` when they carry it, else by the `brand` string
+  casefolded with its whitespace collapsed, so a POI without a wikidata id stays apart from a
+  wikidata group spelled the same (no disambiguation beyond that). A brand's display name is
+  its group's most common `brand` spelling, whitespace collapsed (ties to the smaller string;
+  else its most common `name`, else its wikidata id; a `;` list stays one string). A brand on
+  fewer than `BRAND_MIN_LOCATIONS` (3) distinct nodes is left out. The kept brands, in (name,
+  wikidata) order, which is their id, each with its nodes ascending and the POIs snapped to
+  each, are `graph.graph["brands"]`, which `save` writes as arrays.
 
 `stages/enrich.json` is `EnrichReport`: edges whose speed was parsed and defaulted, by class;
 distinct identities and the edges with one; units and two-way pairs; edges per flag; per
 collectible kind the POI nodes found, placed inside edges, at junctions and off the graph, and
 the edges with a count; per delay kind the same, shape points counted apart; nodes with a delay;
-pass-through nodes; seconds.
+pass-through nodes; per brand POI the found, snapped, skipped at a dead end and too far, the
+brands found and kept, and the kept brands' brand-node rows and the distinct nodes they lie on;
+seconds.
 
 **Portland** (the 2026-10-30 extract, 4–6 s): 89,902 of 168,167 edges have a parsed speed;
 16,864 identities on 163,645 edges; 87,793 units, 80,374 of them two-way pairs; 1,088 bridge, 23
 tunnel, 4 toll and 54 link edges; 2 toll booths (on 4 edges), 1,442 level crossings (550 inside
 edges, 146 at junctions, 746 on roads the filter dropped); of 5,960 stop signs 730 are junction
 members and 4,471 shape points, of 3,377 signals 2,469 and 829; 2,438 nodes have a delay; 51,406
-of 65,810 nodes are pass-through.
+of 65,810 nodes are pass-through. Of the 5,933 brand POIs (2,520 nodes, 3,413 ways), 4,505 are
+snapped, 121 skipped at dead ends and 1,307 have no node within 100 m; 287 of the
+1,041 brands are kept, 3,661 brand-node rows on 2,411 nodes (3,858 POIs): the
+United States Postal Service (post boxes included) on 174 nodes, Starbucks 126, Plaid Pantry 86,
+Biketown 84, Chevron 76, 7-Eleven 75. Four display names belong to two kept brands each:
+Amazon Hub, Columbia Bank and Shell (each under two wikidata ids) and Nectar (one group without
+a wikidata id beside one with it); 6 kept brands have no wikidata id.
 
 ## `tiers`
 
@@ -532,6 +553,9 @@ build_dir)`. The arrays are `docs/reference/graph.md`'s; how they come from the 
 - **Collectibles**: `node_roundabouts`, the `roundabouts` count of each super-junction's record
   (the rings among its internal edges, so an interchange that holds a ring counts it), 0 at
   every other node.
+- **Brands**: enrich's index as `brand_indptr`, `brand_nodes` and `brand_locations`, in its
+  order (the brand ids), each brand's name and wikidata id in `strings.brands` and
+  `strings.brand_wikidata`.
 
 A super-node whose transition table is empty allows no turn through it, which the format cannot
 say (a node without rows allows every turn): `graph_data` raises `EmptyTransitionsError`, naming
@@ -618,15 +642,17 @@ crossover between carriageways, a roundabout bypassed by a slip lane),
 `test_connectivity.py`, `test_cleanup.py` (the whole step on every fixture, determinism, the
 fragmented failure), `test_enrich.py` (maxspeed parsing, bearings, at a cluster the road's and not the stub's,
 identities, units, flags,
-collectibles inside edges and at junctions, delays, pass-through, determinism), `test_tiers.py`
+collectibles inside edges and at junctions, delays, pass-through, determinism; the brand index:
+grouping by wikidata id or name, the display name, the cut on distinct nodes, the 100 m limit, a
+POI with only a dead end near), `test_tiers.py`
 (each fixture's tiers, the tie rule, the fragmented failure), `test_save.py` (every fixture saved,
-read back and checked with `check_build` and `check_saved`, the empty-transitions refusal, a
-stable `graph_version`), `test_qa.py` (a passing and a failing build, the layers),
+read back and checked with `check_build` and `check_saved`, the brand index saved and read back,
+the empty-transitions refusal, a stable `graph_version`), `test_qa.py` (a passing and a failing build, the layers),
 `test_cli_steps.py` (the steps through the CLI under a temporary `WORST_ROUTE_DATA`, including
 the sidecar skips, save's refusal, and `worst-route plan` and `validate` on a build the
 pipeline saved), and, marked `data`, `test_cleanup_data.py` (the invariants and the report on
 Portland's latest build) and `test_build_data.py` (Portland's saved build: valid, its
-`graph_version`, `check_build`, `check_saved` against `stages/enrich.pkl`, the tier masks, QA
-passed). `invariants.py` holds the invariant checks the tests share (`check_build` and
+`graph_version`, `check_build`, `check_saved` against `stages/enrich.pkl`, the tier masks, the
+brands (each on at least 3 pass-through nodes, ids in name order), QA passed). `invariants.py` holds the invariant checks the tests share (`check_build` and
 `check_saved` on a saved build's arrays), `chain.py` runs the steps in memory on a fixture, and
 `osm.py` writes the in-memory cases' OSM files from positions in metres.

@@ -614,6 +614,13 @@ machine, with curl:
   worse" from it with a 30× ratio, seed 1, `done` after 5.7 s at 30.58×, every `progress` lower
   than the one before, its `/validate` ok. Each target job's `done` and document carry its
   `target`.
+- **Brands** (`serve --port 0`, csr, 2026-10-30, build ffe2e7c881ca at pipeline version 3, load
+  average about 20): `/brands?region=portland` answers 287 brands, the United States Postal
+  Service first (174 locations), then Starbucks (126); an unknown brand id is `INVALID_REQUEST`
+  on `field: "brand"` at once. Powell's → Reed for Starbucks (`brand: 229`), seed 1, a 30 s
+  budget: 255 `progress` events, `metrics.brand.visits` rising 7 → 16 by attempt 2,441 → 17 by
+  5,185, never falling; `done` after 30 s at 17 of the 19 the area holds, 59.03× (31,549
+  attempts); the document's `brand` the same, its `/validate` ok.
 - **Share images** (`serve --port 0`, csr, 2026-10-30, with the Portland places index, a warm
   font cache): Powell's → Reed, seed 1 (`5ea844bffd40`, 62.43×): 489 kB in 2.0 s for the first
   image after the start (matplotlib's import included), 8 ms from the cache (the same bytes), one

@@ -135,6 +135,15 @@ document counts all four items; the build keeps each super-junction's roundabout
 (`node_roundabouts`). On Portland, Powell's → Reed passes 24–30 bridges against the distance
 route's 16–17, and Portland's two toll booths, on roads into parks, can be passed only with a
 stop beyond them. A sixth golden route freezes a run collecting bridges.
+The brand pilgrimage is built (M3 step 4): `enrich` indexes every POI with a brand, snapped to
+the nearest node a route can pass through within 100 m and grouped by its wikidata id (else its
+name), keeping the brands on at least three nodes, and the build stores the index as arrays
+(pipeline version 3; Portland: 287 brands on 2,411 nodes, the Postal Service on 174 and
+Starbucks on 126). `objective: "brand"` with a brand's id visits as many of its locations as it
+can, then drives as far, through `plan --objective brand --brand <id or name>` and the API,
+whose `GET /brands?region=` lists the brands; the counts ride in `metrics.brand` and the
+validator recounts them. On Portland, Powell's → Reed (seed 1, 30 s) visits 17 of the 19
+Starbucks in reach at 61.90×. A seventh golden route freezes a pilgrimage.
 The API is built (`docs/reference/api.md`, M2 step 2): `worst-route serve` runs a FastAPI app
 that plans each request as a job in a worker process of its own, streams the route as it grows
 over Server-Sent Events (splices, periodic snapshots, resumable with `Last-Event-ID`), stores
@@ -198,7 +207,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 |---|---|---|
 | M1 — Portland, distance mode, CLI | Built | bootstrap, every pipeline step (download to qa; Portland's build passes QA), the graph package and the engine (snapping, seed route, transition-aware searches, splice loop, distance objective, validator, `worst-route plan` / `validate`). The acceptance run (`docs/PLAN.md` §7 M1 step 9; `uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` on build e4b3b4ad90db, `graph_version` 45f650e868fa, the reference backend: 20 random Portland pairs 3–15 km apart): all 20 plan and the validator passes all 20; the median ratio is 21.5× (3.3–45.2×); seeds 1 and 2 share 10–16% of their edges (Jaccard on 5 pairs, all < 0.3); the cul-de-sac via moves 86 m to the nearest through street with its note. Powell's → Reed gives 58–62×, PDX → Beaverton 7.3× (`docs/reference/engine.md`, **On Portland**) |
 | M2 — API + map, live growth | In progress | CSR + Numba backend built, its transition-aware kernels included (the default on every build; byte-identical to the reference: on Portland the acceptance's 20 routes and Powell's → Reed reproduce exactly, at 7,200–8,200 attempts/s); the API built (jobs in worker processes, SSE progress, the route store, make it worse, `worst-route serve`); targets by ratio and duration built (engine, CLI `--target`/`--base`, API), a 13-minute Portland drive to 9 h within ±2 % in 1.8 s over the API; the MapLibre frontend built (stops by click, the route growing live, run controls, settings with the targets, links); remaining: the acceptance |
-| M3 — Modes and constraints | In progress | built: the turn classes, never turn left / right (soft by default, `strict` for none; engine, CLI, API), the kernels refusing banned turn classes, slowest time (engine, CLI, API), collectibles (the collect objective for toll booths, level crossings, roundabouts and bridges in the engine, `plan --objective collect --item` and the API; `node_roundabouts` in the build; on Portland 24–30 bridges where the distance route passes 16–17); the frontend's controls for them (the Mode and Turns rows, the request, the URL, the stat line's time ratio, delays, items and turns, the strict refusal's retry); on Portland strict no-left plans 4 of the 20 acceptance pairs and soft no-left 20 at a median of 5.33× (§2.3; on a build re-enriched at pipeline version 2, whose bearings describe the roads, not cleanup's stubs); the search honouring stage B transitions was built at M1. Remaining: brands; hard mode; alphabet search; the acceptance |
+| M3 — Modes and constraints | In progress | built: the turn classes, never turn left / right (soft by default, `strict` for none; engine, CLI, API), the kernels refusing banned turn classes, slowest time (engine, CLI, API), collectibles (the collect objective for toll booths, level crossings, roundabouts and bridges in the engine, `plan --objective collect --item` and the API; `node_roundabouts` in the build; on Portland 24–30 bridges where the distance route passes 16–17); the frontend's controls for them (the Mode and Turns rows, the request, the URL, the stat line's time ratio, delays, items and turns, the strict refusal's retry); the brand pilgrimage (the brand index at `enrich`, saved as build arrays at pipeline version 3; `plan --objective brand --brand`, the API's `brand` and `GET /brands`; on Portland 17 of the 19 Starbucks in reach); on Portland strict no-left plans 4 of the 20 acceptance pairs and soft no-left 20 at a median of 5.33× (§2.3; on a build re-enriched at pipeline version 2, whose bearings describe the roads, not cleanup's stubs); the search honouring stage B transitions was built at M1. Remaining: hard mode; alphabet search; the brand control in the frontend; the acceptance |
 | M4 — Presentation | In progress | directions, stats, toasts, comparisons, share image, geocoding proxy, share links; built: the geocoding proxy (`GET /geocode`, Nominatim behind a cache and 1 request/s) and the place search in the stop list; the Census places index (`tools/fetch_census.sh`, `worst-route aux places`: the states and towns a route passes through), the comparison lines, and the share image (`GET /routes/{id}/share.png`, linked from the share section); the directions with deadpan jokes and the stats and toasts in the route documents (`GET /routes/{id}`, `GET /routes/{id}/directions`, route.json, `worst-route directions`). Remaining: the frontend's directions panel and toasts |
 | M5 — Scaling up | Planned | Oregon; array-based simplify/consolidate; US at T1; the national decision gate; public-hosting prep |
 | M6 — Stretch | Planned | certified worst (CP-SAT), turn restrictions, stop reordering, portfolio runs |
@@ -451,6 +460,22 @@ brief):
   arrays reads as one line naming its remedy (the rebuild from `filter` for another pipeline
   version's build, else `pipeline save --force`), which a plain `save` gives too; `plan` refuses
   an unknown objective before its item.
+- **Brand pilgrimage as built for M3** (2026-10-30, at its brief and plan): every POI with
+  `brand` or `brand:wikidata` that filter keeps is indexed, no curated list; each snaps to the
+  nearest **pass-through** node within 100 m (a node only a route's ends can use would count a
+  location no route can visit; such POIs are counted at dead ends), not to an edge within 50 m
+  as §2.5 first planned; grouped by `brand:wikidata` when present, else by the casefolded name,
+  a name-only POI staying apart from a wikidata group spelled the same; a brand on fewer than 3
+  distinct nodes left out. The index is **build arrays** (`brand_indptr`, `brand_nodes`,
+  `brand_locations`, with the names and wikidata ids in `strings.json`), not a Parquet sidecar,
+  so the format's checks, `graph_version`, memory-mapping and the missing-array remedy cover it;
+  every `graph_version` changed with it (the golden routes kept their routes) and
+  `PIPELINE_VERSION` is 3. The objective counts each brand node a route passes once (visits ×
+  10⁶ + length), no ratio target; the metrics carry `brand: {id, name, visits, of}`, `of` the
+  brand's nodes in the request's area; `/brands`' `locations` are a brand's distinct nodes. A
+  brand the build lacks or the area does not hold is `INVALID_REQUEST` on `field: "brand"`,
+  not an `UNKNOWN_BRAND` code. The CLI takes a brand's id or its name in any case, refusing a
+  name two brands share.
 - **Share image rendered from our own data** (route, faint network, Census outlines), no
   basemap of any kind; as built (2026-10-30, at its brief and plan): 1200 × 630, matplotlib Agg
   (the one new dependency), DejaVu Sans as matplotlib ships it rather than a bundled font, the
@@ -495,7 +520,6 @@ The plan's assumed defaults, each open until the owner confirms (`docs/PLAN.md` 
 - Compute budget defaults: 20 s default, 120 s max locally, 60 s max public.
 - "Only turn left" means "never turn right"; straights allowed.
 - Alphabet mode: unnamed roads and ramps are free connectors; wrap Z→A; the final leg is free.
-- Brand set: index every `brand` / `brand:wikidata` object, not a curated list.
 - National end state: one US all-roads master graph if the array pipeline is fast enough,
   otherwise T3 national plus per-state all-roads builds.
 - Alaska and Hawaii in national builds.

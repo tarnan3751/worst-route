@@ -28,7 +28,8 @@ each tier containing the one before it, T4 every class), and `BackendName` and
 ## The arrays
 
 `GraphData` is a frozen dataclass of NumPy arrays plus `strings` and `meta`. n is the node
-count, m the edge count, T = 5 tiers, k the number of transition rows. Every array is
+count, m the edge count, T = 5 tiers, k the number of transition rows, b the number of brands
+(the length of `strings.brands`) and r the number of brand rows (the length of `brand_nodes`). Every array is
 read-only: memory-mapped when read from disk, flagged read-only when built in memory, so a
 stray write into the graph raises instead of corrupting every worker's view. `ARRAY_SPECS`
 lists the arrays in a fixed order, the order of the fields, the files and the hash.
@@ -60,6 +61,8 @@ lists the arrays in a fixed order, the order of the fields, the files and the ha
 | transitions | `trans_node`, `trans_in`, `trans_out` | i32[k] each | allowed (in, out) pairs at a node, sorted by (node, in, out), no duplicates; a node with no rows allows every pair |
 | tiers | `tier_node_mask`, `tier_edge_mask` | bool[T, n], bool[T, m] | tier membership (the pipeline's after per-tier SCC) |
 | collectibles | `node_roundabouts` | u8[n] | the roundabout rings a super-junction holds (a roundabout's one, sometimes two; an interchange that holds a ring counts it), 0 at every other node; the collect mode's roundabouts (`docs/reference/engine.md`, **Objectives**). Added after the first builds (with `PIPELINE_VERSION` 2): a build saved before it lacks the file and is made again (**The build format**) |
+| brands | `brand_indptr`, `brand_nodes` | i64[b+1], i32[r] | the brand index: brand k's nodes are `brand_nodes[brand_indptr[k]:brand_indptr[k + 1]]` (`nodes_of_brand(k)`), at least one each, strictly ascending; the nodes a route can pass through nearest the brand's POIs (`docs/reference/pipeline.md`, **enrich**); the brand mode's locations (`docs/reference/engine.md`, **Objectives**). A brand's id is its run's index; its name and wikidata id are in `strings` |
+| | `brand_locations` | i32[r] | the POIs snapped to each of those nodes (≥ 1). The three arrays were added with `PIPELINE_VERSION` 3 |
 
 A node with no transition rows allows every pair, so an empty table cannot be written: cleanup
 keeps a super-junction whose table is empty (no pair allowed), and `save` refuses a build that has
@@ -69,7 +72,9 @@ one (`docs/reference/pipeline.md`, **cleanup**).
 contiguous run of ascending ids (`out_edges` is `0..m-1`), which the backends' tie rule relies
 on.
 
-`strings` is `Strings(names, refs, identities)`, three lists of str. `meta` is a dict with
+`strings` is `Strings(names, refs, identities, brands, brand_wikidata)`: the three lists of str
+the edges index into, then each brand's display name and its wikidata id (str, or None when its
+POIs carry none), by brand id (the last two empty by default). `meta` is a dict with
 `region`, `build_id`, `crs_epsg`, `created` (ISO time), `pipeline_version`, `graph_version`,
 `counts` (at least `nodes` and `edges`), `params` (the build parameters: free-form, but
 JSON-native with string keys, so no int keys, tuples, NaN or other objects; `pipeline save`
@@ -82,8 +87,10 @@ meta keys, `counts` against n and m, and `params` surviving a JSON round trip un
 default also checks contents: the indptr runs (from 0 to the values' length, each at least its
 minimum above), id and enum ranges, `member_osm_ids` unique, edges sorted by (u, v), both
 adjacency lists exactly as defined, twins and transitions as above, a transition's edges
-meeting at its node, and roundabout rings counted at super-junctions (interchanges and
-roundabouts) only.
+meeting at its node, roundabout rings counted at super-junctions (interchanges and
+roundabouts) only, and each brand's nodes in range and strictly ascending, each with at least
+one location. The cheap check holds `brand_indptr` to one more than the brand names and
+`brand_wikidata` to one entry per name.
 
 ## The build format
 
@@ -92,7 +99,8 @@ steps already use for their `stages/` and sidecars (`docs/reference/pipeline.md`
 
 ```
 meta.json            the meta dict, graph_version filled in (sorted keys, indented)
-strings.json         {"names": [...], "refs": [...], "identities": [...]} (UTF-8, compact)
+strings.json         {"names": [...], "refs": [...], "identities": [...], "brands": [...],
+                      "brand_wikidata": [...]} (UTF-8, compact)
 arrays/<name>.npy    one file per array of ARRAY_SPECS, written by np.save without pickles
 ```
 
@@ -114,16 +122,16 @@ arrays/<name>.npy    one file per array of ARRAY_SPECS, written by np.save witho
   build in every worker. A build without one of the arrays raises `MissingArray` (a
   `FileNotFoundError`), one line naming the remedy for the build's state (`store.outdated`):
   for a build another pipeline version wrote (its `meta.pipeline_version` is not
-  `PIPELINE_VERSION`), the rebuild ("the build at PATH was written by pipeline 1 (now 2):
+  `PIPELINE_VERSION`), the rebuild ("the build at PATH was written by pipeline 2 (now 3):
   rebuild the region with `worst-route pipeline filter --region R` and the steps after it"),
   which gives the build a new id; for this version's build, the array and the save that writes
   it again ("the build at PATH lacks the array node_roundabouts: rebuild it with `worst-route
   pipeline save --force --region R`"). `plan`, `validate`, `serve`, `pipeline qa` and the
   acceptance tool print it and exit 1, and a plain `pipeline save` refuses another version's
-  build with the same rebuild line. `PIPELINE_VERSION` 2 (M3) covers the bearings without
-  cleanup's stubs and `node_roundabouts`, so a build made at version 1 is rebuilt from `filter`,
-  and one made at version 2 before `node_roundabouts` existed is saved again
-  (`docs/reference/pipeline.md`, **Build ids, sidecars, skipping**).
+  build with the same rebuild line. `PIPELINE_VERSION` 2 (M3) covered the bearings without
+  cleanup's stubs and `node_roundabouts`, 3 (M3) the brand arrays and strings, so a build made
+  at an earlier version is rebuilt from `filter` (`docs/reference/pipeline.md`, **Build ids,
+  sidecars, skipping**).
 - `.npy` per array, not `.npz` or Parquet: NumPy memory-maps `.npy` files only (`.npz`
   members are read whole). Parquet exports for DuckDB or QGIS are a `qa` convenience for later.
 
@@ -429,7 +437,8 @@ time, so one tree serves every request.
 `worst_route.graph.testing` ships in the package so every area's tests can build graphs by
 hand; nothing outside tests uses it.
 
-- `make_graph(nodes, edges, *, twins=(), transitions=(), crs_epsg=32610, lonlat=None) -> GraphData`.
+- `make_graph(nodes, edges, *, twins=(), transitions=(), crs_epsg=32610, lonlat=None,
+  brands=None) -> GraphData`.
   `nodes` are (x, y) in metres in `crs_epsg`; lon/lat are their inverse projection unless
   `lonlat` is given. `edges` are `(u, v, length_m)` tuples or `Edge(u, v, length_m=None,
   highway=RESIDENTIAL, speed_kmh=40.0, name=None, ref=None, flags=0, toll_booths=0,
@@ -442,8 +451,9 @@ hand; nothing outside tests uses it.
   from the coordinates (in = out); one member per node with OSM id = node index + 1; one way
   per edge with id = input position + 1; geometry the two endpoints; pass-through from the
   topology; state −1, kind plain, no delay, no roundabout rings; tier masks: edges of tier ≤ t
-  and their endpoints (no SCC); meta region and build id `"test"`, a fixed `created`, and
-  `graph_version` computed.
+  and their endpoints (no SCC); no brands unless `brands` maps names to nodes (ids in name
+  order, no wikidata id, one location at each node, the nodes sorted and each once); meta region
+  and build id `"test"`, a fixed `created`, and `graph_version` computed.
   The result is validated and read-only.
 - `grid_graph(rows, cols, spacing_m, *, oneway_rows="", oneway_cols="") -> GraphData`: a
   lattice of residential streets at `GRID_ORIGIN` (UTM 10N, near downtown Portland); node
@@ -455,9 +465,10 @@ hand; nothing outside tests uses it.
 
 ## Tests
 
-`tests/graph/`: `test_data.py` (every malformation `validate` rejects, rings at a plain node
-among them), `test_testing.py` (the builders), `test_store.py` (round trips, the version and its
-pin, refusals), `test_backends.py`,
+`tests/graph/`: `test_data.py` (every malformation `validate` rejects, rings at a plain node and
+malformed brand runs among them), `test_testing.py` (the builders, brands included),
+`test_store.py` (round trips, a build with brands among them; the version, its pin, and its
+change with a brand's nodes, locations, name or wikidata id; refusals), `test_backends.py`,
 `test_edge_search.py`, `test_spatial.py` (snapping roles, masks, `exclude` and notes; leash and
 bubble masks; the masked balls against `bubble_mask`, radii on lattice nodes included), and
 `test_loader.py` (`latest`, the two builds kept, memory-mapped arrays, missing builds, a build

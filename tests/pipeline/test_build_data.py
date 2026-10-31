@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from tests.pipeline.invariants import check_build, check_saved
-from worst_route.config import TIERS
+from worst_route.config import BRAND_MIN_LOCATIONS, TIERS
 from worst_route.graph.data import GraphData
 from worst_route.graph.store import graph_version, read_build
 from worst_route.pipeline import layout
@@ -50,6 +50,16 @@ def test_portland_tiers(build: Build) -> None:
         assert np.flatnonzero(data.tier_node_mask[t]).tolist() == stage["tiers"][t]["node_ids"]
         assert not (data.tier_edge_mask[t] & ~np.isin(data.edge_highway, sorted(classes))).any()
     assert data.tier_node_mask[4].all() and data.tier_edge_mask[4].all()
+
+
+def test_portland_brands(build: Build) -> None:
+    _, data = build
+    assert len(data.strings.brands) > 100
+    assert (np.diff(data.brand_indptr) >= BRAND_MIN_LOCATIONS).all()
+    assert data.node_pass_through[data.brand_nodes].all()
+    strings = data.strings
+    keys = [(n, w or "") for n, w in zip(strings.brands, strings.brand_wikidata, strict=True)]
+    assert keys == sorted(keys)  # the ids are the (name, wikidata) order
 
 
 def test_portland_qa_passes(build: Build) -> None:

@@ -1,9 +1,12 @@
 # Powell's Books → Reed College on Portland's latest build, read through WORST_ROUTE_DATA: on both
-# backends, then the slowest time and the turn constraints, and collecting each item. Run on
-# demand with `uv run pytest -m data`; skipped when there is no build.
+# backends, then the slowest time and the turn constraints, collecting each item, and a pilgrimage
+# to the brand with the most locations. Run on demand with `uv run pytest -m data`; skipped when
+# there is no build.
+import numpy as np
 import pytest
 
 from worst_route.engine.constraints import Constraints
+from worst_route.engine.objectives.brand import brand_counts
 from worst_route.engine.objectives.collect import ITEMS, CollectItem, count_items
 from worst_route.engine.plan import plan_route
 from worst_route.engine.request import RouteRequest
@@ -142,3 +145,16 @@ def test_a_collecting_route_reaches_a_duration_target(portland: GraphData) -> No
     experienced = result.route.metrics.time_s + result.route.metrics.delay_s
     assert 0.98 * 3 * 3600 <= experienced <= 1.02 * 3 * 3600
     assert result.route.metrics.counters["items"]["bridge"] > 0
+
+
+def test_a_pilgrimage_visits_more_of_its_brand_than_distance(portland: GraphData) -> None:
+    # The brand with the most locations, over the same 4,000 attempts as the distance route.
+    brand = int(np.argmax(np.diff(portland.brand_indptr)))
+    trip = {"stops": [POWELLS, REED], "seed": 1, "max_iterations": 4000, "budget_s": 120}
+    distance = plan_route(portland, RouteRequest(**trip), backend=CsrBackend(portland)).route
+    request = RouteRequest(**trip, objective="brand", brand=brand)
+    result = plan_route(portland, request, backend=CsrBackend(portland))
+    assert result.report.ok
+    counts = result.route.metrics.counters["brand"]
+    assert counts == brand_counts(portland, brand, result.route.nodes, result.masks.active)
+    assert counts["visits"] > brand_counts(portland, brand, distance.nodes)["visits"]

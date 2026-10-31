@@ -6,8 +6,9 @@ the test. Every backend must reproduce it, byte for byte. Two more freeze target
 same stops and seed (a ratio and a duration target, each stopping within it), and two more the
 modes, with the same seed: the slowest time from the same stops on the lattice with a primary
 road every fourth row and column (signals where two cross, stop signs along them), and the
-distance with a soft no-left constraint between inner nodes; and one a run collecting bridges
-on the lattice with a few roads made bridges. A golden file
+distance with a soft no-left constraint between inner nodes; one a run collecting bridges on
+the lattice with a few roads made bridges; and one a pilgrimage to the second of two brands
+placed by hand on the lattice. A golden file
 changes only under a tier A brief that says so; to rewrite one, run
 `WORST_ROUTE_REGEN_GOLDEN=1 uv run pytest tests/golden` and commit the file.
 """
@@ -46,6 +47,11 @@ BRIDGES = {
     (a, b): {"flags": EdgeFlag.BRIDGE}
     for a, b in [(r * 20 + c, r * 20 + c + 1) for r in (4, 9, 14) for c in (3, 9, 15)]
     + [(r * 20 + c, (r + 1) * 20 + c) for r in (6, 12) for c in (6, 13)]
+}
+# The pilgrimage's lattice: two brands, ids in name order, 0 Acme and 1 Pilgrim Coffee.
+BRANDS = {
+    "Pilgrim Coffee": [23, 57, 88, 125, 164, 177, 236, 248, 281, 305, 322, 347, 366, 392],
+    "Acme": [45, 150, 260, 330, 380],
 }
 Backend = type[PythonBackend] | type[CsrBackend]
 
@@ -104,6 +110,19 @@ def test_grid_collect_route_is_golden(backend_type: Backend) -> None:
     actual = golden_of(g, request, result)
     actual["items"] = result.route.metrics.counters["items"]
     compare(Path(__file__).with_name("grid20_collect_bridge.json"), actual)
+
+
+@pytest.mark.parametrize("backend_type", [PythonBackend, CsrBackend], ids=["python", "csr"])
+def test_grid_brand_route_is_golden(backend_type: Backend) -> None:
+    g = lattice(20, 20, rounded_lonlat=True, brands=BRANDS)
+    stops = [at_node(g, v) for v in (0, 210, 399)]
+    request = RouteRequest(
+        stops=stops, seed=7, max_iterations=400, budget_s=120, objective="brand", brand=1
+    )
+    result = plan_route(g, request, backend=backend_type(g), check_delta=True)
+    actual = golden_of(g, request, result)
+    actual["brand"] = result.route.metrics.counters["brand"]
+    compare(Path(__file__).with_name("grid20_brand.json"), actual)
 
 
 def golden_of(g: GraphData, request: RouteRequest, result: PlanResult) -> dict[str, Any]:

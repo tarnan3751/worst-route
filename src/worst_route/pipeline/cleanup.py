@@ -2,8 +2,8 @@
 
 `docs/PLAN.md` §2.4; `docs/reference/pipeline.md`, cleanup. `run_cleanup` takes the raw graph
 `build` wrote (networkx's graph, or the arrays engine's `RawGraph`, which `arrays.simplify`,
-`arrays.stage_a` and `arrays.twins` simplify, consolidate and pair before handing it on as
-networkx would hold it) and runs, in order: `simplify` (self-loops dropped, degree-2 chains
+`arrays.stage_a`, `arrays.twins` and `arrays.stage_b` take through those steps before handing
+it on as networkx would hold it) and runs, in order: `simplify` (self-loops dropped, degree-2 chains
 collapsed), `consolidate.stage_a` (signal clusters and divided crossings),
 `carriageways.find_twins` (on the stage A graph, so stretches stage B makes internal keep their
 twins), `consolidate.stage_b`
@@ -37,9 +37,10 @@ from worst_route import config
 from worst_route.pipeline import layout
 from worst_route.pipeline.arrays import simplify as arrays_simplify
 from worst_route.pipeline.arrays import stage_a as arrays_stage_a
+from worst_route.pipeline.arrays import stage_b as arrays_stage_b
 from worst_route.pipeline.arrays import twins as arrays_twins
 from worst_route.pipeline.arrays.build import RawGraph
-from worst_route.pipeline.arrays.to_nx import stage_a_graph
+from worst_route.pipeline.arrays.to_nx import stage_b_graph
 from worst_route.pipeline.carriageways import TwinStats, find_twins
 from worst_route.pipeline.connectivity import (
     DROPPED_LISTED,
@@ -146,16 +147,19 @@ def run_cleanup(
         lap("simplify")
         merged, report.stage_a = arrays_stage_a.stage_a(simplified)
         lap("stage_a")
-        twin_indptr, twin_edges, report.twins = arrays_twins.find_twins(merged)
-        graph = stage_a_graph(merged, (twin_indptr, twin_edges))
+        twins = arrays_twins.find_twins(merged)
+        report.twins = twins[2]
+        lap("twins")
+        consolidated, report.stage_b = arrays_stage_b.stage_b(merged, twins[:2])
+        graph = stage_b_graph(consolidated)
     else:
         graph, report.simplify = simplify(raw)
         lap("simplify")
         graph, report.stage_a = stage_a(graph)
         lap("stage_a")
         report.twins = find_twins(graph)
-    lap("twins")
-    graph, report.stage_b = stage_b(graph)
+        lap("twins")
+        graph, report.stage_b = stage_b(graph)
     lap("stage_b")
     keep, report.connectivity = largest_component(graph)
     scc = report.connectivity

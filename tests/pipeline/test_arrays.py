@@ -18,6 +18,9 @@ import osmium
 import pyproj
 import pytest
 
+from tests.pipeline import test_carriageways as carriageway_cases
+from tests.pipeline import test_cleanup as cleanup_cases
+from tests.pipeline import test_consolidate as consolidate_cases
 from tests.pipeline.chain import FIXTURES, UTM_10N, pois_of
 from tests.pipeline.invariants import check_all
 from tests.pipeline.osm import write_osm
@@ -30,12 +33,13 @@ from worst_route.pipeline.arrays.simplify import SimplifiedGraph
 from worst_route.pipeline.arrays.simplify import simplify as arrays_simplify
 from worst_route.pipeline.arrays.stage_a import StageAGraph
 from worst_route.pipeline.arrays.stage_a import stage_a as arrays_stage_a
-from worst_route.pipeline.arrays.to_nx import simplified_graph, stage_a_graph
+from worst_route.pipeline.arrays.stage_b import stage_b as arrays_stage_b
+from worst_route.pipeline.arrays.to_nx import simplified_graph, stage_a_graph, stage_b_graph
 from worst_route.pipeline.arrays.twins import find_twins as arrays_find_twins
 from worst_route.pipeline.build import build_raw_graph
 from worst_route.pipeline.carriageways import find_twins
 from worst_route.pipeline.cleanup import run_cleanup
-from worst_route.pipeline.consolidate import stage_a, stage_a_tolerances
+from worst_route.pipeline.consolidate import stage_a, stage_a_tolerances, stage_b
 from worst_route.pipeline.enrich import run_enrich
 from worst_route.pipeline.save import graph_data
 from worst_route.pipeline.simplify import simplify
@@ -47,8 +51,8 @@ META |= {"pipeline_version": "", "sources": []}
 
 
 def assert_same_cleanup(source: Path) -> nx.MultiDiGraph:
-    """Both engines' simplified and stage A graphs, twins, and cleaned graphs and reports are the
-    same; the simplified graph."""
+    """Both engines' simplified, stage A and stage B graphs, twins, and cleaned graphs and reports
+    are the same; the simplified graph."""
     raw = read_back(build_raw_graph(source, UTM_10N)[0])
     arrays, _ = build_raw_arrays(source, UTM_10N)
     simplified, _ = simplify(raw)
@@ -63,6 +67,10 @@ def assert_same_cleanup(source: Path) -> nx.MultiDiGraph:
     assert got_twins == want_twins
     got_table = stage_a_graph(got_a, (twin_indptr, twin_edges)).graph["twins"]
     assert same(want_a.graph["twins"], got_table)
+    want_b, want_b_stats = stage_b(want_a)
+    got_b, got_b_stats = arrays_stage_b(got_a, (twin_indptr, twin_edges))
+    assert got_b_stats == want_b_stats
+    assert_same_graph(want_b, stage_b_graph(got_b))
     want, want_report = run_cleanup(raw, allow_fragmented=True)
     got, got_report = run_cleanup(arrays, allow_fragmented=True)
     assert_same_graph(want, got)
@@ -422,3 +430,59 @@ def test_the_reviewers_random_roads(tmp_path: Path, seed: int) -> None:
     )
     _, report = run_cleanup(build_raw_arrays(source, UTM_10N)[0], allow_fragmented=True)
     assert report.twins.same_road_pairs > 0
+
+
+# Stage B's own cases: those of the networkx engine's tests ------------------------------
+
+STAGE_B_CASES = {
+    "half diamond": lambda tmp: consolidate_cases.half_diamond(tmp),
+    "slip lane near": lambda tmp: consolidate_cases.slip_lane(tmp, 60),
+    "slip lane far": lambda tmp: consolidate_cases.slip_lane(tmp, 200),
+    "motorway slip": lambda tmp: consolidate_cases.slip_lane(tmp, 60, "motorway_link"),
+    "merging branches": lambda tmp: consolidate_cases.merging_branches(tmp),
+    "two interchanges": lambda tmp: consolidate_cases.interchanges(tmp, "B St"),
+    "one interchange": lambda tmp: consolidate_cases.interchanges(tmp, "A St"),
+    "too wide": lambda tmp: consolidate_cases.wide(tmp),
+    "detached": lambda tmp: consolidate_cases.detached(tmp),
+    "bridged diamond": lambda tmp: consolidate_cases.bridged_diamond(tmp),
+    "crossover": lambda tmp: consolidate_cases.crossover(tmp),
+    "one-sided ramps": lambda tmp: carriageway_cases.one_sided(tmp),
+    "offset gores": lambda tmp: carriageway_cases.offset_gores(tmp),
+    "corbett": lambda tmp: carriageway_cases.corbett(tmp, linked=False),
+    "corbett linked": lambda tmp: carriageway_cases.corbett(tmp, linked=True),
+    "cornell": lambda tmp: carriageway_cases.cornell(tmp),
+    "woodburn": lambda tmp: consolidate_cases.woodburn(tmp),
+    "woodburn far": lambda tmp: consolidate_cases.woodburn(tmp, far=True),
+    "woodburn fork 0": lambda tmp: consolidate_cases.woodburn(tmp, fork=0),
+    "woodburn fork 1": lambda tmp: consolidate_cases.woodburn(tmp, fork=1),
+    "mlk": lambda tmp: consolidate_cases.mlk(tmp),
+    "block": lambda tmp: consolidate_cases.block(tmp),
+    "turn back": lambda tmp: consolidate_cases.turn_back(tmp),
+    "cut interchange": lambda tmp: cleanup_cases.cut_interchange(tmp),
+    "cut beyond": lambda tmp: cleanup_cases.cut_beyond(tmp),
+}
+
+
+@pytest.mark.parametrize("case", sorted(STAGE_B_CASES))
+def test_stage_b_cases(tmp_path: Path, case: str) -> None:
+    assert_same_cleanup(STAGE_B_CASES[case](tmp_path))
+
+
+def test_a_twin_that_is_a_boundary_edge(tmp_path: Path) -> None:
+    """Corbett's interchange with a ramp from the southbound carriageway at 16 to Bancroft St:
+    16 joins the super-node, so the twin of the northbound stretch inside it (12-16) is a
+    boundary edge of it, and the transitions that must drive the stretch ban only what a passage
+    through it could drive."""
+    source = carriageway_cases.corbett(tmp_path, linked=False)
+    text = source.read_text().replace(
+        "</osm>",
+        '  <node id="47" version="1" lat="45.4977503" lon="-122.5992302"/>\n'
+        '  <way id="12" version="1"><nd ref="16"/><nd ref="47"/><nd ref="41"/>'
+        '<tag k="highway" v="motorway_link"/></way>\n</osm>',
+    )
+    source.write_text(text)
+    simplified = assert_same_cleanup(source)
+    merged, _ = stage_a(simplified)
+    find_twins(merged)
+    _, stats = stage_b(merged)
+    assert stats.twin_transitions > 0 and sum(stats.superjunctions.values()) == 1

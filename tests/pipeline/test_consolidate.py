@@ -726,6 +726,45 @@ def test_a_carriageway_never_turns_onto_another_road(tmp_path: Path) -> None:
     assert stats.rejoined == 0 and len(supers(graph)) == 2
 
 
+def turn_back(tmp_path: Path) -> Path:
+    """Two ramp clusters 300 m apart on a two-way primary road (OR 1), their side streets of
+    other names (Alpha St, Beta St): a chain from the first east along OR 1 that turned back on
+    its westbound edge would come back to the first, but a carriageway never turns back."""
+    road = {"highway": "primary", "ref": "OR 1"}
+    link = {"highway": "primary_link", "oneway": "yes"}
+    return write_osm(
+        tmp_path / "turnback.osm",
+        {
+            1: (-500, 0),
+            2: (0, 0),
+            3: (300, 0),
+            4: (800, 0),
+            20: (-40, 60),
+            21: (40, 60),
+            22: (0, 200),
+            30: (260, -60),
+            31: (340, -60),
+            32: (300, -200),
+        },  # fmt: skip
+        [
+            (1, [1, 2, 3, 4], road),
+            (2, [2, 20, 21], link),
+            (3, [21, 2], link),
+            (4, [21, 22], {"highway": "tertiary", "name": "Alpha St"}),
+            (5, [3, 30, 31], link),
+            (6, [31, 3], link),
+            (7, [31, 32], {"highway": "tertiary", "name": "Beta St"}),
+        ],
+    )
+
+
+def test_a_carriageway_never_comes_back_by_turning_back(tmp_path: Path) -> None:
+    before, merged, _ = through_a(turn_back(tmp_path))
+    graph, stats = stage_b(merged)
+    check_all(before, graph)
+    assert stats.superjunctions == {"interchange": 2, "roundabout": 0} and stats.rejoined == 0
+
+
 def shuffled(path: Path, seed: int) -> Path:
     """The same OSM file with its nodes, and its ways, written in another order."""
     lines = path.read_text().splitlines()

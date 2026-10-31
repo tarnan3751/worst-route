@@ -5,7 +5,7 @@ networkx and OSMnx, so that a state and later the whole country fit in memory an
 not days; `--engine arrays` on `pipeline build` and `pipeline cleanup` selects it. It makes
 exactly the build the networkx engine makes: the parity tests (`tests/pipeline/test_arrays*.py`)
 compare the two byte for byte. Built so far: `build` (`build.py`, the stage in `stage.py`),
-cleanup's simplification (`simplify.py`), stage A (`stage_a.py`) and twins (`twins.py`), whose
-result `to_nx.py` hands to the networkx steps after it, in the order networkx itself would hold
-it (`order.py`).
+cleanup's simplification (`simplify.py`), stage A (`stage_a.py`), twins (`twins.py`) and stage B
+(`stage_b.py`), whose result `to_nx.py` hands to the networkx steps after it, as networkx itself
+would hold it (`order.py`).
 """

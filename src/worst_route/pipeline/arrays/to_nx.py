@@ -37,7 +37,8 @@ from worst_route.config import ALLEY_SERVICE
 from worst_route.pipeline import PIPELINE_VERSION
 from worst_route.pipeline.arrays.build import Tagset
 from worst_route.pipeline.arrays.simplify import SimplifiedGraph
-from worst_route.pipeline.arrays.stage_a import CLUSTER, StageAGraph
+from worst_route.pipeline.arrays.stage_a import CLUSTER, PLAIN, StageAGraph
+from worst_route.pipeline.arrays.stage_b import INTERCHANGE, ROUNDABOUT, StageBGraph
 from worst_route.pipeline.arrays.twins import edge_keys
 from worst_route.pipeline.build import EDGE_TAGS
 
@@ -118,6 +119,94 @@ def stage_a_graph(
     return result
 
 
+def stage_b_graph(graph: StageBGraph) -> nx.MultiDiGraph:
+    """The stage B graph as networkx holds it (`consolidate.stage_b`'s, numbered by `relabel`),
+    with its `superjunctions` and `twins` tables."""
+    a = graph.stage_a
+    keys = _raw_keys()
+    tags_of = _WayTags(a.tagsets, keys)
+    result = _empty(a.crs_epsg, keys)
+    names = {
+        PLAIN: "plain",
+        CLUSTER: "cluster",
+        INTERCHANGE: "interchange",
+        ROUNDABOUT: "roundabout",
+    }
+    members = [tuple(m.tolist()) for m in np.split(graph.member_id, graph.member_indptr[1:-1])]
+    for k, (x, y, lon, lat, kind) in enumerate(
+        zip(
+            graph.node_x.tolist(),
+            graph.node_y.tolist(),
+            graph.node_lon.tolist(),
+            graph.node_lat.tolist(),
+            graph.node_kind.tolist(),
+            strict=True,
+        )
+    ):
+        # A node stage A left as it was keeps its dict; a super-node's is `stage_b`'s own.
+        node = _node(keys, kind != PLAIN, x, y, lon, lat)
+        result.add_node(k, **node, kind=names[kind], members=members[k])
+    data = _attributes(
+        a,
+        graph.edge_from,
+        graph.coord_indptr,
+        graph.coord_x,
+        graph.coord_y,
+        keys,
+        tags_of,
+        graph.edge_length,
+    )
+    ends = list(
+        zip(graph.edge_u.tolist(), graph.edge_v.tolist(), graph.edge_key.tolist(), strict=True)
+    )
+    result.add_edges_from((u, v, k, d) for (u, v, k), d in zip(ends, data, strict=True))
+
+    indptr, x_inner, y_inner = _runs_of(a, graph.internal_edge)
+    inner = _attributes(a, graph.internal_edge, indptr, x_inner, y_inner, keys, tags_of)
+    parts = np.split(graph.part_member_id, graph.part_member_indptr[1:-1])
+    transitions: dict[int, list[tuple[Any, Any]]] = {int(n): [] for n in graph.super_node}
+    for node, into, out in zip(
+        graph.trans_node.tolist(), graph.trans_in.tolist(), graph.trans_out.tolist(), strict=True
+    ):
+        transitions[node].append((tuple(ends[into]), tuple(ends[out])))  # a tuple each, as there
+    records = {}
+    for i, node in enumerate(graph.super_node.tolist()):
+        lo, hi = int(graph.internal_indptr[i]), int(graph.internal_indptr[i + 1])
+        records[node] = {
+            "kind": names[int(graph.node_kind[node])],
+            "members": members[node],
+            "parts": tuple(
+                tuple(p.tolist()) for p in parts[graph.part_indptr[i] : graph.part_indptr[i + 1]]
+            ),
+            "internal": tuple(
+                {**inner[r], "u": int(graph.internal_u[r]), "v": int(graph.internal_v[r])}
+                for r in range(lo, hi)
+            ),
+            "roundabouts": int(graph.super_roundabouts[i]),
+            "transitions": tuple(transitions[node]),
+        }
+    result.graph["superjunctions"] = records
+    twins = graph.twin_edges.tolist()
+    result.graph["twins"] = {
+        tuple(ends[e]): tuple(
+            tuple(ends[f]) for f in twins[graph.twin_indptr[e] : graph.twin_indptr[e + 1]]
+        )
+        for e in np.flatnonzero(np.diff(graph.twin_indptr)).tolist()
+    }
+    return result
+
+
+def _runs_of(
+    graph: StageAGraph, edges: NDArray[np.int64]
+) -> tuple[NDArray[np.int64], NDArray[np.float64], NDArray[np.float64]]:
+    """The geometry of the given edges, one run each."""
+    counts = graph.coord_indptr[edges + 1] - graph.coord_indptr[edges]
+    indptr = np.zeros(len(edges) + 1, dtype=np.int64)
+    np.cumsum(counts, out=indptr[1:])
+    at = np.repeat(graph.coord_indptr[edges] - indptr[:-1], counts) + np.arange(indptr[-1])
+    return indptr, graph.coord_x[at], graph.coord_y[at]
+
+
 def _raw_keys() -> dict[str, str]:
     """The keys of the networkx engine's raw graph as `cleanup` reads it back from `build.pkl`:
     one object per name, apart from the code's own strings of the same names."""
@@ -153,10 +242,11 @@ def _attributes(
     coord_y: NDArray[np.float64],
     keys: dict[str, str],
     tags_of: "_WayTags | None" = None,
+    lengths: NDArray[np.float64] | None = None,
 ) -> list[dict[str, Any]]:
     """networkx's attribute dicts of the graph's `edges`, in networkx's key order and with its
     keys (`keys`, the raw graph's), with the geometry of the coordinate runs `coord_indptr` (one
-    per edge of `edges`)."""
+    per edge of `edges`) and, when given, those `lengths` (one per edge of `edges`)."""
     tags_of = tags_of or _WayTags(graph.tagsets, keys)
     oneway_, length_, reversed_k = keys["oneway"], keys["length"], keys["reversed"]
     geometry_, osm_nodes_ = keys["geometry"], keys["osm_nodes"]
@@ -168,7 +258,8 @@ def _attributes(
     for k, e in enumerate(edges.tolist()):
         tags = tags_of(int(graph.way_id[graph.way_indptr[e]]), int(graph.edge_tags[e]))
         oneway, reversed_ = bool(graph.edge_oneway[e]), bool(graph.edge_reversed[e])
-        length, geometry = float(graph.edge_length[e]), geometries[k]
+        length = float(graph.edge_length[e] if lengths is None else lengths[k])
+        geometry = geometries[k]
         nodes, osmids = tuple(osm_nodes[e].tolist()), tuple(ways[e].tolist())
         # The order networkx's dicts hold them in: a raw edge's build order with `osmid` popped
         # and `osmids` added last; a merged edge's as `simplify._merged` writes it.

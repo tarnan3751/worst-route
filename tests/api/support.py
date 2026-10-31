@@ -29,6 +29,8 @@ BIG = lattice(20, 20)
 SLOW = lattice(10, 10, primary_every=3)  # GRID's nodes, with delays
 # The grid build's region: 0.1° around its nodes, so a stop can be inside it and still more
 # than the 5 km snapping reaches from every node.
+# What the API tests serve: portland's latest build.
+PORTLAND = (("portland", "latest"),)
 GRID_BBOX = [
     round(float(GRID.node_lon.min()) - 0.1, 7),
     round(float(GRID.node_lat.min()) - 0.1, 7),
@@ -43,13 +45,14 @@ def save_build(
     build_id: str,
     latest: bool = True,
     geometry: Geometry | None = None,
+    region: str = "portland",
     **params: Any,
 ) -> None:
-    meta = {**g.meta, "region": "portland", "build_id": build_id, "params": params}
+    meta = {**g.meta, "region": region, "build_id": build_id, "params": params}
     g = replace(g, meta=meta)
-    write_build(g, data_dir / "graphs" / "portland" / build_id, geometry)
+    write_build(g, data_dir / "graphs" / region / build_id, geometry)
     if latest:
-        (data_dir / "graphs" / "portland" / "latest").write_text(f"{build_id}\n")
+        (data_dir / "graphs" / region / "latest").write_text(f"{build_id}\n")
 
 
 def request(g: GraphData, stops: list[int], seed: int = 3, **fields: Any) -> RouteRequest:

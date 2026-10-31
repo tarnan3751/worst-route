@@ -47,8 +47,10 @@ imports) and print the one used, which changes only the speed; `csr` when numba 
 is one line and exit 1.
 
 `serve` runs the API (`docs/reference/api.md`) with uvicorn, in one process (jobs live in its
-memory; each runs in a worker process of its own, `--workers` at once): it loads the region's
-build first, so a missing one is one line and exit 1, and keeps its routes in `--store`
+memory; each runs in a worker process of its own, `--workers` at once): it loads each region's
+build first (`--region` repeated serves several, the first the default; `--build-id` names the
+first one's, the others serve their latest), so a missing one is one line and exit 1, and keeps
+its routes in `--store`
 (default `<WORST_ROUTE_DATA>/routes.sqlite`). It takes `--backend` and prints the one used as
 `plan` does. `--port 0` binds a free port, which uvicorn logs, and the job manager's lines (a
 job cancelled, a worker failed) go to the same log. `--geocoder nominatim|none` and
@@ -58,9 +60,10 @@ the contact from `WORST_ROUTE_CONTACT` included. `--trust-proxy` believes a reve
 `X-Forwarded-For` and `X-Request-ID` (uvicorn's own proxy headers are off), and `--log-format
 json` logs a JSON object a line on stdout, with request ids and without uvicorn's access lines
 (`api/logs.py`); `--public` applies the public limits (`api/limits.py`) and prints them. The
-basemap the frontend draws is `WORST_ROUTE_BASEMAP`'s (`raster` or `pmtiles`, whose file it then
-names). `--frontend DIR` serves the frontend's build at `/` and the API under `/api`
-(`api/static.py`), from one process; a directory without `index.html` is one line and exit 1.
+basemap the frontend draws is `WORST_ROUTE_BASEMAP`'s (`raster` or `pmtiles`, whose file,
+`--basemap-name`'s, by default the first region's, it then names). `--frontend DIR` serves the
+frontend's build at `/` and the API under `/api` (`api/static.py`), from one process; a directory
+without `index.html` is one line and exit 1.
 
 `aux places` writes the places index (`docs/reference/presentation.md`, **Places**) under
 `<WORST_ROUTE_DATA>/aux/places/` from the Census files `tools/fetch_census.sh` fetched into
@@ -1351,6 +1354,15 @@ def _check_geocoder(value: str) -> str:
     return value
 
 
+def _check_served(values: list[str]) -> list[str]:
+    for value in values:
+        _check_region(value)
+    twice = sorted({value for value in values if values.count(value) > 1})
+    if twice:
+        raise typer.BadParameter(f"{', '.join(twice)} given more than once")
+    return values
+
+
 def _check_log_format(value: str) -> str:
     if value not in ("text", "json"):
         raise typer.BadParameter(f"unknown log format {value!r}; known: text, json")
@@ -1359,8 +1371,17 @@ def _check_log_format(value: str) -> str:
 
 @app.command()
 def serve(
-    region: RegionOption,
-    build_id: Annotated[str | None, typer.Option(help="Build id (default: latest).")] = None,
+    region: Annotated[
+        list[str],
+        typer.Option(
+            help="A region from config.REGIONS to serve; repeat it to serve several, the first "
+            "the default.",
+            callback=_check_served,
+        ),
+    ],
+    build_id: Annotated[
+        str | None, typer.Option(help="The first region's build id (default: latest).")
+    ] = None,
     host: Annotated[str, typer.Option(help="Address to bind.")] = "127.0.0.1",
     port: Annotated[int, typer.Option(help="Port to bind (0: a free one).")] = 8000,
     workers: Annotated[
@@ -1408,6 +1429,13 @@ def serve(
             file_okay=False,
         ),
     ] = None,
+    basemap_name: Annotated[
+        str | None,
+        typer.Option(
+            help="The pmtiles basemap's file, <data>/basemap/<name>.pmtiles (default: the "
+            "first region)."
+        ),
+    ] = None,
 ) -> None:
     """Serve the API."""
     import copy
@@ -1421,10 +1449,10 @@ def serve(
     from worst_route.api.static import create_site
     from worst_route.graph.loader import BuildNotFound
 
+    first, *others = region
     config = ApiSettings(
         data_dir=settings().data_dir,
-        region=region,
-        build_id=build_id or "latest",
+        builds=((first, build_id or "latest"), *((r, "latest") for r in others)),
         backend=cast(BackendName, backend),
         store_path=store,
         jobs=JobSettings(max_jobs=workers),
@@ -1434,6 +1462,7 @@ def serve(
         trust_proxy=trust_proxy,
         public=public,
         basemap=settings().basemap,
+        basemap_name=basemap_name,
     )
     if frontend is not None and not (frontend / "index.html").is_file():
         _fail(f"no frontend build at {frontend}: run `npm run build` under frontend/")
@@ -1443,14 +1472,15 @@ def serve(
         _fail(str(error))
     except ImportError as error:  # only csr needs numba; auto falls back to python
         _fail(f"the csr backend needs numba, which did not import: {error}")
-    loaded = application.state.api.builds[region]
+    loaded = application.state.api.builds[first]
     typer.echo(f"backend: {loaded.backend.name}")
     if config.geocoder == "none":
         typer.echo("geocoder: none")
     else:
         typer.echo(f'geocoder: nominatim {nominatim_url} as "{geocoder_user_agent(config)}"')
     if config.basemap == "pmtiles":
-        typer.echo(f"basemap: pmtiles {config.data_dir / 'basemap' / f'{region}.pmtiles'}")
+        name = basemap_name or first
+        typer.echo(f"basemap: pmtiles {config.data_dir / 'basemap' / f'{name}.pmtiles'}")
     if trust_proxy:
         typer.echo("trusting the proxy's X-Forwarded-For and X-Request-ID")
     if public:

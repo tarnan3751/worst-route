@@ -8,12 +8,13 @@ An id that is not a route id (12 lowercase hex digits) is 404 `NOT_FOUND`, befor
 looked at. An image already rendered is served from `<share_dir>/<id>-v<SHARE_IMAGE_VERSION>.png`
 (the share directory is `share/` beside the route store, as `geocode.sqlite` is). Otherwise the
 route is read from the store (404 `NOT_FOUND`) and drawn on its build (409 `BUILD_UNAVAILABLE`,
-as the other route endpoints answer) with the places index's outlines, its comparison line, and
-its objective and `time_ratio` as its document has them (a slowest-time route shows its time
-ratio), in a worker thread, under a lock per route so that concurrent first requests render
-once; the file is written whole (a temporary name of its own, then a rename) before the lock is
-released, and the lock is forgotten whatever happened. Every image is answered with
-`Cache-Control: public, max-age=86400`; a HEAD renders it too, to give its length.
+as the other route endpoints answer) with the outlines of its region's places index
+(`routes_api.places_of`), its comparison line, and its objective and `time_ratio` as its
+document has them (a slowest-time route shows its time ratio), in a worker thread, under a lock
+per route so that concurrent first requests render once; the file is written whole (a temporary
+name of its own, then a rename) before the lock is released, and the lock is forgotten whatever
+happened. Every image is answered with `Cache-Control: public, max-age=86400`; a HEAD renders it
+too, to give its length.
 
 matplotlib is imported by the first render, never with this module, so the API starts without it
 (its first import may build its font cache, which takes seconds on a cold machine).
@@ -36,6 +37,7 @@ from worst_route.api.routes_api import (
     api_of,
     build_of,
     geometry_of,
+    places_of,
     stored_delays,
     stored_route,
 )
@@ -100,7 +102,7 @@ def _render(api: "Api", stored: StoredRoute) -> bytes:
         stored.nodes,
         stored.edges,
         {**m, "time_ratio": ratio},  # as the route's document has it
-        api.places,
+        places_of(api, stored.region),
         comparison_line(stored.metrics.length_m),
         baseline_edges=stored.baseline_edges,
         objective=stored.request.objective,

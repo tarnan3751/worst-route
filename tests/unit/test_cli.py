@@ -123,10 +123,50 @@ def test_serve_runs_the_app_for_its_options(
     assert (ran["host"], ran["port"]) == ("127.0.0.1", 0)
     assert ran["log_config"]["loggers"]["worst_route"]["level"] == "INFO"
     api = ran["app"].state.api
-    assert api.settings.data_dir == tmp_path and api.settings.build_id == "b1"
+    assert api.settings.data_dir == tmp_path and api.settings.builds == (("portland", "b1"),)
     assert api.jobs.settings.max_jobs == 3 and api.store.path == tmp_path / "r.db"
     assert api.builds["portland"].backend.name == "python"
     assert runner.invoke(app, [*args[:3], "--workers", "0"]).exit_code == 2
+
+
+def test_serve_takes_several_regions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import uvicorn
+
+    for region, build_id in (("oregon", "b1"), ("oregon", "b2"), ("portland", "b1")):
+        g = grid_graph(3, 3, 100)
+        g = replace(g, meta={**g.meta, "region": region, "build_id": build_id})
+        write_build(g, tmp_path / "graphs" / region / build_id)
+        (tmp_path / "graphs" / region / "latest").write_text("b1\n")
+    ran: dict[str, Any] = {}
+    monkeypatch.setattr(uvicorn, "run", lambda application, **kw: ran.update(app=application))
+    monkeypatch.setenv("WORST_ROUTE_DATA", str(tmp_path))
+    monkeypatch.setenv("WORST_ROUTE_BASEMAP", "pmtiles")
+    settings.cache_clear()
+    base = ["serve", "--region", "oregon", "--region", "portland", "--backend", "python"]
+    base += ["--geocoder", "none", "--store", str(tmp_path / "r.db")]
+    served = runner.invoke(app, [*base, "--build-id", "b2"])  # the first region's
+    assert served.exit_code == 0, served.output
+    api = ran["app"].state.api
+    assert api.settings.builds == (("oregon", "b2"), ("portland", "latest"))
+    assert [(r, b.data.meta["build_id"]) for r, b in api.builds.items()] == [
+        ("oregon", "b2"),
+        ("portland", "b1"),
+    ]
+    assert served.stdout.splitlines()[-1] == (
+        f"basemap: pmtiles {tmp_path / 'basemap' / 'oregon.pmtiles'}"  # the first region's
+    )
+    named = runner.invoke(app, [*base, "--basemap-name", "us"])
+    assert named.exit_code == 0, named.output
+    assert ran["app"].state.api.settings.basemap_name == "us"
+    assert (
+        named.stdout.splitlines()[-1] == f"basemap: pmtiles {tmp_path / 'basemap' / 'us.pmtiles'}"
+    )
+    twice = runner.invoke(app, [*base, "--region", "oregon"])
+    assert twice.exit_code == 2 and "oregon given more than once" in twice.output
+    unknown = runner.invoke(app, [*base, "--region", "atlantis"])
+    assert unknown.exit_code == 2 and "unknown region 'atlantis'" in unknown.output
+    monkeypatch.delenv("WORST_ROUTE_BASEMAP")
+    settings.cache_clear()
 
 
 def test_serve_takes_csr_on_a_build_with_turn_tables(

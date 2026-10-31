@@ -40,7 +40,7 @@ from ..engine.graphs import (
     named_roads,
     two_rings,
 )
-from .support import GRID, GRID_BBOX, SLOW, save_build, slow_splices, until
+from .support import GRID, GRID_BBOX, PORTLAND, SLOW, save_build, slow_splices, until
 
 pytestmark = pytest.mark.anyio
 
@@ -65,7 +65,7 @@ def job_body(**fields: Any) -> dict[str, Any]:
 async def serving(data: Path, **jobs: Any) -> AsyncIterator[tuple[httpx.AsyncClient, FastAPI]]:
     settings = JobSettings(**{"inline_workers": True, "coalesce_s": 0.0, **jobs})
     config = ApiSettings(
-        data_dir=data, region="portland", backend="python", jobs=settings, geocoder="none"
+        data_dir=data, builds=PORTLAND, backend="python", jobs=settings, geocoder="none"
     )
     app = create_app(config)
     async with app.router.lifespan_context(app):

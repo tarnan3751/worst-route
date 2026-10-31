@@ -1,6 +1,6 @@
 """`GET /config` and the basemap's files under `/basemap/`: what the frontend is told to draw,
 byte ranges on a small file standing for a `.pmtiles` (any bytes do: the server never reads
-them), and `/ready`'s basemap check."""
+them), `/ready`'s basemap check, and one file named for every build served."""
 
 from pathlib import Path
 
@@ -138,3 +138,28 @@ async def test_ready_needs_the_tiles_of_a_pmtiles_basemap(data: Path) -> None:
             c for c in (await http.get("/ready")).json()["checks"] if c["name"] == "basemap"
         ]
         assert basemap["detail"].endswith("with labels")
+
+
+async def test_one_named_basemap_serves_every_build(lands: Path) -> None:
+    # The file is named by basemap_name, by default the first region served.
+    both = (("westland", "latest"), ("lands", "latest"))
+    async with hosted(lands, builds=both, basemap="pmtiles") as (http, _):
+        basemap = (await http.get("/config")).json()["basemap"]
+        assert basemap["tiles"] == "/basemap/westland.pmtiles"
+    async with hosted(lands, builds=both, basemap="pmtiles", basemap_name="us") as (http, _):
+        assert (await http.get("/config")).json()["basemap"]["tiles"] == "/basemap/us.pmtiles"
+        answer = await http.get("/ready")
+        [basemap] = [c for c in answer.json()["checks"] if c["name"] == "basemap"]
+        assert basemap["detail"] == "no basemap file us.pmtiles: run `tools/fetch_basemap.sh us`"
+        path = lands / "basemap" / "us.pmtiles"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(TILES)
+        [basemap] = [
+            c for c in (await http.get("/ready")).json()["checks"] if c["name"] == "basemap"
+        ]
+        assert basemap == {
+            "name": "basemap",
+            "ok": True,
+            "detail": "us.pmtiles, 0.0 MB, without labels (--assets)",
+        }
+        assert (await http.get("/basemap/us.pmtiles")).content == TILES

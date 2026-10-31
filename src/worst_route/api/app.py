@@ -1,22 +1,24 @@
 """The FastAPI application (`docs/reference/api.md`).
 
-`create_app(settings)` loads the region's build (memory-mapped, `graph.loader`) and its geometry,
-which drawing a route needs, when it is called, so `worst-route serve` fails before it listens
-when the build or its geometry is missing; it opens the
-route store, builds the geocoding service (Nominatim, with its cache `geocode.sqlite` beside
-the route store; none when the geocoder is `none`; a test passes its own), loads the region's
-places index (`presentation.places`; none when `worst-route aux places` has not written it) and
-mounts the endpoints (`routes_api`, `geocode_api`, `share_api`, whose images are cached in
-`share/` beside the route store, `directions_api` and `ready_api`). Its lifespan starts and
-stops the job manager, and closes the geocoder's client. `ApiSettings` says which build, which
-backend, where the store is, the job limits, and the geocoder: which, at what URL, with what
-contact in its User-Agent (`geocoder_user_agent`); whether a reverse proxy in front of it is
-trusted (`trust_proxy`: its `X-Forwarded-For` names the client, its `X-Request-ID` the request);
-and whether it is public (`public`: the limits `limits.PUBLIC`, a budget up to 60 s and each
-client's share of the jobs and the place searches, held as `Api.limits`, the job manager's
-settings and `Api.quota`; else `limits.LOCAL`); and the basemap `GET /config` offers the
-frontend (`basemap`), whose files it serves under `/basemap/` (`basemap_api`). Every request gets
-an id and an access line (`logs.RequestLog`).
+`create_app(settings)` loads each served region's build (memory-mapped, `graph.loader`) and its
+geometry, which drawing a route needs, when it is called, so `worst-route serve` fails before it
+listens when a build or its geometry is missing; it opens the route store, builds the geocoding
+service (Nominatim, with its cache `geocode.sqlite` beside the route store; none when the
+geocoder is `none`; a test passes its own), loads each region's places index
+(`presentation.places`; none for a region `worst-route aux places` has not written one for, whose
+routes then use a served region's that covers its states, `routes_api.places_of`) and mounts the
+endpoints (`routes_api`, `geocode_api`, `share_api`, whose images are cached in `share/` beside
+the route store, `directions_api` and `ready_api`). Its lifespan starts and stops the job
+manager, and closes the geocoder's client. `ApiSettings` says which builds (each region with its
+build id, the first region the default), which backend, where the store is, the job limits, and
+the geocoder: which, at what URL, with what contact in its User-Agent (`geocoder_user_agent`);
+whether a reverse proxy in front of it is trusted (`trust_proxy`: its `X-Forwarded-For` names the
+client, its `X-Request-ID` the request); and whether it is public (`public`: the limits
+`limits.PUBLIC`, a budget up to 60 s and each client's share of the jobs and the place searches,
+held as `Api.limits`, the job manager's settings and `Api.quota`; else `limits.LOCAL`); and the
+basemap `GET /config` offers the frontend (`basemap`, its file named by `basemap_name`, by default
+the first region), whose files it serves under `/basemap/` (`basemap_api`). Every request gets an
+id and an access line (`logs.RequestLog`).
 
 Every error answers an `ErrorBody` (`{code, message, ...}`): an endpoint refuses with
 `routes_api.ApiError(status, code, message, **fields)`, a malformed request is 422
@@ -80,8 +82,7 @@ class ApiSettings:
     """What one API process serves."""
 
     data_dir: Path
-    region: str
-    build_id: str = "latest"
+    builds: tuple[tuple[str, str], ...]  # (region, build id or "latest"); the first the default
     backend: BackendName = DEFAULT_BACKEND
     store_path: Path | None = None  # default: <data_dir>/routes.sqlite
     jobs: JobSettings = field(default_factory=JobSettings)
@@ -91,6 +92,7 @@ class ApiSettings:
     trust_proxy: bool = False  # a reverse proxy's X-Forwarded-For and X-Request-ID believed
     public: bool = False  # the public limits (`limits.PUBLIC`)
     basemap: BasemapName = "raster"  # what `/config` offers (WORST_ROUTE_BASEMAP)
+    basemap_name: str | None = None  # its file, basemap/<name>.pmtiles; None: the first region
 
 
 @dataclass(frozen=True, eq=False)
@@ -98,11 +100,11 @@ class Api:
     """The application's state (`app.state.api`)."""
 
     settings: ApiSettings
-    builds: dict[str, Loaded]  # by region
+    builds: dict[str, Loaded]  # by region, in the order served
     store: RouteStore
     jobs: JobManager
     geocode: GeocodeService | None  # None when the geocoder is "none"
-    places: PlaceIndex | None  # None when the region has no places index
+    places: dict[str, PlaceIndex | None]  # by region; None for one without its own index
     share_dir: Path  # the share images' cache
     share_locks: dict[str, asyncio.Lock] = field(default_factory=dict)  # by route, while rendering
     # each build's edge letters (`alphabet_search.edge_letters`), by graph_version, worked out
@@ -119,15 +121,16 @@ def geocoder_user_agent(settings: ApiSettings) -> str:
 
 
 def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> FastAPI:
-    """The application for `settings`, its build loaded; `geocode` stands in for the geocoding
+    """The application for `settings`, its builds loaded; `geocode` stands in for the geocoding
     service `settings` would build (tests), unless the geocoder is "none"."""
-    loaded = load_build(
-        settings.data_dir, settings.region, settings.build_id, backend=settings.backend
-    )
-    try:
-        _ = loaded.geometry  # read now: a build without its geometry cannot draw a route
-    except MissingArray as error:
-        raise BuildNotFound(str(error)) from None
+    builds: dict[str, Loaded] = {}
+    for region, build_id in settings.builds:
+        loaded = load_build(settings.data_dir, region, build_id, backend=settings.backend)
+        try:
+            _ = loaded.geometry  # read now: a build without its geometry cannot draw a route
+        except MissingArray as error:
+            raise BuildNotFound(str(error)) from None
+        builds[region] = loaded
     store_path = settings.store_path or settings.data_dir / "routes.sqlite"
     store = RouteStore(store_path)
     limits = PUBLIC if settings.public else LOCAL
@@ -156,9 +159,8 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
                 await service.aclose()
 
     app = FastAPI(title="worst-route", version=__version__, lifespan=lifespan)
-    places = PlaceIndex.load(settings.region, settings.data_dir)
+    places = {region: PlaceIndex.load(region, settings.data_dir) for region in builds}
     share_dir = store_path.parent / "share"
-    builds = {settings.region: loaded}
     quota = GeocodeQuota(limits.geocode_per_minute) if limits.geocode_per_minute else None
     app.state.api = Api(
         settings, builds, store, jobs, service, places, share_dir, limits=limits, quota=quota

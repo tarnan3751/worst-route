@@ -16,7 +16,7 @@ from worst_route.api.jobs import JobSettings
 from worst_route.geocode.service import GeocodeService
 
 from ..engine.graphs import at_node
-from .support import GRID
+from .support import GRID, PORTLAND
 
 
 def stop(v: int) -> dict[str, float]:
@@ -39,8 +39,13 @@ async def hosted(
     **settings: Any,
 ) -> AsyncIterator[tuple[httpx.AsyncClient, FastAPI]]:
     job_settings = JobSettings(**{"inline_workers": True, "coalesce_s": 0.0, **(jobs or {})})
-    values: dict[str, Any] = {"backend": "python", "geocoder": "none", **settings}
-    config = ApiSettings(data_dir=data, region="portland", jobs=job_settings, **values)
+    values: dict[str, Any] = {
+        "builds": PORTLAND,
+        "backend": "python",
+        "geocoder": "none",
+        **settings,
+    }
+    config = ApiSettings(data_dir=data, jobs=job_settings, **values)
     app = create_app(config, geocode=geocode)
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app, client=client)

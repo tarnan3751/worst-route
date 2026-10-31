@@ -6,12 +6,14 @@
 
 `/config` tells the frontend which basemap to draw (`ApiSettings.basemap`, from
 `WORST_ROUTE_BASEMAP`): `raster`, OpenStreetMap's tiles at hobby volume, or `pmtiles`, Protomaps'
-vector tiles from `<data>/basemap/<region>.pmtiles`, a file `tools/fetch_basemap.sh` cuts from a
-Protomaps build. With `pmtiles` it names the file (`tiles`) and, when that script's `--assets`
-put them there, the labels' fonts (`glyphs`, a MapLibre template) and the icons (`sprite`, the
-grayscale flavor the frontend draws); without them the frontend draws the basemap without
-labels. Paths are the API's own, which the frontend prefixes with `/api`. It also gives whether
-the server is public and the limits a request meets (`limits.Limits`).
+vector tiles from `<data>/basemap/<name>.pmtiles`, a file `tools/fetch_basemap.sh` cuts from a
+Protomaps build, the name `ApiSettings.basemap_name` (`serve --basemap-name`), by default the
+first region served, so one file may serve every build. With `pmtiles` it names the file
+(`tiles`) and, when that script's `--assets` put them there, the labels' fonts (`glyphs`, a
+MapLibre template) and the icons (`sprite`, the grayscale flavor the frontend draws); without
+them the frontend draws the basemap without labels. Paths are the API's own, which the frontend
+prefixes with `/api`. It also gives whether the server is public and the limits a request meets
+(`limits.Limits`).
 
 `/basemap/` serves that directory as static files (`BasemapFiles`): byte ranges (206, a range
 running past the end cut at it; 416 with `Content-Range` for one starting past it), `ETag` and
@@ -49,9 +51,14 @@ def basemap_dir(data_dir: Path) -> Path:
     return data_dir / "basemap"
 
 
+def basemap_name(api: "Api") -> str:
+    """The basemap file's name: `basemap_name`, else the first region served."""
+    return api.settings.basemap_name or api.settings.builds[0][0]
+
+
 def tiles_path(api: "Api") -> Path:
-    """The served region's tiles."""
-    return basemap_dir(api.settings.data_dir) / f"{api.settings.region}.pmtiles"
+    """The basemap's tiles."""
+    return basemap_dir(api.settings.data_dir) / f"{basemap_name(api)}.pmtiles"
 
 
 def basemap_of(api: "Api") -> BasemapOut:
@@ -63,7 +70,7 @@ def basemap_of(api: "Api") -> BasemapOut:
     sprite = (directory / "sprites" / f"{SPRITE}.json").is_file()
     return BasemapOut(
         kind="pmtiles",
-        tiles=f"/basemap/{api.settings.region}.pmtiles",
+        tiles=f"/basemap/{basemap_name(api)}.pmtiles",
         glyphs="/basemap/fonts/{fontstack}/{range}.pbf" if fonts else None,
         sprite=f"/basemap/sprites/{SPRITE}" if sprite else None,
     )

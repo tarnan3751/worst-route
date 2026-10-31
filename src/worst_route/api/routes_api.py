@@ -36,8 +36,9 @@ graph_version).
 
 A route's document adds what the presentation says about it (`presentation.document.present`:
 its directions, its toasts, and its fuel, states, towns and share of the roads), worked out
-again on every request from its build, its request, its seed and the region's places index
-(`presentation_of`); `directions_of` gives its directions alone, the same ones, for
+again on every request from its build, its request, its seed and its region's places index
+(`presentation_of`, `places_of`: the region's own, else a served region's whose states hold its
+own); `directions_of` gives its directions alone, the same ones, for
 `GET /routes/{id}/directions` (`directions_api`). An alphabet route's letters are recounted on
 every request too, from the build's edge letters, worked out once per build (`Api.letters`).
 
@@ -87,7 +88,7 @@ from worst_route.api.schemas import (
 from worst_route.api.sse import server_sent, time_ratio
 from worst_route.api.store import StoredRoute
 from worst_route.api.worker import RouteArrays, unreachable
-from worst_route.config import BUBBLE_KM
+from worst_route.config import BUBBLE_KM, REGIONS
 from worst_route.engine import ENGINE_VERSION
 from worst_route.engine.alphabet_search import alphabet_counts, edge_letters
 from worst_route.engine.objectives import OBJECTIVE_KEYS
@@ -108,6 +109,7 @@ from worst_route.graph.store import MissingArray
 from worst_route.presentation.directions import Step
 from worst_route.presentation.document import present, route_directions
 from worst_route.presentation.geojson import feature_collection, line_coordinates
+from worst_route.presentation.places import PlaceIndex
 
 if TYPE_CHECKING:
     from worst_route.api.app import Api
@@ -173,13 +175,18 @@ def stored_route(api: "Api", route_id: str) -> StoredRoute:
 
 
 def build_of(api: "Api", stored: StoredRoute) -> Loaded:
-    """The build a stored route was planned on, at its graph_version."""
-    try:
-        loaded = load_build(
-            api.settings.data_dir, stored.region, stored.build_id, backend=api.settings.backend
-        )
-    except BuildNotFound as error:
-        raise ApiError(409, "BUILD_UNAVAILABLE", str(error)) from None
+    """The build a stored route was planned on, at its graph_version: the served one when it is
+    served, else read from disk (`load_build` keeps the two used last)."""
+    served = api.builds.get(stored.region)
+    if served is not None and served.data.meta["build_id"] == stored.build_id:
+        loaded = served
+    else:
+        try:
+            loaded = load_build(
+                api.settings.data_dir, stored.region, stored.build_id, backend=api.settings.backend
+            )
+        except BuildNotFound as error:
+            raise ApiError(409, "BUILD_UNAVAILABLE", str(error)) from None
     if loaded.data.meta["graph_version"] != stored.graph_version:
         message = (
             f"build {stored.region}/{stored.build_id} is graph_version "
@@ -188,6 +195,25 @@ def build_of(api: "Api", stored: StoredRoute) -> Loaded:
         )
         raise ApiError(409, "BUILD_UNAVAILABLE", message)
     return loaded
+
+
+def places_of(api: "Api", region: str) -> PlaceIndex | None:
+    """The places index for a route on `region`: the region's own when it is served with one,
+    else that of the served region with the fewest states among those whose states hold all of
+    its own (`config.Region.fips`; the first served on a tie), never one clipped to a bbox, whose
+    index holds only its bbox's towns; None when none does."""
+    own, known = api.places.get(region), REGIONS.get(region)
+    if own is not None or known is None:
+        return own
+    covering = [
+        (len(other.fips), index)
+        for name, index in api.places.items()
+        if index is not None
+        and (other := REGIONS.get(name)) is not None
+        and other.bbox is None
+        and known.fips <= other.fips
+    ]
+    return min(covering, key=lambda c: c[0])[1] if covering else None
 
 
 def geometry_of(loaded: Loaded) -> Geometry:
@@ -519,8 +545,9 @@ def presentation_of(
     api: "Api", loaded: Loaded, stored: StoredRoute, asked: RouteRequestIn, metrics: dict[str, Any]
 ) -> dict[str, Any]:
     """What the presentation adds to a stored route's document (`present`), from its request's
-    masks, labels and vehicle, its seed and the region's places index."""
+    masks, labels and vehicle, its seed and its region's places index (`places_of`)."""
     masks = request_masks(loaded.spatial, loaded.data, stored.request)
+    places = places_of(api, stored.region)
     return present(
         loaded.data,
         stored.nodes,
@@ -532,8 +559,8 @@ def presentation_of(
         seed=stored.seed,
         labels=[s.label for s in asked.stops or []],
         vehicle=asked.vehicle,
-        places=api.places,
-        geometry=geometry_of(loaded) if api.places is not None else None,
+        places=places,
+        geometry=geometry_of(loaded) if places is not None else None,
     )
 
 

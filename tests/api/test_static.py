@@ -13,6 +13,7 @@ from worst_route.api.jobs import JobSettings
 from worst_route.api.static import IMMUTABLE, create_site
 
 from .hosting import job_body
+from .support import PORTLAND
 
 pytestmark = pytest.mark.anyio
 
@@ -32,7 +33,7 @@ async def test_the_frontend_at_the_root_and_the_api_under_api(
     caplog.set_level(logging.INFO, logger="worst_route")
     jobs = JobSettings(inline_workers=True, coalesce_s=0.0)
     settings = ApiSettings(
-        data_dir=data, region="portland", backend="python", jobs=jobs, geocoder="none"
+        data_dir=data, builds=PORTLAND, backend="python", jobs=jobs, geocoder="none"
     )
     site = create_site(create_app(settings), write_dist(tmp_path))
     async with site.router.lifespan_context(site):

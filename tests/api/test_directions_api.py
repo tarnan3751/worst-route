@@ -21,7 +21,7 @@ from worst_route.engine.io import route_document
 from worst_route.engine.plan import plan_route
 
 from ..presentation.support import write_fixture_places
-from .support import GRID, api_input, loaded, request
+from .support import GRID, PORTLAND, api_input, loaded, request
 
 pytestmark = pytest.mark.anyio
 
@@ -44,7 +44,7 @@ def store_route(data: Path, *, vehicle: dict[str, float] | None = None, **docume
 async def serving(data: Path) -> AsyncIterator[httpx.AsyncClient]:
     config = ApiSettings(
         data_dir=data,
-        region="portland",
+        builds=PORTLAND,
         backend="python",
         jobs=JobSettings(inline_workers=True),
         geocoder="none",

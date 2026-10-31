@@ -66,6 +66,11 @@ class Region(BaseModel):
             return None
         return frozenset(c.name.lower() for c in TIERS[int(self.classes[1])])
 
+    @property
+    def fips(self) -> frozenset[str]:
+        """The FIPS codes of its states (`STATES`), which the API's places and picks go by."""
+        return frozenset(STATES[state][1] for state in self.states)
+
 
 REGIONS: dict[str, Region] = {
     "portland": Region(

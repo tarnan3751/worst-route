@@ -26,7 +26,7 @@ from worst_route.engine.plan import plan_route
 from worst_route.presentation import share_image
 
 from ..presentation.support import write_fixture_places
-from .support import SLOW, api_input, loaded, request, save_build
+from .support import PORTLAND, SLOW, api_input, loaded, request, save_build
 
 pytestmark = pytest.mark.anyio
 
@@ -48,7 +48,7 @@ def store_route(
 async def serving(data: Path) -> AsyncIterator[tuple[httpx.AsyncClient, FastAPI]]:
     config = ApiSettings(
         data_dir=data,
-        region="portland",
+        builds=PORTLAND,
         backend="python",
         jobs=JobSettings(inline_workers=True),
         geocoder="none",
@@ -78,7 +78,7 @@ async def test_the_image_renders_once_then_comes_from_the_cache(
     monkeypatch.setattr(share_image, "render_share_image", counted)
     async with serving(data) as (client, app):
         api: Api = app.state.api
-        assert (api.places is not None) == with_places
+        assert (api.places["portland"] is not None) == with_places
         url = f"/routes/{route_id}/share.png"
         first, second = await asyncio.gather(client.get(url), client.get(url))
         for r in (first, second):

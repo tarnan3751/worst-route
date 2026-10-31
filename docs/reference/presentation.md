@@ -12,7 +12,7 @@ builds and the places index.
 
 | Module | What it holds |
 |---|---|
-| `places.py` | `write_places` (the index's writer), `PlaceIndex` (`load`, `states_crossed`, `towns_passed`, `outlines`), `State`, `Town`, `PlacesWritten`, `route_line`, `census_dir`, `places_dir`, `state_files`, `place_files` |
+| `places.py` | `write_places` (the index's writer), `PlaceIndex` (`load`, `states_at`, `states_crossed`, `towns_passed`, `outlines`), `State`, `Town`, `PlacesWritten`, `route_line`, `census_dir`, `places_dir`, `state_files`, `place_files` |
 | `comparisons.py` | `COMPARISONS`, `Comparison`, `SHORTER`, `comparison_line`, `distance_text`, `METRES_PER_MILE` |
 | `share_image.py` | `render_share_image`, `headline`, the image's sizes, thresholds and colours (its version, `SHARE_IMAGE_VERSION`, is the endpoint's, in `api/share_api.py`) |
 | `directions.py` | `directions`, `Step`, `StepKind`, `road_text`, `compass`, `turn_word`, `numbered` |
@@ -181,7 +181,8 @@ reads it only when it has a places index); `metrics_extra` holds `extra_fuel_gal
   wrote one). `read_route`, `validate` and `plan --base` read the file as before
   (`docs/reference/engine.md`, **Route files**).
 - **`GET /routes/{id}`** works it out again on every request (`routes_api.presentation_of`),
-  with the request's labels and vehicle and the server's places index, and
+  with the request's labels and vehicle and its region's places index (its own, else a served
+  region's that covers its states: `docs/reference/api.md`, **Running it**), and
   **`GET /routes/{id}/directions`** gives the same directions alone (`docs/reference/api.md`).
 
 Nothing of it is stored: the worker's and the job manager's stored document is route.json's
@@ -295,6 +296,12 @@ build's geometry):
   (load average about 27) and about 0.23 s on a quiet one. Prepared polygons are not safe under
   concurrent use with shapely 2.2 and GEOS 3.14, used before or not (sixteen threads asking at
   once crash the process), so the index answers one lookup at a time.
+
+`states_at(points) -> list[State | None]` gives the state each `(lon, lat)` point lies in (a touch
+counts; a point on a border the first state by STATEFP), None for a point in none, at sea or
+abroad: the API's pick of the build a trip runs on reads its stops' states so
+(`docs/reference/api.md`, **Picking a build**). Every index holds the same states, whichever
+region's it is.
 
 On Portland, Powell's → Reed (seed 1) crosses `[OR]` and passes through Portland first (GEOID
 4159000, "Portland city"); a straight line from Aloha (45.4943, −122.8671) to Powell's
@@ -439,7 +446,7 @@ data directory and holds a route over the API tests' 10 × 10 lattice):
 
 | Test file | What it covers |
 |---|---|
-| `test_places.py` | the index's rows; states and towns in route order, the CDP included, and reversed; a route that comes back into a town listed where it first met it; a point repeated (a zero-length segment) met where it is; a route touching nothing; a touch counting; places outside the bbox left out; a state the bbox meets without its places file reported missing; the state's bounds when there is no bbox; the files' columns and CRS; no index when a file is missing; `aux places` on the fixture zipped as the Census ships it (shapefiles), with the latest build's bbox and the warning, and its missing state file; `STATES` (51, unique, every region's state) |
+| `test_places.py` | the index's rows; states and towns in route order, the CDP included, and reversed; a route that comes back into a town listed where it first met it; a point repeated (a zero-length segment) met where it is; a route touching nothing; a touch counting; the state each point lies in (one in each, one on the border, a corner, one in neither); places outside the bbox left out; a state the bbox meets without its places file reported missing; the state's bounds when there is no bbox; the files' columns and CRS; no index when a file is missing; `aux places` on the fixture zipped as the Census ships it (shapefiles), with the latest build's bbox and the warning, and its missing state file; `STATES` (51, unique, every region's state) |
 | `test_comparisons.py` | the four lines above; the things in order, each with both lines; a sweep from 0.1 to 500,000 mi reaching every thing, and every "N×" line but those the list makes unreachable (derived from it), deterministic; the boundaries (equal is not longer, 2× exactly, the shorter line); every distance's format |
 | `test_share_image.py` | a 1200 × 630 PNG (its IHDR), the same bytes twice, with and without the index (which differ), no Software stamp; `headline` for each objective and a round trip; a slowest-time route drawing its own headline, a distance route ignoring its time ratio; a round trip; no baseline; the extent's margin and shape, and its minimum; the network one line per road unit, drawn along a bent geometry, only the units near the map; the roads a full decode finds, on the lattice with every road bent over 243 maps in and around it and on a hairpin met only by its tip, and none decoded to tell for a map holding every road or none; under a cap of 10, thinned to T0–T2, T0–T1, T0, then the longest units of T0 (359 of one length: the first ten; among unequal lengths the ten longest, ties to the lower unit id, a long unit outside T0 left out), the same lines twice |
 | `test_share_image_data.py` (`data`) | Portland: on the map of Powell's → Reed and two smaller ones inside it, the network is the roads a full decode finds |

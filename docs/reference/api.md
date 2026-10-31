@@ -38,14 +38,19 @@ Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in requests; every numb
 ## Running it
 
 ```
-worst-route serve --region R [--build-id ID] [--host 127.0.0.1] [--port 8000] [--workers N]
-                  [--backend auto|csr|python] [--store PATH]
+worst-route serve --region R [--region R2 ...] [--build-id ID] [--host 127.0.0.1] [--port 8000]
+                  [--workers N] [--backend auto|csr|python] [--store PATH]
                   [--geocoder nominatim|none] [--nominatim-url URL]
                   [--trust-proxy] [--log-format text|json] [--public] [--frontend DIR]
+                  [--basemap-name NAME]
 ```
 
-It loads the region's build (`--build-id`, else the region's `latest`) and its geometry before it
-listens, so a missing build, one saved before an array of the format existed
+It serves the regions `--region` names, one or several (`--region oregon --region us-t1`: a
+state's all roads beside the national T1 build), each a region of `config.REGIONS`, given once
+(twice is exit 2), the first the default (the basemap's name). Each trip runs on one of them,
+which the frontend asks the server to pick (**Picking a build**) and names in its request. It
+loads each region's build (`--build-id` names the first region's; the others, and the first
+without it, serve their `latest`) and its geometry before it listens, so a missing build, one saved before an array of the format existed
 (`docs/reference/graph.md`, **The build format**), or one without its geometry (the `save
 --force` that writes it again) is one line on stderr and exit 1. Then uvicorn serves one process. The jobs live
 in that process's memory, and each runs in a worker process of its own, `--workers` at once
@@ -54,8 +59,11 @@ in that process's memory, and each runs in a worker process of its own, `--worke
 `WORST_ROUTE_DATA` points `--store` into its own tree, and runs with `--geocoder none` or
 `--nominatim-url` pointed at a stub of its own (no agent calls Nominatim). The share images are
 cached in `share/` beside the route store, so a lane's stay in its own tree too. At startup it
-loads the region's places index if `worst-route aux places` has written it under
-`<WORST_ROUTE_DATA>/aux/places/` (**Share image**). `--port 0` binds a free port, which
+loads each region's places index that `worst-route aux places` has written under
+`<WORST_ROUTE_DATA>/aux/places/`; a route on a region without its own uses that of a served
+region whose states hold all of the route's region's (`config.Region.states`), the fewest states
+first, never one clipped to a bbox, whose index holds only its bbox's towns
+(`routes_api.places_of`): the national T1 build's covers every state's (**Share image**). `--port 0` binds a free port, which
 uvicorn's log line names. The job manager's own lines (a job cancelled for want of a subscriber,
 a worker's traceback) go to the same log. `--backend` is the engine's
 (`docs/reference/graph.md`, **Choosing a backend**), and `serve` prints the one it took as
@@ -83,7 +91,8 @@ uvicorn's format, as before. `--public` applies the public limits (**Public limi
 them last: `public: a client runs 1 job at once with 3 waiting, budgets up to 60 s, 10 place
 searches and 60 picks of a build a minute`. The basemap the frontend draws is `WORST_ROUTE_BASEMAP`'s, `raster` (the
 default) or `pmtiles` (**Basemap**), and with `pmtiles` `serve` prints the file it serves,
-`basemap: pmtiles <data>/basemap/<region>.pmtiles`, before the proxy's and the public lines.
+`basemap: pmtiles <data>/basemap/<name>.pmtiles`, `--basemap-name`'s name, by default the first
+region's, before the proxy's and the public lines.
 
 `--frontend DIR` serves the frontend's build (`frontend/dist`, `npm run build`) too, from the
 same process: `api/static.py`'s `create_site` mounts the API, its paths unchanged, under `/api`
@@ -95,9 +104,10 @@ and exit 1; it prints `frontend: DIR at /, the API under /api` last. The contain
 (`docs/reference/hosting.md`). The access lines then name the whole path, `/api/...`; the
 build's own files are not logged.
 
-`create_app(ApiSettings(data_dir, region, build_id="latest", backend, store_path, jobs,
+`create_app(ApiSettings(data_dir, builds=((region, build_id), ...), backend, store_path, jobs,
 geocoder="nominatim", nominatim_url, contact, trust_proxy=False, public=False,
-basemap="raster"))` builds the same application in-process, and
+basemap="raster", basemap_name=None))` builds the same application in-process (a build id
+`"latest"` for the region's latest), and
 `create_app(settings, geocode=service)` with a geocoding service of the caller's own (a
 `FakeGeocoder` behind it, in the tests); the tests drive it over `httpx` (**Tests**).
 
@@ -244,11 +254,13 @@ state build, since every failing seed search looks again for a node-simple path
 | GET, HEAD | `/routes/{id}/share.png` | the route's share image, a 1200 × 630 PNG (`image/png`), cached; HEAD the same headers without it (**Share image**) |
 
 **`/ready`** says whether the deployment is whole, where `/health` says only that the process
-lives: `build`, the served build still on disk at the `graph_version` it loaded (a build
+lives: `build`, each served build still on disk at the `graph_version` it loaded (a build
 replaced since, or gone, fails: restart to serve the new one); `store`, the route store
-answering a query; `places`, the region's places index loaded at startup (missing, the check
-names `worst-route aux places --region R`); `basemap`, with the `pmtiles` basemap its file
-(missing, the check names `tools/fetch_basemap.sh R`; its detail says whether the labels' fonts
+answering a query; `places`, a places index for each served region, its own loaded at startup
+or a served region's that covers it (**Running it**; the detail says which: `oregon: 534 towns;
+us-t1: 31540 towns`, or `westland: lands's index`; a region with neither fails, the check naming
+`worst-route aux places --region R`); `basemap`, with the `pmtiles` basemap its file (missing,
+the check names `tools/fetch_basemap.sh NAME`, the basemap's name; its detail says whether the labels' fonts
 and icons are there too, which are optional), with `raster` nothing. A check that fails makes
 the answer 503 with `status: "not_ready"`; each check's `detail` says what it found, or what is
 missing and its remedy, never a path on the server or an error of its system (those go to the
@@ -341,7 +353,8 @@ none of them stored, so a route stored before they existed has them too:
 - `extra_fuel_gal` and `extra_cost_usd`, the length beyond the baseline's at the request's
   `vehicle`'s `mpg` and `gas_price_usd`, null without a vehicle; `states` and `towns`, the
   Census names of the states and towns the route passes through in the order it enters them,
-  and `towns_n`, null when the region has no places index (**Share image**); and
+  and `towns_n`, null when the route's region has no places index, its own or a served one that
+  covers it (**Running it**); and
   `network_fraction`, the share of the road units within the request's reach (its leash, tier
   and bubbles) that the route drives.
 
@@ -680,15 +693,17 @@ the image as a GET would, if it is not cached yet.
   lock (`Api.share_locks`, an `asyncio.Lock` per route), so concurrent first requests render once:
   the first renders in a worker thread (`asyncio.to_thread`), on the route's build at its
   `graph_version` (409 `BUILD_UNAVAILABLE`, as `GET /routes/{id}` answers), with `comparison_line`
-  of its length, the places index's outlines, its request's objective and the document's
+  of its length, its region's places index's outlines, its request's objective and the document's
   `time_ratio` (computed as `GET /routes/{id}` does: `stored_delays` and `sse.time_ratio`); it
   writes the file whole (a temporary name of its own, then a rename, so two writers, two servers on
   one store, never share a part file); the others then find the file. The lock is forgotten once the
   request that took it is done, whatever happened (an image written, a 409, a render that failed,
   which is a 500 and leaves no file): the next request starts afresh.
-- The places index (`Api.places`) is loaded once, at startup, for the served region:
-  `worst-route aux places --region R` writes it (`docs/reference/presentation.md`, **Places**).
-  Without one the images have no state outlines; nothing fails.
+- The places indexes (`Api.places`, by region) are loaded once, at startup, one for each served
+  region whose index `worst-route aux places --region R` has written
+  (`docs/reference/presentation.md`, **Places**); a route's is its region's own, else a served
+  one that covers it (**Running it**). Without one the images have no state outlines; nothing
+  fails.
 
 The drawing (`presentation/share_image.py`) is imported, and with it matplotlib, by the first
 render, never at startup: matplotlib's first import may build its font cache, which took 11 s on
@@ -777,6 +792,16 @@ machine, with curl:
   ms from the cache. Portland → Bend with a 2.72× ratio target, seed 1: `done` after 7.3 s at
   2.73× (700.5 km, `target`); the document 0.6 MB in 0.08–0.15 s with 723 steps and 33 towns,
   `/directions` 11 ms, `/share.png` 0.54 s (115,836 road units, thinned to 17,050).
+- **Oregon beside the national T1 build** (`serve --region oregon --region us-t1 --port 0
+  --geocoder none`, csr, engine version 5, 2026-10-31, builds ea3b18096e8b and c4a85b3d36d0, with
+  both places indexes, load average about 3): `/ready` ready, its places "oregon: 534 towns;
+  us-t1: 31540 towns"; `/regions/pick` put Portland → Bend on `oregon` ("all stops in Oregon"),
+  Portland → Chicago on `us-t1` ("stops in Oregon and Illinois") and refused Portland → Honolulu
+  (`STOP_OUTSIDE_REGION`, stop 1). Planned on the builds picked, seed 1, a 30 s budget: Portland
+  → Bend on Oregon's all roads (T4, a 117.1 km leash), `done` after 30.9 s at 17.70× (4,534.7 km,
+  `budget`), `["Oregon"]` and 120 towns; Portland → Chicago on T1 (a 565.1 km leash), `done`
+  after 31.6 s at 9.69× (32,801.3 km, 20 states, 1,770 towns); each `/validate` ok and each
+  share image drawn. The API process held 249 MB afterwards.
 
 ## Basemap
 
@@ -784,8 +809,10 @@ The frontend draws the basemap the server names (`docs/reference/frontend.md`, *
 `docs/reference/hosting.md`). `WORST_ROUTE_BASEMAP` (`config.Settings.basemap`,
 `ApiSettings.basemap`) picks it: `raster`, the default, OpenStreetMap's raster tiles, which their
 usage policy allows at hobby volume and so only locally; or `pmtiles`, Protomaps' vector tiles
-from one file the server holds, `<WORST_ROUTE_DATA>/basemap/<region>.pmtiles`, which
-`tools/fetch_basemap.sh` cuts from a Protomaps build (`docs/reference/hosting.md`).
+from one file the server holds, `<WORST_ROUTE_DATA>/basemap/<name>.pmtiles`, which
+`tools/fetch_basemap.sh` cuts from a Protomaps build (`docs/reference/hosting.md`); the name is
+`serve --basemap-name`'s (`ApiSettings.basemap_name`), by default the first region served, so
+one file, a national extract, may serve every build.
 
 **`GET /config`** answers what the frontend needs of the server:
 
@@ -914,7 +941,10 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 | `test_schemas.py` | the request mirrors the engine's (a pilgrimage's brand included), its defaults, the seed's bounds, stops left out only with a base, malformed requests refused (both turn constraints at once, an unknown one); the target as the engine's, each kind with its own number and within its bounds; `done`'s time ratio, target, delays and turns typed |
 | `test_logs.py` | who a client is (the peer; the last `X-Forwarded-For` address only when trusted, without a port; IPv6 by its /64), its hash; a request id and one access line per request, without the address or the query; a proxy's request id kept only when trusted and well formed; a job's end line with its id, outcome and route and the id of the request that started it; a queued job's lines with its own request's id, not the one that freed its slot; an unhandled error's 500 `INTERNAL_ERROR` with the request's id, logged with it; a JSON line's fields and traceback |
 | `test_limits.py` | each client's searches on a fake clock (ten in any minute, `retry_after_s`, other clients apart, idle ones forgotten); the manager's per-client jobs (one running and three waiting while workers are free, the fifth refused with its counts, another client and a job without a client unaffected, the next of a client starting in order when its running one ends, a waiting job whose client is busy letting the next one start, a full server's refusal without counts); over HTTP the public budget (and 120 s otherwise), a client's share of the jobs from one peer and behind a trusted proxy (the last forwarded address counting, an untrusted header ignored), a client's eleventh search refused, cached answers counted, none of it when not public |
-| `test_basemap_api.py` | `/config` for each basemap, with and without the labels' assets, and its public flag and limits; the basemap's file: whole, its first 127 bytes, a suffix, a range running past the end (cut), one starting past it (416 with the length), `If-Range` current and stale, `HEAD`, the media types and caching; a font; a missing file, a missing directory and a path leaving it, 404; a linked file served and ready, and a small one's first 16 kB read whole; `/ready`'s basemap check, failing without the file (no path in its detail) and naming the labels |
+| `test_basemap_api.py` | `/config` for each basemap, with and without the labels' assets, and its public flag and limits; the basemap's file: whole, its first 127 bytes, a suffix, a range running past the end (cut), one starting past it (416 with the length), `If-Range` current and stale, `HEAD`, the media types and caching; a font; a missing file, a missing directory and a path leaving it, 404; a linked file served and ready, and a small one's first 16 kB read whole; `/ready`'s basemap check, failing without the file (no path in its detail) and naming the labels; one file named for every build served, by `basemap_name` or the first region |
+| `test_several_builds.py` | two regions served at once (`lands` in `conftest.py`: one fake state's region and one of two, `config.REGIONS` and `STATES` given them): `/regions` (in the order served, each with its `name`; a region config does not name by its id), `/health` and `/ready`'s build check over both, `UNKNOWN_REGION` naming them; a job on each build, its document, `/validate` and the stored route's build the served one; a stop beyond one build's bbox; a stored route's document and share image after a restart serving the regions the other way round, and serving only another region (its build read from disk, its places from a covering index); a region without its own places index taking a covering one (`/ready`'s detail saying so), then its own; a region clipped to a bbox covering no other but covered by a whole state's |
+| `test_pick_api.py` | `POST /regions/pick` on the same regions: stops in one state (whatever the order served, one stop too), in both, in both with only the one-state region served (by bounding box), a stop in no state, no places index; a region clipped to a bbox first, the smallest first, passed over for a stop in a state it does not name while a places index is loaded, by its bbox alone without one; the reason naming a stop beyond the smaller build; a tie to the region served first; a public server's sixty picks a minute a client, apart from its searches; `STOP_OUTSIDE_REGION` for a stop outside every region and for one outside the region holding the most; the body's refusals (no stop, a bad one, an unknown field); a job planned on the region picked |
+| `test_pick_data.py` (`data`) | the pick with Portland's, Oregon's and the national T1 build served from `WORST_ROUTE_DATA` with their places indexes: Powell's → Reed on `portland`, Portland → Bend on `oregon` ("all stops in Oregon"), Portland → Chicago, Portland → Bend → Vancouver (WA) and Portland → Vancouver (both in Portland's bbox) on `us-t1`, Honolulu refused |
 | `test_ready_api.py` | `/ready`: 200 with the build, the store and the places index; 503 without the index, and once the build is replaced or gone (while `/health` answers), its details without a path on the server |
 | `test_static.py` | the site: the build at `/` and its caching, a module's media type, `/health` not at the root, the API under `/api` with its errors, a job run to its end through it (the lifespan ran), the access lines' whole paths |
 | `test_store.py` | the round trip (the stored route validates), unknown ids, the first record kept, what the id covers |
@@ -929,7 +959,8 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 `tests/engine/test_plan.py` covers `plan_route`'s hooks, `tests/graph/test_loader.py` the loader,
 and `tests/unit/test_cli.py` `serve`'s errors, options (the geocoder's included, with the line
 it prints; `--trust-proxy`, `--log-format`, `--public`, `WORST_ROUTE_BASEMAP` and `--frontend`,
-uvicorn's proxy headers off) and its taking `csr` on a build with transition tables. `tests/geocode/` covers the
+uvicorn's proxy headers off; several `--region`s, `--build-id` the first's, `--basemap-name`, a
+region given twice or unknown refused) and its taking `csr` on a build with transition tables. `tests/geocode/` covers the
 geocoding package: `normalise`; the cache and its TTL on a fake clock; the rate limit on a fake
 clock (a burst of ten serving six and refusing four, requests the interval plus a 300 ms
 latency apart, the interval from the answer, a failure spacing the next request too, a turn
@@ -947,6 +978,12 @@ over a real socket by hand (**Measured**).
 
 - **One process.** Jobs live in the API process's memory, so uvicorn runs one process; a restart
   loses running jobs (their routes so far are not stored) and ended jobs' records.
+- **The pick knows states and bboxes, not roads** (**Picking a build**): a trip goes to the
+  smallest region whose states hold its stops, whether or not its build has a road near each, so
+  a stop the smaller build cannot snap is `NO_NODE_NEAR` from `POST /jobs` where the national
+  build might have served it. A stop past a build's nodes' extent, as on Oregon's edges, goes to
+  the next region up. "Make it worse" continues a route on its own build, whatever the pick
+  would give its stops now.
 - **The public limits are per process and per address** (**Public limits**): a restart forgets
   them, and a client with many addresses has many shares. There is no authentication and no
   CORS (the frontend is on the API's origin: the dev server proxies, `serve --frontend` serves

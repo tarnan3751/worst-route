@@ -556,7 +556,8 @@ FastAPI, JSON bodies validated by pydantic. All coordinates are `[lon, lat]` in 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` | liveness + loaded builds |
-| GET | `/regions` | regions, tiers, bbox, `graph_version`, counts |
+| GET | `/regions` | regions, tiers, bbox, `graph_version`, counts (and a display `name`, built with several builds) |
+| POST | `/regions/pick` | `{stops}` → `{region, build_id, reason}`: the served build a trip runs on (built, M5) |
 | GET | `/geocode?q=&region=` | address → candidates (proxied, cached, rate-limited; §4.4; built) |
 | POST | `/snap` | `{region, lat, lon, role: start\|via\|end, tier?}` → snapped node |
 | GET | `/brands?region=` | the region's brands for the pilgrimage mode (the build's index, not Nominatim; built, M3) |
@@ -571,6 +572,8 @@ FastAPI, JSON bodies validated by pydantic. All coordinates are `[lon, lat]` in 
 | POST | `/routes/{route_id}/validate` | runs the validator, returns the report (debug/CI) |
 
 Every error answers `{code, message, ...}` (the error's own fields beside them), 422 for a request that cannot be planned, 429 when the server is full, 404 for an unknown job or route, 409 for a stored route whose build is gone.
+
+As built for several builds (M5, the end state the decision gate gives on a 24 GB machine, §7 M5.3 (b); `docs/reference/api.md`, **Running it**, **Picking a build**): `serve --region` repeats, so one process serves a state's all-roads build beside the national T1 one, the first region the default; `POST /regions/pick` names the smallest served region that holds every stop (a region clipped to a bbox, then one whose states hold the stops' states, by the Census polygons, then the region with the most states whose bbox holds them), and the frontend names it over the stop list and sends it in `POST /jobs`, which still names its region. Each region has its own places index, else uses a served one that covers its states; one basemap file, named by `--basemap-name`, serves every build.
 
 ### 4.1 `POST /jobs` request
 
@@ -707,6 +710,7 @@ frontend/
 │   ├── map/stopsLayer.ts     # draggable markers, numbered, snapped-position ghost + note tooltip
 │   ├── stops/stopList.ts     # ordered list: add by click, remove
 │   ├── stops/search.ts       # (M4, built) the place search: a field and a button, not type-ahead; a pick places a stop as a click
+│   ├── stops/pick.ts         # (M5, built) the build a trip runs on, asked of POST /regions/pick as the stops change, named over the stop list
 │   ├── settings/panel.ts     # seed, budget, inefficiency target, scale (tier auto/override, leash), objective mode, units; constraints (M3), vehicle and departure (M4, built)
 │   ├── run/controls.ts       # Go / Cancel / Reroll (new seed) / Make it worse; the live stat line with the ratio ticking up
 │   ├── share/share.ts        # URL state, ?route= links, copy link, open share.png and download GeoJSON (M4, built)

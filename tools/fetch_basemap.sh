@@ -2,9 +2,10 @@
 # Fetch the vector basemap the API serves under WORST_ROUTE_BASEMAP=pmtiles
 # (docs/reference/hosting.md, **The basemap**; docs/reference/api.md, **Basemap**): an area of one
 # of Protomaps' daily builds, cut with the go-pmtiles CLI, as $WORST_ROUTE_DATA/basemap/NAME.pmtiles
-# (default the repository's data/basemap/), NAME being the region the API serves; and with
-# --assets the fonts and icons of its labels, from protomaps/basemaps-assets at a pinned commit,
-# into fonts/ and sprites/ beside it, with their licences. Run by a person; never by the gate, a
+# (default the repository's data/basemap/), NAME being the basemap's name (serve --basemap-name, by
+# default the first region the API serves); and with --assets the fonts and icons of its labels,
+# from protomaps/basemaps-assets at a pinned commit, into fonts/ and sprites/ beside it, with
+# their licences. Run by a person; never by the gate, a
 # test or an agent:
 #
 #   tools/fetch_basemap.sh portland --build 20261030 --bbox -123.05,45.25,-122.35,45.72 --assets

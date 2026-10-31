@@ -1,6 +1,6 @@
 # Frontend
 
-The single-page app under `frontend/`: a map of the served region on which the user clicks a
+The single-page app under `frontend/`: a map of the served regions on which the user clicks a
 start, an end and stops along the way, starts a job, watches the worst route grow live, cancels,
 rerolls, makes the route worse, reads its directions and its toasts, and opens a stored route
 by link. Vite + TypeScript (strict), no
@@ -10,18 +10,19 @@ nothing there.
 
 | Module | What it holds |
 |---|---|
-| `main.ts` | bootstrap and wiring: the store from the URL's state, the panel's parts, the region's bbox, the basemap the server names (`GET /config`), a stored route when the URL names one, clicks on the map, the cancel on `pagehide` |
+| `main.ts` | bootstrap and wiring: the store from the URL's state, the panel's parts, the served regions (`GET /regions`) and the map fitted to all their bboxes, the build each trip runs on (`RegionPicker`), the basemap the server names (`GET /config`), a stored route when the URL names one, clicks on the map, the cancel on `pagehide` |
 | `state.ts` | `Store`, the app's state on an `EventTarget`; `Settings`, `Stop`, `RunView`, `targetOf`, `takesTarget` (the targets a mode takes), `modeOf` (the request's objective, item, brand and constraints), `vehicleOf`, `departureOf`; the API's limits (tiers, budget, leash, targets), the vehicle's, and the modes and items it plans |
 | `api/types.ts` | the API's shapes, written by hand from `api.md` |
-| `api/client.ts` | the fetch wrappers (`getConfig`, `getBrands` and `geocode` among them), `ApiError`, `errorBody`, `subscribe` (a job's events over `EventSource`) |
+| `api/client.ts` | the fetch wrappers (`getConfig`, `pickRegion`, `getBrands` and `geocode` among them), `ApiError`, `errorBody`, `subscribe` (a job's events over `EventSource`) |
 | `map/basemap.ts` | `basemapParts` (the basemap `/config` names, as sources and layers), `addBasemap`, `EMPTY_STYLE` (**Basemap**) |
 | `map/map.ts` | the MapLibre map, its controls, MapLibre's worker and the `pmtiles://` protocol, `fitTo` |
 | `map/routeLayer.ts` | `spliceLine` and `RouteLayer`: the baseline, the growing route, the flash (**Live growth**), and the highlight of a step of the directions |
 | `map/stopsLayer.ts` | the stop markers and the snapped-position ghosts |
 | `stops/stopList.ts` | how a click, a drag or a removal changes the stops (`placeStop`: a click's, and a place search's pick); `stopErrored`, the stops an error names; the list in the panel |
-| `stops/search.ts` | `PlaceSearch` (the place search, no DOM, so the tests drive it) and `mountPlaceSearch`, its field, button and results |
-| `settings/panel.ts` | the request's settings (the mode with its item or brand, the turns and hard mode, the vehicle and the departure among them; `loadBrands` and `brandOptions`, the brand picker's), the row an error's `field` names, and the units |
-| `run/controls.ts` | `JobRunner`, a job's lifecycle (no DOM, so the tests drive it), and the retries without strict and without hard mode; `mountRunControls`, Go, Cancel, Reroll, Make it worse and the stat line; `statLines`, `countsTitle` and `routeLines`, its rows; `awaitingBrand`, which holds the buttons under Brand until the brands are known, and `worseRefused`, which turns Make it worse off under Alphabet |
+| `stops/pick.ts` | `RegionPicker` (the build a trip runs on, asked of `POST /regions/pick` as the stops change, no DOM), `pickLine` (the stop list's header), `regionLabel`, `regionName`, `roadsOf` (**Stops**) |
+| `stops/search.ts` | `PlaceSearch` (the place search, no DOM, so the tests drive it), `searchRegion` (the region it asks in) and `mountPlaceSearch`, its field, button and results |
+| `settings/panel.ts` | the request's settings (the region pinned, the mode with its item or brand, the turns and hard mode, the vehicle and the departure among them; `regionOptions`, the region picker's; `loadBrands` and `brandOptions`, the brand picker's), the row an error's `field` names, and the units |
+| `run/controls.ts` | `JobRunner`, a job's lifecycle (no DOM, so the tests drive it), and the retries without strict and without hard mode; `mountRunControls`, Go, Cancel, Reroll, Make it worse and the stat line; `statLines`, `countsTitle` and `routeLines`, its rows; `awaitingBrand`, which holds the buttons under Brand until the brands are known, and `worseRefused`, which turns Make it worse off for an alphabet route |
 | `directions/panel.ts` | `StepLocator` (where the steps lie along the route's geometry), `stepRows`, `DirectionsPanel` (the list's rows, a hover's highlight and a click's pan, no DOM) and `mountDirections` (**Directions**) |
 | `toasts.ts` | `Toasts`, the rotation (no DOM), and `mountToasts`, the strip under the map (**Toasts**) |
 | `share/share.ts` | the URL state, `UrlSync`, `openRoute`, `shareImageUrl`, `geojsonUrl`, the share section (**Links**) |
@@ -69,8 +70,9 @@ pre-bundled dependencies in the dev server) does not keep, so `map.ts` imports i
 
 ## Using it
 
-- **Stops.** On load the map fits the region's bbox (`GET /regions`; the server serves one
-  region). The first click sets the start, the second the end; later clicks add stops along the
+- **Stops.** On load the map fits the bboxes of every region the server serves (`GET /regions`,
+  one or several builds: a state's all roads beside the national one). The first click sets the
+  start, the second the end; later clicks add stops along the
   way, inserted before the end. A marker is numbered and coloured by its role (start green, via
   blue, end red) and dragged to move; the list shows each stop's coordinates and a remove button.
   A stop keeps its coordinates at 6 decimals, so the request and the link that reproduces it
@@ -82,15 +84,37 @@ pre-bundled dependencies in the dev server) does not keep, so `map.ts` imports i
   when there are none; a place's OSM tag is its tooltip). Picking one places the next stop
   exactly as a click there would (`placeStop`: the start, the end, then stops along the way, at
   6 decimals), and clears the field; the place's name is not kept with the stop, as a click has
-  none. The search is locked with the stops while a job runs, and until `/regions` has answered. Once a job has snapped them (its `snapped` event, or a stored route's
+  none. It asks in the region pinned in the settings, else in the served region with the largest
+  bbox (`searchRegion`: the national one, which holds the others when it is served), not the one
+  the stops so far are picked onto, since a stop searched for may take the trip beyond it (a
+  search for Chicago with a start in Portland). The search is locked with the stops while a job
+  runs, and until `/regions` has answered. Once a job has snapped them (its `snapped` event, or a stored route's
   stops), the list shows each stop's node, how far it moved and the API's note, and the map a
   dashed ghost dot where it went (the note as its tooltip). Editing the stops forgets the route
-  shown and the snaps. Stops and settings are locked while a job runs. Under the alphabet route
+  shown and the snaps.
+- **The build a trip runs on** (`stops/pick.ts`). The server picks it: whenever the stops'
+  coordinates change (a stop placed, moved or removed; 300 ms after the last change, never for a
+  job's snaps), `RegionPicker` sends them to `POST /regions/pick` (`docs/reference/api.md`,
+  **Picking a build**: the smallest served region that holds every stop), and every request then
+  names the region picked; an answer for stops since moved is dropped. Under the list's heading
+  the region by its name and roads, the roads read from `/regions`' tiers (the first tier holding
+  all of a build's edges: "all roads", "primary roads and up"), with the server's reason under it
+  in grey: "Oregon · all roads" / "all stops in Oregon", "United States · primary roads and up" /
+  "stops in Oregon and Illinois"; "Finding the build…" while it asks. Until it answers Go and
+  Reroll are disabled. A refusal (`STOP_OUTSIDE_REGION`, a stop no served region holds with the
+  others) is in the banner with that stop highlighted, and the header empty. Any other failure
+  (`NETWORK`, a proxy's 502, a public server's `RATE_LIMITED`) is asked again a second later, up
+  to three times (`PICK_RETRY_MS`, `PICK_RETRIES`); then the banner says "could not ask the
+  server which build these stops run on: …", and the next change of the stops asks again. A region pinned in
+  the settings (**Settings**) skips the pick: the header names it, "set in the settings". Stops and settings are locked while a job runs. Under the alphabet route
   a second hint says "start and end only: the alphabet route takes no stops along the way" (the
   API refuses a stop along the way).
 - **Settings.** The seed (empty: random, picked by the server), the time budget (1–120 s), the
   tier (`auto`, `T0`–`T4`) and the leash (empty: auto, else up to 150 km); once a job has said,
-  what `auto` became ("auto was T4", "auto was 3.6 km"). The inefficiency target is "as bad as
+  what `auto` became ("auto was T4", "auto was 3.6 km"). When the server serves several regions,
+  a Region row: "Picked from the stops" (the default, with the note "the smallest the server has
+  that holds every stop") or one of them by its name and roads ("United States · primary roads
+  and up"), which pins every request to it. The inefficiency target is "as bad as
   possible", "a ratio" to the sensible route (× it, more than 1; 20 by default) or "a drive
   time" (9 h by default), typed as `9h`, `90m`, `2h30m`, `45s` or a bare number of minutes, at
   most 7 days; typing a number picks its kind, and each kind keeps its number while another is
@@ -114,10 +138,14 @@ pre-bundled dependencies in the dev server) does not keep, so `map.ts` imports i
   bridges by default; the pick is kept while another mode is chosen), "Brand" (`brand`, the
   pilgrimage: the most locations of a brand), which shows a list of the region's brands, or
   "Alphabet" (`alphabet`: named roads whose letters run A, B, C, ...). The brands come from
-  `GET /brands?region=`, asked once the region is known and kept in the store, in the API's order
-  (the most located first), each named with its locations ("Starbucks (126)"); the first is
-  picked unless the settings already name a brand the region has (a link's, or a stored
-  route's), and the pick is kept while another mode is chosen; a region without brands has the
+  `GET /brands?region=`, asked for the region trips run on, again whenever it changes
+  (`followBrands`; an answer for a region since left is dropped, and after a failure the next
+  change asks again, to the same region too), and kept in the store, in the API's order (the most
+  located first), each named with its locations ("Starbucks (126)"); the first is picked unless
+  the settings already name a brand the region has (a link's, or a stored route's). A brand's id
+  is its build's, so when the region changes the brand picked is kept by its wikidata id, else
+  its name (Starbucks, 369 on Oregon's build, is 1991 on the national one), else the first is
+  picked; and the pick is kept while another mode is chosen; a region without brands has the
   Brand mode disabled. Until they have answered, the picker is disabled and reads "loading…"
   ("brands unavailable" when the request fails, its error in the banner), and under Brand Go,
   Reroll and Make it worse stay disabled (`awaitingBrand`: until the brand set is one of the
@@ -145,14 +173,18 @@ pre-bundled dependencies in the dev server) does not keep, so `map.ts` imports i
   only when it is on and `strict` only with a side, the key left out otherwise, as the API's own
   serializer does; the `vehicle` and the `departure`), and its 202's seed goes into the
   settings. Reroll posts the same without a
-  seed, so the server picks one. Make it worse posts the shown route as `base_route_id`, with
-  the budget, mode, turns, target, vehicle and departure from the panel (a route opened by link
-  has put its own in the panel first), leaving the stops, tier and leash to the base route
-  (the API's rule), and the seed after the last one tried on
-  that route (its own seed at first). Under Alphabet, Make it worse is disabled, its tooltip "the
-  alphabet route cannot be continued; pick another mode to make it worse" (`worseRefused`): the
-  API continues no route under the alphabet route, while another mode may continue any route,
-  an alphabet route too. The settings' seed follows the route shown: when the
+  seed, so the server picks one. Make it worse posts the shown route as `base_route_id` to the
+  route's own region (its build), with the route's own objective and its item or brand, from the
+  route's recorded request, never the panel's (a brand's id is its build's, and the panel's are
+  those of the region trips now run on, which may be another build's: Starbucks is 229 on
+  Portland's build and 1991 on the national one), and with the budget, turns and hard mode,
+  target, vehicle and departure from the panel (a route opened by link has put its own in the
+  panel first; a target the route's objective refuses goes as as bad as possible), leaving the
+  stops, tier and leash to the base route (the API's rule), and the seed after the last one tried
+  on that route (its own seed at first). The Mode row is the next Go's. An alphabet route cannot
+  be made worse: Make it worse is disabled while one is shown, its tooltip "the alphabet route
+  cannot be continued" (`worseRefused`), the API continuing no route under the alphabet route.
+  The settings' seed follows the route shown: when the
   job's `done` names the base route (nothing worse was found), the route and its seed stay, and
   the next press tries the seed after; with a target, the base route may already meet it ("already
   within the target"), or no route nearer it was found. A target below the base route's value
@@ -181,9 +213,9 @@ pre-bundled dependencies in the dev server) does not keep, so `map.ts` imports i
   the run is going or ended
   (`getting worse…`, `reconnecting…`, `budget`, `converged`, `target reached`, `cancelled`,
   `timeout`, `failed`), the seed, and, when Make it worse found nothing, "no worse route found
-  with seed N; try again or Reroll". The rows follow the run's own mode (what it asked, even
-  when Make it worse found nothing and shows the base route), or a route opened by link's
-  request. Under them, once the route is stored, five rows from its document (`routeLines`): when it
+  with seed N; try again or Reroll". The rows follow the run's own mode (what it asked, a Make it
+  worse its route's own, even when it found nothing and shows the base route), or a route opened
+  by link's request. Under them, once the route is stored, five rows from its document (`routeLines`): when it
   arrives, the day and the minute at the departure's offset ("arrives Sat 14:57", the whole time in
   the tooltip; `formatClock`); the towns it passes through, the first two and how many more ("towns:
   Beaverton, West Slope +14", every name in the row's tooltip); the states by their USPS codes
@@ -264,8 +296,10 @@ pre-bundled dependencies in the dev server) does not keep, so `map.ts` imports i
 
 ## State
 
-`Store` holds `{region, stops, settings, run, route, error, brands}` (`brands`, the region's,
-null until `GET /brands` has answered). A module renders from it with
+`Store` holds `{regions, region, pick, stops, settings, run, route, error, brands}`: `regions`,
+the served ones, null until `GET /regions` has answered; `region`, the one trips run on (the
+pinned one, else the pick's; null until known); `pick`, the server's pick for the stops,
+`"picking"` while it is asked; `brands`, the region's, null until `GET /brands` has answered. A module renders from it with
 `watch(keys, listener)` (called at once, then after every `update` that touches one of the
 keys) and changes it with `update(patch)`, `updateRun` or `updateSettings`. `run` changes up to
 ten times a second while a job runs, so the stop list, the markers and the settings compare what
@@ -363,15 +397,20 @@ tile server (**Seeing it**), so their screenshots show the route on a blank back
 ## Links
 
 The URL carries the request:
-`?seed=&budget=&tier=&leash=&target=&mode=&turns=&strict=&hard=&vehicle=&departure=&stops=lat,lon;lat,lon;…`,
+`?seed=&budget=&tier=&leash=&target=&mode=&turns=&strict=&hard=&vehicle=&departure=&region=&stops=lat,lon;lat,lon;…`,
 the target as `max`, `ratio:<x>` or `duration:<seconds>`, the mode as `distance`, `time`,
 `collect:<item>` (`collect:bridge`), `brand:<id>` (`brand:229`, a brand's id, digits only) or
 `alphabet`, the turns as `left` or `right` and `strict=1` (read only with a side), hard mode as
 `hard=1`, the vehicle as `<mpg>,<gas price>` (`vehicle=30,4.25`, both within the panel's limits), the
 departure as an ISO 8601 time with its offset, encoded (`departure=2026-10-31T09%3A00%3A00-05%3A00`;
-a day the month lacks is not one); the mode, the turns and the vehicle are written only when not the
-default (Longest, Any, 24 mpg at $3.89; a pilgrimage only once its brand is known), hard mode and
-the departure only when set, so a distance link reads as before. A target the mode refuses reads
+a day the month lacks is not one), the region pinned as its id (`region=us-t1`, only when pinned:
+otherwise the server picks it from the stops again, the same for the same regions served; a
+region the server does not serve is unpinned); the mode, the turns and the vehicle are written
+only when not the default (Longest, Any, 24 mpg at $3.89; a pilgrimage only once its brand is
+known), hard mode and the departure only when set, so a distance link reads as before. A
+`?route=` link leaves the pin as the link has it: the route's stops are picked like any others,
+and Make it worse continues the route on its own build, in its own objective with its own item
+or brand (**Using it**, **Run**). A target the mode refuses reads
 as "as bad as possible": a ratio beside `mode=collect:…` or `mode=brand:…`, any beside
 `mode=alphabet`. A brand id the region's brands lack is replaced by the first of them once
 `/brands` has answered. The URL is rewritten (`history.replaceState`, by
@@ -394,8 +433,7 @@ departure when the request has none;
 for a "make it worse" route, the base route's stops),
 the snaps from its stops, the route drawn whole, the camera fitted to it, its numbers in the
 stat line, its directions and its toasts, from which Make it worse and Reroll work as after a
-run (an alphabet route's link sets Alphabet, under which Make it worse is off: another mode
-continues it). The URL is left as it
+run (an alphabet route's link sets Alphabet, and Make it worse is off for it). The URL is left as it
 came until the route has opened; then it is written whole. A link that does not open (a route
 not stored, a build gone) keeps its `route=` and shows the API's error in the banner; the URL
 follows the app again from the next change. The units are not in the URL.
@@ -407,17 +445,18 @@ follows the app again from the next change. The units are not in the URL.
 | Test file | What it covers |
 |---|---|
 | `map/routeLayer.test.ts` | `spliceLine` on hand-made lines (a longer and a shorter detour, either end, the input left alone); each recording replayed: it ends with the stored route's node count, every node where the job's final snapshot has it (whose stop positions are the route's), every drawn point a point of the stored geometry in order with the same ends; and at every snapshot after splices (the max-mode recording's after its 50th `progress`), the replayed nodes equal the snapshot's (the alphabet recording's snapshots follow none); the alphabet recording through a `RouteLayer` on a stand-in map: each snapshot drawn whole, no flash ever, the stored geometry drawn at the end |
-| `api/types.test.ts` | each type's runtime spec, which the compiler holds to the type's keys; the specs against `api.md` (its JSON request example, and the field lists of the events, `done`'s metrics, `/regions`, the 202, the job status, the route document, `/routes/{id}/directions`, `/brands`, `/geocode` and `/config`) and against every payload of the seven recordings; the ratio recording's target reached in `done` and the document, its round-trip refusal; the slowest-time recording's time ratio, delays and turns in `done` and the document, its refusal of both turn constraints; the collect recording's bridges counted in every `progress`, in `done` and the document, its refusal of a ratio target; the directions recording's vehicle, fuel and cost, states and towns, its steps numbered from 1 with the driving steps' ranges covering the route's edges in order and adding up to its length, its first toast, its refusal of a vehicle of 0 mpg; the brand recording's visits never falling in its `progress` events (8, 13, 14 of 19), `done` and the document agreeing, its refusal of a ratio target; the alphabet recording's better routes, each a snapshot then a `progress` with no splice, the same metrics and a higher score, from "A" to "ABCDEFGHIJKLMNO", `done` and the document agreeing, its refusal of a stop along the way (`field: "stops"`); a payload that does not fit is caught |
+| `api/types.test.ts` | each type's runtime spec, which the compiler holds to the type's keys; the specs against `api.md` (its JSON request example, and the field lists of the events, `done`'s metrics, `/regions` (its `name` optional: the recordings predate it), `/regions/pick`, the 202, the job status, the route document, `/routes/{id}/directions`, `/brands`, `/geocode` and `/config`) and against every payload of the seven recordings; the ratio recording's target reached in `done` and the document, its round-trip refusal; the slowest-time recording's time ratio, delays and turns in `done` and the document, its refusal of both turn constraints; the collect recording's bridges counted in every `progress`, in `done` and the document, its refusal of a ratio target; the directions recording's vehicle, fuel and cost, states and towns, its steps numbered from 1 with the driving steps' ranges covering the route's edges in order and adding up to its length, its first toast, its refusal of a vehicle of 0 mpg; the brand recording's visits never falling in its `progress` events (8, 13, 14 of 19), `done` and the document agreeing, its refusal of a ratio target; the alphabet recording's better routes, each a snapshot then a `progress` with no splice, the same metrics and a higher score, from "A" to "ABCDEFGHIJKLMNO", `done` and the document agreeing, its refusal of a stop along the way (`field: "stops"`); a payload that does not fit is caught |
 | `map/basemap.test.ts` | `basemapParts`: OSM's raster tiles for `raster`; nothing (an error on the console, never OSM's tiles) for `pmtiles` without its file; Protomaps' tiles from the server for `pmtiles`, its `pmtiles://` URL absolute under `/api`, the attribution the app's own, no symbol layer without the server's fonts; with them the fonts' and icons' URLs absolute with the template's braces kept, and the labels asking for no font but the four `tools/fetch_basemap.sh` fetches; `addBasemap` on a stand-in map: the fonts, icons and sources set, then every layer before the first layer the map already had (the route's), or on top of an empty map |
-| `run/controls.test.ts` | `JobRunner` with `fetch` and `EventSource` stubbed: a TypeError from the client and an event the app cannot handle end the run as `CLIENT_ERROR` with the controls unlocked (the job cancelled), the server's `error` closes the stream; Make it worse keeps the route and its seed when nothing worse is found and tries the next seed, follows a worse route's seed; Go and Reroll send the settings' seed, then none; leaving the page cancels a job whose POST is in flight once it is answered, a running one at once; a ratio and a drive-time target sent, shown while running and with what was achieved (`target reached`), and Make it worse whose base already meets its target; the objective, the item only under collect and the constraints only with a side sent (and not by default), the brand only under brand, the alphabet route with no item nor brand, Brand waiting for the region's brands with the brand set among them (none, a link's before they answer, one they lack, an empty list) and no other mode waiting, hard mode's `hard: true` alone or beside a side (the key left out when off, strict sent only with a side), Make it worse in the mode set (a pilgrimage under hard mode, its whole body); the slowest-time recording replayed (the lengths' ratio while running, then the time ratio, the drive and delays, the turns) and the collect recording's bridges counted live, then the stored route's; the run's mode shown when Make it worse in another finds nothing; "no lefts" and "no rights" (not with a U-turn); `INFEASIBLE_TURN_CONSTRAINT` as the error, and the refused request sent again without strict: a Go with its seed, a Make it worse on the same route with its seed, a Reroll with none, hard mode kept; the counter row's "17 of 19 Starbucks" and "letters: 23 (A–W)", "letters: 1 (A)", "letters: 0", the laps past Z for 26, 27 and 29 letters ("(A–Z)", "(A–Z, A)", "(A–Z, A–C)"), the roads one a line in its tooltip, nothing under another mode; Make it worse off under Alphabet with its reason, and in no other mode; the brand recording's visits counted live (1, 8, 13, 14 of 19), then the stored route's; the alphabet recording replayed: every snapshot drawn, no splice, the ratio and letters following each better route (1.1× and 1, 1.0× and 2, ...), the stored route drawn, its fifteen roads in the tooltip; a refusal under hard mode sent again without it: a Go with its seed and no constraints left, a Make it worse with its base and seed and its strict side kept, a Reroll with none, and a Make it worse whose base hard mode refuses (`BASE_ROUTE_MISMATCH`) on the same route with the same seed; each stop along the way labelled as its marker is numbered ("Stop 2", "Stop 3"), the start and the end without a label; the vehicle set sent by Make it worse, Go and Reroll (the default in Make it worse's whole body); the departure set sent, or, empty, the time Go is pressed at the browser's offset (on a fake clock); "arrives Sat 17:42" from a document's arrival at its own offset, nothing without one; the directions recording replayed: no route rows while it runs, then its towns, states, fuel and share of the roads; the first two towns and how many more with every name in the tooltip, two states by their codes, no fuel without a vehicle, "under 1 %", and nothing from a document without them |
+| `run/controls.test.ts` | `JobRunner` with `fetch` and `EventSource` stubbed: a TypeError from the client and an event the app cannot handle end the run as `CLIENT_ERROR` with the controls unlocked (the job cancelled), the server's `error` closes the stream; Make it worse keeps the route and its seed when nothing worse is found and tries the next seed, follows a worse route's seed; Go and Reroll send the settings' seed, then none; leaving the page cancels a job whose POST is in flight once it is answered, a running one at once; a ratio and a drive-time target sent, shown while running and with what was achieved (`target reached`), and Make it worse whose base already meets its target; the objective, the item only under collect and the constraints only with a side sent (and not by default), the brand only under brand, the alphabet route with no item nor brand, Brand waiting for the region's brands with the brand set among them (none, a link's before they answer, one they lack, an empty list) and no other mode waiting, hard mode's `hard: true` alone or beside a side (the key left out when off, strict sent only with a side), Make it worse in its route's own objective with its own item or brand, whatever the panel's mode and brand (a pilgrimage under hard mode, its whole body, the panel's brand another build's id), with the panel's turns and target (as bad as possible where the route's objective refuses it); the slowest-time recording replayed (the lengths' ratio while running, then the time ratio, the drive and delays, the turns) and the collect recording's bridges counted live, then the stored route's; the route's own mode shown when Make it worse, the panel in another, finds nothing; "no lefts" and "no rights" (not with a U-turn); `INFEASIBLE_TURN_CONSTRAINT` as the error, and the refused request sent again without strict: a Go with its seed, a Make it worse on the same route with its seed, a Reroll with none, hard mode kept; the counter row's "17 of 19 Starbucks" and "letters: 23 (A–W)", "letters: 1 (A)", "letters: 0", the laps past Z for 26, 27 and 29 letters ("(A–Z)", "(A–Z, A)", "(A–Z, A–C)"), the roads one a line in its tooltip, nothing under another mode; Make it worse off for an alphabet route with its reason, whatever the mode set, and for no other route; the brand recording's visits counted live (1, 8, 13, 14 of 19), then the stored route's; the alphabet recording replayed: every snapshot drawn, no splice, the ratio and letters following each better route (1.1× and 1, 1.0× and 2, ...), the stored route drawn, its fifteen roads in the tooltip; a refusal under hard mode sent again without it: a Go with its seed and no constraints left, a Make it worse with its base and seed and its strict side kept, a Reroll with none, and a Make it worse whose base hard mode refuses (`BASE_ROUTE_MISMATCH`) on the same route with the same seed; each stop along the way labelled as its marker is numbered ("Stop 2", "Stop 3"), the start and the end without a label; the vehicle set sent by Make it worse, Go and Reroll (the default in Make it worse's whole body); the departure set sent, or, empty, the time Go is pressed at the browser's offset (on a fake clock); "arrives Sat 17:42" from a document's arrival at its own offset, nothing without one; the directions recording replayed: no route rows while it runs, then its towns, states, fuel and share of the roads; the first two towns and how many more with every name in the tooltip, two states by their codes, no fuel without a vehicle, "under 1 %", and nothing from a document without them |
 | `directions/panel.test.ts` | on the directions recording: a row per step classed by its kind, numbered as the document numbers them (none for the 40 jokes, the numbers skipping them), a driving step's distance and time in miles and kilometres, the arrival's and a stop's rows with none; `StepLocator`: the driving steps' lines ending on their first and last nodes (more than 99 % exactly, all within a metre; the job's last snapshot gives where the nodes are) and covering the geometry end to end, a step given at least one segment however short its distance, no line for a step that drives nothing, every step starting where it is; `DirectionsPanel` with a stand-in map: the rows of the route shown and none without one, the units followed, a hover highlighting the right edges, from node to node (once for the same step), a joke and none highlighting nothing, a click panning to the step's start, the highlight forgotten when the route changes, a document without directions listing nothing |
-| `settings/panel.test.ts` | the brand picker with `fetch` stubbed: one `GET /api/brands?region=`, the options in the API's order named with their locations ("Starbucks (126)", "(1,234)"), the first picked when the settings name none, the list put in the store, a brand the region has kept and one it lacks replaced, a region without brands leaving the settings alone |
+| `settings/panel.test.ts` | the brand picker with `fetch` stubbed: one `GET /api/brands?region=`, the options in the API's order named with their locations ("Starbucks (126)", "(1,234)"), the first picked when the settings name none, the list put in the store, a brand the region has kept and one it lacks replaced, a region without brands leaving the settings alone; the brand picked kept across a change of region by its wikidata id, else its name, else the first; the brands of a region since left dropped; the region picker's options, the server's pick first, then each region by its name and roads; `followBrands`: one request per region it changes to, a region's answer dropped once it is left, and after a failure (the region null meanwhile) the same region asked again |
 | `banner.test.ts` | `retryOf`: "Try without strict" for `INFEASIBLE_TURN_CONSTRAINT`, "Try without hard mode" for `STOP_UNREACHABLE_WITHOUT_REPEAT` under hard mode and `BASE_ROUTE_MISMATCH` naming hard mode, nothing for the same codes without it (a base route a strict constraint refuses) nor for another refusal |
+| `stops/pick.test.ts` | `RegionPicker` with `fetch` stubbed on fake timers over a real store: no request without stops, one `POST /api/regions/pick` after the stops stop changing (for the last of them), no region meanwhile (so Go waits) and "Finding the build…" in the header, then the region picked and the header "Oregon · all roads" with its reason, then "United States · primary roads and up" for a stop in Chicago; an answer for stops since moved dropped; a job's snaps asking nothing; a refusal in the banner with its stop, asked no more; any other failure asked again a second later, up to three times, then the banner saying the server could not be asked, until the stops change; a pinned region taken without asking, "set in the settings", and the pick asked again once unpinned; nothing before `/regions`, and a pin the server does not serve dropped; `roadsOf` and `regionLabel` from the real builds' tiers |
 | `stops/stopList.test.ts` | `stopErrored`: the stop of an error's `stop_index`, every stop along the way for `field: "stops"`, none otherwise |
 | `toasts.test.ts` | `Toasts` on fake timers: nothing and no timer while idle; the three waiting lines and the live ratio every 4 s while a job starts and runs (the ratio following `progress` while shown, round again), the ratio's slot skipped without one, and the line shown kept when the ratio comes; none of the last run's ratio while the next one's POST is in flight (and the route's back when it is refused); the stored route's toasts from the first, in order, every 4 s, looping (ten toasts, so ten periods come round); held under the pointer, a click moving on at once and starting the period again; nothing once the route is forgotten, nor for a document without toasts |
 | `api/client.test.ts` | the API's error bodies, `BAD_RESPONSE` for an HTML success, `HTTP_<status>`, `NETWORK`, `CLIENT_ERROR` |
-| `stops/search.test.ts` | `PlaceSearch` with `fetch` stubbed and a real store: nothing asked while typing, one `GET /api/geocode?q=&region=` on Search, nothing for a blank text or before the region; the candidates listed, an empty answer said; a pick placing the stop exactly as `placeStop` (a click) does, as the start and as a stop before the end, and clearing the field; nothing placed or asked while a job runs; a 429 in the banner, and a search closing it |
-| `share/share.test.ts` | the URL state round trip (every field, `auto`, seeds 0 and 2⁵³ − 1, clicked coordinates exactly), values it ignores, the app's state to the URL and back; a `?route=` link at startup: the URL untouched until the route opens, then written from its request, and kept, with the banner, when it does not open; targets in the URL, values ignored, and a ratio-target route opened by link; every mode and turn setting round-tripped, values ignored (strict without a side among them), a ratio beside a collect mode read as max, the defaults left out, the settings given back; a brand (`brand:229`, `brand:0`), the alphabet route and hard mode round-tripped with every turn setting, malformed brands ignored (none, a name, negative, a fraction, an exponent, a space, beyond 2⁵³ − 1), `alphabet:1` and a `hard` other than 1 ignored, a ratio beside a brand and any target beside the alphabet route read as max, a pilgrimage whose brand is not known yet written without a mode, the brand kept under another mode; a slowest-time and a collecting route opened by link (mode, item and turns into the settings, the URL and the stat line, the panel's item kept), the recorded pilgrimage and alphabet route (`mode=brand:229` and "14 of 19 Starbucks", `mode=alphabet` and "letters: 15 (A–O)" with its roads); a pilgrimage, an alphabet route and a hard-mode route (alone and beside a side) opened by link, hard mode unticked by a route without it; the share image's URL; the vehicle round-tripped, at its limits, the default left out, values ignored; a route opened by link putting its request's vehicle into the settings and the URL (the default not written), and one without a vehicle, or with one outside the panel's limits, keeping the panel's; the departure round-tripped with its offset (encoded), what is not an ISO time with an offset ignored, a route's link putting its request's departure into the settings and the URL, and one without keeping the panel's; the GeoJSON's URL |
+| `stops/search.test.ts` | `PlaceSearch` with `fetch` stubbed and a real store: nothing asked while typing, one `GET /api/geocode?q=&region=` on Search, nothing for a blank text or before `/regions` has answered; the region asked in, the pinned one, else the served region with the largest bbox (Chicago searched for with a start in Portland asks the national one); the candidates listed, an empty answer said; a pick placing the stop exactly as `placeStop` (a click) does, as the start and as a stop before the end, and clearing the field; nothing placed or asked while a job runs; a 429 in the banner, and a search closing it |
+| `share/share.test.ts` | the URL state round trip (every field, a pinned region and none, values it ignores, `auto`, seeds 0 and 2⁵³ − 1, clicked coordinates exactly), values it ignores, the app's state to the URL and back; a `?route=` link at startup: the URL untouched until the route opens, then written from its request, and kept, with the banner, when it does not open; targets in the URL, values ignored, and a ratio-target route opened by link; every mode and turn setting round-tripped, values ignored (strict without a side among them), a ratio beside a collect mode read as max, the defaults left out, the settings given back; a brand (`brand:229`, `brand:0`), the alphabet route and hard mode round-tripped with every turn setting, malformed brands ignored (none, a name, negative, a fraction, an exponent, a space, beyond 2⁵³ − 1), `alphabet:1` and a `hard` other than 1 ignored, a ratio beside a brand and any target beside the alphabet route read as max, a pilgrimage whose brand is not known yet written without a mode, the brand kept under another mode; a slowest-time and a collecting route opened by link (mode, item and turns into the settings, the URL and the stat line, the panel's item kept), the recorded pilgrimage and alphabet route (`mode=brand:229` and "14 of 19 Starbucks", `mode=alphabet` and "letters: 15 (A–O)" with its roads); a pilgrimage, an alphabet route and a hard-mode route (alone and beside a side) opened by link, hard mode unticked by a route without it; the share image's URL; the vehicle round-tripped, at its limits, the default left out, values ignored; a route opened by link putting its request's vehicle into the settings and the URL (the default not written), and one without a vehicle, or with one outside the panel's limits, keeping the panel's; the departure round-tripped with its offset (encoded), what is not an ISO time with an offset ignored, a route's link putting its request's departure into the settings and the URL, and one without keeping the panel's; the GeoJSON's URL |
 | `notices.test.ts` | the footer's "Data sources" link (relative, `notices.html`, in a new tab) beside the two credits; the notices page's title and its nine sources, each with its licence and link, in order; a build (Vite's own, into a temporary directory) holding `notices.html` as it is |
 | `format.test.ts` | distances in both units and their thresholds, durations, ratios, counts, items one and many; drive times typed as a target, read and written back; fuel and its cost, percentages ("under 1 %"), states by their codes and a name not known; a time written at the browser's offset to the second and read back, ISO times with an offset read and others (a day the month lacks among them) refused, a time shown as a clock at its own offset |
 
@@ -625,6 +664,18 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
   no request to the OSM tile server. With stand-in icons and an empty fonts directory the
   labelled style loaded too, its font requests 404 (`Unable to load glyph range`, at the
   `/api/basemap/fonts/Noto Sans Regular/0-255.pbf` the template gives) and the rest drawn alike.
+- **Two builds** (2026-10-31, a lane's `serve --region oregon --region us-t1 --geocoder none`,
+  builds ea3b18096e8b and c4a85b3d36d0 with both places indexes, the dev server proxying to it,
+  headless Chrome with the tile server blocked): the map opened on the contiguous US, the Region
+  row listing "Picked from the stops", "Oregon · all roads" and "United States · primary roads
+  and up". A link with stops at Powell's and Bend asked `POST /api/regions/pick` once and the
+  header read "Oregon · all roads" over "all stops in Oregon"; one ending in Chicago, "United
+  States · primary roads and up" over "stops in Oregon and Illinois"; with `region=us-t1`, no pick
+  asked and "set in the settings". Go (seed 1, 6 s) posted `region: "oregon"` for Bend, 10.2×,
+  1,618 mi, states OR, and `region: "us-t1"` for Chicago, 7.0×, 14,653 mi through 17 states, the
+  stats and toasts as on one build. Under Brand with Starbucks picked on Oregon's build
+  (`mode=brand:369`), removing the end and clicking near Chicago asked the pick again, then
+  `GET /api/brands?region=us-t1`, and kept Starbucks (`mode=brand:1991`, "Starbucks (3,721)").
 
 ## Limitations
 

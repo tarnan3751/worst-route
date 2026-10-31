@@ -49,8 +49,11 @@ tests, the docs and the tools).
 Its command is `worst-route serve --region portland --host 0.0.0.0 --port 8000 --store
 /state/routes.sqlite --frontend /app/frontend --public --log-format json`: the site
 (`docs/reference/api.md`, **Running it**: the frontend at `/`, the API under `/api`), the
-public limits, JSON lines on stdout. Another region, `--trust-proxy` behind a proxy or
-`--geocoder none` go in the command (`compose.yaml` gives it whole). Its environment:
+public limits, JSON lines on stdout. Another region, or several (`--region oregon --region
+us-t1`: each trip on the smallest that holds its stops, `docs/reference/api.md`, **Picking a
+build**; the basemap's file named by `--basemap-name`, by default the first region),
+`--trust-proxy` behind a proxy or `--geocoder none` go in the command (`compose.yaml` gives it
+whole). Its environment:
 `WORST_ROUTE_DATA=/data`, `WORST_ROUTE_BASEMAP=pmtiles` (the vector basemap; `raster` would
 send every visitor to OpenStreetMap's tile servers, which their policy rules out for a public
 site), `NUMBA_CACHE_DIR=/state/numba` (the compiled kernels; the package's own directory is not
@@ -69,7 +72,8 @@ geopandas, pyarrow, numba, come with it, though the server uses only some of the
   graphs/<region>/<build_id>/   a build: worst-route pipeline … save (docs/reference/pipeline.md)
   graphs/<region>/latest        the build served: its id
   aux/places/                   the places index: tools/fetch_census.sh, worst-route aux places
-  basemap/<region>.pmtiles      the basemap: tools/fetch_basemap.sh
+  basemap/<name>.pmtiles        the basemap: tools/fetch_basemap.sh (the name serve's
+                                --basemap-name, by default the first region)
   basemap/fonts/, sprites/      its labels' fonts and icons, with their licences:
                                 tools/fetch_basemap.sh --assets
 /state (written by the server)
@@ -82,7 +86,7 @@ geopandas, pyarrow, numba, come with it, though the server uses only some of the
 `compose.yaml` mounts `./data` read only and keeps `/state` in a named volume, `state`. A build
 is a directory: one made on another machine is copied with its `latest` file (the server loads
 the build `latest` names when it starts, and refuses to start without one). A new build of the
-region (`pipeline save` writes a new id, or `--force` replaces one and changes its
+region served (`pipeline save` writes a new id, or `--force` replaces one and changes its
 `graph_version`) is served after a restart, and `/ready` fails until then once the files of the
 loaded build have changed on disk; routes stored on a build that is no longer there answer 409
 `BUILD_UNAVAILABLE` (`docs/reference/api.md`).
@@ -96,14 +100,17 @@ A person, on a machine with the repository (the dev machine), then on the server
    `docs/reference/pipeline.md`). It needs far more memory than serving does (**Sizing**), so
    it runs on the dev machine and the build is copied.
 2. **The places index.** `tools/fetch_census.sh <FIPS…>` for the states the region touches, then
-   `uv run worst-route aux places --region R` (`docs/reference/presentation.md`, **Places**).
+   `uv run worst-route aux places --region R` (`docs/reference/presentation.md`, **Places**), for
+   each region served (one without its own takes a served index that covers its states: the
+   national one covers every state's; `docs/reference/api.md`, **Running it**).
 3. **The basemap.** Install go-pmtiles (`brew install pmtiles`, or a release from
    https://github.com/protomaps/go-pmtiles/releases), find the latest Protomaps build
    (**The basemap**), look at the extract's size with `--dry-run`, then cut it with its labels:
    `tools/fetch_basemap.sh R --build YYYYMMDD --bbox W,S,E,N --assets` (or `--region
-   area.geojson` for a shape such as the US).
+   area.geojson` for a shape such as the US), one file for all the regions served, named for the
+   first of them (or for `--basemap-name`'s name).
 4. **Copy** `data/graphs/R/`, `data/aux/places/` and `data/basemap/` to the server's `data/`.
-5. **Run** `docker compose up -d --build` beside it, the region set in `compose.yaml`'s command
+5. **Run** `docker compose up -d --build` beside it, the regions set in `compose.yaml`'s command
    and `WORST_ROUTE_CONTACT` in the environment (an address Nominatim's operators can write to).
 6. **The proxy** in front, with TLS (**Behind a reverse proxy**).
 7. **Check** `curl https://<host>/api/ready`: `ready`, with the build, the store, the places
@@ -132,8 +139,9 @@ from one and served from your own machine, which is what `tools/fetch_basemap.sh
   the area's tiles from the build over HTTP byte ranges, down to `--maxzoom` (the build's 15
   when left out; MapLibre draws deeper zooms from the deepest it has), into
   `$WORST_ROUTE_DATA/basemap/NAME.pmtiles` (default the repository's `data/basemap/`), NAME the
-  region the API serves. The script never changes directory, so a relative `--region` file or
-  `WORST_ROUTE_DATA` is the caller's. The file is written to a temporary name and renamed once
+  basemap's name, the first region the API serves unless `serve --basemap-name` names another.
+  The script never changes directory, so a relative `--region` file or `WORST_ROUTE_DATA` is the
+  caller's. The file is written to a temporary name and renamed once
   whole, so a failed extract leaves the previous one. `--dry-run` asks `pmtiles` for the
   extract's tiles and size without downloading them, and writes nothing, not even the
   directory. A flag without its value is refused with the usage (exit 2). `--planet` downloads the whole build instead (resumable with curl), which
@@ -210,15 +218,16 @@ it but no proxy, a visitor could name any address. The API's stream already send
 - **The public limits** (`docs/reference/api.md`, **Public limits**): budgets up to 60 s (120
   locally), a request's own leash at most 150 km as everywhere (the automatic leash follows the
   trip, a fifth of it beyond 750 km, and the budget bounds the job), and for each client one job
-  running and three
-  waiting (`TOO_MANY_JOBS` with its counts) and ten place searches a minute (`RATE_LIMITED` with
-  `retry_after_s`). They are per process and per address; there is no authentication.
+  running and three waiting (`TOO_MANY_JOBS` with its counts), ten place searches and sixty picks
+  of a build (`POST /regions/pick`) a minute (`RATE_LIMITED` with `retry_after_s`). They are per
+  process and per address; there is no authentication.
 - **The logs** (`docs/reference/api.md`, **Logs**): one JSON object a line on stdout (`docker
   compose logs`), each request's line with its id (`X-Request-ID` in the answer), its path
   without the query, its status, its duration and the client's salted hash, never an address
   or a place searched for; a job's lines with its id, its end with its outcome and route.
-- **`/api/ready`**: 200 when the build, the route store, the places index and the basemap are
-  there, else 503 naming what is missing; `/api/health` only says the process lives.
+- **`/api/ready`**: 200 when every build served, the route store, a places index for each region
+  (its own, or a served one covering its states) and the basemap are there, else 503 naming what
+  is missing; `/api/health` only says the process lives.
 
 ## Sizing
 

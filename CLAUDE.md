@@ -56,7 +56,10 @@ several states**): regions of several states merged at `filter`, a class ceiling
 contiguous states and DC at primary roads and above, its numbers the decision gate's
 (`docs/project_overview.md` §3.2); since engine version 5 it plans cross-country trips at the
 automatic tier, T1 with a fifth of the trip as leash (`docs/reference/engine.md`, **On the
-national T1 build**).
+national T1 build**). So is serving several builds at once (`serve --region oregon --region
+us-t1`): the server picks the smallest that holds a trip's stops (`POST /regions/pick`,
+`docs/reference/api.md`, **Picking a build**), which the frontend names over the stop list and
+plans on, a region pinnable in its settings.
 So is the public-hosting preparation (M5's fourth step, `docs/reference/hosting.md`): a container
 image serving the built frontend and the API (under `/api`) from one process (`serve
 --frontend`), Protomaps' vector basemap from a file the API serves (`WORST_ROUTE_BASEMAP=pmtiles`,
@@ -127,7 +130,7 @@ Every command below exists. One a later milestone adds is marked with that miles
 | Plan a route from the CLI, validated (`--target ratio:20` or `duration:9h` aims for a target within ±2 %; `--base route.json` continues a saved route; `--objective time` the slowest; `--no-left` / `--no-right` such turns at a kilometre each, `--strict` none; `--hard` each road in one stretch, never driven again once left; `--objective collect --item bridge` collects bridges, or `toll_booth`, `level_crossing`, `roundabout`; `--objective brand --brand Starbucks` visits a brand's locations, by name or id; `--objective alphabet` drives roads A, B, C, … from `--from` to `--to`) | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
 | Validate a saved route | `uv run worst-route validate route.json` |
 | Print a saved route's turn-by-turn directions (`--no-jokes` without the jokes) | `uv run worst-route directions route.json` |
-| API server (the coordinator only; agents use `--port 0` or a port of their own, `--store` in their own tree, and `--geocoder none` or `--nominatim-url` pointed at a local stub: no agent calls Nominatim; for public hosting `--public`, `--trust-proxy`, `--log-format json` and `--frontend frontend/dist`, the basemap by `WORST_ROUTE_BASEMAP=raster\|pmtiles`) | `uv run worst-route serve --region portland` |
+| API server (the coordinator only; agents use `--port 0` or a port of their own, `--store` in their own tree, and `--geocoder none` or `--nominatim-url` pointed at a local stub: no agent calls Nominatim; `--region` repeated serves several builds, each trip on the smallest holding its stops, `--build-id` the first one's; for public hosting `--public`, `--trust-proxy`, `--log-format json` and `--frontend frontend/dist`, the basemap by `WORST_ROUTE_BASEMAP=raster\|pmtiles`, its file by `--basemap-name`, by default the first region) | `uv run worst-route serve --region portland` (or `--region oregon --region us-t1`) |
 | Frontend dev server / build / typecheck (with the prettier check) / tests / format (the dev server proxies `/api` to `WORST_ROUTE_API`, default `http://127.0.0.1:8000`; agents point it at their own server and add `-- --port <free>`) | `cd frontend && npm run dev` / `npm run build` / `npm run typecheck` / `npm test` / `npm run format` |
 | Build a region's pipeline with each step's time, peak memory and output sizes (a heavy job for a state; writes `tools/out/`, never downloads; `--steps`, `--force`, `--allow-fragmented`; `--max-mem-gb` stops a step past that much memory, its physical footprint on macOS, `--min-free-gb` starts none with less disk free) | `uv run python tools/bench_build.py --region oregon --source data/raw/oregon-latest.osm.pbf` |
 | Fetch the vector basemap (a person, never the gate or an agent; needs go-pmtiles; `--dry-run` for the size, `--assets` for the labels' fonts and icons) | `tools/fetch_basemap.sh portland --build 20261030 --bbox -123.05,45.25,-122.35,45.72 --assets` |

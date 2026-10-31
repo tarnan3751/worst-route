@@ -46,17 +46,18 @@ Claude: Python for the pipeline, engine, API and rendering; TypeScript + MapLibr
   the collect mode and hard mode since M3; the other modes are later milestones.
 - **API and frontend** (In progress): FastAPI jobs with Server-Sent Events progress, a MapLibre map
   that shows the route getting worse live, settings, reroll, make it worse. `docs/PLAN.md` §4–5.
-  The API and the frontend are built for the distance, slowest-time and collect modes, the
-  turn constraints and the targets (`docs/reference/api.md`, `docs/reference/frontend.md`), the
-  API for hard mode too; M2's acceptance is next.
+  The API and the frontend are built for the distance, slowest-time, collect and brand modes,
+  the alphabet route, the turn constraints, hard mode and the targets (`docs/reference/api.md`,
+  `docs/reference/frontend.md`); M2's acceptance is next.
 - **Modes** (In progress): longest distance, slowest time, never/only turn left, collect toll
   booths / rail crossings / roundabouts / bridges, brand pilgrimage, alphabet route, hard mode.
   Built: longest distance, slowest time, and never turn left / right as constraints on either
   (soft: each such turn costs a kilometre; strict: none), with targets by ratio or duration, and
   collecting toll booths, level crossings, roundabouts or bridges (targets by duration); the
   frontend offers each of them (its Mode and Turns rows). Hard mode (each road in one stretch) is
-  built in the engine, the CLI and the API, with any of them; the frontend's control for it is
-  to come.
+  built in the engine, the CLI and the API, with any of them, and the frontend offers it (a
+  checkbox in its Turns row), as it does the brand pilgrimage (a Brand mode with a brand picker
+  from `GET /brands`) and the alphabet route (an Alphabet mode).
 - **Presentation** (Built): directions, stat toasts, comparisons, states and towns, share
   image. Built: the states and towns a route passes through (the Census places index), the
   comparison lines, the share image, and the directions with deadpan jokes, the stats and the
@@ -177,15 +178,18 @@ Portland, Powell's → Reed streams to 62.4× in 11.8 s through it, the engine's
 that seed; a 9 h target from the same 13-minute drive ends within ±2 % in 1.8 s.
 The frontend is built (`docs/reference/frontend.md`, M2 step 3): a Vite + TypeScript app
 without a framework on MapLibre GL JS, in which the user clicks a start, an end and stops along
-the way on the region's map, picks a mode (the longest, the slowest, or collecting an item),
-turns to avoid (left or right, soft or strict) and a target (as bad as possible, a ratio or a
-drive time), runs a job and watches the route grow from the stream (each splice applied and
-flashed, a colour gradient from start to end, reconnecting with `Last-Event-ID`), cancels,
-rerolls, makes the route worse, and opens a stored route by its `?route=` link; the settings
-and stops live in the URL, every API error shows in a banner (a strict turn constraint's with
-a button to try without strict), and leaving the page cancels a running job. The stat line shows the slowest time's
-ratio of experienced times with the drive and the delays, the items collected (live), and the
-turns. On Portland, Powell's → Reed grows to 60.0× in 12 s on the map, and to "40.1× slower"
+the way on the region's map, picks a mode (the longest, the slowest, collecting an item, a
+brand's pilgrimage or the alphabet route), turns to avoid (left or right, soft or strict), hard
+mode and a target (as bad as possible, a ratio or a drive time), runs a job and watches the
+route grow from the stream (each splice applied and flashed, a colour gradient from start to
+end, reconnecting with `Last-Event-ID`; the alphabet route's better routes each drawn in place
+of the last), cancels, rerolls, makes the route worse, and opens a stored route by its
+`?route=` link; the settings and stops live in the URL, every API error shows in a banner (a
+strict turn constraint's with a button to try without strict, a refusal under hard mode's with
+one to try without it), and leaving the page cancels a running job. The stat line shows the
+slowest time's ratio of experienced times with the drive and the delays, the items collected,
+a pilgrimage's visits ("17 of 19 Starbucks") and an alphabet route's letters (all live), and
+the turns. On Portland, Powell's → Reed grows to 60.0× in 12 s on the map, and to "40.1× slower"
 in 8 s under the slowest time; its tests replay streams recorded from the server, node for
 node.
 The geocoding proxy is built (M4's first piece; `docs/reference/api.md`, **Geocoding**): a
@@ -238,7 +242,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 |---|---|---|
 | M1 — Portland, distance mode, CLI | Built | bootstrap, every pipeline step (download to qa; Portland's build passes QA), the graph package and the engine (snapping, seed route, transition-aware searches, splice loop, distance objective, validator, `worst-route plan` / `validate`). The acceptance run (`docs/PLAN.md` §7 M1 step 9; `uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` on build e4b3b4ad90db, `graph_version` 45f650e868fa, the reference backend: 20 random Portland pairs 3–15 km apart): all 20 plan and the validator passes all 20; the median ratio is 21.5× (3.3–45.2×); seeds 1 and 2 share 10–16% of their edges (Jaccard on 5 pairs, all < 0.3); the cul-de-sac via moves 86 m to the nearest through street with its note. Powell's → Reed gives 58–62×, PDX → Beaverton 7.3× (`docs/reference/engine.md`, **On Portland**) |
 | M2 — API + map, live growth | In progress | CSR + Numba backend built, its transition-aware kernels included (the default on every build; byte-identical to the reference: on Portland the acceptance's 20 routes and Powell's → Reed reproduce exactly, at 7,200–8,200 attempts/s); the API built (jobs in worker processes, SSE progress, the route store, make it worse, `worst-route serve`); targets by ratio and duration built (engine, CLI `--target`/`--base`, API), a 13-minute Portland drive to 9 h within ±2 % in 1.8 s over the API; the MapLibre frontend built (stops by click, the route growing live, run controls, settings with the targets, links); remaining: the acceptance |
-| M3 — Modes and constraints | In progress | built: the turn classes, never turn left / right (soft by default, `strict` for none; engine, CLI, API), the kernels refusing banned turn classes, slowest time (engine, CLI, API), collectibles (the collect objective for toll booths, level crossings, roundabouts and bridges in the engine, `plan --objective collect --item` and the API; `node_roundabouts` in the build; on Portland 24–30 bridges where the distance route passes 16–17); the frontend's controls for them (the Mode and Turns rows, the request, the URL, the stat line's time ratio, delays, items and turns, the strict refusal's retry); the brand pilgrimage (the brand index at `enrich`, saved as build arrays at pipeline version 3; `plan --objective brand --brand`, the API's `brand` and `GET /brands`; on Portland 17 of the 19 Starbucks in reach); on Portland strict no-left plans 4 of the 20 acceptance pairs and soft no-left 20 at a median of 5.33× (§2.3; on a build re-enriched at pipeline version 2, whose bearings describe the roads, not cleanup's stubs); hard mode (engine, CLI, API; on Portland 19 of the 20 acceptance pairs plan under it, at a median of 4.73×); the alphabet route (its own search, a new tree search on both backends, `plan --objective alphabet` and the API; on Portland Powell's → Reed A to M, Powell's → PDX A to W, the acceptance pairs a median of 1 letter); the search honouring stage B transitions was built at M1. Remaining: the brand, hard-mode and alphabet controls in the frontend; the acceptance |
+| M3 — Modes and constraints | In progress | built: the turn classes, never turn left / right (soft by default, `strict` for none; engine, CLI, API), the kernels refusing banned turn classes, slowest time (engine, CLI, API), collectibles (the collect objective for toll booths, level crossings, roundabouts and bridges in the engine, `plan --objective collect --item` and the API; `node_roundabouts` in the build; on Portland 24–30 bridges where the distance route passes 16–17); the frontend's controls for them (the Mode and Turns rows, the request, the URL, the stat line's time ratio, delays, items and turns, the strict refusal's retry); the brand pilgrimage (the brand index at `enrich`, saved as build arrays at pipeline version 3; `plan --objective brand --brand`, the API's `brand` and `GET /brands`; on Portland 17 of the 19 Starbucks in reach); the frontend's controls for the brand pilgrimage, the alphabet route and hard mode (a Brand mode with its picker, an Alphabet mode, a Hard mode checkbox, the request, the URL, the visits and letters live in the stat line, the alphabet route's better routes drawn in place, the hard-mode refusal's retry); on Portland strict no-left plans 4 of the 20 acceptance pairs and soft no-left 20 at a median of 5.33× (§2.3; on a build re-enriched at pipeline version 2, whose bearings describe the roads, not cleanup's stubs); hard mode (engine, CLI, API; on Portland 19 of the 20 acceptance pairs plan under it, at a median of 4.73×); the alphabet route (its own search, a new tree search on both backends, `plan --objective alphabet` and the API; on Portland Powell's → Reed A to M, Powell's → PDX A to W, the acceptance pairs a median of 1 letter); the search honouring stage B transitions was built at M1. Remaining: the acceptance |
 | M4 — Presentation | Built | directions, stats, toasts, comparisons, share image, geocoding proxy, share links; built: the geocoding proxy (`GET /geocode`, Nominatim behind a cache and 1 request/s) and the place search in the stop list; the Census places index (`tools/fetch_census.sh`, `worst-route aux places`: the states and towns a route passes through), the comparison lines, and the share image (`GET /routes/{id}/share.png`, linked from the share section); the directions with deadpan jokes and the stats and toasts in the route documents (`GET /routes/{id}`, `GET /routes/{id}/directions`, route.json, `worst-route directions`); the frontend's directions panel (a step's edges highlighted on the map), toasts under the map, extra stat rows and vehicle setting; the departure setting with the arrival time, and the GeoJSON download |
 | M5 — Scaling up | Planned | Oregon; array-based simplify/consolidate; US at T1; the national decision gate; public-hosting prep |
 | M6 — Stretch | Planned | certified worst (CP-SAT), turn restrictions, stop reordering, portfolio runs |
@@ -598,6 +602,25 @@ brief):
   now), sent with every request as ISO 8601 with the browser's offset, in the URL only when set,
   restored from a link; the arrival shows as "arrives Sat 14:57" at the departure's offset. The
   share section downloads the route's `/geojson`.
+- **The frontend's brand, alphabet and hard-mode controls as built** (2026-10-31, at their brief):
+  the Mode row gains Brand, with a picker of the region's brands from `GET /brands` (asked once the
+  region is known, in the API's order, "Starbucks (126)", the first picked unless the settings name
+  one the region has), and Alphabet; the Turns row a Hard mode checkbox, independent of the side
+  and of strict. The request sends the `brand` only under brand and `constraints.hard: true` only
+  when on (the constraints sent with a side or hard mode). A brand run takes no ratio target, the
+  alphabet route no target at all (its row disabled, its stops start and end only, and Make it
+  worse off, since it continues no route): one rule for the panel and for links. The URL carries `mode=brand:<id>`, `mode=alphabet` and `hard=1`,
+  and a `?route=` link restores them. The stat line's counter row shows a pilgrimage's visits ("17
+  of 19 Starbucks") and an alphabet route's letters ("letters: 15 (A–O)", the roads in its
+  tooltip), live; the alphabet route's better routes are drawn whole, each in place of the last.
+  At the coordinator's answers (same day): under Brand, Go, Reroll and Make it worse wait for
+  `/brands` (the picker reading "loading…"; a failure keeps them disabled, with the banner), so
+  no request goes without a brand; a refusal hard mode is why offers "Try without hard mode", as
+  strict's does, both a leg the seed cannot build under it and a base route that comes back to a
+  road (`BASE_ROUTE_MISMATCH`); an error on `field: "stops"` highlights the stops along the way.
+  A brand and an alphabet recording are added, their sizes kept down by `max_iterations`. At the
+  review (same day): Make it worse is off under Alphabet, its tooltip saying to pick another mode;
+  the letters' span is written as the CLI writes it, a lap at a time past Z ("(A–Z, A–C)").
 - **Workflow conventions**: tiers A/B/C, lanes as clones, patch-series delivery, no commit
   trailers, the gate on every change (`CLAUDE.md`, **Agent workflow**).
 

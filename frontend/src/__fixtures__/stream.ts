@@ -1,6 +1,6 @@
 // The recorded streams (tests only): jobs planned by `worst-route serve --region portland`
-// (the first two on build e4b3b4ad90db, the next two on 506f747d7458, the last on ffe2e7c881ca),
-// as the API sent them. Each
+// (the first two on build e4b3b4ad90db, the next two on 506f747d7458, the last three on
+// ffe2e7c881ca), as the API sent them. Each
 // holds the regions, the request, the 202, every event, the job's status after `done` (its
 // snapshot included), the stored route's document, and a refused request.
 // docs/reference/frontend.md, **Tests**, says how to record them again.
@@ -18,6 +18,11 @@
 //   with a vehicle (24 mpg, $3.89); its document carries the directions, the toasts, the extra
 //   fuel and its cost, the states and towns and the share of the roads; refused: a vehicle of
 //   0 mpg.
+// - `portland-brand-stream`: Powell's → Reed, seed 1, a 4 s budget cut to 450 attempts, a
+//   pilgrimage to Starbucks (brand 229), its visits counted in every `progress`; refused: a ratio
+//   target under brand.
+// - `portland-alphabet-stream`: Powell's → PDX, seed 1, the alphabet route, 150 restarts; each
+//   better route a snapshot, then a progress without splices; refused: a stop along the way.
 import { readFileSync } from "node:fs";
 import type {
   Baseline,
@@ -59,6 +64,8 @@ export const RECORDINGS = [
   "portland-time-stream",
   "portland-collect-stream",
   "portland-directions-stream",
+  "portland-brand-stream",
+  "portland-alphabet-stream",
 ] as const;
 
 /** A recording as it was made; types.test.ts checks it against the types. */

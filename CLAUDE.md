@@ -31,11 +31,11 @@ inefficiency targets (M2's fourth step): a ratio or a duration, reached within Â
 time`), the turn constraints (`--no-left`, `--no-right`, soft unless `--strict`) and collecting
 toll booths, level crossings, roundabouts or bridges (`--objective collect --item`), from `plan`,
 the API and the frontend's settings, and so is the fourth, the brand pilgrimage (`--objective
-brand --brand`, the API's `brand` and `GET /brands`, not yet in the frontend; its index built at
+brand --brand`, the API's `brand` and `GET /brands`, the frontend's Brand mode; its index built at
 `enrich`, pipeline version 3), and so is hard mode, each road in one stretch (`--hard`, the API's
-`constraints.hard`, not yet in the frontend), and the alphabet route (`--objective alphabet`,
-named roads whose letters run A, B, C, ..., its own constructive search; the API's `objective:
-"alphabet"`, not yet in the frontend). So is the frontend (`docs/reference/frontend.md`,
+`constraints.hard`, the frontend's Hard mode checkbox), and the alphabet route (`--objective
+alphabet`, named roads whose letters run A, B, C, ..., its own constructive search; the API's
+`objective: "alphabet"`, the frontend's Alphabet mode). So is the frontend (`docs/reference/frontend.md`,
 M2's third step): a MapLibre map on which stops are clicked, the route drawn growing live from the
 stream, the run controls, the settings (the targets among them) and links. So is the geocoding proxy
 (M4's first piece): a place search in the stop list, answered by `GET /geocode` from Nominatim

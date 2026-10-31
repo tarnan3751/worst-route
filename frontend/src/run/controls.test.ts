@@ -538,6 +538,69 @@ describe("a pilgrimage's visits, an alphabet route's letters and hard mode's ref
     expect(counts("time", { alphabet: alphabet("AB") })).toEqual(["", ""]);
   });
 
+  it("counts the recorded pilgrimage's visits live, then the stored route's", async () => {
+    const pilgrimage = loadStream("portland-brand-stream");
+    stubFetch((call) => (call.method === "POST" ? created(call, "jb") : json(pilgrimage.route)));
+    const s = store();
+    s.updateSettings({ objective: "brand", brand: 229 });
+    await new JobRunner(s, fakeView(), () => {}).go();
+    const live: string[] = [];
+    for (const event of pilgrimage.events.slice(0, -1)) {
+      sources[0].send(event.event, event.data);
+      if (event.event !== "snapped" && event.event !== "baseline") live.push(statLines(s.state)[5]);
+    }
+    expect(live).toEqual([
+      "1 of 19 Starbucks", // the seed's snapshot
+      "8 of 19 Starbucks",
+      "13 of 19 Starbucks",
+      "14 of 19 Starbucks",
+    ]);
+    sources[0].send("done", pilgrimage.events.at(-1)!.data);
+    await settle();
+    const [ratio, , , run, , visits] = statLines(s.state);
+    expect([ratio, visits]).toEqual(["13.2×", "14 of 19 Starbucks"]);
+    expect(run).toBe("450 attempts · 0.3 s · budget · seed 1");
+  });
+
+  it("follows the recorded alphabet route's better routes, each replacing the last", async () => {
+    const alphabet = loadStream("portland-alphabet-stream");
+    stubFetch((call) => (call.method === "POST" ? created(call, "ja") : json(alphabet.route)));
+    const s = store();
+    s.updateSettings({ objective: "alphabet" });
+    const view = fakeView();
+    await new JobRunner(s, view, () => {}).go();
+    const shown: string[][] = [];
+    for (const event of alphabet.events.slice(0, -1)) {
+      sources[0].send(event.event, event.data);
+      if (event.event === "progress") {
+        const [ratio, , , , , letters] = statLines(s.state);
+        shown.push([ratio, letters]);
+        expect(s.state.run.metrics?.ratio).toBe(event.data.metrics.ratio); // the toasts' too
+      }
+    }
+    const snapshots = alphabet.events.filter((e) => e.event === "snapshot");
+    expect(view.setSnapshot).toHaveBeenCalledTimes(snapshots.length);
+    expect(view.applySplice).not.toHaveBeenCalled();
+    expect(shown.slice(0, 3)).toEqual([
+      ["1.1×", "letters: 1 (A)"],
+      ["1.0×", "letters: 2 (A–B)"], // a better route may be shorter: more letters
+      ["1.1×", "letters: 3 (A–C)"],
+    ]);
+    expect(shown.at(-1)).toEqual(["1.9×", "letters: 15 (A–O)"]);
+    sources[0].send("done", alphabet.events.at(-1)!.data);
+    await settle();
+    expect(view.setFinal).toHaveBeenCalledWith(alphabet.route.geometry);
+    const [ratio, , , run, , letters] = statLines(s.state);
+    expect([ratio, letters]).toEqual(["1.9×", "letters: 15 (A–O)"]);
+    expect(run).toMatch(/^150 attempts · 4\.5 s · budget · seed 1$/);
+    const roads = countsTitle(s.state).split("\n");
+    expect(roads).toHaveLength(15);
+    expect([roads[0], roads.at(-1)]).toEqual([
+      "A: Southwest Alder Street",
+      "O: Southwest Oak Street",
+    ]);
+  });
+
   // As the API refuses a leg the seed cannot build under hard mode (tests/api/test_routes_api.py).
   const refusal = {
     code: "STOP_UNREACHABLE_WITHOUT_REPEAT",

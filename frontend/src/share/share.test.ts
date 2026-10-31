@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeView, json, stubFetch } from "../__fixtures__/http";
 import { loadStream } from "../__fixtures__/stream";
 import type { RouteDocument, RouteRequest } from "../api/types";
-import { JobRunner, statLines } from "../run/controls";
+import { JobRunner, countsTitle, statLines } from "../run/controls";
 import { DEFAULT_SETTINGS, IDLE_RUN, ITEMS, Store, type AppState, type Settings } from "../state";
 import { round6 } from "../util/geo";
 import {
@@ -445,6 +445,18 @@ describe("a route of another mode opened by its link", () => {
       "",
       "277 left · 282 right",
     ]);
+  });
+
+  it("takes a recorded pilgrimage's brand and an alphabet route's mode, with their rows", async () => {
+    const pilgrimage = await open(loadStream("portland-brand-stream").route);
+    expect(pilgrimage.state.settings).toMatchObject({ objective: "brand", brand: 229 });
+    expect(encodeUrlState(urlStateOf(pilgrimage.state))).toContain("&mode=brand:229&stops=");
+    expect(statLines(pilgrimage.state)[5]).toBe("14 of 19 Starbucks");
+    const alphabet = await open(loadStream("portland-alphabet-stream").route);
+    expect(alphabet.state.settings).toMatchObject({ objective: "alphabet", target: "max" });
+    expect(encodeUrlState(urlStateOf(alphabet.state))).toContain("&target=max&mode=alphabet&");
+    expect(statLines(alphabet.state)[5]).toBe("letters: 15 (A–O)");
+    expect(countsTitle(alphabet.state).split("\n")[1]).toBe("B: West Burnside Street");
   });
 
   it("takes a collecting route's item, and a route's turn constraint", async () => {

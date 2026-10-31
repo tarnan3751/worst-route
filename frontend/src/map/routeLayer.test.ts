@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import type { Map as MapLibreMap } from "maplibre-gl";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { json, settle, stubEventSource, stubFetch } from "../__fixtures__/http";
 import { RECORDINGS, loadStream } from "../__fixtures__/stream";
 import type { LonLat } from "../api/types";
-import { spliceLine, type RouteLine } from "./routeLayer";
+import { JobRunner } from "../run/controls";
+import { DEFAULT_SETTINGS, IDLE_RUN, Store } from "../state";
+import { RouteLayer, spliceLine, type RouteLine } from "./routeLayer";
 
 // A route of `nodes` nodes, every edge drawn with one shape point between its nodes: node k is
 // point 2k, so node_index is [0, 2, 4, ...].
@@ -123,17 +127,22 @@ describe.each(RECORDINGS)("replaying the recorded stream %s", (name) => {
   const same = (a: LonLat, b: LonLat) => a[0] === b[0] && a[1] === b[1];
 
   // The client's algorithm (docs/reference/api.md, **Applying the stream**): a snapshot
-  // replaces the line, each splice of a progress event replaces route nodes i..j.
+  // replaces the line, each splice of a progress event replaces route nodes i..j. `check` sees
+  // each snapshot that follows splices (the alphabet route's snapshots follow none: each is a
+  // better route, not the one the splices drew).
   function replay(check?: (before: RouteLine, snapshot: RouteLine) => void): RouteLine {
     let current: RouteLine = { points: [], index: [] };
+    let spliced = false;
     for (const event of events) {
       if (event.event === "snapshot") {
         const next = { points: event.data.geometry.coordinates, index: event.data.node_index };
-        if (current.index.length > 0) check?.(current, next);
+        if (spliced) check?.(current, next);
         current = next;
+        spliced = false;
       } else if (event.event === "progress") {
         for (const s of event.data.splices) {
           current = spliceLine(current, s.i, s.j, s.coords, s.node_index);
+          spliced = true;
         }
       }
     }
@@ -160,7 +169,8 @@ describe.each(RECORDINGS)("replaying the recorded stream %s", (name) => {
       });
       checked++;
     });
-    expect(checked).toBe(events.filter((e) => e.event === "snapshot").length - 1);
+    const snapshots = events.filter((e) => e.event === "snapshot").length;
+    expect(checked).toBe(name === "portland-alphabet-stream" ? 0 : snapshots - 1);
   });
 
   it("ends with the stored route's nodes, every one where the final snapshot has it", () => {
@@ -189,5 +199,61 @@ describe.each(RECORDINGS)("replaying the recorded stream %s", (name) => {
       at++;
     }
     expect(drawn.length).toBeLessThan(stored.length); // the snapshots are simplified
+  });
+});
+
+describe("the alphabet route's better routes on the map", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("replaces the drawn route whole with each, never flashing, and ends on the stored one", async () => {
+    const { request, regions, events, route } = loadStream("portland-alphabet-stream");
+    // A stand-in map that keeps what each source is given, drawn at once.
+    const drawn = new Map<string, { features: { geometry: { coordinates: LonLat[] } }[] }[]>();
+    const map = {
+      addSource: (id: string) => drawn.set(id, []),
+      addLayer: () => undefined,
+      getSource: (id: string) => ({ setData: (data: never) => drawn.get(id)!.push(data) }),
+    } as unknown as MapLibreMap;
+    vi.stubGlobal("requestAnimationFrame", (draw: () => void) => {
+      draw();
+      return 0;
+    });
+    const sources = stubEventSource();
+    stubFetch((call) =>
+      call.method === "POST"
+        ? json({ job_id: "ja", events_url: "/jobs/ja/events", seed: 1 }, 202)
+        : json(route),
+    );
+    const store = new Store({
+      region: regions[0],
+      stops: request.stops!.map(({ lat, lon }) => ({ lat, lon, snapped: null })),
+      settings: { ...DEFAULT_SETTINGS, objective: "alphabet" },
+      run: IDLE_RUN,
+      route: null,
+      error: null,
+      brands: null,
+    });
+    const layer = new RouteLayer(map);
+    await new JobRunner(store, layer, () => {}).go();
+    const last = (id: string) => drawn.get(id)!.at(-1)!.features;
+    let replaced = 0;
+    for (const event of events) {
+      sources[0].send(event.event, event.data);
+      if (event.event === "snapshot") {
+        expect(last("wr-route").map((f) => f.geometry.coordinates)).toEqual([
+          event.data.geometry.coordinates,
+        ]);
+        replaced++;
+      }
+      expect(last("wr-flash")).toEqual([]); // no splice, no flash
+    }
+    await settle();
+    expect(replaced).toBe(events.filter((e) => e.event === "snapshot").length);
+    expect(last("wr-route").map((f) => f.geometry.coordinates)).toEqual([
+      route.geometry.coordinates,
+    ]);
+    expect(layer.points).toEqual(route.geometry.coordinates);
   });
 });

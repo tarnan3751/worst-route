@@ -677,4 +677,54 @@ describe("what the recordings say", () => {
     expect(route.toasts![0]).toBe("14.5× less efficient than the sensible route.");
     expect(refused.body).toMatchObject({ code: "INVALID_REQUEST", field: "vehicle" });
   });
+
+  it("counts a pilgrimage's visits in every progress, in done and the document", () => {
+    const { events, route, refused } = loadStream("portland-brand-stream");
+    const starbucks = { id: 229, name: "Starbucks", of: 19 };
+    const visits = events.flatMap((e) => (e.event === "progress" ? [e.data.metrics.brand] : []));
+    expect(visits.every((brand) => expect.objectContaining(starbucks).asymmetricMatch(brand))).toBe(
+      true,
+    );
+    const counts = visits.map((brand) => brand!.visits);
+    expect(counts).toEqual([...counts].sort((a, b) => a - b)); // never falling
+    expect(counts).toEqual([8, 13, 14]);
+    const done = events.at(-1);
+    if (done?.event !== "done") throw new Error("no done");
+    expect(done.data.metrics.brand).toEqual({ ...starbucks, visits: 14 });
+    expect(route.metrics.brand).toEqual(done.data.metrics.brand);
+    expect(route.metrics.alphabet).toBeNull();
+    expect(route.request).toMatchObject({ objective: "brand", brand: 229, item: null });
+    expect(refused.body).toMatchObject({ code: "INVALID_REQUEST", field: "target" });
+  });
+
+  it("sends each better alphabet route as a snapshot, then a progress without splices", () => {
+    const { events, route, refused } = loadStream("portland-alphabet-stream");
+    const better = events.slice(3, -1); // after snapped, baseline and the seed's snapshot
+    expect(better.length % 2).toBe(0);
+    let score = -Infinity;
+    for (let k = 0; k < better.length; k += 2) {
+      const [snapshot, progress] = better.slice(k, k + 2);
+      if (snapshot.event !== "snapshot" || progress.event !== "progress") {
+        throw new Error(`events ${snapshot.id} and ${progress.id}: not a snapshot and a progress`);
+      }
+      expect(progress.data.splices).toEqual([]);
+      expect(progress.data.metrics).toEqual(snapshot.data.metrics);
+      expect(progress.data.score).toBeGreaterThan(score); // each one better
+      score = progress.data.score;
+    }
+    const letters = better.flatMap((e) =>
+      e.event === "progress" ? [e.data.metrics.alphabet!] : [],
+    );
+    expect(letters[0]).toMatchObject({ letters: 1, sequence: "A" });
+    expect(letters.at(-1)).toMatchObject({ letters: 15, sequence: "ABCDEFGHIJKLMNO" });
+    const done = events.at(-1);
+    if (done?.event !== "done") throw new Error("no done");
+    expect(done.data.metrics.alphabet).toEqual(letters.at(-1));
+    expect(route.metrics.alphabet).toEqual(done.data.metrics.alphabet);
+    expect(route.metrics.alphabet!.roads[0]).toBe("Southwest Alder Street");
+    expect(route.metrics.brand).toBeNull();
+    expect(route.request).toMatchObject({ objective: "alphabet", target: { kind: "max" } });
+    expect(route.run).toMatchObject({ attempts: 150, accepted: 20 }); // restarts, better routes
+    expect(refused.body).toMatchObject({ code: "INVALID_REQUEST", field: "stops" });
+  });
 });

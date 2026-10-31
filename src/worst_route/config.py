@@ -149,7 +149,15 @@ DEFAULT_BACKEND: BackendName = "auto"
 DEFAULT_BUDGET_S = 20.0
 BUDGET_MAX_S = 120.0
 DEFAULT_MAX_ITERATIONS = 5000
-TIER_AUTO_KM = (15.0, 60.0, 250.0, 800.0)
+# TIER_AUTO_KM: T4 below 800 km, T0 from 800 km, T1-T3 by override only. Tuned on the Oregon
+# build (M5.1, docs/reference/engine.md, **Requests**): at every trip length a state holds, the
+# all-roads graph gave the best routes in 30 s and reached every stop the sparser tiers did, and
+# more: four named trips of 166-592 km made 3.56-10.99x on T4 against 1.32-5.31x on T2 and
+# 3.35-6.73x on T3, ten random pairs of 71-403 km planned 8 of 10 on T4 (6.10-10.85x), 7 on T3,
+# 4 on T2 (a rural stop's 3 km bubble seldom meets a sparser tier's roads), and T1 refused two
+# trips over I-5. Before: (15, 60, 250, 800), T4, T3, T2, T1 below each, T0 beyond. The bands
+# above a state's span wait for a national build (M5.3).
+TIER_AUTO_KM = (800.0, 800.0, 800.0, 800.0)
 LEASH_FACTOR = 0.6
 LEASH_MIN_KM = 3.0
 LEASH_MAX_KM = 150.0

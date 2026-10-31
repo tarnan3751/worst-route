@@ -20,8 +20,9 @@ reads as it did before they existed.
 so the validator can recompute them from a saved route. The stops are projected and the trip
 length is the straight-line length of the polyline through them.
 
-- tier auto: below 15 km T4, below 60 km T3, below 250 km T2, below 800 km T1, else T0
-  (`config.TIER_AUTO_KM`);
+- tier auto: below 800 km T4, else T0 (`config.TIER_AUTO_KM`, four thresholds, T4 below the
+  first and T0 from the last; they coincide since the Oregon build's tuning, so T1-T3 are
+  override-only);
 - leash auto: 0.6 × the trip length within [3, 150] km; `leash` the nodes within it of the
   polyline;
 - `bubbles`: the nodes within 3 km of a stop;

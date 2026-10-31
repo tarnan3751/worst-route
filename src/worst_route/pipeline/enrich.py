@@ -308,12 +308,21 @@ def _place_pois(
 
 def index_brands(graph: nx.MultiDiGraph, pois: pa.Table) -> tuple[BrandIndex, dict[str, int]]:
     """The brand index of the graph (the module docstring) and its counts; `pass_through` set."""
-    rows = [r for r in pois.to_pylist() if r["kind"] == "brand"]
-    counts = {"found": len(rows), "snapped": 0, "at_dead_ends": 0, "too_far": 0}
-    nodes = sorted(graph.nodes)
+    nodes = sorted(graph.nodes)  # 0..n-1, as cleanup numbers them
     xy = np.array([(graph.nodes[v]["x"], graph.nodes[v]["y"]) for v in nodes]).reshape(-1, 2)
     through = np.array([graph.nodes[v]["pass_through"] for v in nodes], dtype=np.bool_)
-    to_xy = pyproj.Transformer.from_crs(4326, graph.graph["crs"], always_xy=True)
+    return brand_index(xy, through, graph.graph["crs"], pois)
+
+
+def brand_index(
+    xy: NDArray[np.float64], through: NDArray[np.bool_], crs: str, pois: pa.Table
+) -> tuple[BrandIndex, dict[str, int]]:
+    """The brand index of the nodes 0..n-1 at `xy` (`through` their `pass_through`) in the
+    projected `crs`, and its counts."""
+    rows = [r for r in pois.to_pylist() if r["kind"] == "brand"]
+    counts = {"found": len(rows), "snapped": 0, "at_dead_ends": 0, "too_far": 0}
+    nodes = list(range(len(xy)))
+    to_xy = pyproj.Transformer.from_crs(4326, crs, always_xy=True)
     px, py = to_xy.transform([r["lon"] for r in rows], [r["lat"] for r in rows])
     points = np.column_stack([px, py]).reshape(-1, 2)
     near = cKDTree(xy).query_ball_point(points, BRAND_SNAP_M) if len(nodes) else []

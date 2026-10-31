@@ -169,7 +169,7 @@ def check_build(data: GraphData) -> None:
 
 def check_saved(graph: nx.MultiDiGraph, data: GraphData) -> None:
     """The build holds the enriched graph: its nodes (with each super-junction's roundabout rings),
-    edges, twins and transitions, keys as ids."""
+    edges, twins, transitions and brands (each at nodes a route can pass through), keys as ids."""
     keys = sorted(graph.edges(keys=True))
     edge_id = {key: e for e, key in enumerate(keys)}
     assert (data.n, data.m) == (graph.number_of_nodes(), len(keys))
@@ -227,3 +227,11 @@ def check_saved(graph: nx.MultiDiGraph, data: GraphData) -> None:
     }
     table = np.column_stack([data.trans_node, data.trans_in, data.trans_out]).tolist()
     assert {tuple(row) for row in table} == rows and len(table) == len(rows)
+    brands = graph.graph["brands"]
+    assert data.strings.brands == [name for name, _, _ in brands]
+    assert data.strings.brand_wikidata == [wikidata for _, wikidata, _ in brands]
+    for b, (_, _, at) in enumerate(brands):
+        nodes = data.nodes_of_brand(b)
+        located = _run(data.brand_indptr, data.brand_locations, b)
+        assert list(zip(nodes.tolist(), located, strict=True)) == at
+        assert data.node_pass_through[nodes].all()

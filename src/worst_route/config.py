@@ -60,7 +60,7 @@ REGIONS: dict[str, Region] = {
 # The pipeline's version enters every build id and every step's sidecar (`pipeline/layout.py`);
 # bump it when a step's output changes for the same input. `pipeline` re-exports it, and
 # `graph.store` reads it to name the remedy for a build another version wrote.
-PIPELINE_VERSION = "2"  # 2: bearings exclude stubs; save writes node_roundabouts
+PIPELINE_VERSION = "3"  # 2: bearings exclude stubs, node_roundabouts; 3: brand arrays
 
 
 @cache
@@ -285,7 +285,9 @@ SCC_MIN_RETAINED = 0.99
 # Enrich (`docs/PLAN.md` §2.5; `docs/reference/pipeline.md`, enrich). An edge's speed is its
 # `maxspeed` tag when it parses, else its class's default here, in mph; a node's delay is the
 # largest NODE_DELAY_S of the stop signs and signals merged into it; an edge's bearings are taken
-# over the first and the last BEARING_SAMPLE_M of its geometry.
+# over the first and the last BEARING_SAMPLE_M of its geometry. A brand POI is snapped to the
+# nearest node a route can pass through within BRAND_SNAP_M; a brand on fewer than
+# BRAND_MIN_LOCATIONS distinct nodes is left out of the build's brand index.
 SPEED_DEFAULT_MPH: dict[HighwayClass, float] = {
     HighwayClass.MOTORWAY: 65.0,
     HighwayClass.MOTORWAY_LINK: 35.0,
@@ -304,6 +306,8 @@ SPEED_DEFAULT_MPH: dict[HighwayClass, float] = {
 }
 NODE_DELAY_S = {"stop": 10.0, "traffic_signals": 30.0}
 BEARING_SAMPLE_M = 20.0
+BRAND_SNAP_M = 100.0
+BRAND_MIN_LOCATIONS = 3
 
 # Tiers (`docs/PLAN.md` §2.6; `pipeline/tiers.py`): each tier keeps the largest strongly
 # connected component of its own roads; the step fails when a tier keeps fewer than this

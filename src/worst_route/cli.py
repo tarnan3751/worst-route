@@ -348,7 +348,8 @@ def cleanup(
 def enrich(
     region: RegionOption, build_id: BuildIdOption = None, force: ForceOption = False
 ) -> None:
-    """Speeds, identities, road units, flags, bearings, collectibles, delays, pass-through."""
+    """Speeds, identities, road units, flags, bearings, collectibles, delays, pass-through,
+    brands."""
     import pickle
 
     import pyarrow.parquet as pq
@@ -403,6 +404,12 @@ def enrich(
     typer.echo(
         f"nodes: {report.delay_nodes} with a delay, {report.pass_through} of {report.nodes} "
         "pass-through"
+    )
+    b = report.brands
+    typer.echo(
+        f"brands: {b['found']} POIs, {b['snapped']} snapped, {b['at_dead_ends']} skipped at dead "
+        f"ends, {b['too_far']} too far; {b['kept']} of {b['brands']} brands kept, {b['rows']} "
+        f"brand-node rows on {b['nodes']} nodes"
     )
 
 

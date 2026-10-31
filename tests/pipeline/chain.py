@@ -1,10 +1,12 @@
 """The pipeline's steps run in memory on a fixture, for the tests of the later steps."""
 
 from pathlib import Path
+from typing import Any
 
 import networkx as nx
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pyproj
 
 from worst_route.pipeline.build import build_raw_graph
 from worst_route.pipeline.cleanup import run_cleanup
@@ -14,6 +16,7 @@ from worst_route.pipeline.tiers import run_tiers
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "osm"
 UTM_10N = 32610
+TO_LONLAT = pyproj.Transformer.from_crs(UTM_10N, 4326, always_xy=True)
 
 
 def cleaned(source: Path, *, allow_fragmented: bool = False) -> nx.MultiDiGraph:
@@ -36,6 +39,22 @@ def poi_table(rows: list[tuple[str, int, str]]) -> pa.Table:
         for name, value in zip(POI_SCHEMA.names, values, strict=True):
             columns[name].append(value)
     return pa.table(columns, schema=POI_SCHEMA)
+
+
+def brand_pois(rows: list[tuple[float, float, Any, Any, Any]]) -> pa.Table:
+    """A POI table of brand rows `(lon, lat, brand, wikidata, name)`; every third a way."""
+    columns: dict[str, list[object]] = {name: [] for name in POI_SCHEMA.names}
+    for k, (lon, lat, brand, wikidata, name) in enumerate(rows):
+        values = ("w" if k % 3 == 2 else "n", 1000 + k, lon, lat, "brand", brand, wikidata, name)
+        for column, value in zip(POI_SCHEMA.names, values, strict=True):
+            columns[column].append(value)
+    return pa.table(columns, schema=POI_SCHEMA)
+
+
+def east_of(graph: nx.MultiDiGraph, node: int, dx: float) -> tuple[float, float]:
+    """(lon, lat) `dx` metres east of a node (west when negative)."""
+    lon, lat = TO_LONLAT.transform(graph.nodes[node]["x"] + dx, graph.nodes[node]["y"])
+    return float(lon), float(lat)
 
 
 def node_of(graph: nx.MultiDiGraph, osm_id: int) -> int:

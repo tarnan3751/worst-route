@@ -6,12 +6,13 @@ import networkx as nx
 import numpy as np
 import pytest
 
-from tests.pipeline.chain import FIXTURES, enriched, tier_nodes
+from tests.pipeline.chain import FIXTURES, brand_pois, cleaned, east_of, enriched, tier_nodes
 from tests.pipeline.invariants import check_build, check_saved
 from tests.pipeline.osm import write_osm
 from worst_route.config import TIERS
 from worst_route.graph.data import NodeKind
 from worst_route.graph.store import graph_version, read_build
+from worst_route.pipeline.enrich import run_enrich
 from worst_route.pipeline.save import (
     EmptyTransitionsError,
     graph_data,
@@ -124,6 +125,26 @@ def test_roundabout_rings_are_saved_at_their_super_junctions(tmp_path: Path) -> 
         (node,) = graph.graph["superjunctions"]
         assert (loaded.node_kind[node], loaded.node_roundabouts[node]) == (kind, rings)
         assert int(loaded.node_roundabouts.sum()) == rings
+
+
+def test_the_brand_index_is_saved_and_read_back(tmp_path: Path) -> None:
+    graph = cleaned(FIXTURES / "grid.osm")
+    rows = [(v, 5.0, "Acme", "Q1", None) for v in (0, 7, 14)]
+    rows += [(v, dx, "Zed", None, None) for v, dx in ((3, 5.0), (3, -5.0), (9, 5.0), (20, 5.0))]
+    run_enrich(graph, brand_pois([(*east_of(graph, v, dx), *tags) for v, dx, *tags in rows]))
+    data = graph_data(graph, tier_nodes(graph), META)
+    path = build_dir(tmp_path)
+    save_build(data, path)
+    loaded = read_build(path)
+    loaded.validate()
+    check_saved(graph, loaded)
+    assert (loaded.strings.brands, loaded.strings.brand_wikidata) == (["Acme", "Zed"], ["Q1", None])
+    assert loaded.nodes_of_brand(0).tolist() == [0, 7, 14]
+    assert loaded.nodes_of_brand(1).tolist() == [3, 9, 20]
+    assert loaded.brand_locations.tolist() == [1, 1, 1, 2, 1, 1]
+    assert loaded.meta["graph_version"] == graph_version(data)
+    plain = enriched(FIXTURES / "grid.osm", tmp_path)  # its two brand POIs, one location each
+    assert graph_version(graph_data(plain, tier_nodes(plain), META)) != graph_version(data)
 
 
 def test_a_super_junction_with_no_allowed_turn_is_refused(tmp_path: Path) -> None:

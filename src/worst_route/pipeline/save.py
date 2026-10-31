@@ -21,6 +21,9 @@ tier_nodes, meta)` turns the enriched graph into `GraphData`:
   tier's classes with both ends kept.
 - **Collectibles**: `node_roundabouts`, the roundabout rings each super-junction's record counts
   (an interchange that holds a ring counts it too), 0 at every other node.
+- **Brands**: enrich's index (`enrich.index_brands`) as `brand_indptr`, `brand_nodes` and
+  `brand_locations`, in its order (the brand ids), each brand's name and wikidata id in
+  `strings.brands` and `strings.brand_wikidata`.
 
 It refuses a super-node whose transition table is empty (`EmptyTransitionsError`): for cleanup
 that means no turn through it is allowed, but `GraphData` reads a node without rows as allowing
@@ -99,14 +102,17 @@ def graph_data(
                 "express: a node without transition rows allows every turn"
             )
 
+    brands: list[tuple[str, str | None, list[tuple[int, int]]]] = graph.graph["brands"]
     strings = Strings(
         names=sorted({d["name"] for d in edges if "name" in d}),
         refs=sorted({d["ref"] for d in edges if "ref" in d}),
         identities=sorted({d["identity"] for d in edges if d["identity"] is not None}),
+        brands=[name for name, _, _ in brands],
+        brand_wikidata=[wikidata for _, wikidata, _ in brands],
     )
     index = {
-        table: {value: i for i, value in enumerate(values)}
-        for table, values in asdict(strings).items()
+        table: {value: i for i, value in enumerate(getattr(strings, table))}
+        for table in ("names", "refs", "identities")
     }
     highway = np.array([HighwayClass[d["highway"].upper()] for d in edges], dtype=np.uint8)
     edge_u = np.array([u for u, _, _ in keys], dtype=np.int32)
@@ -190,6 +196,9 @@ def graph_data(
         node_roundabouts=np.array(
             [records[v]["roundabouts"] if v in records else 0 for v in range(n)], dtype=np.uint8
         ),
+        brand_indptr=_indptr([len(at) for _, _, at in brands]),
+        brand_nodes=np.array([v for _, _, at in brands for v, _ in at], dtype=np.int32),
+        brand_locations=np.array([k for _, _, at in brands for _, k in at], dtype=np.int32),
         strings=strings,
         meta={**meta, "counts": counts, "graph_version": ""},
     )

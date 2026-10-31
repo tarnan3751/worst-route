@@ -11,6 +11,7 @@ import pytest
 from typer.testing import CliRunner
 
 from worst_route.cli import _seconds, app
+from worst_route.config import PIPELINE_VERSION
 from worst_route.engine import ENGINE_VERSION
 from worst_route.graph.data import EdgeFlag, GraphData
 from worst_route.graph.store import write_build
@@ -293,8 +294,9 @@ def test_a_build_saved_before_an_array_existed_is_one_line(data_dir: Path, tmp_p
     path = data_dir / "graphs" / "portland" / "b1"
     (path / "arrays" / "node_roundabouts.npy").unlink()
     line = (
-        f"the build at {path} was written by pipeline 1 (now 2): rebuild the region with "
-        "`worst-route pipeline filter --region portland` and the steps after it\n"
+        f"the build at {path} was written by pipeline 1 (now {PIPELINE_VERSION}): "
+        "rebuild the region with `worst-route pipeline filter --region portland` and the steps "
+        "after it\n"
     )
     assert plan(*trip) == (1, "", line)
     result = runner.invoke(app, ["validate", str(out)])

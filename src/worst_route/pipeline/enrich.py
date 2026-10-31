@@ -33,9 +33,19 @@ and on every node:
 - `pass_through`: some in-neighbour u and out-neighbour w with u ≠ w, self-loops ignored (the
   rule `graph/spatial.py` applies within a request's mask).
 
-Edges are visited in key order, so the result is deterministic. `save_stage` pickles the graph to
-`stages/enrich.pkl` and writes the report to `stages/enrich.json`; `parameters` is what the
-step's sidecar records.
+and on the graph, `brands` (`index_brands`): each POI with a brand (a node, or a way's mean
+position) snapped to the nearest pass-through node within `config.BRAND_SNAP_M` (a node a
+route can only start or end at is skipped: such a POI is counted at a dead end), ties to the
+lower node; grouped by `brand:wikidata` when present, else by the `brand` string casefolded
+with its whitespace collapsed; named by the group's most common `brand` spelling, whitespace
+collapsed (ties to the smaller string; else its most common `name`, else its wikidata id); kept
+when it lies on at least `config.BRAND_MIN_LOCATIONS` distinct nodes. The list is `(name,
+wikidata, [(node, POIs snapped there), ...])` per brand, nodes ascending, brands in (name,
+wikidata) order, which is their id order in the build.
+
+Edges are visited in key order and POIs in the table's order, so the result is deterministic.
+`save_stage` pickles the graph to `stages/enrich.pkl` and writes the report to
+`stages/enrich.json`; `parameters` is what the step's sidecar records.
 """
 
 import json
@@ -50,10 +60,19 @@ from typing import Any
 import networkx as nx
 import numpy as np
 import pyarrow as pa
+import pyproj
 import shapely
 from numpy.typing import NDArray
+from scipy.spatial import cKDTree
 
-from worst_route.config import BEARING_SAMPLE_M, NODE_DELAY_S, SPEED_DEFAULT_MPH, HighwayClass
+from worst_route.config import (
+    BEARING_SAMPLE_M,
+    BRAND_MIN_LOCATIONS,
+    BRAND_SNAP_M,
+    NODE_DELAY_S,
+    SPEED_DEFAULT_MPH,
+    HighwayClass,
+)
 from worst_route.graph.data import EdgeFlag
 from worst_route.pipeline import layout
 from worst_route.pipeline.build import ROUNDABOUT_JUNCTIONS
@@ -63,6 +82,7 @@ KMH_PER_MPH = 1.609344
 COLLECTIBLES = {"toll_booth": "toll_booths", "level_crossing": "level_crossings"}
 
 type EdgeKey = tuple[int, int, int]
+type BrandIndex = list[tuple[str, str | None, list[tuple[int, int]]]]
 
 _FLAG_NAMES = {name.lower(): bit for name, bit in EdgeFlag.__members__.items()}
 _MAXSPEED = re.compile(r"(\d+(?:\.\d+)?)\s*(mph|km/h|kmh|kph)?", re.IGNORECASE)
@@ -87,6 +107,9 @@ class EnrichReport:
     delays: dict[str, dict[str, int]] = field(default_factory=dict)
     delay_nodes: int = 0  # nodes with a delay
     pass_through: int = 0  # nodes
+    # brand POIs: found, snapped, at_dead_ends, too_far; brands (groups), kept, and the kept
+    # brands' rows (a brand at a node) and distinct nodes
+    brands: dict[str, int] = field(default_factory=dict)
     seconds: float = 0.0
 
 
@@ -96,6 +119,8 @@ def parameters() -> dict[str, Any]:
         "SPEED_DEFAULT_MPH": {c.name.lower(): mph for c, mph in SPEED_DEFAULT_MPH.items()},
         "NODE_DELAY_S": dict(NODE_DELAY_S),
         "BEARING_SAMPLE_M": BEARING_SAMPLE_M,
+        "BRAND_SNAP_M": BRAND_SNAP_M,
+        "BRAND_MIN_LOCATIONS": BRAND_MIN_LOCATIONS,
     }
 
 
@@ -193,6 +218,7 @@ def run_enrich(graph: nx.MultiDiGraph, pois: pa.Table) -> EnrichReport:
         after = {w for w in graph.successors(node) if w != node}
         data["pass_through"] = bool(before and after and len(before | after) >= 2)
         report.pass_through += data["pass_through"]
+    graph.graph["brands"], report.brands = index_brands(graph, pois)
     report.seconds = round(time.perf_counter() - clock, 3)
     return report
 
@@ -277,6 +303,53 @@ def _place_pois(
             name: found[name] for name in ("found", "at_junctions", "shape_points", "off_graph")
         }
     report.delay_nodes = sum(1 for _, delay in graph.nodes(data="delay_s") if delay > 0)
+
+
+def index_brands(graph: nx.MultiDiGraph, pois: pa.Table) -> tuple[BrandIndex, dict[str, int]]:
+    """The brand index of the graph (the module docstring) and its counts; `pass_through` set."""
+    rows = [r for r in pois.to_pylist() if r["kind"] == "brand"]
+    counts = {"found": len(rows), "snapped": 0, "at_dead_ends": 0, "too_far": 0}
+    nodes = sorted(graph.nodes)
+    xy = np.array([(graph.nodes[v]["x"], graph.nodes[v]["y"]) for v in nodes]).reshape(-1, 2)
+    through = np.array([graph.nodes[v]["pass_through"] for v in nodes], dtype=np.bool_)
+    to_xy = pyproj.Transformer.from_crs(4326, graph.graph["crs"], always_xy=True)
+    px, py = to_xy.transform([r["lon"] for r in rows], [r["lat"] for r in rows])
+    points = np.column_stack([px, py]).reshape(-1, 2)
+    near = cKDTree(xy).query_ball_point(points, BRAND_SNAP_M) if len(nodes) else []
+
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    snapped: list[int | None] = []
+    for row, point, around in zip(rows, points, near, strict=True):
+        candidates = np.array(sorted(around), dtype=np.int64)
+        candidates = candidates[through[candidates]] if len(candidates) else candidates
+        if len(candidates):
+            d = np.hypot(*(xy[candidates] - point).T)
+            snapped.append(nodes[int(candidates[np.lexsort((candidates, d))[0]])])
+            counts["snapped"] += 1
+        else:
+            snapped.append(None)
+            counts["at_dead_ends" if around else "too_far"] += 1
+        wikidata, brand = row["brand_wikidata"], " ".join((row["brand"] or "").split())
+        if wikidata or brand:  # an empty brand tag alone names nothing
+            key = ("wikidata", wikidata) if wikidata else ("brand", brand.casefold())
+            groups[key].append({**row, "node": snapped[-1]})
+
+    index: BrandIndex = []
+    for key, members in groups.items():
+        at = Counter(m["node"] for m in members if m["node"] is not None)
+        if len(at) < BRAND_MIN_LOCATIONS:
+            continue
+        spellings = Counter(" ".join((m["brand"] or "").split()) for m in members)
+        names = Counter(m["name"] for m in members if m["name"])
+        del spellings[""]  # no brand tag, or an empty one
+        common = spellings or names
+        name = min(common.items(), key=lambda kv: (-kv[1], kv[0]))[0] if common else key[1]
+        wikidata = key[1] if key[0] == "wikidata" else None
+        index.append((name, wikidata, sorted(at.items())))
+    index.sort(key=lambda brand: (brand[0], brand[1] or ""))
+    placed = [node for _, _, at in index for node, _ in at]
+    counts.update(brands=len(groups), kept=len(index), rows=len(placed), nodes=len(set(placed)))
+    return index, counts
 
 
 def save_stage(graph: nx.MultiDiGraph, report: EnrichReport, build_dir: Path) -> None:

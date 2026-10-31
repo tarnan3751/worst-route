@@ -28,6 +28,21 @@ def named_roads() -> GraphData:
     return make_graph(nodes, edges, transitions=[((0, 1), (1, 2))])
 
 
+def branded() -> GraphData:
+    """`small_build` with two brands, one with a wikidata id and two POIs at a node."""
+    g = make_graph(
+        [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0)],
+        [(0, 1, 100.0), (1, 2, 100.0), (2, 0, 141.0), (1, 0, 100.0)],
+        brands={"Café Ünïcode": [0, 2], "Plaid Pantry": [1]},
+    )
+    strings = replace(g.strings, brand_wikidata=["Q1", None])
+    locations = np.array([1, 2, 1], dtype=np.int32)
+    locations.flags.writeable = False
+    g = replace(g, strings=strings, brand_locations=locations, meta=dict(g.meta))
+    g.meta["graph_version"] = graph_version(g)
+    return g
+
+
 def assert_same_build(a: GraphData, b: GraphData) -> None:
     for name in ARRAY_SPECS:
         x, y = getattr(a, name), getattr(b, name)
@@ -40,12 +55,14 @@ def assert_same_build(a: GraphData, b: GraphData) -> None:
 def test_graph_version_is_pinned() -> None:
     # Freezes the version definition and the array order (docs/reference/graph.md): this
     # literal changes only under a tier A brief that changes the build format.
-    expected = "a85968d0fbd95110ec6c88f10c32c140f5efb800299022f8aaf3dc89453ed750"
+    expected = "281d156d6db24a54f6e4b3140b720d21b15c55f51865b2139f51cce42d29d68f"
     assert small_build().meta["graph_version"] == expected
 
 
 @pytest.mark.parametrize("mmap", [True, False])
-@pytest.mark.parametrize("build", [small_build, named_roads, lambda: grid_graph(4, 3, 80.0)])
+@pytest.mark.parametrize(
+    "build", [small_build, named_roads, branded, lambda: grid_graph(4, 3, 80.0)]
+)
 def test_round_trip(tmp_path: Path, build, mmap: bool) -> None:
     g = build()
     version = write_build(g, tmp_path / "b")
@@ -74,6 +91,8 @@ def test_files_on_disk(tmp_path: Path) -> None:
         "names": ["Hawthorne Boulevard", "Powell"],
         "refs": ["US 26"],
         "identities": ["Hawthorne Boulevard", "US 26"],
+        "brands": [],
+        "brand_wikidata": [],
     }
     meta = json.loads((tmp_path / "b" / "meta.json").read_text())
     assert meta["graph_version"] == g.meta["graph_version"]
@@ -120,6 +139,23 @@ def test_version_changes_with_arrays_strings_and_params() -> None:
     assert graph_version(replace(g, tier_node_mask=mask)) != base
     assert graph_version(replace(g, strings=Strings(["Main"], [], []))) != base
     assert graph_version(replace(g, meta={**g.meta, "params": {"tolerance_m": 8}})) != base
+
+
+def test_version_changes_with_the_brands() -> None:
+    g = branded()
+    base = graph_version(g)
+    nodes = g.brand_nodes.copy()
+    nodes[0] = 1
+    assert graph_version(replace(g, brand_nodes=nodes)) != base
+    locations = g.brand_locations.copy()
+    locations[1] = 1
+    assert graph_version(replace(g, brand_locations=locations)) != base
+    for strings in (
+        replace(g.strings, brands=["Café Unicode", "Plaid Pantry"]),
+        replace(g.strings, brand_wikidata=["Q2", None]),
+        replace(g.strings, brand_wikidata=[None, None]),
+    ):
+        assert graph_version(replace(g, strings=strings)) != base
 
 
 def test_version_ignores_the_order_of_params_keys() -> None:

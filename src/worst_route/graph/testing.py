@@ -5,10 +5,10 @@ edge list into a valid, read-only `GraphData`, filling every array the pipeline 
 plain default: lengths as given (Euclidean when omitted), bearings from the coordinates, one
 OSM member per node (id = node index + 1), one way per edge (id = input position + 1), class
 residential (tier 4), speed 40 km/h, the unit id = the edge id, pass-through from the topology,
-tier masks from the edge tiers (no SCC), every node plain (no roundabout rings), and
-meta["graph_version"] as `write_build` would compute it. Edge ids are the positions after a
-stable sort by (u, v), as in a real build; twins and transitions name edges by their (u, v)
-node pairs, and `edge_id(data, u, v)` finds an edge the same way.
+tier masks from the edge tiers (no SCC), every node plain (no roundabout rings), no brands
+unless `brands` names some, and meta["graph_version"] as `write_build` would compute it. Edge
+ids are the positions after a stable sort by (u, v), as in a real build; twins and transitions
+name edges by their (u, v) node pairs, and `edge_id(data, u, v)` finds an edge the same way.
 
 `grid_graph(rows, cols, spacing_m, ...)` builds a lattice at `GRID_ORIGIN` (UTM 10N, near
 downtown Portland): node r * cols + c sits at (x0 + c * spacing, y0 + r * spacing), row 0 the
@@ -20,7 +20,7 @@ It ships in the package so every area's tests can build on it; nothing outside t
 """
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import NamedTuple
 
 import numpy as np
@@ -61,12 +61,15 @@ def make_graph(
     transitions: Sequence[EdgePair] = (),
     crs_epsg: int = 32610,
     lonlat: Sequence[tuple[float, float]] | None = None,
+    brands: Mapping[str, Sequence[int]] | None = None,
 ) -> GraphData:
     """A valid `GraphData` from node coordinates and edges, every other array defaulted.
 
     `twins` pairs edges, each named by its (u, v): the symmetric closure is stored.
     `transitions` lists allowed ((a, v), (v, b)) pairs at node v.
     `lonlat` overrides the inverse projection of the node coordinates.
+    `brands` maps a brand's name to its nodes: ids in name order, no wikidata, one location at
+    each node.
     """
     n = len(nodes)
     xy = np.array(nodes, dtype=np.float64).reshape(n, 2)
@@ -143,6 +146,9 @@ def make_graph(
     allowed = sorted({(int(edge_v[find(i)]), find(i), find(o)) for i, o in transitions})
     trans = np.array(allowed, dtype=np.int32).reshape(len(allowed), 3)
 
+    brand_names = sorted(brands or {})
+    brand_runs = [sorted(set((brands or {})[name])) for name in brand_names]
+
     tier_edge_mask = np.array([edge_tier <= t for t in range(N_TIERS)], dtype=np.bool_)
     tier_node_mask = np.zeros((N_TIERS, n), dtype=np.bool_)
     for t in range(N_TIERS):
@@ -196,7 +202,18 @@ def make_graph(
         tier_node_mask=tier_node_mask,
         tier_edge_mask=tier_edge_mask,
         node_roundabouts=np.zeros(n, dtype=np.uint8),
-        strings=Strings(names=names, refs=refs, identities=identities),
+        brand_indptr=np.concatenate(([0], np.cumsum([len(r) for r in brand_runs]))).astype(
+            np.int64
+        ),
+        brand_nodes=np.array([v for run in brand_runs for v in run], dtype=np.int32),
+        brand_locations=np.ones(sum(map(len, brand_runs)), dtype=np.int32),
+        strings=Strings(
+            names=names,
+            refs=refs,
+            identities=identities,
+            brands=brand_names,
+            brand_wikidata=[None] * len(brand_names),
+        ),
         meta={
             "region": "test",
             "build_id": "test",

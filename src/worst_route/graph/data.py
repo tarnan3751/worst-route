@@ -1,23 +1,26 @@
 """The arrays of one graph build (`docs/reference/graph.md`, **The arrays**).
 
 `GraphData` holds every array of a build as a NumPy array (read-only, and memory-mapped when
-read from disk), plus `strings`, the name, ref and identity tables the edges index into, and
-`meta`. `ARRAY_SPECS` is the format: each array's name, dtype and shape, in the order the build
-lists its files and `graph_version` hashes them. n is the node count, m the edge count, T the
-number of tiers. Edge ids are sorted by (u, v, original order), so each node's out-edges are a
-contiguous run of ascending ids.
+read from disk), plus `strings`, the name, ref and identity tables the edges index into and the
+brand tables the brand ids index into, and `meta`. `ARRAY_SPECS` is the format: each array's
+name, dtype and shape, in the order the build lists its files and `graph_version` hashes them. n
+is the node count, m the edge count, T the number of tiers, b the number of brands. Edge ids are
+sorted by (u, v, original order), so each node's out-edges are a contiguous run of ascending
+ids. Brand k's nodes are `brand_nodes[brand_indptr[k]:brand_indptr[k + 1]]` (`nodes_of_brand`),
+ascending, with the POIs snapped to each in `brand_locations`.
 
 `validate()` checks a build against the format and raises `ValueError` naming the array.
 `deep=False` checks only what is cheap without reading the arrays' contents (dtypes, shapes,
 the meta keys and counts, and `meta["params"]` JSON-native with string keys, so that its JSON,
 which `graph_version` hashes, is the params); that is what `read_build` runs. The default also
 checks contents: indptr runs, id and enum ranges, each original OSM node id a member of one
-node only, the edge order, both adjacency lists, twins symmetric, transitions sorted, and
-roundabout rings counted at super-junctions only.
+node only, the edge order, both adjacency lists, twins symmetric, transitions sorted,
+roundabout rings counted at super-junctions only, and each brand's nodes in range, strictly
+ascending, each with at least one location.
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum, IntFlag
 from typing import Any
 
@@ -49,7 +52,8 @@ class EdgeFlag(IntFlag):
 
 
 # name -> (dtype, shape). Shape symbols: "n" nodes, "m" edges, "k" transition rows (the length
-# of trans_node), "T" tiers, "*" any length; "n+1" and "m+1" for indptr arrays.
+# of trans_node), "T" tiers, "r" brand rows (the length of brand_nodes), "*" any length; "n+1",
+# "m+1" and "b+1" (b brands: the length of strings.brands) for indptr arrays.
 ARRAY_SPECS: dict[str, tuple[np.dtype[Any], tuple[str | int, ...]]] = {
     # nodes
     "node_lon": (np.dtype(np.float64), ("n",)),
@@ -103,6 +107,10 @@ ARRAY_SPECS: dict[str, tuple[np.dtype[Any], tuple[str | int, ...]]] = {
     "tier_edge_mask": (np.dtype(np.bool_), ("T", "m")),
     # collectibles
     "node_roundabouts": (np.dtype(np.uint8), ("n",)),
+    # brands: brand k's nodes, ascending, and the POIs snapped to each
+    "brand_indptr": (np.dtype(np.int64), ("b+1",)),
+    "brand_nodes": (np.dtype(np.int32), ("r",)),
+    "brand_locations": (np.dtype(np.int32), ("r",)),
 }
 
 META_KEYS = (
@@ -120,11 +128,14 @@ META_KEYS = (
 
 @dataclass(frozen=True)
 class Strings:
-    """The string tables `edge_name`, `edge_ref` and `edge_identity` index into (−1 = none)."""
+    """The string tables `edge_name`, `edge_ref` and `edge_identity` index into (−1 = none), and
+    each brand's display name and wikidata id (None when the brand has none), by brand id."""
 
     names: list[str]
     refs: list[str]
     identities: list[str]
+    brands: list[str] = field(default_factory=list)
+    brand_wikidata: list[str | None] = field(default_factory=list)
 
 
 @dataclass(frozen=True, eq=False)
@@ -184,6 +195,11 @@ class GraphData:
     tier_edge_mask: NDArray[np.bool_]
     # collectibles: the roundabout rings each super-junction holds, 0 at every other node
     node_roundabouts: NDArray[np.uint8]
+    # brands: brand k's nodes are brand_nodes[brand_indptr[k]:brand_indptr[k + 1]], ascending;
+    # brand_locations the POIs snapped to each
+    brand_indptr: NDArray[np.int64]
+    brand_nodes: NDArray[np.int32]
+    brand_locations: NDArray[np.int32]
     strings: Strings
     meta: dict[str, Any]
 
@@ -196,6 +212,10 @@ class GraphData:
     def m(self) -> int:
         """The number of edges."""
         return int(self.edge_u.shape[0])
+
+    def nodes_of_brand(self, brand: int) -> NDArray[np.int32]:
+        """Brand `brand`'s nodes, ascending."""
+        return self.brand_nodes[self.brand_indptr[brand] : self.brand_indptr[brand + 1]]
 
     def validate(self, *, deep: bool = True) -> None:
         """Raise `ValueError` if the build breaks the format; `deep=False` skips contents."""
@@ -215,11 +235,14 @@ class GraphData:
         n, m = self.n, self.m
         sizes: dict[str | int, str | int] = {"n": n, "n+1": n + 1, "m": m, "m+1": m + 1}
         sizes.update({"k": len(self.trans_node), "T": N_TIERS, "*": "*", 2: 2})
+        sizes.update({"b+1": len(self.strings.brands) + 1, "r": len(self.brand_nodes)})
         for name, (_, shape) in ARRAY_SPECS.items():
             actual = getattr(self, name).shape
             expected = tuple(sizes[s] for s in shape)
             if any(e not in ("*", a) for e, a in zip(expected, actual, strict=True)):
                 raise ValueError(f"{name}: shape {actual}, expected {expected}")
+        if len(self.strings.brand_wikidata) != len(self.strings.brands):
+            raise ValueError("strings: brand_wikidata must list one entry per brand")
         missing = [key for key in META_KEYS if key not in self.meta]
         if missing:
             raise ValueError(f"meta: missing keys {missing}")
@@ -245,6 +268,7 @@ class GraphData:
         _check_indptr("twin_indptr", self.twin_indptr, len(self.twin_edges), 0)
         _check_indptr("out_indptr", self.out_indptr, m, 0)
         _check_indptr("in_indptr", self.in_indptr, m, 0)
+        _check_indptr("brand_indptr", self.brand_indptr, len(self.brand_nodes), 1)
 
         _check_range("node_kind", self.node_kind, 0, len(NodeKind))
         _check_range("node_state", self.node_state, -1, 1 << 15)
@@ -263,6 +287,8 @@ class GraphData:
         _check_range("trans_node", self.trans_node, 0, n)
         _check_range("trans_in", self.trans_in, 0, m)
         _check_range("trans_out", self.trans_out, 0, m)
+        _check_range("brand_nodes", self.brand_nodes, 0, n)
+        _check_range("brand_locations", self.brand_locations, 1, 1 << 31)
         supers = (self.node_kind == NodeKind.INTERCHANGE) | (self.node_kind == NodeKind.ROUNDABOUT)
         if (self.node_roundabouts[~supers] > 0).any():
             raise ValueError("node_roundabouts: only a super-junction holds roundabout rings")
@@ -294,6 +320,11 @@ class GraphData:
             raise ValueError("twin_edges: each row must be strictly ascending")
         if not np.array_equal(rows * m + cols, np.sort(cols * m + rows)):
             raise ValueError("twin_edges: twins must be symmetric")
+
+        brand_of = np.repeat(np.arange(len(self.brand_indptr) - 1), np.diff(self.brand_indptr))
+        same_brand = brand_of[1:] == brand_of[:-1]
+        if (np.diff(self.brand_nodes.astype(np.int64))[same_brand] <= 0).any():
+            raise ValueError("brand_nodes: each brand's nodes must be strictly ascending")
 
         node, e_in, e_out = self.trans_node, self.trans_in, self.trans_out
         d_node, d_in, d_out = np.diff(node), np.diff(e_in), np.diff(e_out)

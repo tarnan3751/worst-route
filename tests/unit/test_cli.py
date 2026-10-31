@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 
 from worst_route import __version__
 from worst_route.cli import app
-from worst_route.config import settings
+from worst_route.config import PIPELINE_VERSION, settings
 from worst_route.graph.store import write_build
 from worst_route.graph.testing import grid_graph
 
@@ -77,8 +77,9 @@ def test_serve_on_a_build_saved_before_an_array_existed_is_one_line(
     settings.cache_clear()
     assert result.exit_code == 1
     assert result.stderr == (
-        f"the build at {path} was written by pipeline 1 (now 2): rebuild the region with "
-        "`worst-route pipeline filter --region portland` and the steps after it\n"
+        f"the build at {path} was written by pipeline 1 (now {PIPELINE_VERSION}): "
+        "rebuild the region with `worst-route pipeline filter --region portland` and the steps "
+        "after it\n"
     )
 
 

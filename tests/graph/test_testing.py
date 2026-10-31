@@ -170,3 +170,16 @@ def test_arrays_are_read_only() -> None:
         g.edge_length_m[0] = 1.0
     with pytest.raises(ValueError, match="read-only"):
         g.tier_node_mask[0, 0] = True
+
+
+def test_brands_in_name_order_with_their_nodes_ascending() -> None:
+    nodes = [(0.0, 0.0), (100.0, 0.0), (200.0, 0.0)]
+    g = make_graph(nodes, [(0, 1, 100.0), (1, 2, 100.0)], brands={"Zed": [2, 0, 2], "Acme": [1]})
+    assert g.strings.brands == ["Acme", "Zed"]
+    assert g.strings.brand_wikidata == [None, None]
+    assert g.brand_indptr.tolist() == [0, 1, 3]
+    assert g.brand_nodes.tolist() == [1, 0, 2]
+    assert g.brand_locations.tolist() == [1, 1, 1]
+    plain = make_graph(nodes, [(0, 1, 100.0), (1, 2, 100.0)])
+    assert (plain.brand_indptr.tolist(), plain.brand_nodes.tolist()) == ([0], [])
+    assert plain.strings.brands == [] and plain.meta["graph_version"] != g.meta["graph_version"]

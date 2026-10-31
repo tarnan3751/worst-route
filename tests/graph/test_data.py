@@ -11,12 +11,14 @@ from worst_route.graph.testing import make_graph
 
 # A square of two-way streets: edge ids after the (u, v) sort are
 # 0: 0→1, 1: 0→3, 2: 1→0, 3: 1→2, 4: 2→1, 5: 2→3, 6: 3→0, 7: 3→2.
+# Two brands: 0 Acme at nodes 0 and 2, 1 Zed at nodes 1, 2 and 3.
 SQUARE = make_graph(
     [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)],
     [(a, b, 100.0) for a, b in [(0, 1), (1, 2), (2, 3), (3, 0)]]
     + [(b, a, 100.0) for a, b in [(0, 1), (1, 2), (2, 3), (3, 0)]],
     twins=[((0, 1), (2, 3)), ((1, 0), (3, 2))],
     transitions=[((2, 1), (1, 0)), ((0, 1), (1, 2))],
+    brands={"Zed": [3, 1, 2], "Acme": [2, 0]},
 )
 
 
@@ -40,6 +42,10 @@ def setitem(index: Any, value: Any) -> Callable[[np.ndarray], None]:
 
 def with_params(g: GraphData, params: Any) -> GraphData:
     return replace(g, meta={**g.meta, "params": params})
+
+
+def with_brand_strings(g: GraphData, brands: list[str], wikidata: list[str | None]) -> GraphData:
+    return replace(g, strings=replace(g.strings, brands=brands, brand_wikidata=wikidata))
 
 
 MALFORMED: list[tuple[str, Callable[[GraphData], GraphData], str]] = [
@@ -133,10 +139,29 @@ MALFORMED: list[tuple[str, Callable[[GraphData], GraphData], str]] = [
     ("transition out order", edited("trans_in", setitem(1, 0)), "rows must be strictly"),
     ("transition elsewhere", edited("trans_out", setitem(0, 0)), "do not meet at its node"),
     ("ring at a plain node", edited("node_roundabouts", setitem(0, 1)), "node_roundabouts"),
+    ("brand count", lambda g: with_brand_strings(g, ["Acme"], [None]), "brand_indptr: shape"),
+    ("brand wikidata", lambda g: with_brand_strings(g, ["Acme", "Zed"], [None]), "brand_wikidata"),
+    ("brand rows", edited("brand_locations", lambda a: a[:-1]), "brand_locations: shape"),
+    (
+        "brand run end",
+        lambda g: replace(
+            g, brand_nodes=g.brand_nodes[:-1], brand_locations=g.brand_locations[:-1]
+        ),
+        "brand_indptr: must run",
+    ),
+    ("brand without a node", edited("brand_indptr", setitem(1, 0)), "brand_indptr: every run"),
+    ("brand node range", edited("brand_nodes", setitem(0, 4)), "brand_nodes: values"),
+    ("brand node order", edited("brand_nodes", setitem([2, 3], [2, 1])), "strictly ascending"),
+    ("brand node twice", edited("brand_nodes", setitem(3, 1)), "strictly ascending"),
+    ("brand location", edited("brand_locations", setitem(0, 0)), "brand_locations: values"),
 ]
 
 
 def test_square_is_as_documented() -> None:
+    assert SQUARE.strings.brands == ["Acme", "Zed"]
+    assert SQUARE.brand_indptr.tolist() == [0, 2, 5]
+    assert SQUARE.brand_nodes.tolist() == [0, 2, 1, 2, 3]
+    assert SQUARE.nodes_of_brand(1).tolist() == [1, 2, 3]
     pairs = list(zip(SQUARE.edge_u.tolist(), SQUARE.edge_v.tolist(), strict=True))
     assert pairs == [(0, 1), (0, 3), (1, 0), (1, 2), (2, 1), (2, 3), (3, 0), (3, 2)]
     assert SQUARE.twin_indptr.tolist() == [0, 1, 1, 2, 2, 2, 3, 3, 4]

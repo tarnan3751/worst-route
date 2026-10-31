@@ -3,7 +3,8 @@
 One directory per build, `data/graphs/<region>/<build_id>/`:
 
     meta.json           GraphData.meta, with graph_version filled in
-    strings.json        {"names": [...], "refs": [...], "identities": [...]}
+    strings.json        {"names": [...], "refs": [...], "identities": [...], "brands": [...],
+                         "brand_wikidata": [...]}
     arrays/<name>.npy   one file per ARRAY_SPECS entry, written by np.save without pickles
 
 `write_build(data, path)` validates the build and writes it into the build directory `path`,
@@ -114,7 +115,11 @@ def read_build(path: Path, mmap: bool = True) -> GraphData:
     data = GraphData(
         **arrays,
         strings=Strings(
-            names=strings["names"], refs=strings["refs"], identities=strings["identities"]
+            names=strings["names"],
+            refs=strings["refs"],
+            identities=strings["identities"],
+            brands=strings["brands"],
+            brand_wikidata=strings["brand_wikidata"],
         ),
         meta=meta,
     )
@@ -123,5 +128,11 @@ def read_build(path: Path, mmap: bool = True) -> GraphData:
 
 
 def _strings_json(strings: Strings) -> bytes:
-    tables = {"names": strings.names, "refs": strings.refs, "identities": strings.identities}
+    tables = {
+        "names": strings.names,
+        "refs": strings.refs,
+        "identities": strings.identities,
+        "brands": strings.brands,
+        "brand_wikidata": strings.brand_wikidata,
+    }
     return json.dumps(tables, ensure_ascii=False, separators=(",", ":")).encode("utf-8")

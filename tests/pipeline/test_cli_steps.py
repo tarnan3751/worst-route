@@ -335,11 +335,14 @@ def test_enrich_after_cleanup(data_dir: Path) -> None:
         "traffic_signals: 1 found, 1 at junctions (a delay), 0 shape points (none), "
         "0 off the graph",
         "nodes: 2 with a delay, 36 of 36 pass-through",
+        "brands: 2 POIs, 2 snapped, 0 skipped at dead ends, 0 too far; 0 of 2 brands kept, 0 "
+        "brand-node rows on 0 nodes",
     ]
     assert json.loads((stages / "enrich.json").read_text())["units"] == 60
     sidecar = json.loads((stages / "enrich.pkl.inputs.json").read_text())
     assert [i["file"] for i in sidecar["inputs"]] == ["cleanup.pkl", "portland.pois.parquet"]
     assert sidecar["params"]["config"]["BEARING_SAMPLE_M"] == 20.0
+    assert sidecar["params"]["config"]["BRAND_SNAP_M"] == 100.0
 
 
 def test_enrich_skips_unless_forced_or_changed(data_dir: Path) -> None:
@@ -716,8 +719,9 @@ def test_a_build_another_pipeline_wrote_names_the_rebuild(data_dir: Path) -> Non
     (directory / "meta.json").write_text(json.dumps({**meta, "pipeline_version": "1"}))
     (directory / "arrays" / "node_roundabouts.npy").unlink()
     line = (
-        f"the build at {directory} was written by pipeline 1 (now 2): rebuild the region with "
-        "`worst-route pipeline filter --region portland` and the steps after it\n"
+        f"the build at {directory} was written by pipeline 1 (now {PIPELINE_VERSION}): "
+        "rebuild the region with `worst-route pipeline filter --region portland` and the steps "
+        "after it\n"
     )
     for step in ("save", "qa"):
         result = runner.invoke(app, ["pipeline", step, "--region", "portland"])

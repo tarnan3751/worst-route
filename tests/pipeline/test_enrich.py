@@ -7,10 +7,19 @@ import networkx as nx
 import pytest
 import shapely
 
-from tests.pipeline.chain import FIXTURES, cleaned, node_of, poi_table, pois_of
+from tests.pipeline.chain import (
+    FIXTURES,
+    brand_pois,
+    cleaned,
+    east_of,
+    node_of,
+    poi_table,
+    pois_of,
+)
 from tests.pipeline.osm import write_osm
 from worst_route.graph.backend import TURN_CLASS, TURN_LEFT, TURN_STRAIGHT
 from worst_route.graph.data import EdgeFlag
+from worst_route.pipeline import enrich
 from worst_route.pipeline.enrich import (
     KMH_PER_MPH,
     bearings,
@@ -332,3 +341,92 @@ def test_parameters_are_json() -> None:
     assert json.loads(json.dumps(values)) == values
     assert values["SPEED_DEFAULT_MPH"]["alley"] == 10.0
     assert values["NODE_DELAY_S"] == {"stop": 10.0, "traffic_signals": 30.0}
+    assert (values["BRAND_SNAP_M"], values["BRAND_MIN_LOCATIONS"]) == (100.0, 3)
+
+
+def test_brands_are_grouped_by_wikidata_else_by_their_name() -> None:
+    graph = cleaned(FIXTURES / "grid.osm")
+    rows = [
+        (0, 5.0, "Acme", "Q1", None),
+        (1, 5.0, "Acme", "Q1", None),
+        (2, 5.0, "ACME", "Q1", None),
+        (2, -5.0, None, "Q1", "Acme Store"),  # no spelling; a second POI at node 2
+        (3, 5.0, "Acme", None, None),  # no wikidata: another brand, though spelled the same
+        (4, 5.0, "acme", None, None),
+        (5, 5.0, " Acme ", None, None),
+        (0, -5.0, "Plaid Pantry", None, None),  # beside Acme: two brands at one node
+        (7, 5.0, "plaid  PANTRY", None, None),
+        (8, 5.0, "Plaid Pantry", None, None),
+        (9, 5.0, None, "Q9", "Zed's"),  # no spelling: named by its most common name
+        (10, 5.0, None, "Q9", "Zed's"),
+        (11, 5.0, None, "Q9", None),
+        (12, 5.0, None, "Q8", None),  # neither: named by its wikidata id
+        (13, 5.0, None, "Q8", None),
+        (14, 5.0, None, "Q8", None),
+        (15, 5.0, "Two Spot", None, None),  # three POIs on two nodes: left out
+        (15, -5.0, "Two Spot", None, None),
+        (16, 5.0, "Two Spot", None, None),
+        (17, 5.0, "", None, None),  # an empty brand tag names no brand
+        (18, 5.0, "  ", None, None),
+        (19, 5.0, "", None, "Corner Store"),
+    ]
+    pois = brand_pois([(*east_of(graph, node, dx), *tags) for node, dx, *tags in rows])
+    report = run_enrich(graph, pois)
+    assert graph.graph["brands"] == [
+        ("Acme", None, [(3, 1), (4, 1), (5, 1)]),
+        ("Acme", "Q1", [(0, 1), (1, 1), (2, 2)]),
+        ("Plaid Pantry", None, [(0, 1), (7, 1), (8, 1)]),
+        ("Q8", "Q8", [(12, 1), (13, 1), (14, 1)]),
+        ("Zed's", "Q9", [(9, 1), (10, 1), (11, 1)]),
+    ]
+    assert report.brands == {
+        "found": 22,
+        "snapped": 22,
+        "at_dead_ends": 0,
+        "too_far": 0,
+        "brands": 6,
+        "kept": 5,
+        "rows": 15,
+        "nodes": 14,
+    }
+
+
+def test_a_brand_poi_snaps_within_100_m_to_a_node_a_route_can_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(enrich, "BRAND_MIN_LOCATIONS", 1)
+    grid = cleaned(FIXTURES / "grid.osm")
+    corner = min(grid.nodes, key=lambda v: (grid.nodes[v]["x"], grid.nodes[v]["y"]))
+    near, far = east_of(grid, corner, -99.0), east_of(grid, corner, -101.0)
+    report = run_enrich(grid, brand_pois([(*near, "Near", None, None), (*far, "Far", None, None)]))
+    assert grid.graph["brands"] == [("Near", None, [(corner, 1)])]
+    assert (report.brands["snapped"], report.brands["too_far"]) == (1, 1)
+
+    # Clinton Ct runs 111 m north from Clinton St (OSM node 3) to its cul-de-sac end (7).
+    culdesac = cleaned(FIXTURES / "culdesac.osm")
+    rows = [
+        (-122.6430, 45.5612, "Kiosk", None, None),  # 22 m from the end, 133 m from node 3
+        (-122.6430, 45.5606, "Shop", None, None),  # 44 m from the end, 67 m from node 3
+        (-122.6430, 45.5640, "Shop", None, None),  # 333 m from the end
+    ]
+    report = run_enrich(culdesac, brand_pois(rows))
+    assert culdesac.graph["brands"] == [("Shop", None, [(node_of(culdesac, 3), 1)])]
+    assert report.brands == {
+        "found": 3,
+        "snapped": 1,
+        "at_dead_ends": 1,
+        "too_far": 1,
+        "brands": 2,
+        "kept": 1,
+        "rows": 1,
+        "nodes": 1,
+    }
+
+
+def test_no_brand_pois_index_no_brands() -> None:
+    graph = cleaned(FIXTURES / "grid.osm")
+    report = run_enrich(graph, NO_POIS)
+    assert graph.graph["brands"] == []
+    assert report.brands == dict.fromkeys(
+        ("found", "snapped", "at_dead_ends", "too_far", "brands", "kept", "rows", "nodes"), 0
+    )

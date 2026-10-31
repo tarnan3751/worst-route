@@ -76,7 +76,7 @@ report beside it in `qa/`.
   | 2 | M3: `enrich`'s bearings leave out cleanup's stubs; `save` writes `node_roundabouts` | 506f747d7458 (ae1ce1e8289b) |
   | 3 | M3: `enrich` indexes the brands, `save` writes them as arrays | ffe2e7c881ca (8867636799a6) |
   | 4 | M5: stage A places each cluster from its own buffers, not from OSMnx's union of every buffer (**cleanup**, step 2) | 4b8998deee9f (57e5deb43289) |
-  | 5 | M5: stage B joins two clusters a carriageway leaves and comes back to, and its pockets follow a road by its name as well as its refs (**cleanup**, step 4). With them came the drop of a super-junction with edges in and out that allows no turn through it (step 4, No turn allowed), which needed no version of its own: no build that saved had one (`save` refuses them), so it changes no array of Portland's or Oregon's | c60bc0c9cb4a (0d4338234cae), under the connectivity rule of M5.1 |
+  | 5 | M5: stage B joins two clusters a carriageway leaves and comes back to, and its pockets follow a road by its name as well as its refs (**cleanup**, step 4). With them came the drop of a super-junction left with edges in and out and no allowed turn after connectivity (step 5), which needed no version of its own: no build that saved had one (`save` refuses them), so it changes no array of Portland's or Oregon's (Portland's `cleanup.pkl` is byte-identical with and without it) | c60bc0c9cb4a (0d4338234cae), under the connectivity rule of M5.1 |
   | 6 | M5: `save` writes the compact format (format 4: the speed table; no lon/lat, way ids, OSM node runs, states or shapes among the arrays; the shapes simplified into `geometry/`; `docs/reference/graph.md`) | 3a4a3df6269f (04d2e06854dd) |
 
   Rows 1–4 were measured on Geofabrik's Oregon extract of 2026-10-28, rows from 5 on on that of
@@ -392,18 +392,6 @@ twice.
      the out-edge's original start (the same node counts). A full cloverleaf or diamond allows
      every pair, U-turns included (two loops, or off, across and back on); a half-diamond does
      not. Route splicing enforces them from M1.
-   - **No turn allowed:** a super-junction with edges in and out whose table is empty is
-     dropped, with its boundary edges, and has no record: no route can pass through it,
-     connectivity (which does not read the tables) would keep it, and a build cannot say so (a
-     node without transition rows allows every turn). It happens where a region's edge cuts an
-     interchange whose interior lies beyond the extracts: I-90 at the Washington–Idaho line
-     (State Line, 47.6968, −117.0417) in the build of Oregon and Washington enters from the
-     west on one carriageway and leaves on the other, the junction between them in Idaho.
-     Connectivity then drops the stubs left at its neighbours. A super-junction without edges in
-     or out (a ramp chain touching no other road) allows no pair either and keeps its record;
-     connectivity drops it as it is. Portland and Oregon have none of the first kind, so their
-     builds are unchanged; the report counts them (`dropped_empty`) and the CLI's stage B line
-     adds "N dropped with no allowed turn" when there are any.
    - **Twins carried across** (`_carry_twins`): an edge that stays maps to itself. An edge
      internal to a super-node maps to the super-node's boundary edges on the same road (equal
      signature) along its own carriageway: the in-edges from which that road leads to it through
@@ -439,6 +427,22 @@ twice.
    component is the check for the first, and the share (0.99 until the Oregon build, **Oregon**)
    for a filtering rule that fragments everything. The kept nodes are numbered `0..n-1` again, in
    the same order.
+   - **No turn allowed:** connectivity does not read the turn tables, and dropping an edge
+     drops the transitions that name it, so a super-junction can be left with edges in and out
+     and no allowed pair between them. No route can pass through it, and a build cannot say so
+     (a node without transition rows allows every turn), so `run_cleanup` drops it with its
+     edges, runs connectivity again on what is left, and repeats until none remains. It happens
+     where a region's edge cuts an interchange whose interior lies beyond the extracts: I-90 at
+     the Washington–Idaho line (State Line, 47.6968, −117.0417) in the build of Oregon and
+     Washington allowed the straight-through pairs at stage B, each through a stub beyond the
+     line; once connectivity dropped the stubs, eastbound arriving from the west and westbound
+     leaving to it had no pair left between them. A super-junction without edges in or out (a
+     ramp chain touching no other road) allows no pair either, but connectivity drops it as it
+     is. The report adds the rounds up: nodes, edges, length and components dropped, the largest
+     dropped components, `retained` against the stage B graph, and `dropped_no_turn`, the
+     super-junctions dropped this way; the thresholds apply to the sums. The CLI's connectivity
+     line adds ", N super-junctions dropped with no allowed turn" when there are any. Portland
+     and Oregon have none, so their builds are unchanged.
 
 **The stage file.** `stages/cleanup.pkl` is the cleaned `MultiDiGraph`:
 
@@ -455,11 +459,10 @@ twice.
   edge's attributes plus `u`, `v`: the smallest OSM id of the part at each end), `roundabouts`
   (the number of roundabout rings among its internal edges, so an interchange that holds a
   dumbbell's ring still counts it) and `transitions` (sorted `((u, v, key), (u, v, key))`
-  pairs; present for every super-node, and empty only for one without edges in or out, since
-  stage B drops one with both that allows no pair; connectivity drops the first kind).
-  `GraphData` reads a node without transition rows as allowing every pair and cannot express an
-  empty table, so `save` still refuses a build that has a super-node whose table is empty, as a
-  guard.
+  pairs; present for every super-node, never empty after cleanup: connectivity drops one
+  without edges in or out, and step 5 one left with both and no pair). `GraphData` reads a node
+  without transition rows as allowing every pair and cannot express an empty table, so `save`
+  still refuses a build that has a super-node whose table is empty, as a guard.
 - `G.graph["twins"]`: edge key → sorted tuple of its twins' keys, for every edge with one.
 
 **Lengths through junctions.** An edge at a cluster or super-node has its geometry extended to
@@ -485,13 +488,13 @@ among its internal edges. These are what the validator's proof from original ids
 `coverage`: the share of one-way motorway and trunk length with a twin, the QA metric);
 `stage_b` (`superjunctions` by kind, `sizes`: nodes replaced → super-nodes, `joined`,
 `rejoined`: joins made along a carriageway, `slip_centres`, `pocket_nodes`, `split`,
-`dropped_empty`: super-junctions with edges in and out dropped for allowing no turn between
-them, `internal_edges`, `twin_pairs` carried across,
+`internal_edges`, `twin_pairs` carried across,
 `twin_transitions`: transitions that must drive an internal edge with a twin outside,
 `twin_passages`: passages banned for driving both edges of a twin pair inside, `nodes`,
 `edges`); `connectivity` (nodes and edges before and after, dropped nodes, edges and length, a
 two-way road counted once, the number of dropped components and the 20 largest with their size,
-length and centroid, `retained`); `seconds` per step.
+length and centroid, `retained`, `dropped_no_turn`: the super-junctions dropped for allowing no
+turn, the rounds after them added in); `seconds` per step.
 
 **Portland, for scale** (the 2026-10-30 extract; about 30–110 s depending on the machine's load,
 most of it stage A): simplify drops 267 self-loops and removes 12,833 nodes; stage A merges 9,771
@@ -659,8 +662,8 @@ build c60bc0c9cb4a: 1,331, 5,169, 11,663, 20,173 of 20,184 and 65,779).
 
 A super-node whose transition table is empty allows no turn through it, which the format cannot
 say (a node without rows allows every turn): `graph_data` raises `EmptyTransitionsError`, naming
-the node and its position, and the CLI exits 1. It is a guard: stage B drops such super-nodes
-(**cleanup**, step 4).
+the node and its position, and the CLI exits 1. It is a guard: cleanup drops such super-nodes
+(**cleanup**, step 5).
 
 The validator proves a route passes no original OSM node twice from the nodes' members alone
 (`docs/reference/engine.md`, `osm_ids`), which rests on what lies along the edges, kept in the

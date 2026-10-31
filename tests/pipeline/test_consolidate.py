@@ -974,49 +974,6 @@ def test_roundabouts_are_counted(tmp_path: Path) -> None:
     assert (record["kind"], record["roundabouts"]) == ("interchange", 1)
 
 
-def cut_interchange(tmp_path: Path) -> Path:
-    """I 90 cut by a region's edge at an interchange whose interior lies beyond the extracts: the
-    eastbound carriageway ends at its on-ramp's merge (3), the westbound starts at its on-ramp's
-    merge (4), and both ramps come from the cross road's terminal (8), whose road is outside. A
-    street joins the carriageways' west ends (1, 6). No path inside the interchange leads from
-    where eastbound arrives to where westbound leaves, so it allows no turn through it."""
-    return write_osm(
-        tmp_path / "cut.osm",
-        {
-            1: (-900, 15),
-            2: (-400, 15),
-            3: (0, 15),
-            4: (0, -15),
-            5: (-400, -15),
-            6: (-900, -15),
-            7: (-950, 0),
-            8: (300, 0),
-        },  # fmt: skip
-        [
-            (1, [1, 2, 3], {"highway": "motorway", "ref": "I 90", "oneway": "yes"}),
-            (2, [4, 5, 6], {"highway": "motorway", "ref": "I 90", "oneway": "yes"}),
-            (3, [6, 7, 1], {"highway": "residential", "name": "Stateline Rd"}),
-            (4, [8, 3], {"highway": "motorway_link"}),
-            (5, [8, 4], {"highway": "motorway_link"}),
-        ],
-    )
-
-
-def test_a_super_junction_allowing_no_turn_is_dropped(tmp_path: Path) -> None:
-    _, merged, _ = through_a(cut_interchange(tmp_path))
-    find_twins(merged)
-    assert merged.graph["twins"]  # the carriageways are twins
-    graph, stats = stage_b(merged)
-    assert stats.dropped_empty == 1
-    assert stats.superjunctions == {"interchange": 0, "roundabout": 0}
-    assert (stats.internal_edges, stats.twin_pairs) == (0, 0)
-    assert supers(graph) == {} and graph.graph["twins"] == {}  # its boundary edges went with it
-    assert sorted(m for _, members in graph.nodes(data="members") for m in members) == [1, 6]
-    street = {d["osm_nodes"]: d for _, _, d in merged.edges(data=True) if "name" in d}
-    assert {d["osm_nodes"]: d for _, _, d in graph.edges(data=True)} == street  # as it was
-    assert list(graph.nodes) == [0, 1]
-
-
 def test_stage_b_numbers_the_nodes() -> None:
     _, graph = through_b("diamond")
     assert list(graph.nodes) == list(range(7))

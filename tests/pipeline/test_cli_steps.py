@@ -16,7 +16,7 @@ import pytest
 from typer.testing import CliRunner
 
 from tests.pipeline.invariants import check_build
-from tests.pipeline.test_consolidate import cut_interchange
+from tests.pipeline.test_cleanup import cut_interchange
 from worst_route.cli import app
 from worst_route.config import REGIONS
 from worst_route.graph.store import read_build
@@ -268,17 +268,17 @@ def test_cleanup_after_build(data_dir: Path) -> None:
     assert sidecar["params"]["config"]["STAGE_B_JOIN_M"] == 500.0
 
 
-def test_cleanup_names_the_super_junctions_dropped_with_no_allowed_turn(
+def test_cleanup_counts_the_super_junctions_dropped_with_no_allowed_turn(
     data_dir: Path, tmp_path: Path
 ) -> None:
     source = str(cut_interchange(tmp_path))
     assert pipeline("build", "--region", "portland", "--source", source, "--build-id", "b1")[0] == 0
-    code, output = pipeline("cleanup", "--region", "portland")
+    code, output = pipeline("cleanup", "--region", "portland", "--allow-fragmented")
     assert code == 0, output
-    assert (
-        "stage B: 0 super-junctions (interchange 0, roundabout 0), 0 internal edges, "
-        "0 twin pairs carried, 0 joins along a carriageway, 1 dropped with no allowed turn"
-    ) in output.splitlines()
+    lines = output.splitlines()
+    assert lines[4].startswith("stage B: 1 super-junctions (interchange 1, roundabout 0)")
+    assert lines[5].startswith("connectivity: kept 2 of ")
+    assert lines[5].endswith(" components, 1 super-junctions dropped with no allowed turn")
 
 
 def test_cleanup_skips_unless_forced(data_dir: Path) -> None:

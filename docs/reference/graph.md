@@ -79,8 +79,8 @@ differ from the pipeline's by at most 2e-14 degrees on Portland, the same at 7 d
 every node. Stored the other way round, x/y derived from lon/lat would move the merged nodes'
 x/y by up to 2e-9 m, enough to change three of the golden routes on the lattice.
 
-A node with no transition rows allows every pair, so an empty table cannot be written: stage B
-drops a super-junction with edges in and out whose table would be empty (no pair allowed),
+A node with no transition rows allows every pair, so an empty table cannot be written: cleanup
+drops a super-junction left with edges in and out and no pair allowed after connectivity, and
 connectivity drops one without, and `save` refuses a build that has one, as a guard
 (`docs/reference/pipeline.md`, **cleanup**).
 

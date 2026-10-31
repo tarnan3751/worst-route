@@ -57,14 +57,9 @@ members of each node it replaced), `internal` (each internal edge's attributes p
 the smallest OSM id of the part at each end), `roundabouts` (the roundabout rings among its
 internal edges) and `transitions`, the sorted `(in_edge, out_edge)` pairs, edges keyed `(u, v,
 key)`, for which a directed path through the internal edges leads from the in-edge's end to the
-out-edge's start (the same node counts). Route splicing enforces them. A super-junction with
-edges in and out that allows no pair between them is dropped, with its boundary edges, and has
-no entry: no route can pass through it, connectivity cannot see that, and a build cannot say so
-(a node without transition rows allows every turn). It happens where a region's edge cuts an
-interchange, its interior continuing beyond the extracts (I-90 at the Washington-Idaho line, in
-a build of Oregon and Washington); connectivity then drops the stubs left at its neighbours. One
-without edges in or out allows no pair either and keeps its entry: connectivity drops it as it
-is, since no route reaches it or leaves it.
+out-edge's start (the same node counts). Route splicing enforces them; every super-node has the
+entry, even when no pair is allowed (cleanup drops one left with edges in and out and no pair,
+after connectivity: `cleanup.py`).
 
 Twins (`carriageways.find_twins`) are found on the stage A graph, so a carriageway stretch that
 stage B makes internal still has its twins; `stage_b` carries the table across (`_carry_twins`).
@@ -156,7 +151,6 @@ class StageBStats:
     slip_centres: int = 0  # slip-lane clusters that took in the node they bypass
     pocket_nodes: int = 0  # nodes taken in as pockets
     split: int = 0  # clusters split by the diameter guard
-    dropped_empty: int = 0  # super-junctions with edges in and out that allow no turn between
     internal_edges: int = 0
     twin_pairs: int = 0  # unordered twin pairs carried across
     twin_transitions: int = 0  # transitions that must drive an internal edge with a twin outside
@@ -384,7 +378,6 @@ def stage_b(graph: nx.MultiDiGraph) -> tuple[nx.MultiDiGraph, StageBStats]:
         new_key[u, v, k] = (nu, nv, result.add_edge(nu, nv, **attributes))
 
     superjunctions = {}
-    empty: set[int] = set()
     sizes: Counter[int] = Counter()
     kinds: Counter[str] = Counter()
     for i, (nodes, kind) in enumerate(supers):
@@ -402,9 +395,6 @@ def stage_b(graph: nx.MultiDiGraph) -> tuple[nx.MultiDiGraph, StageBStats]:
             for out, tail in outs[i]
             if tail in reach[head]
         )
-        if not transitions and ins[i] and outs[i]:  # no route passes it: dropped below
-            empty.add(base + i)
-            continue
         result.nodes[base + i]["members"] = tuple(sorted(members))
         superjunctions[base + i] = {
             "kind": kind,
@@ -422,12 +412,10 @@ def stage_b(graph: nx.MultiDiGraph) -> tuple[nx.MultiDiGraph, StageBStats]:
         result.graph["twins"], stats.twin_transitions, stats.twin_passages = _carry_twins(
             graph, internal, ins, outs, new_key, signature
         )
+        stats.twin_pairs = sum(map(len, result.graph["twins"].values())) // 2
     stats.superjunctions = {kind: kinds[kind] for kind in sorted(SUPER_KINDS)}
     stats.sizes = dict(sorted(sizes.items()))
-    stats.dropped_empty = len(empty)
-    relabelled = relabel(result, [node for node in result if node not in empty])
-    if "twins" in relabelled.graph:
-        stats.twin_pairs = sum(map(len, relabelled.graph["twins"].values())) // 2
+    relabelled = relabel(result)
     stats.nodes = relabelled.number_of_nodes()
     stats.edges = relabelled.number_of_edges()
     return relabelled, stats

@@ -45,7 +45,7 @@ def test_portland_report(stages: Stages) -> None:
     assert report["connectivity"]["retained"] >= SCC_MIN_RETAINED
     assert report["connectivity"]["largest_dropped"][0]["nodes"] <= SCC_MAX_DROPPED_NODES
     assert report["connectivity"]["nodes_after"] == graph.number_of_nodes()
-    assert report["stage_b"].get("dropped_empty", 0) == 0  # a report before the field has none
+    assert report["connectivity"].get("dropped_no_turn", 0) == 0  # none in a report before it
     made = sum(report["stage_b"]["superjunctions"].values())
     assert 0 < len(graph.graph["superjunctions"]) <= made  # some lie in dropped components
 

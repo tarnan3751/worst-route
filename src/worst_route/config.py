@@ -186,6 +186,10 @@ SEED_PENALTY_FACTOR = 8.0
 # A seed leg or a detour's search whose path drives an edge and one of its twins bans the later
 # of the two and searches again, up to TWIN_RESEARCH_ROUNDS times (`engine/search.py`).
 TWIN_RESEARCH_ROUNDS = 8
+# A search whose cheapest legal walk enters a node twice (a turn table can make it a loop round a
+# block) bans the edge entering that node the second time and searches again, up to
+# SIMPLE_RETRY_ROUNDS times (`engine/search.py`); then there is no path.
+SIMPLE_RETRY_ROUNDS = 8
 # Under hard mode a seed whose legs come back to a road they left re-solves a leg with that road
 # banned but for one of its stretches, up to HARD_SEED_ROUNDS times (`engine/seed_route.py`; on
 # Portland's acceptance pairs 4 rounds at most were needed).

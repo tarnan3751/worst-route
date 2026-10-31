@@ -88,15 +88,29 @@ def test_a_soft_no_left_route_keeps_left_turns_rare_on_portland(portland: GraphD
     assert route.metrics.length_m > 5 * result.baseline.length_m
 
 
-def test_strict_no_left_refuses_powells_to_reed_in_one_line(portland: GraphData) -> None:
+def test_strict_no_left_plans_powells_to_reed(portland: GraphData) -> None:
+    # refused until engine version 4 searched again for a node-simple path; on build
+    # 3a4a3df6269f, seed 1: Reed moved 214 m by the stops' fallback, 1.86x with no left turn and
+    # no U-turn, converged after 2,320 attempts
     request = RouteRequest(
-        stops=[POWELLS, REED], seed=1, constraints=Constraints(no_left=True, strict=True)
+        stops=[POWELLS, REED], seed=1, budget_s=120, max_iterations=4000,
+        constraints=Constraints(no_left=True, strict=True),
+    )  # fmt: skip
+    result = plan_route(portland, request)
+    assert result.report.ok and result.report.check("constraints").ok
+    turns = count_turns(portland, result.route.edges)
+    assert turns["left"] == 0 and turns["u_turn"] == 0
+
+
+def test_strict_no_right_refuses_powells_to_reed_in_one_line(portland: GraphData) -> None:
+    request = RouteRequest(
+        stops=[POWELLS, REED], seed=1, constraints=Constraints(no_right=True, strict=True)
     )
     with pytest.raises(InfeasibleTurnConstraint) as refused:
         plan_route(portland, request)
     message = str(refused.value)
-    assert "\n" not in message and message.endswith("under the strict no-left constraint")
-    assert refused.value.constraint == "no_left"
+    assert "\n" not in message and message.endswith("under the strict no-right constraint")
+    assert refused.value.constraint == "no_right"
 
 
 def test_hard_mode_keeps_each_road_one_stretch_on_portland(portland: GraphData) -> None:

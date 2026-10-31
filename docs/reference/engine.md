@@ -159,8 +159,16 @@ ignored: every backend gives the same paths there, byte for byte, and the routes
 (the test lattices, the golden route) are what they were before the tables were searched.
 
 The transition-aware search answers the cheapest legal walk, which may pass a node twice (a
-table can make the cheapest legal way a loop round a block); such a walk is illegal for a route,
-so `shortest_path` answers None for it, and the caller's fallback applies as for no path at all.
+table can make the cheapest legal way a loop round a block); such a walk is illegal for a route.
+So `shortest_path` makes the search again with one more edge banned, the one by which the walk
+first comes back to a node it has passed (the node stays passable, by its other ways in), the
+bans adding up, up to `SIMPLE_RETRY_ROUNDS` (8) times; then there is no path, and the caller's
+fallback applies as for no path at all. The bans depend only on the walks found, so this is
+deterministic, and the same on both backends, which answer the same walks. It is a heuristic: a
+node-simple path that drives a banned edge is missed. On every pair of nodes of two 4 × 5
+lattices whose junctions each allow a random 60% of their turns (`test_search.py`), 107 cheapest
+walks loop where a legal simple path exists: searching again finds one for 66 (48 longer than
+the walk), and misses 41. The baseline does not search again (**Seed and baseline**).
 
 **Turn classes.** `shortest_path` and `simple_paths` take `banned_turn_classes` and
 `avoided_turn_classes` (sets of class bits, **Turns**), which `find_detour` passes from the
@@ -184,7 +192,9 @@ between consecutive stops, within the request's masks and nothing else, concaten
 may share nodes. It is the denominator of the ratio. Each leg turns only where the tables allow,
 independently of the leg before it (no entry edge at a via), so the baseline is never longer
 than the seed; a leg whose cheapest legal path would pass a node twice is the turn-blind
-shortest path instead, a lower bound, so the baseline exists whenever the seed does.
+shortest path instead, a lower bound, so the baseline exists whenever the seed does. It does not
+search again for a node-simple path (`shortest_path(..., simple_retry=False)`; **Searches**),
+which could be longer than the seed's.
 
 **Settling the stops** (`resolve_stops(data, spatial, backend, request, masks)`) comes first:
 the stops are snapped, and when the seed cannot be built they fall back (step 4 below). It is
@@ -430,17 +440,20 @@ avoided turn (**Targets**).
 **Why strict is rarely satisfiable.** On a street grid a net left turn without left turns is
 three rights round a block, which comes back through the junction it left, and no junction may
 repeat; a node-simple way must spiral outward round the trip's own start, mostly beyond the
-leash, and the cheapest walk the edge-state search finds then loops, which is no path
-(**Searches**).
-On Portland, strict no-left plans 4 of the 20 acceptance pairs and strict no-right 3 (the
-others fail at the seed, after the stops' fallback), and Powell's → Reed refuses (**On
-Portland**). The same geometry bounds a soft run: a detour that adds no left turn needs right
-turns at both ends of its window, or two inside it, so where a left turn costs more than any
-detour gains the route barely grows. Hence the penalty of a kilometre, not more: at 10⁶ (fewest
-left turns first) the soft modes gave a median of 1.12× on the acceptance pairs; at 1,000 they
-give 5.33× (no-left) and 6.47× (no-right), against 21.5× without (**On Portland**). And a soft
-route barely shrinks toward a smaller target: a shorter way round mostly needs the left turn
-its three rights stood for, which shrinking may not add (**Targets**).
+leash, and the cheapest walk the edge-state search finds then loops, which is no path unless
+searching again finds a node-simple one (**Searches**).
+On Portland (the version 6 build 3a4a3df6269f, engine version 4), strict no-left plans 7 of the
+20 acceptance pairs (pairs 0, 6, 9, 10, 11, 13 and 17; 4 before the search looked again for a
+node-simple path) and strict no-right 3 (the others fail at the seed, after the stops'
+fallback); Powell's → Reed plans under strict no-left, its end moved 214 m by the fallback
+(1.86×, no left turn), and refuses under strict no-right (**On Portland**). The same geometry
+bounds a soft run: a detour that adds no left turn needs right turns at both ends of its window,
+or two inside it, so where a left turn costs more than any detour gains the route barely grows.
+Hence the penalty of a kilometre, not more: at 10⁶ (fewest left turns first) the soft modes gave
+a median of 1.12× on the acceptance pairs; at 1,000 they give 5.33× (no-left) and 6.47×
+(no-right), against 21.5× without (**On Portland**). And a soft route barely shrinks toward a
+smaller target: a shorter way round mostly needs the left turn its three rights stood for, which
+shrinking may not add (**Targets**).
 
 **Hard mode** (`hard`; `HardMode`; `docs/PLAN.md` §3.7): each road in one stretch at most, so
 once the route leaves a road it never comes back to it. A road is an identity (`edge_identity`:
@@ -536,7 +549,7 @@ round-trip seed).
   `entry_edge` to `exit_edge`. A Dijkstra probe skips the enumeration when b is unreachable;
   it ignores turns, since a legal path exists only where a turn-blind one does, and the
   transition-aware search could answer None where a legal path exists (when its cheapest walk
-  passes a node twice). The paths are ranked by
+  passes a node twice and searching again finds no node-simple path). The paths are ranked by
   `objective.delta` (stable, so ties keep the DFS order), and the first the splice accepts is
   returned. A run shrinking toward a target (`shrink`, its goal) keeps only the paths it can
   take, those that lose on the objective's own part (`delta − constraint_delta` < 0) and add
@@ -1232,6 +1245,9 @@ routes and numbers.
 | `--objective time --no-left` | 228.78 km, 28.48× the experienced time (29.66× the length), 250 left turns of 2,359 (1.09 a km) and 2 U-turns, converged after 46,597 attempts: a left turn costs 90 s here, cheaper against the time a detour gains (its delays included) than a kilometre is against its length, so more stay than under the distance (**the penalty** below) |
 | `--no-left --strict` (or `--no-right --strict`) | one line, exit 1: "cannot plan: no route from stop 0 to stop 1 without repeating a road, after moving stop 1 up to 10 times, under the strict no-left constraint; try without --strict" |
 
+This table and the paragraph below predate engine version 4, under which strict no-left plans
+Powell's → Reed and 7 of the 20 acceptance pairs (**Constraints**).
+
 On the 20 acceptance pairs (pair seed 2026, seed 1, 30 s each, the same build): soft no-left
 plans all 20 at a median of 5.33× (2.54–11.04×, 0.54 left turns and U-turns a km), soft
 no-right all 20 at 6.47× (2.36–13.89×); strict no-left plans 4 (2.40×, 1.42×, 1.04×, 1.00×; 16
@@ -1428,13 +1444,15 @@ Portland (`docs/project_overview.md` §2.3).
 
 ## Limitations
 
-- **Transitions.** The searches see the transition tables (**Searches**), but a leg or a part
-  of a detour whose cheapest legal path passes a node twice is no path: the search does not
-  look for the cheapest node-simple legal path, which a turn table can make longer than the
-  cheapest walk. The seed then falls back as for an unreachable leg. On Oregon's build at
-  pipeline version 3 this refused 2 of ten random 60–650 km pairs on T4 and two of the four
-  named trips on T1, at super-junctions whose table forbade a through movement; since version
-  5's stage B, one pair (a cross turn at McKay Road and French Prairie Road; **On Oregon**).
+- **Transitions.** The searches see the transition tables (**Searches**), and a leg or a part
+  of a detour whose cheapest legal walk passes a node twice is searched again, up to 8 times,
+  with the edge banned by which the walk comes back to the node. That is a heuristic: it misses
+  a node-simple legal path that drives a banned edge or needs more rounds (41 of 107 on the
+  small towns of `test_search.py`), and need not find the cheapest one; the seed then falls back
+  as for an unreachable leg. On Oregon's build at pipeline version 3 the walks that loop refused
+  2 of ten random 60–650 km pairs on T4 and two of the four named trips on T1, at super-junctions
+  whose table forbade a through movement, before the search looked again; since version 5's
+  stage B, one pair (a cross turn at McKay Road and French Prairie Road; **On Oregon**).
 - **Twins within a leg.** A leg driving an edge and its twin is searched again without the
   later one, up to 8 times; a leg that needs more rounds, or whose only way drives a twin
   pair, falls back as an unreachable one.
@@ -1460,7 +1478,7 @@ Portland (`docs/project_overview.md` §2.3).
 - **Targets.** A shrinking run only replaces windows (at most 24 edges) by shorter paths, so a
   base far past a small target can converge above the band, returning the closest route
   (`"converged"`); a target beyond what the area holds converges below it.
-- **Turn constraints.** A strict one is rarely satisfiable on a street grid (4 and 3 of 20
+- **Turn constraints.** A strict one is rarely satisfiable on a street grid (7 and 3 of 20
   Portland pairs plan), and a soft one makes routes less bad than no constraint (medians 5.33×
   and 6.47× against 21.5×; **Constraints**). Under the slowest time a left turn costs 90 s,
   and the time a detour gains counts its delays, so more left turns stay than under the
@@ -1516,8 +1534,8 @@ for stable bytes; `at_node`, a node's lon/lat rounded to 1e-7° as a request's s
 | `test_request.py` | the request model and its bounds (its target's too, and no ratio target for a round trip; the item only and always with `collect`, which takes no ratio; the brand only and always with `brand`, which takes none either, and left out of the JSON when there is none; the alphabet route with two stops only, a round trip among them, and no target), tier and leash auto, the masks and the tier's edge bans; the objective's keys, the constraints left out of the JSON when there are none, both at once refused |
 | `test_target.py` | the target's bounds; the goal's rules on values (the band's edges, phases, the closer route better and a tie to the later, growing and shrinking acceptance at the band, a duration moving one way, a candidate's value equal to the re-scored route's, a ratio and a duration under the slowest time and a duration under the distance on the experienced time, delays included); and on lattices with `check_delta`: ratio and duration targets reached while only growing, a base past a target shrinking into it, a route already within it stopping before an attempt, an unreachable target converging with the closest route, the overshoot after an empty cycle (the closest route returned, and a run cut at its attempt the prefix ending with it), the same bytes on both backends and twice; the slowest time reaching ratio and duration targets on its experienced time |
 | `test_snap.py` | roles, cul-de-sacs, stops kept apart, round trips only for identical points, an end near the start moved on, re-snapping |
-| `test_search.py` | the turn edges counting only on a build with rows, a path driving both carriageways searched again, and the rounds' limit; a cheapest legal walk entering a node twice no path, on both backends |
-| `test_seed_route.py` | `resolve_stops` deterministic, node-disjoint legs, legs avoiding later stops, the penalty re-solve on a corridor, the baseline, the re-snap walk out of a one-entrance ring, the start never moving, a point-to-point trip never collapsing onto the start, a leg between two stops on one node, unreachable legs named by both ends, a leg going round a junction that allows only straight on, the turn at a via, the baseline's legal legs and its turn-blind fallback, a leg driving both carriageways going round, a round trip to a neighbour not one road out and back, round-trip loops (never back along the way out) |
+| `test_search.py` | the turn edges counting only on a build with rows, a path driving both carriageways searched again, and the rounds' limit; a cheapest legal walk entering a node twice searched again, to a bypass or to no path (and none at once for the baseline's search), the rounds' limit (as many loops as rounds, not one more), on both backends; on every pair of two small towns with tables, the answer a legal simple path by brute force (or None, always when none exists), costing at least the walk; the searches made again on a 30 × 30 town the same bytes on both backends |
+| `test_seed_route.py` | `resolve_stops` deterministic, node-disjoint legs, legs avoiding later stops, the penalty re-solve on a corridor, the baseline, the re-snap walk out of a one-entrance ring, the start never moving, a point-to-point trip never collapsing onto the start, a leg between two stops on one node, unreachable legs named by both ends, a leg going round a junction that allows only straight on, the turn at a via, the baseline's legal legs and its turn-blind fallback, a leg whose cheapest legal walk loops taking a simple path (the end staying, the baseline still turn-blind), a leg driving both carriageways going round, a round trip to a neighbour not one road out and back, round-trip loops (never back along the way out) |
 | `test_objectives.py` | `Distance`, the radius, the registry (`brand` with its brand), and `delta` against a full re-score for every kind of term, the first-edge term included; the delays in every mode's metrics; `SlowestTime`'s terms, weights, waypoint pool, `describe` and primary quantity (the experienced time), and its `delta` against a full re-score |
 | `test_collect.py` | `count_items` and each item's score, items first then length (a bridge split by a junction once, a bridge at the start, a bridge run through a round trip's start once, a roundabout on a round trip's start once, a toll booth in either direction), `delta` against a full re-score for each item with windows at the route's start and at its end (a round trip's start inside a bridge run among them), the waypoint pool (the uncollected places, once per route, any node once none is left in the area), the radius, `describe`; for each item a loop run with `check_delta` that never gives an item back and validates; a request planning the same collecting route on both backends, and one reaching a duration target |
 | `test_brand.py` | `brand_counts` and the score, visits first then length (a round trip's start once), the counters and `describe`, an unknown brand refused, `delta` against a full re-score with windows at the route's start and at a round trip's end, the waypoint pool (the brand's unvisited nodes in the area, once per route, any node once none is left), the radius; a 300-attempt loop with `check_delta` that never gives a visit back, validates and is the same on both backends; the validator failing each tampered field of a reported brand and an `of` the area does not give; a request planning the same pilgrimage on both backends, its route.json read back with its brand and validated, an edited one failing; a brand the build lacks or the area does not hold refused as `BrandRefused`; a duration target reached |
@@ -1529,7 +1547,7 @@ for stable bytes; `at_node`, a node's lon/lat rounded to 1e-7° as a request's s
 | `test_io.py` | the route files, the target in the request and, for a target run, in the metrics; the delays and the turns in the metrics, and a saved route's metrics carrying its file's item counts |
 | `test_plan.py` | `plan_route`'s hooks: `on_start` once before the loop with the route it starts from (every splice replays from it to the result), the same route without the hooks, a continuation from `base` that never scores less, is fixed by its seed on both backends, and refuses a base for other stops, one leaving the request's area (before the loop) and, in `check_base`, a node outside the mask or an edge the request bans; a soft constraint starting from the plain seed and keeping left turns rarer than the plain run's, a strict one no route keeps as `InfeasibleTurnConstraint` with its note, one no route keeps without it either (two one-way rings) refused as without it, a stop the strict fallback moves noting why, a base refused for a turn a strict constraint refuses (taken by a soft one); a strict route validated against its constraint |
 | `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32, `--backend` on both commands (the same route.json on both backends but the backend and the time), and the same on a build with turn tables, where `auto` is `csr` too, a file from another engine version refused; `--target` (its line, its parsing, its refusals) and `--base` (a continuation to a smaller target, the options it refuses, a file from another engine version, region or `graph_version`, a truncated or broken route, stops that do not resolve); a ratio target for a round trip, from the stops or the base, refused; an illegal route reported as the base file's fault only with `--base`; `--objective`, `--no-left`, `--no-right` and `--strict` (their lines, the time ratio with its drive and delays, the route.json, `validate`, their refusals, `--strict` alone in one line, a strict refusal in one line ending "try without --strict", `--base` taking them from its file); `validate` failing a soft route's file edited to claim a strict constraint; `--objective collect --item` (the collected line, the items and item in route.json, `--base` keeping them, a distance run's items) and its refusals, each one plain line (an unknown objective before its item); `--objective brand --brand` by name in any case and by id (the visited line, the brand in route.json, `--base` keeping it and refusing `--brand`, `validate` passing it and failing an edited count) and its refusals (the misfits, a name no brand has, one two brands share, an unknown id, a brand out of reach); a brand named "76" in a build whose brand 76 is another (the bare number refused, `"76"` the name, `#76` the id, `77` an id), `#` without a number, `²`; a build missing an array, one line for `plan` and `validate`; `validate` refusing a route.json whose item counts were edited; `--objective alphabet` (its objective and letters lines, the letters line for one letter and past Z, the `alphabet` check in the validator's line, the letters in route.json, `validate` passing it and failing a road edited in it) and its refusals (`--via`, a target, a `--base` file of an alphabet route), each one plain line |
-| `test_portland_data.py` | (`data`: Portland's latest build through `WORST_ROUTE_DATA`, skipped without one) Powell's → Reed, seed 1, 4,000 attempts: the same bytes on both backends, splice for splice, no turn refused; the slowest time reaching 9 h within ±2 %; soft no-left with fewer left turns a kilometre than its seed, at more than 5×; strict no-left refusing in one line; hard mode over 4,000 attempts, the same on both backends, every road one stretch, at more than 3×; collecting each item over 4,000 attempts, more of it than the distance route passes (none of the toll booths, which lie outside the area), and a duration target under `collect` reached within ±2 %; a pilgrimage to the brand with the most locations visiting more of it than the distance route over the same 4,000 attempts, its counts the recount's; an alphabet route over 100 restarts, the same bytes and letters on both backends, no turn refused, its `alphabet` check passing, at least 5 letters (A to I on build ffe2e7c881ca) |
+| `test_portland_data.py` | (`data`: Portland's latest build through `WORST_ROUTE_DATA`, skipped without one) Powell's → Reed, seed 1, 4,000 attempts: the same bytes on both backends, splice for splice, no turn refused; the slowest time reaching 9 h within ±2 %; soft no-left with fewer left turns a kilometre than its seed, at more than 5×; strict no-left planning Powell's → Reed with no left turn or U-turn, strict no-right refusing it in one line; hard mode over 4,000 attempts, the same on both backends, every road one stretch, at more than 3×; collecting each item over 4,000 attempts, more of it than the distance route passes (none of the toll booths, which lie outside the area), and a duration target under `collect` reached within ±2 %; a pilgrimage to the brand with the most locations visiting more of it than the distance route over the same 4,000 attempts, its counts the recount's; an alphabet route over 100 restarts, the same bytes and letters on both backends, no turn refused, its `alphabet` check passing, at least 5 letters (A to I on build ffe2e7c881ca) |
 
 **The acceptance run**, `tools/acceptance.py`, plans random stop pairs on a saved build, so it
 needs `WORST_ROUTE_DATA` and is not part of the gate:

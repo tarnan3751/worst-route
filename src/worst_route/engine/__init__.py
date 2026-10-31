@@ -15,4 +15,4 @@ engine works: `docs/reference/engine.md`; the design: `docs/PLAN.md` §3.
 would give a different route.
 """
 
-ENGINE_VERSION = "3"  # 3: T4 below 800 km (config.TIER_AUTO_KM)
+ENGINE_VERSION = "4"  # 4: a node-simple path searched for (config.SIMPLE_RETRY_ROUNDS)

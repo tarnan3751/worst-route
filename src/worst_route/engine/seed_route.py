@@ -6,7 +6,7 @@ else forbidden), concatenated. Its legs may share nodes; it is not a `Route`. Ea
 only where the transition tables allow (`search.shortest_path`), independently of the leg
 before it, so the baseline is never longer than the seed; a leg whose cheapest legal path would
 pass a node twice is the turn-blind shortest path instead (a lower bound, and the baseline
-then exists whenever the seed does).
+then exists whenever the seed does), with no search for a node-simple one (`simple_retry`).
 
 `seed_route` is the shortest route through the stops that never repeats, the route the worsen loop
 starts from. Its legs are built in order on length, each forbidding the nodes of the other legs
@@ -142,7 +142,15 @@ def baseline_route(
     nodes: list[IntArray] = [np.array(stop_nodes[:1], dtype=np.int32)]
     edges: list[IntArray] = [np.zeros(0, dtype=np.int32)]
     for k, (s, t) in enumerate(pairwise(stop_nodes)):
-        path = shortest_path(backend, s, t, weights, node_mask=node_mask, banned_edges=banned_edges)
+        path = shortest_path(
+            backend,
+            s,
+            t,
+            weights,
+            node_mask=node_mask,
+            banned_edges=banned_edges,
+            simple_retry=False,
+        )
         if path is None and len(data.trans_node):  # the legal way passes a node twice
             path = backend.dijkstra(s, t, weights, node_mask=node_mask, banned_edges=banned_edges)
         if path is None:

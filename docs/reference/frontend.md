@@ -527,9 +527,11 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
   `mode=collect:bridge` in the URL; the count rose live (19 bridges at 1.2 s, 23 at 2.8 s, 24
   at 7.1 s) and the run ended at 51.4×, 248 mi, 24 bridges. Avoid left turns (`turns=left`),
   the longest: converged at 10.4× in 2.7 s, "58 left · 80 right". Strict on top
-  (`strict=1`): refused by the `POST` with `INFEASIBLE_TURN_CONSTRAINT` ("no route from stop 0
-  to stop 1 without repeating a road, after moving stop 1 up to 10 times, under the strict
-  no-left constraint; try without strict"), the end stop highlighted and the "Try without
+  (`strict=1`; the recording predates engine version 4, under which these clicked stops still
+  refuse on build 3a4a3df6269f, while Powell's → Reed at the tests' points plans): refused by the
+  `POST` with `INFEASIBLE_TURN_CONSTRAINT` ("no route from stop 0 to stop 1 without repeating a
+  road, after moving stop 1 up to 10 times, under the strict no-left constraint; try without
+  strict"), the end stop highlighted and the "Try without
   strict" button in the banner; the button unticked strict, closed the banner, dropped
   `strict=1` from the URL and planned the soft no-left route again (the same numbers). The
   slowest-time route's link, in a fresh page, showed Slowest checked and the same rows; Make it

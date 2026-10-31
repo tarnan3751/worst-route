@@ -282,6 +282,21 @@ def test_a_baseline_leg_turns_legally_and_falls_back_to_the_blind_path() -> None
     assert blind.nodes.tolist() == [0, 1, 2]
 
 
+def test_a_leg_whose_cheapest_legal_walk_loops_takes_a_simple_path() -> None:
+    # S → A → D turns at A only towards B, so the cheapest legal walk, S A B C A D, enters A
+    # twice: the leg is searched again without C → A and takes the bypass S X D, and the end
+    # stays (before, the end moved); the baseline keeps the turn-blind S A D, a lower bound
+    from .test_search import loop
+
+    g = loop(bypass=True)
+    seed = plan_seed(g, [at_node(g, 0), at_node(g, 2)])
+    assert seed.nodes.tolist() == [0, 5, 2]
+    assert all(s.note is None for s in seed.snaps)
+    everywhere, nothing = np.ones(g.n, dtype=bool), np.zeros(g.m, dtype=bool)
+    baseline = baseline_route(PythonBackend(g), g, [0, 2], everywhere, nothing)
+    assert baseline.nodes.tolist() == [0, 1, 2]
+
+
 def test_a_leg_driving_both_carriageways_goes_round() -> None:
     # the shortest S → T drives a carriageway and its twin: the leg is searched again without
     # the later one, and the end stays (before, the leg failed and the end moved)

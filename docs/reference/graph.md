@@ -301,9 +301,9 @@ driven, banned or costed. A bad one is a `ValueError`.
 - **The answer** is the path of the first end state popped, or None. **It is a walk, and may
   enter a node twice**: node-simplicity cannot be said in an edge-state search, and a turn table
   can make the cheapest legal way a loop round a block. Such a walk is illegal for a route, so a
-  caller that needs a simple path checks, as for the tree search (`engine/search.py` does:
-  `docs/reference/engine.md`, **Searches**). It never enters `src` again (no state returns to
-  the start) and passes `dst` only at its end (a dead end is never expanded).
+  caller that needs a simple path checks, as for the tree search (`engine/search.py` does, and
+  searches again: `docs/reference/engine.md`, **Searches**). It never enters `src` again (no
+  state returns to the start) and passes `dst` only at its end (a dead end is never expanded).
 - From `src` to itself: the one-node path, unless both turn edges are given and their turn is
   not allowed at `src` (None).
 

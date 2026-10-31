@@ -6,9 +6,15 @@ turn constraint's), `shortest_path` is the transition-aware `GraphBackend.dijkst
 `simple_paths` the DFS with its turn checks, so a path turns only where the tables and the
 classes allow, at the junctions inside it and, given `entry_edge` and `exit_edge`, at its two
 ends. Otherwise no turn can be forbidden, so they are the node-state `dijkstra` and the plain
-DFS, whose paths every backend reproduces byte for byte; the turn edges are then ignored. The
-transition-aware search answers the cheapest legal walk, which may enter a node twice (a table
-can make the cheapest legal way a loop round a block); such a walk is no path here.
+DFS, whose paths every backend reproduces byte for byte; the turn edges are then ignored.
+
+The transition-aware search answers the cheapest legal walk, which may enter a node twice (a
+table can make the cheapest legal way a loop round a block), and such a walk is no path. So the
+search is made again with one more edge banned, the one by which the walk first comes back to a
+node it has passed (the node stays passable, by its other ways in), the bans adding up, up to
+`SIMPLE_RETRY_ROUNDS` times; then there is no path. A heuristic: a node-simple path that drives a
+banned edge is missed. `simple_retry=False` (the baseline's) answers no path at once.
+Deterministic: the bans depend only on the walks found.
 
 `avoided_turn_classes` (a soft turn constraint's) are refused too on a first search; when it
 finds nothing, the search is made again without them, so a path avoids those turns when it
@@ -26,7 +32,7 @@ import math
 import numpy as np
 from numpy.typing import NDArray
 
-from worst_route.config import TWIN_RESEARCH_ROUNDS
+from worst_route.config import SIMPLE_RETRY_ROUNDS, TWIN_RESEARCH_ROUNDS
 from worst_route.engine.route import IntArray, twins_of
 from worst_route.graph.backend import GraphBackend, Path
 from worst_route.graph.data import GraphData
@@ -49,10 +55,12 @@ def shortest_path(
     avoid_twins: bool = False,
     banned_turn_classes: int = 0,
     avoided_turn_classes: int = 0,
+    simple_retry: bool = True,
 ) -> Path | None:
     """A cheapest path src → dst within the masks, turning only where the build and the banned
     turn classes allow, and without the avoided ones when it can (and, with `avoid_twins`, never
-    driving an edge and its twin)."""
+    driving an edge and its twin); a node-simple one searched for again when the cheapest legal
+    walk enters a node twice, unless not `simple_retry`."""
     banned = banned_edges
     for _ in range(TWIN_RESEARCH_ROUNDS + 1):
         path = None
@@ -69,6 +77,7 @@ def shortest_path(
                 banned_edges=banned,
                 max_cost=max_cost,
                 banned_turn_classes=classes,
+                simple_retry=simple_retry,
             )
             if path is not None:
                 break
@@ -112,6 +121,7 @@ def _search(
     banned_edges: BoolArray | None,
     max_cost: float,
     banned_turn_classes: int,
+    simple_retry: bool,
 ) -> Path | None:
     if len(backend.data.trans_node) == 0 and banned_turn_classes == 0:
         return backend.dijkstra(
@@ -123,21 +133,30 @@ def _search(
             banned_edges=banned_edges,
             max_cost=max_cost,
         )
-    walk = backend.dijkstra_edges(
-        src,
-        dst,
-        weights,
-        entry_edge=entry_edge,
-        exit_edge=exit_edge,
-        node_mask=node_mask,
-        forbid_nodes=forbid_nodes,
-        banned_edges=banned_edges,
-        max_cost=max_cost,
-        banned_turn_classes=banned_turn_classes,
-    )
-    if walk is None or _reentry(walk[0]) >= 0:
-        return None
-    return walk
+    banned = banned_edges
+    rounds = SIMPLE_RETRY_ROUNDS if simple_retry else 0
+    for round_ in range(rounds + 1):
+        walk = backend.dijkstra_edges(
+            src,
+            dst,
+            weights,
+            entry_edge=entry_edge,
+            exit_edge=exit_edge,
+            node_mask=node_mask,
+            forbid_nodes=forbid_nodes,
+            banned_edges=banned,
+            max_cost=max_cost,
+            banned_turn_classes=banned_turn_classes,
+        )
+        if walk is None:
+            return None
+        again = _reentry(walk[0])
+        if again < 0:
+            return walk
+        if round_ < rounds:  # the edge entering that node the second time, banned
+            banned = np.zeros(backend.data.m, dtype=np.bool_) if banned is None else banned.copy()
+            banned[walk[1][again - 1]] = True
+    return None
 
 
 def _reentry(nodes: IntArray) -> int:

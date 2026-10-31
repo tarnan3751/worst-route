@@ -278,10 +278,11 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 The risks the plan anticipates are `docs/PLAN.md` §8.3. Found on the Portland build:
 
 - **The transition-aware search's second look is a heuristic**: when the cheapest legal way
-  passes a node twice, the search is made again with the edge that comes back to the node
+  passes a node twice, a detour's search is made again with the edge that comes back to the node
   banned, up to 8 times (engine version 4; `docs/reference/engine.md`, **Searches**), and can
-  still miss a longer node-simple legal way, so a leg can fall back (a re-snapped stop) or a
-  detour attempt fail where one exists. On the acceptance pairs (the version 6 build,
+  still miss a longer node-simple legal way, so a detour attempt can fail where one exists. A
+  seed leg's is a tree over bans (engine version 5) that misses one only when its searches run
+  out, so a leg can still fall back (a re-snapped stop). On the acceptance pairs (the version 6 build,
   2026-10-31), 40 of about a million detour searches met such a walk: 15 now give a path, 25 find
   no walk once the edge is banned (before, 42 met one, each a failed attempt). No seed leg met
   one, and every seed is what it was.
@@ -569,6 +570,11 @@ brief):
   enters a node twice, and the engine checks it and searches again with the edge that comes back
   to the node banned, up to 8 rounds. The baseline does not search again and keeps the
   turn-blind fallback when its legal walk loops, so it is never longer than the seed.
+- **A seed leg searches by a tree over bans** (2026-10-31, engine version 5, at its plan; the
+  coordinator): a walk entering a node twice is searched again without the edge that comes back
+  to it, else without the one it first entered by; a twin pair without its later edge only; up to
+  9 searches and one more per 100 km between the leg's ends. The detours keep the chain of
+  rounds, and the seeds on Portland and Oregon stay the same bytes (plain, strict and hard).
 - **Alphabet mode is a constructive search**, not a splice objective. As built (M3, the
   coordinator's ruling at its plan, after the first Portland measurements left 18 of 22 trips
   without a letter): the first leg, up to the route's first A road, is free like the last;

@@ -297,6 +297,17 @@ def test_a_leg_whose_cheapest_legal_walk_loops_takes_a_simple_path() -> None:
     assert baseline.nodes.tolist() == [0, 1, 2]
 
 
+def test_a_leg_the_chain_refused_enters_the_node_the_way_its_walk_came_back() -> None:
+    # S A B C A D loops at A, and without C → A nothing is left: the leg's tree bans S → A
+    # instead and takes S Y C A D, and the end stays where the chain of rounds refused the leg
+    from .test_search import entered_again
+
+    g = entered_again()
+    seed = plan_seed(g, [at_node(g, 0), at_node(g, 2)])
+    assert seed.nodes.tolist() == [0, 5, 4, 1, 2]
+    assert all(s.note is None for s in seed.snaps)
+
+
 def test_a_leg_driving_both_carriageways_goes_round() -> None:
     # the shortest S → T drives a carriageway and its twin: the leg is searched again without
     # the later one, and the end stays (before, the leg failed and the end moved)

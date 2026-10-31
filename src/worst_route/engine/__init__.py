@@ -15,4 +15,4 @@ engine works: `docs/reference/engine.md`; the design: `docs/PLAN.md` §3.
 would give a different route.
 """
 
-ENGINE_VERSION = "4"  # 4: a node-simple path searched for (config.SIMPLE_RETRY_ROUNDS)
+ENGINE_VERSION = "5"  # 5: seed legs by a tree over bans (config.LEG_SEARCHES)

@@ -18,7 +18,7 @@ routes either way, on every build, transition tables included (**Searches**).
 | `request.py` | `RouteRequest`, `ObjectiveKey`, `RequestMasks`, `request_masks`, `auto_tier`, `auto_leash_m`, `objective_problem` |
 | `target.py` | `Target` (a request's target), `Goal` (what a run is after: better, done, its phases) |
 | `snap.py` | `snap_stops`, `resnap`, `apart_from`, `role_of`, `is_round_trip`, `StopUnreachable`, `InfeasibleTurnConstraint`, `InfeasibleHardMode` |
-| `search.py` | `shortest_path`, `simple_paths`: which backend search builds a path |
+| `search.py` | `shortest_path`, `leg_path` (a seed leg's), `simple_paths`: which backend search builds a path |
 | `seed_route.py` | `resolve_stops`, `baseline_route` / `Baseline`, `seed_route` / `SeedRoute` |
 | `objectives/` | `base.py` (`Objective`, `BaseObjective`, `route_delay_s`), `distance.py` (`Distance`), `time.py` (`SlowestTime`), `collect.py` (`Collect`, `count_items`, `ITEMS`, `CollectItem`), `brand.py` (`Brand`, `brand_counts`, `brand_problem`, `BrandRefused`), `composite.py` (`Composite`), `OBJECTIVES`, `OBJECTIVE_KEYS`, `make_objective` |
 | `turns.py` | `turn_classes`, `count_turns` |
@@ -170,6 +170,24 @@ lattices whose junctions each allow a random 60% of their turns (`test_search.py
 walks loop where a legal simple path exists: searching again finds one for 66 (48 longer than
 the walk), and misses 41. The baseline does not search again (**Seed and baseline**).
 
+**A seed leg's search** (`leg_path`, engine version 5) makes the same searches as a depth-first
+tree over bans rather than a chain. A walk that enters a node X a second time has two children:
+the walk banned the edge by which it comes back to X (the chain's step, tried first), and the
+walk banned the edge by which it first entered X. A node-simple path enters X once, so it
+survives in one of the two, and the tree, given searches enough, finds a node-simple legal path
+wherever one exists. A walk that drives an edge and its twin has one child, the later edge
+banned (**Twins**). The bans of a branch add up, re-entries and twins alike. The tree makes at
+most 1 + `LEG_SEARCHES` (8) searches, and one more per `LEG_SEARCH_KM` (100 km) of the straight
+line between the leg's ends, since a long leg passes many junctions whose cheapest legal walk
+loops and the first branch fixes one a search: New York to Los Angeles on the national T1 build's
+motorways and trunks needs 31 (**On the national T1 build**). Where the chain finds a path
+without meeting a twin, the tree's first branch is the chain and gives the same path; the seeds
+of Powell's → Reed and the 20 acceptance pairs on Portland, and of Oregon's five named trips and
+20 random pairs, are the same bytes as engine version 4's, plain, under strict no-left and
+no-right and under hard mode. On the small towns above, 9 searches find 103 of the 107 and 17
+all of them. The bans depend only on the walks found: deterministic, the same on both
+backends.
+
 **Turn classes.** `shortest_path` and `simple_paths` take `banned_turn_classes` and
 `avoided_turn_classes` (sets of class bits, **Turns**), which `find_detour` passes from the
 objective (**Constraints**) and the seed from a strict constraint. Either set makes the search
@@ -182,7 +200,8 @@ the banned ones never are.
 random-weight search) is searched with `avoid_twins`: when it drives an edge and one of its
 twins (both carriageways of one road, as in a U-turn across a median), the later edge of the
 pair that closes first along the path is banned and the search made again, up to
-`TWIN_RESEARCH_ROUNDS` (8) times; then there is no path. The bans depend only on the paths
+`TWIN_RESEARCH_ROUNDS` (8) times for a detour's search, up to the tree's searches for a seed
+leg's; then there is no path. The bans depend only on the paths
 found, so this is deterministic. The baseline is not: a GPS may drive both carriageways.
 
 ## Seed and baseline
@@ -208,8 +227,10 @@ saved route with it; the cost is a few seed builds.
    leg before it (`entry_edge`, its last edge) and hands over to the leg after it when that one
    is built (`exit_edge`, its first edge, which matters when the penalty re-solve rebuilds an
    earlier leg), so the turn at every via is one the tables allow (and, under a strict turn
-   constraint, none it refuses: **Constraints**; a soft one leaves the seed alone). A leg driving an edge and
-   its twin is searched again without the later one (**Searches**), and a round trip's leg
+   constraint, none it refuses: **Constraints**; a soft one leaves the seed alone). Each leg
+   is `leg_path`'s, the tree over bans (**Searches**): a walk entering a node twice is searched
+   again without the edge coming back to it, else without the one it first entered by, and a
+   leg driving an edge and its twin without the later one; and a round trip's leg
    whose other legs drive a single edge avoids that edge's road unit, so a trip to a neighbour
    and back is not one road out and back.
 2. **Penalty re-solve.** When a leg fails, up to 4 rounds (`docs/PLAN.md` §3.3): the leg's
@@ -1527,12 +1548,14 @@ render (0.41 MB; it drew every T1 road in the route's bounding box, which the dr
 
 ## Limitations
 
-- **Transitions.** The searches see the transition tables (**Searches**), and a leg or a part
-  of a detour whose cheapest legal walk passes a node twice is searched again, up to 8 times,
-  with the edge banned by which the walk comes back to the node. That is a heuristic: it misses
-  a node-simple legal path that drives a banned edge or needs more rounds (41 of 107 on the
-  small towns of `test_search.py`), and need not find the cheapest one; the seed then falls back
-  as for an unreachable leg. On Portland's acceptance pairs (the version 6 build 3a4a3df6269f,
+- **Transitions.** The searches see the transition tables (**Searches**), and a part of a
+  detour whose cheapest legal walk passes a node twice is searched again, up to 8 times, with
+  the edge banned by which the walk comes back to the node. That is a heuristic: it misses a
+  node-simple legal path that drives a banned edge or needs more rounds (41 of 107 on the small
+  towns of `test_search.py`), and need not find the cheapest one. A seed leg's tree over bans
+  (engine version 5) misses one only when its searches run out (4 of the 107 with its 9 there),
+  and need not find the cheapest one either; the seed then falls back as for an unreachable
+  leg. On Portland's acceptance pairs (the version 6 build 3a4a3df6269f,
   2026-10-31), 40 of about a million transition-aware detour searches met a walk that loops: 15
   found a node-simple path (6 after one round, 8 after two, 1 after three), 25 no walk once the
   edge was banned; no seed leg met one. On Oregon's build at pipeline version 3 the walks that
@@ -1546,10 +1569,15 @@ render (0.41 MB; it drew every T1 road in the route's bounding box, which the dr
   build (e78224b5cf9a) 11.2–14.1 s against 1.3–1.7 s, Powell's → Reed under strict no-right on
   Portland's (3a4a3df6269f) 0.52–0.68 s against 0.09–0.10 s, the refusals among the 20
   acceptance pairs a median of 0.19–0.21 s against 0.06–0.10 s (load average about 23). The
-  rounds stay at 8.
+  rounds stay at 8. With the tree (engine version 5), whose searches grow with the leg, a
+  refusal costs a little more again: Medford → Portland under strict no-right on Oregon's build
+  ea3b18096e8b 9.1 s against 7.0 s, Powell's → Reed on Portland's a453e105582b 0.72–0.77 s
+  against 0.75–0.92 s (the whole `plan` process; a fixed 64 searches had made the first 52 s).
 - **Twins within a leg.** A leg driving an edge and its twin is searched again without the
-  later one, up to 8 times; a leg that needs more rounds, or whose only way drives a twin
-  pair, falls back as an unreachable one.
+  later one, within the tree's searches, never without the earlier one; a leg that needs more
+  searches, or whose only way drives the later edge of a twin pair, falls back as an unreachable
+  one. Trying the earlier one too planned one of Oregon's 25 trips at its snapped end, but on a
+  531 km seed instead of the re-snapped end's 455 km, so it is not done.
 - **Speed.** `CsrBackend`'s searches are 8–13× the reference's on large searches, but most of a
   run's searches are small: a whole run is about 1.2× faster on Portland (**On Portland with
   `CsrBackend`**) and 1.5–1.9× on a build without tables (**The loop**, Measured).
@@ -1629,8 +1657,8 @@ for stable bytes; `at_node`, a node's lon/lat rounded to 1e-7° as a request's s
 | `test_request.py` | the request model and its bounds (its target's too, and no ratio target for a round trip; the item only and always with `collect`, which takes no ratio; the brand only and always with `brand`, which takes none either, and left out of the JSON when there is none; the alphabet route with two stops only, a round trip among them, and no target), tier and leash auto, the masks and the tier's edge bans; the objective's keys, the constraints left out of the JSON when there are none, both at once refused |
 | `test_target.py` | the target's bounds; the goal's rules on values (the band's edges, phases, the closer route better and a tie to the later, growing and shrinking acceptance at the band, a duration moving one way, a candidate's value equal to the re-scored route's, a ratio and a duration under the slowest time and a duration under the distance on the experienced time, delays included); and on lattices with `check_delta`: ratio and duration targets reached while only growing, a base past a target shrinking into it, a route already within it stopping before an attempt, an unreachable target converging with the closest route, the overshoot after an empty cycle (the closest route returned, and a run cut at its attempt the prefix ending with it), the same bytes on both backends and twice; the slowest time reaching ratio and duration targets on its experienced time |
 | `test_snap.py` | roles, cul-de-sacs, stops kept apart, round trips only for identical points, an end near the start moved on, re-snapping |
-| `test_search.py` | the turn edges counting only on a build with rows, a path driving both carriageways searched again, and the rounds' limit; a cheapest legal walk entering a node twice searched again, to a bypass or to no path (and none at once for the baseline's search), the rounds' limit (as many loops as rounds, not one more), on both backends; on every pair of two small towns with tables, the answer a legal simple path by brute force (or None, always when none exists), costing at least the walk; the searches made again on a 30 × 30 town the same bytes on both backends |
-| `test_seed_route.py` | `resolve_stops` deterministic, node-disjoint legs, legs avoiding later stops, the penalty re-solve on a corridor, the baseline, the re-snap walk out of a one-entrance ring, the start never moving, a point-to-point trip never collapsing onto the start, a leg between two stops on one node, unreachable legs named by both ends, a leg going round a junction that allows only straight on, the turn at a via, the baseline's legal legs and its turn-blind fallback, a leg whose cheapest legal walk loops taking a simple path (the end staying, the baseline still turn-blind), a leg driving both carriageways going round, a round trip to a neighbour not one road out and back, round-trip loops (never back along the way out) |
+| `test_search.py` | the turn edges counting only on a build with rows, a path driving both carriageways searched again, and the rounds' limit; a cheapest legal walk entering a node twice searched again, to a bypass or to no path (and none at once for the baseline's search), the rounds' limit (as many loops as rounds, not one more), on both backends; on every pair of two small towns with tables, the answer a legal simple path by brute force (or None, always when none exists), costing at least the walk; the searches made again on a 30 × 30 town the same bytes on both backends; a seed leg's tree (`leg_path`): the walk's first entry banned where banning its way back leaves nothing, the searches growing with the distance between the ends (as many loops as searches, not one more, unless the ends lie 100 km farther apart), the later twin banned, on the small towns the walk where it is simple and else a legal simple path costing at least it, all 107 with 17 searches, the same bytes on both backends there and on the 30 × 30 town |
+| `test_seed_route.py` | `resolve_stops` deterministic, node-disjoint legs, legs avoiding later stops, the penalty re-solve on a corridor, the baseline, the re-snap walk out of a one-entrance ring, the start never moving, a point-to-point trip never collapsing onto the start, a leg between two stops on one node, unreachable legs named by both ends, a leg going round a junction that allows only straight on, the turn at a via, the baseline's legal legs and its turn-blind fallback, a leg whose cheapest legal walk loops taking a simple path (the end staying, the baseline still turn-blind), a leg the chain of rounds refused entering the node by the way its walk came back (the end staying), a leg driving both carriageways going round, a round trip to a neighbour not one road out and back, round-trip loops (never back along the way out) |
 | `test_objectives.py` | `Distance`, the radius, the registry (`brand` with its brand), and `delta` against a full re-score for every kind of term, the first-edge term included; the delays in every mode's metrics; `SlowestTime`'s terms, weights, waypoint pool, `describe` and primary quantity (the experienced time), and its `delta` against a full re-score |
 | `test_collect.py` | `count_items` and each item's score, items first then length (a bridge split by a junction once, a bridge at the start, a bridge run through a round trip's start once, a roundabout on a round trip's start once, a toll booth in either direction), `delta` against a full re-score for each item with windows at the route's start and at its end (a round trip's start inside a bridge run among them), the waypoint pool (the uncollected places, once per route, any node once none is left in the area), the radius, `describe`; for each item a loop run with `check_delta` that never gives an item back and validates; a request planning the same collecting route on both backends, and one reaching a duration target |
 | `test_brand.py` | `brand_counts` and the score, visits first then length (a round trip's start once), the counters and `describe`, an unknown brand refused, `delta` against a full re-score with windows at the route's start and at a round trip's end, the waypoint pool (the brand's unvisited nodes in the area, once per route, any node once none is left), the radius; a 300-attempt loop with `check_delta` that never gives a visit back, validates and is the same on both backends; the validator failing each tampered field of a reported brand and an `of` the area does not give; a request planning the same pilgrimage on both backends, its route.json read back with its brand and validated, an edited one failing; a brand the build lacks or the area does not hold refused as `BrandRefused`; a duration target reached |

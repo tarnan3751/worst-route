@@ -196,13 +196,24 @@ BUBBLE_KM = 3.0
 SNAP_FALLBACK_CANDIDATES = 10
 SEED_PENALTY_ROUNDS = 4
 SEED_PENALTY_FACTOR = 8.0
-# A seed leg or a detour's search whose path drives an edge and one of its twins bans the later
-# of the two and searches again, up to TWIN_RESEARCH_ROUNDS times (`engine/search.py`).
+# A detour's search whose path drives an edge and one of its twins bans the later of the two and
+# searches again, up to TWIN_RESEARCH_ROUNDS times (`engine/search.py`, `shortest_path`).
 TWIN_RESEARCH_ROUNDS = 8
-# A search whose cheapest legal walk enters a node twice (a turn table can make it a loop round a
-# block) bans the edge entering that node the second time and searches again, up to
+# A detour's search whose cheapest legal walk enters a node twice (a turn table can make it a loop
+# round a block) bans the edge entering that node the second time and searches again, up to
 # SIMPLE_RETRY_ROUNDS times (`engine/search.py`); then there is no path.
 SIMPLE_RETRY_ROUNDS = 8
+# A seed leg is searched by a tree over the same bans (`engine/search.py`, `leg_path`): at most
+# 1 + LEG_SEARCHES searches, and one more per LEG_SEARCH_KM of the straight line between the leg's
+# ends. Tuned on the national T1 build (c4a85b3d36d0, engine version 5): New York to Los Angeles
+# on T0, whose cheapest legal walk enters 13 super-junctions twice and drives 9 twin pairs, needs
+# 31 searches, which the chain of 8 x 8 rounds never reached; a fixed 16 refused it, and a fixed
+# 64 made a refusal under a strict turn constraint on Oregon (Medford to Portland, strict
+# no-right) take 52 s where the chain took 7 s and this takes 9 s. On test_search.py's small towns
+# 9 searches (1 + LEG_SEARCHES) find 103 of the 107 node-simple paths the chain found 66 of, 17
+# all.
+LEG_SEARCHES = 8
+LEG_SEARCH_KM = 100.0
 # Under hard mode a seed whose legs come back to a road they left re-solves a leg with that road
 # banned but for one of its stretches, up to HARD_SEED_ROUNDS times (`engine/seed_route.py`; on
 # Portland's acceptance pairs 4 rounds at most were needed).

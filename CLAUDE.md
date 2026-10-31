@@ -69,9 +69,10 @@ M5.2's array pipeline is built: every step from `build` to `save` runs on arrays
 engine, its stages directories of `.npy` files (`docs/reference/pipeline.md`, **The arrays
 engine**), to the networkx engine's build byte for byte (`--engine networkx`); Oregon's cleanup
 takes 5 s where networkx's takes 91.
-The engine is at version 4: when the cheapest legal walk the transition-aware search finds
-passes a node twice, it searches again with the edge that comes back to it banned, up to 8
-times (`docs/reference/engine.md`, **Searches**).
+The engine is at version 5: when the cheapest legal walk the transition-aware search finds
+passes a node twice, a detour's search searches again with the edge that comes back to it banned,
+up to 8 times, and a seed leg's by a tree over bans, that edge else the one that first entered
+the node, its searches growing with the leg (`docs/reference/engine.md`, **Searches**).
 The plan (`docs/PLAN.md`,
 2026-10-30) is written and its open questions answered as far as `docs/project_overview.md` §3
 records. **M1 is built**: in the acceptance run on the

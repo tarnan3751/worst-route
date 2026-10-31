@@ -13,10 +13,12 @@ starts from. Its legs are built in order on length, each forbidding the nodes of
 built so far and every other stop's node, and banning their edges' twins; each continues the leg
 before it (`entry_edge`) and hands over to the leg after it when that one is built (`exit_edge`), so
 every turn, at the vias too, is one the tables allow, and, under a strict turn constraint
-(`constraints.Constraints`), none of a class it refuses (a soft one leaves the seed alone). A leg
-found driving an edge and its twin is searched again without the later of the two
-(`search.shortest_path`, `avoid_twins`), and a round trip's leg whose other legs drive a single edge
-avoids that edge's road (`edge_unit`), so the trip is not one road out and back. When a leg cannot
+(`constraints.Constraints`), none of a class it refuses (a soft one leaves the seed alone). Each
+leg is searched by `search.leg_path`'s tree over bans: a walk entering a node twice is searched
+again without the edge coming back to it, else without the edge it first entered by, and a leg
+found driving an edge and its twin without the later of the two (`avoid_twins`), up to its
+searches. A round trip's leg whose other legs drive a single edge avoids that edge's road
+(`edge_unit`), so the trip is not one road out and back. When a leg cannot
 be built, the penalty re-solve runs up to `SEED_PENALTY_ROUNDS` rounds: the leg's unconstrained path
 names the nodes other legs hold that it needs; those legs are rebuilt with `SEED_PENALTY_FACTOR` ×
 the weight on every edge touching those nodes (keeping their old path when no other exists), and the
@@ -77,7 +79,7 @@ from worst_route.engine.detour import waypoint_path
 from worst_route.engine.objectives.base import route_delay_s
 from worst_route.engine.request import RequestMasks, RouteRequest
 from worst_route.engine.route import IllegalSplice, IntArray, Metrics, check_route, twins_of
-from worst_route.engine.search import shortest_path
+from worst_route.engine.search import leg_path, shortest_path
 from worst_route.engine.snap import (
     StopUnreachable,
     apart_from,
@@ -426,7 +428,7 @@ class _Builder:
         s, t = stops[leg], stops[leg + 1]
         forbid[[s, t]] = False
         entry, exit_ = _turn_edges(legs, leg)
-        return shortest_path(
+        return leg_path(
             self.backend,
             s,
             t,
@@ -498,7 +500,7 @@ class _Builder:
         """Push the other legs off the nodes this leg needs, then try it again."""
         s, t = stops[leg], stops[leg + 1]
         entry, exit_ = _turn_edges(legs, leg)
-        wanted = shortest_path(
+        wanted = leg_path(
             self.backend,
             s,
             t,

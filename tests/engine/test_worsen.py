@@ -26,8 +26,10 @@ from worst_route.engine.worsen import (
     Budget,
     ProgressEvent,
     UnusedNodes,
+    detour_ends,
     pick_segment,
     run_worsen,
+    widened,
     worsen,
 )
 from worst_route.graph.backend import GraphBackend
@@ -35,7 +37,7 @@ from worst_route.graph.csr_backend import CsrBackend
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
 from worst_route.graph.spatial import SpatialIndex
-from worst_route.graph.testing import Edge, EdgePair, make_graph
+from worst_route.graph.testing import Edge, EdgePair, edge_id, make_graph
 
 from .graphs import X0, Y0, at_node, lattice, route_on
 
@@ -292,6 +294,89 @@ def test_shrinking_picks_longer_runs() -> None:
             runs.append(j - i)
     assert np.mean(runs) == pytest.approx(SHRINK_RUN_EDGES_MEAN, abs=0.3)
     assert max(runs) > SEGMENT_RUN_MAX
+
+
+def split_lattice(rows: int, cols: int) -> GraphData:
+    """A two-way lattice of junctions 200 m apart (node r * cols + c) whose every street is
+    split in two by a node of its own, with only the street's two junctions as neighbours."""
+    xy = [(X0 + 200.0 * c, Y0 + 200.0 * r) for r in range(rows) for c in range(cols)]
+    streets = [(a, a + 1) for a in range(rows * cols) if (a + 1) % cols]
+    streets += [(a, a + cols) for a in range((rows - 1) * cols)]
+    edges = []
+    for a, b in streets:
+        xy.append(((xy[a][0] + xy[b][0]) / 2, (xy[a][1] + xy[b][1]) / 2))
+        m = len(xy) - 1
+        edges += [(a, m, 100.0), (m, a, 100.0), (m, b, 100.0), (b, m, 100.0)]
+    return make_graph(xy, edges)
+
+
+SPLIT = split_lattice(3, 3)  # junctions 0-8, then the middles of 0-1, 1-2, 3-4, 4-5, ...
+
+
+def middle(g: GraphData, a: int, b: int) -> int:
+    """The node splitting the street a-b."""
+    heads = g.edge_v[g.out_edges[g.out_indptr[a] : g.out_indptr[a + 1]]]
+    tails = g.edge_u[g.in_edges[g.in_indptr[b] : g.in_indptr[b + 1]]]
+    return int(np.intersect1d(heads, tails)[0])
+
+
+def test_detour_ends_have_three_neighbours_over_the_usable_edges() -> None:
+    everywhere = np.ones(SPLIT.n, dtype=bool)
+    ends = detour_ends(SPLIT, everywhere, None)
+    # the corners and the street middles have two neighbours, the other junctions three or four
+    assert np.flatnonzero(ends).tolist() == [1, 3, 4, 5, 7]
+    # junction 1 loses its third neighbour to the mask, to bans of both directions, not to one
+    spur = middle(SPLIT, 1, 4)
+    masked = everywhere.copy()
+    masked[spur] = False
+    assert not detour_ends(SPLIT, masked, None)[1]
+    banned = np.zeros(SPLIT.m, dtype=bool)
+    banned[edge_id(SPLIT, 1, spur)] = True
+    assert detour_ends(SPLIT, everywhere, banned)[1]
+    banned[edge_id(SPLIT, spur, 1)] = True
+    assert not detour_ends(SPLIT, everywhere, banned)[1]
+
+
+def test_a_window_widens_to_the_nodes_a_detour_can_leave_or_join() -> None:
+    ends = detour_ends(SPLIT, np.ones(SPLIT.n, dtype=bool), None)
+    a, b = middle(SPLIT, 0, 1), middle(SPLIT, 1, 2)
+    route = route_on(SPLIT, [0, a, 1, b, 2])  # along the bottom row, corner to corner
+    assert widened(route, 1, 2, ends) == (0, 2)
+    assert widened(route, 2, 3, ends) == (2, 4)
+    assert widened(route, 0, 4, ends) == (0, 4)
+    assert widened(route, 1, 3, ends) == (0, 4)
+    # never past a stop, even one in the middle of a street
+    route = route_on(SPLIT, [0, a, 1, b, 2], stop_idx=(0, 3, 4))
+    assert widened(route, 1, 2, ends) == (0, 2)
+    assert widened(route, 2, 3, ends) == (2, 3)
+    assert widened(route, 3, 4, ends) == (3, 4)
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_every_splice_starts_and_ends_where_a_detour_can(seed: int) -> None:
+    # corner to corner across a split lattice, whose every other node lies inside a street: each
+    # accepted window's ends are junctions with three neighbours or stops, and the run validates
+    g = split_lattice(6, 6)
+    s = start(g, [at_node(g, 0), at_node(g, 35)], seed)
+    ends = detour_ends(g, s.masks.active, s.masks.banned)
+    result = run(s, Budget(seconds=600, max_iterations=1000))
+    assert result.accepted >= 3
+    route = s.route
+    for event in result.events:
+        sp = event.splice
+        for k in (sp.i, sp.j):
+            assert k in route.stop_idx or ends[route.nodes[k]]
+        route = route.splice(
+            g, sp.i, sp.j, sp.nodes, sp.edges, score=event.score, metrics=event.metrics
+        )
+    report = validate_route(
+        g,
+        result.best,
+        stop_nodes=s.stop_nodes,
+        node_mask=s.masks.active,
+        banned_edges=s.masks.banned,
+    )
+    assert report.ok, report.lines()
 
 
 def test_pick_segment_starts_at_an_anchor_at_the_bias_rate() -> None:

@@ -26,8 +26,12 @@ nothing, it is spliced in as one more attempt, and the run goes on shrinking.
   starts at one of the `SEGMENT_BIAS_TOP` route edges with the most unused active nodes near
   their midpoint (`UnusedNodes`: a grid of counts, its summed-area table rebuilt on every
   accepted splice, read in a square of half-side `WAYPOINT_BALL_FACTOR` × the radius), else
-  at a uniform edge. The objective's `window` may then widen it (hard mode: a window inside
-  one road's stretch, out to the stretch's ends), drawing nothing.
+  at a uniform edge. Its ends then move out along the route to the nearest nodes a detour can
+  leave or join (`detour_ends`: at least three distinct neighbours over the request's usable
+  edges) or to a stop, never past one: a node in the middle of a road, where its tags change,
+  has only the route's own neighbours, so no detour starts or ends there (on the national T1
+  build nearly nine in ten of a route's nodes). The objective's `window` may then widen it further
+  (hard mode: a window inside one road's stretch, out to the stretch's ends), drawing nothing.
 - The search masks are the route's own once the window is released (`Route.release`), with
   the request's `banned_edges` and the objective's bans for the window; those two are also
   what the splice is told to refuse.
@@ -172,6 +176,29 @@ def pick_segment(
     return i, min(i + k, next_stop)
 
 
+def detour_ends(data: GraphData, node_mask: BoolArray, banned_edges: BoolArray | None) -> BoolArray:
+    """The nodes a detour can leave or join: those with at least three distinct neighbours over
+    the edges both of whose ends lie in `node_mask` and that `banned_edges` does not ban."""
+    usable = node_mask[data.edge_u] & node_mask[data.edge_v] & (data.edge_u != data.edge_v)
+    if banned_edges is not None:
+        usable &= ~banned_edges
+    u, v = data.edge_u[usable].astype(np.int64), data.edge_v[usable].astype(np.int64)
+    pairs = np.unique(np.concatenate((u * data.n + v, v * data.n + u)))  # each neighbour once
+    ends: BoolArray = np.bincount(pairs // data.n, minlength=data.n) >= 3
+    return ends
+
+
+def widened(route: Route, i: int, j: int, ends: BoolArray) -> tuple[int, int]:
+    """The window (i, j) with its ends moved out to the nearest positions whose nodes are among
+    `ends`, or that are stops (never past a stop)."""
+    stops = route.stop_idx
+    while i not in stops and not ends[route.nodes[i]]:
+        i -= 1
+    while j not in stops and not ends[route.nodes[j]]:
+        j += 1
+    return i, j
+
+
 class UnusedNodes:
     """The active nodes a route does not use, counted on a grid of square cells, and the route
     edges with the most of them near their midpoint. A cell is `SEGMENT_BIAS_CELL_M` wide, or
@@ -248,6 +275,7 @@ def worsen(
     overshoot: _Overshoot | None = None
     unused = UnusedNodes(data, node_mask)
     table = unused.table(route)
+    ends = detour_ends(data, node_mask, banned_edges)
     anchors_for: tuple[int, float] | None = None
     anchors = np.zeros(0, dtype=np.intp)
     events: list[ProgressEvent] = []
@@ -276,7 +304,8 @@ def worsen(
         else:
             if anchors_for != (accepted, radius):
                 anchors, anchors_for = unused.anchors(route, table, radius), (accepted, radius)
-            i, j = objective.window(route, *pick_segment(route, rng, anchors, shrinking=shrinking))
+            i, j = pick_segment(route, rng, anchors, shrinking=shrinking)
+            i, j = objective.window(route, *widened(route, i, j, ends))
             forbid, banned = route.release(data, i, j)
             extra = _either(banned_edges, objective.banned_edges(data, route, i, j))
             if extra is not None:

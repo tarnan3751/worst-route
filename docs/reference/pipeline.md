@@ -1149,8 +1149,9 @@ numbers).
 The merge streams (`filter.merge_parts`), so its memory grows with the number of extracts, not
 with their nodes: 49 readers held open at once take 0.5–0.7 GB. `osmium.MergeInputReader`, which
 merged them before, held every part in memory (the national T1 filter, merging 49 files into a
-196 MB roads file, peaked at 2.32 GB with it; the all-roads country's roads file is about 26
-times Oregon and Washington's 74.9 MB).
+196 MB roads file, peaked at 2.32 GB with it). The all-roads country's roads file, 1,917.6 MB,
+25.6 times Oregon and Washington's 74.9 MB, was merged from its 49 parts in a stream, the whole
+filter peaking at 4.19 GB of resident set (**The all-roads national build**).
 
 Extracts of one day are cut from one snapshot. Extracts of different days still merge into a
 reference-complete file, since each per-extract file is complete, but a border way edited between
@@ -1281,6 +1282,93 @@ was the default. The build predates the class ceiling's entry in a build's param
   (425447408 and 425447409, 1534168462 and 1534168463) each close a loop through it, lay inside
   one edge and inside another road (`ShapePointError`). Pipeline version 7 keeps such a node, and
   the build saves.
+
+**The all-roads national build** (`us`, M5.3's (a)), from the same 49 extracts at pipeline
+version 7, on the dev machine (24 GB of memory, 10 cores) at load averages of 5–9, under the
+watchdog and the disk check (the watchdog's flag, `--max-rss-gb` then, is `--max-mem-gb` since):
+
+```
+uv run python tools/bench_build.py --region us --allow-fragmented --max-rss-gb 18 --min-free-gb 15
+```
+
+It did not get past `build`:
+
+| Step | Wall | Memory | Writes |
+|---|---|---|---|
+| filter | 1,372 s (1,926 s CPU) | 4.19 GB of resident set | roads 1,917.6 MB, POIs 61.6 MB |
+| build | stopped by hand after 1,005 s (410 s user, 485 s system) | physical footprint 27 GB (20 GB of large allocations, 4.2 GB of small) | nothing: the stage is written at the step's end |
+
+- **The filter** keeps 14,243,093 of the 51,971,904 highway ways and reads 54,055 border ways
+  once; the T1 run counted 14,289,975 kept or above its ceiling, the 46,882 more border copies
+  read once now making the difference. Its 2,593,833 POIs are the T1 build's.
+- **The build's stop.** The watchdog read the step's resident set from `ps`: 2.1 GB at the stop, and
+  `ru_maxrss` 4.68 GB. On macOS the resident set leaves out the pages the system has compressed or
+  swapped out, and `footprint` read 27 GB from 15 minutes in to the stop at 16.75 minutes, while the
+  machine's swap grew from 8.5 GB to 16.9 of 18.4 GB (13 M pageouts) and the step spent more time in
+  the kernel than in its own code. So the 18 GB line never fired; the step was stopped by hand, with
+  SIGTERM, and left nothing behind. The watchdog reads the footprint since
+  (`docs/reference/testing-tools.md`).
+- **West-coast** (California, Oregon and Washington, build ea89e860206f at `graph_version`
+  c6ea6d2e721c, run twice to the same build), the scale between a state and the country at which
+  the memory is measured: 1,752,551 ways kept, 1,930,839 nodes and 4,797,434 edges, 444.9 MB of
+  arrays and strings and 63.2 MB of geometry; QA fails "SCC largest dropped" alone (San Juan
+  Island's 1,154 nodes, **Oregon and Washington**). The peak memory is the physical footprint the
+  bench tool reads, beside its resident set and the heap tracemalloc traces (a probe run of
+  each step, four to twenty times slower under it):
+
+  | Step | Wall | Peak memory | Peak RSS | Heap | Writes |
+  |---|---|---|---|---|---|
+  | filter | 162 s | 6.39 GB | 3.79 GB | | roads 205.6 MB, POIs 12.3 MB |
+  | build | 47 s | 4.86 GB | 4.32 GB | 3.42 GB | `stages/build/` 733.2 MB |
+  | cleanup | 56 s | 9.76 GB | 4.93 GB | 8.99 GB | `stages/cleanup/` 2,300.6 MB |
+  | enrich | 27 s | 8.19 GB | 6.25 GB | 3.59 GB | `stages/enrich/` 322.0 MB |
+  | tiers | 5.5 s | 1.07 GB | 1.30 GB | 0.72 GB | `tiers.json` 37.5 MB |
+  | save | 27 s | 8.82 GB | 5.60 GB | 4.35 GB | the build, 508.1 MB |
+  | qa | 13 s | 1.17 GB | 1.44 GB | | |
+
+  The resident set reads above the footprint where a step maps its input stage (clean file pages
+  the system may drop, which the footprint leaves out) and below it where pages were compressed.
+  The heap leaves out what GEOS allocates for shapely's geometries: the 4,797,434 lines of the
+  cleaned graph's 36.4 M coordinates take 2.89 GB of footprint, of which tracemalloc sees 0.31
+  GB, and `enrich` builds two such sets, `save` one and its simplification.
+- **What holds the peaks**, at west-coast (tracemalloc's largest holders at each step's peak; refs
+  20.4 M, the roads file's nodes 17.7 M, segments 3.04 M, stage A edges 5.01 M and coordinates
+  37.9 M, stage B coordinates 36.4 M):
+  - `build`: reading the file, `array`s of the file's node ids (int64), their fixed-point lon and
+    lat (int32) and the ways' refs (int64), 0.44 GB, and the ways' tag tuples and tagsets, 0.15
+    GB; then whole-file NumPy over the refs: `flat` and `owner` after `[keep]` (int64, 0.31 GB),
+    `np.unique` of the refs with an inverse and counts (0.29 GB of sorting), and `at`,
+    `ref_id`, `position`, `lon` and `lat` (int64 and float64, 0.16 GB each) beside pyproj's copies
+    of `lon` and `lat` (0.33 GB) and the argsort of the node ids (0.14 GB).
+  - `cleanup`, at stage B's end with stage A's arrays alive: Python lists made by `.tolist()` in
+    stage B's context (eight of 5.0 M items, 1.44 GB), `np.split` of the members into 4.1 M arrays
+    (0.62 GB) and the members' lists (0.20 GB); the coordinates three times over, stage A's
+    (float64, 0.61 GB), stage B's (0.59 GB) and its gathered copy for the stage (0.59 GB), with
+    their `take` and `dst` indices (int64, 0.30 GB each) and stage A's OSM nodes (0.30 GB); and
+    1.0 GB of gathers from the memory-mapped build stage.
+  - `enrich`: the bearings, from two full sets of lines, every edge's and every edge's road
+    without its junction stubs (9.6 M geometries, about 4.5 GB of GEOS memory beside their 0.61 GB
+    of Python objects, and their stacked coordinates, 0.57 GB); 0.87 GB of gathers from the
+    memory-mapped stage.
+  - `save`: the geometry, every edge's line and its simplification (GEOS) and their points
+    (0.49 GB), then `geometry.encode`'s per-step arrays (1.55 GB).
+- **The projection.** The country is 8.1 times west-coast by the ways kept (9.3 times by the roads
+  file's bytes), and every holder above grows with the graph: the footprints scale to about 39–45 GB
+  at `build`, 79–91 GB at `cleanup`, 66–76 GB at `enrich`, 71–82 GB at `save` and 9–11 GB at `tiers`
+  and `qa`, against the machine's 24 GB. The national build's 27 GB was likely short of its peak:
+  the heap alone scales to 28–32 GB there. A slope fitted to the resident sets of Oregon, Oregon and
+  Washington and west-coast had put `build` at 16–21 GB, and undercounted for the reason above.
+- **Leaner steps.** What each change would save at west-coast (about 8–9 times as much
+  nationally): at `build`, projecting and measuring the refs in chunks into `ref_x` and `ref_y`
+  (dropping `position`, `lon`, `lat` and pyproj's copies) 0.65–0.8 GB, letting go of `refs`,
+  `owner` and the first `flat` once used 0.3–0.5 GB, int32 indices 0.3 GB, junctions from one
+  argsort instead of `np.unique` with an inverse and counts 0.3 GB; at `cleanup`, arrays instead
+  of stage B's lists and split 2.2 GB, one copy of stage B's coordinates 1.2 GB, stage A's
+  coordinates out of memory before stage B 0.6–0.9 GB; at `enrich`, the bearings from each road's
+  end points as arrays, with no lines, about 6 GB; at `save`, the geometry encoded in chunks of
+  edges, most of the 6 GB or so it holds. Even so `cleanup` would hold about 5.5 GB at
+  west-coast, 45–50 GB nationally: the all-roads country needs leaner steps before it can be
+  built on this machine, and `cleanup` a way of working through the graph in parts.
 
 ## Fixtures
 

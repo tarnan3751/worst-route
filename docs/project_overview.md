@@ -787,14 +787,17 @@ brief):
   frontend reads only the basemap for now); the public limits behind `serve --public`, off by
   default: per client one job running and three waiting, its next waiting even while workers are
   free, `TOO_MANY_JOBS` carrying the client's counts only when they are why, ten place searches
-  a minute counting cached answers, budgets up to 60 s, and the leash the schema's 150 km (the
-  plan's 300 km is above any request); the client the peer, or with `--trust-proxy` the last
-  `X-Forwarded-For` address, IPv6 by its /64, uvicorn's own proxy headers off; JSON logs with a
-  request id, the client as a salted hash and a line at each job's end; `/ready` failing (503)
-  on a missing places index or basemap; Protomaps credited in the map's attribution control,
+  a minute counting cached answers, budgets up to 60 s, and, as of M5.4, the leash the schema's
+  150 km (the plan's 300 km is above any request); the client the peer, or with `--trust-proxy` the
+  last `X-Forwarded-For` address, IPv6 by its /64, uvicorn's own proxy headers off; JSON logs with a
+  request id, the client as a salted hash and a line at each job's end; `/ready` failing (503) on a
+  missing places index or basemap; Protomaps credited in the map's attribution control,
   OpenStreetMap (ODbL) and the Census Bureau in a footer; MapLibre GL JS upgraded to 6
   (GHSA-jrc7-96c5-q579 fixed); `pmtiles` and `@protomaps/basemaps` (BSD-3-Clause) the new
   dependencies.
+- **The public leash limit relaxed** (2026-11-01, engine version 5; `docs/PLAN.md` §4.5): a
+  request's own leash at most 150 km, the automatic leash following the trip (a fifth of it beyond
+  750 km), the budget bounding the job.
 - **Compute budgets as the plan assumed them** (`docs/PLAN.md` §9 Q1; recorded by the
   coordinator at the M2 and M3 acceptance, 2026-10-31; the owner may revisit): 20 s by default
   (the CLI, the API and the frontend's settings), at most 120 s, at most 60 s on a public server
@@ -816,22 +819,31 @@ The plan's assumed defaults, each open until the owner confirms (`docs/PLAN.md` 
   - (a) **One all-roads master graph.** The national filter keeps 14.3 M ways at every class, 70.6
     times Oregon's (26.6 times Oregon and Washington's), so about 17 M nodes and 42 M edges. Sizes
     in decimal units, scaled from Oregon's build ea3b18096e8b (55.3 MB of arrays and strings plus
-    11.3 MB of geometry): about 3.9 GB of arrays and strings, which the engine maps, and 4.7 GB
-    with the geometry, where format 3 (Oregon's 174 MB) would take about 12 GB. On networkx it is
-    out of reach: the T1 build's 2.6 M raw edges did not finish cleanup in two hours. On arrays,
-    scaled from the runs measured (about 49 M raw edges, 18.7 times the T1 build's): the filter
-    25–35 min, build about 16 min (50 s for T1), cleanup 20–60 min (Oregon 15 s, the T1 build 198
-    s, their costs per raw edge bracketing it), and enrich, tiers, save and qa about 30–40 min
-    (on networkx they took 345 s for the T1 build's 1.3 M edges, about 3 h scaled to 42 M, and
-    tens of GB; the array pipeline's speed-up on Portland is about 8×): about 1.5–2.5 h in all,
-    now that enrich, tiers and save run on arrays too and `filter` merges in a stream (the
-    in-memory merge would have held about 190 M nodes), the peak memory to be measured against the
-    machine's 24 GB (the T1 build's arrays cleanup peaked at 3.7 GB, most of it the handover to
-    networkx, which the steps after cleanup on arrays no longer need). The engine at 17 M nodes
-    has the leash's distances in NumPy (4–10 ms on the T1 build's 887,737 nodes, where shapely's
-    0.16–0.3 µs a node would have taken seconds for a coast-to-coast trip) and would need
-    searches whose set-up does not grow with the build (the kernels allocate per-node or per-edge
-    work arrays on each call; at 887,737 nodes runs still made 1,070–1,170 attempts a second).
+    11.3 MB of geometry): about 3.9 GB of arrays and strings, which the engine maps, and 4.7 GB with
+    the geometry, where format 3 (Oregon's 174 MB) would take about 12 GB. On networkx it is out of
+    reach: the T1 build's 2.6 M raw edges did not finish cleanup in two hours. On arrays, scaled
+    from the runs measured (about 49 M raw edges, 18.7 times the T1 build's): the filter 23 min as
+    measured, build about 16 min (50 s for T1), cleanup 20–60 min (Oregon 15 s, the T1 build 198 s,
+    their costs per raw edge bracketing it), and enrich, tiers, save and qa about 30–40 min (on
+    networkx they took 345 s for the T1 build's 1.3 M edges, about 3 h scaled to 42 M, and tens of
+    GB; the array pipeline's speed-up on Portland is about 8×): about 1.5–2.5 h in all, now that
+    enrich, tiers and save run on arrays too and `filter` merges in a stream (the in-memory merge
+    would have held about 190 M nodes). Its memory, measured (2026-10-31;
+    `docs/reference/pipeline.md`, **The all-roads national build**), does not fit the machine's
+    24 GB: the filter streams the country's 1.92 GB of roads in 23 min at 4.2 GB of resident set,
+    but `build` was stopped by hand at a physical footprint of 27 GB, swapping (the watchdog read
+    the resident set, 2.1 GB, which on macOS leaves out compressed and swapped pages; it reads the
+    footprint since), and west-coast's footprints (California, Oregon and Washington), scaled 8–9
+    times, put the steps at about 39–45 GB for build, 79–91 GB for cleanup, 66–76 GB for enrich and
+    71–82 GB for save. So (a) needs leaner steps before it can be built on this machine: the changes
+    the probes point to (chunked projection and geometry, arrays for cleanup's Python lists, one
+    copy of the coordinates, bearings without GEOS lines) would save from about a third of build's
+    to most of enrich's and save's, leaving cleanup at about 45–50 GB, which needs a way of working
+    through the graph in parts. The engine at 17 M nodes has the leash's distances in NumPy (4–10 ms
+    on the T1 build's 887,737 nodes, where shapely's 0.16–0.3 µs a node would have taken seconds for
+    a coast-to-coast trip) and would need searches whose set-up does not grow with the build (the
+    kernels allocate per-node or per-edge work arrays on each call; at 887,737 nodes runs still made
+    1,070–1,170 attempts a second).
   - (b) **T1 nationally plus all-roads builds per state.** The T1 build: 887,737 nodes, 1,324,013
     edges, 178.1 MB of arrays and strings (201.2 MB with the geometry), 22 minutes from the
     extracts with build and cleanup on arrays; the state builds together about (a)'s size (3.9 GB,
@@ -846,9 +858,9 @@ The plan's assumed defaults, each open until the owner confirms (`docs/PLAN.md` 
     differences of bearing, are unaffected. Geodesic lengths and bearings corrected for it would be
     a pipeline version of their own.
   - The plan's rule (`docs/PLAN.md` §7 M5.3) recommends (a) if the array pipeline makes it a few
-    hours, which its numbers point to, once the memory is measured (the streaming merge exists)
-    (the rest of the array pipeline has landed since); the automatic tier for trips beyond a state (T0 and the 150
-    km leash) needs retuning either way.
+    hours, which its times point to; its memory, now measured, does not fit this machine until the
+    steps are leaner (above). The automatic tier for trips beyond a state (T0 and the 150 km
+    leash) needs retuning either way.
 - Alaska and Hawaii in national builds: left out of `us-t1` and of `us` for now (the coordinator,
   2026-10-31, for the owner to revisit): no road reaches them and CONUS Albers does not cover
   them; they would be regions of their own.

@@ -3,15 +3,20 @@
 // job has said), the mode (the longest, the slowest, or collecting an item, picked under it),
 // the turns (any, or left or right turns avoided, `strict` for none at all), the inefficiency
 // target (as bad as possible, a ratio to the sensible route, or a drive time typed as `9h`,
-// `90m`, `2h30m` or minutes; typing a number picks its kind; no ratio under collect), and the
-// units the panel shows. Locked while a job runs, except the units. The setting an error names
-// (`field`: the target, the item or the constraints) is highlighted.
+// `90m`, `2h30m` or minutes; typing a number picks its kind; no ratio under collect), the
+// vehicle (its mpg and the gas price, for the route's extra fuel and its cost), and the units the
+// panel shows. Locked while a job runs, except the units. The setting an error names (`field`:
+// the target, the item, the constraints or the vehicle) is highlighted.
 import type { CollectItem, TargetKind, Tier } from "../api/types";
 import { ITEM_NAMES, formatDurationInput, parseDuration, type Units } from "../format";
 import {
   BUDGET_MAX_S,
+  GAS_PRICE_MAX,
+  GAS_PRICE_MIN,
   ITEMS,
   LEASH_MAX_KM,
+  MPG_MAX,
+  MPG_MIN,
   TARGET_MAX_DURATION_S,
   TIERS,
   type Mode,
@@ -50,9 +55,9 @@ function typed(input: HTMLInputElement, min: number, max: number, integer: boole
   return ok && value >= min && value <= max ? value : undefined;
 }
 
-/** A labelled row; a group of radios is a `div`, since labels do not nest. */
+/** A labelled row; a group of controls is a `div`, since a label holds one. */
 function field(label: string, control: HTMLElement, note?: HTMLElement): HTMLElement {
-  const row = el(control.classList.contains("radios") ? "div" : "label", "field");
+  const row = el(control instanceof HTMLDivElement ? "div" : "label", "field");
   row.append(el("span", "label", label), control);
   if (note) row.append(note);
   return row;
@@ -118,6 +123,16 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     "resolved",
     "strict rarely finds a route on a street grid: the route may not exist",
   );
+  const mpg = numberInput("", MPG_MIN, MPG_MAX, "any");
+  mpg.ariaLabel = "miles per gallon";
+  const gasPrice = numberInput("", GAS_PRICE_MIN, GAS_PRICE_MAX, "0.01");
+  gasPrice.ariaLabel = "gas price in dollars a gallon";
+  const mpgLabel = el("label");
+  mpgLabel.append(mpg, " mpg");
+  const priceLabel = el("label");
+  priceLabel.append("$ ", gasPrice, " a gallon");
+  const vehicle = el("div", "vehicle");
+  vehicle.append(mpgLabel, priceLabel);
   const units = radios(
     "units",
     UNITS.map(([u, text]): [Units, string, boolean] => [u, text, true]),
@@ -126,6 +141,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
   const modeRow = field("Mode", mode.group);
   const turnsRow = field("Turns", turns.group, strictNote);
   const targetRow = field("How bad", target.group, targetNote);
+  const vehicleRow = field("Vehicle", vehicle);
 
   root.replaceChildren(
     el("h2", "", "Settings"),
@@ -136,6 +152,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     modeRow,
     turnsRow,
     targetRow,
+    vehicleRow,
     field("Units", units.group),
   );
 
@@ -154,6 +171,8 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     item.hidden = settings.objective !== "collect";
     for (const input of turns.inputs) input.checked = input.value === settings.turns;
     strict.checked = settings.strict;
+    mpg.value = String(settings.mpg);
+    gasPrice.value = String(settings.gasPriceUsd);
     for (const input of units.inputs) input.checked = input.value === settings.units;
   };
 
@@ -202,6 +221,16 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     });
   }
   strict.addEventListener("change", () => set({ strict: strict.checked }));
+  mpg.addEventListener("change", () => {
+    const value = typed(mpg, MPG_MIN, MPG_MAX, false);
+    if (value === undefined || value === null) render();
+    else set({ mpg: value });
+  });
+  gasPrice.addEventListener("change", () => {
+    const value = typed(gasPrice, GAS_PRICE_MIN, GAS_PRICE_MAX, false);
+    if (value === undefined || value === null) render();
+    else set({ gasPriceUsd: value });
+  });
   for (const input of units.inputs) {
     input.addEventListener("change", () => set({ units: input.value as Units }));
   }
@@ -212,6 +241,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     ["item", modeRow],
     ["constraints", turnsRow],
     ["target", targetRow],
+    ["vehicle", vehicleRow],
   ]);
   store.watch(["error"], ({ error }) => {
     const errored = fieldRows.get(error?.field);
@@ -225,7 +255,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     const key = [locked, resolved, state.settings.tier, state.settings.leashKm, objective, side];
     if (key.every((value, k) => value === shown[k])) return;
     shown = key;
-    for (const control of [seed, budget, tier, leash, duration, item]) {
+    for (const control of [seed, budget, tier, leash, duration, item, mpg, gasPrice]) {
       control.disabled = locked;
     }
     for (const input of [...target.inputs, ...mode.inputs, ...turns.inputs]) {

@@ -1,6 +1,6 @@
 // Numbers for people (docs/reference/frontend.md). The API's numbers are metric; miles are the
 // default, kilometres the toggle. A drive time typed as a target reads `9h`, `90m`, `2h30m` or
-// a number of minutes.
+// a number of minutes. Fuel is in US gallons and dollars, as the vehicle's mpg and gas price.
 import type { CollectItem } from "./api/types";
 
 export type Units = "mi" | "km";
@@ -13,6 +13,7 @@ const oneDecimal = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 1,
   maximumFractionDigits: 1,
 });
+const dollars = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
 /** A distance: miles (feet under a tenth of a mile) or kilometres (metres under one). */
 export function formatDistance(metres: number, units: Units): string {
@@ -61,6 +62,82 @@ export const ITEM_NAMES: Record<CollectItem, [string, string]> = {
 /** A count of items: `1 bridge`, `24 bridges`. */
 export function formatItems(n: number, item: CollectItem): string {
   return `${formatCount(n)} ${ITEM_NAMES[item][n === 1 ? 0 : 1]}`;
+}
+
+/** The fuel a route burns beyond the sensible route's, and what it costs: `+6.6 gal · $25.80`. */
+export function formatFuel(gallons: number, usd: number): string {
+  return `+${oneDecimal.format(gallons)} gal · ${dollars.format(usd)}`;
+}
+
+/** A share as a whole percentage, as the toasts write it: `23 %`, or `under 1 %`. */
+export function formatPercent(fraction: number): string {
+  const percent = Math.round(fraction * 100);
+  return percent > 0 ? `${percent} %` : "under 1 %";
+}
+
+// The USPS code of each state and territory by its Census name, as the route document names them.
+export const STATE_CODES: Record<string, string> = {
+  Alabama: "AL",
+  Alaska: "AK",
+  "American Samoa": "AS",
+  Arizona: "AZ",
+  Arkansas: "AR",
+  California: "CA",
+  Colorado: "CO",
+  "Commonwealth of the Northern Mariana Islands": "MP",
+  Connecticut: "CT",
+  Delaware: "DE",
+  "District of Columbia": "DC",
+  Florida: "FL",
+  Georgia: "GA",
+  Guam: "GU",
+  Hawaii: "HI",
+  Idaho: "ID",
+  Illinois: "IL",
+  Indiana: "IN",
+  Iowa: "IA",
+  Kansas: "KS",
+  Kentucky: "KY",
+  Louisiana: "LA",
+  Maine: "ME",
+  Maryland: "MD",
+  Massachusetts: "MA",
+  Michigan: "MI",
+  Minnesota: "MN",
+  Mississippi: "MS",
+  Missouri: "MO",
+  Montana: "MT",
+  Nebraska: "NE",
+  Nevada: "NV",
+  "New Hampshire": "NH",
+  "New Jersey": "NJ",
+  "New Mexico": "NM",
+  "New York": "NY",
+  "North Carolina": "NC",
+  "North Dakota": "ND",
+  Ohio: "OH",
+  Oklahoma: "OK",
+  Oregon: "OR",
+  Pennsylvania: "PA",
+  "Puerto Rico": "PR",
+  "Rhode Island": "RI",
+  "South Carolina": "SC",
+  "South Dakota": "SD",
+  Tennessee: "TN",
+  Texas: "TX",
+  "United States Virgin Islands": "VI",
+  Utah: "UT",
+  Vermont: "VT",
+  Virginia: "VA",
+  Washington: "WA",
+  "West Virginia": "WV",
+  Wisconsin: "WI",
+  Wyoming: "WY",
+};
+
+/** States by their codes: `OR, WA`; a name not known stays as it is. */
+export function formatStates(names: string[]): string {
+  return names.map((name) => STATE_CODES[name] ?? name).join(", ");
 }
 
 /** A coordinate as the stop list shows it. */

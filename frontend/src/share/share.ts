@@ -1,26 +1,33 @@
 // Links (docs/reference/frontend.md, **Links**).
 //
 // The request's settings and stops live in the URL
-// (`?seed=&budget=&tier=&leash=&target=&mode=&turns=&strict=&stops=`, the target as `max`,
-// `ratio:<x>` or `duration:<seconds>`, the mode as `distance`, `time` or `collect:<item>` and the
-// turns as `left` or `right`, with `strict=1` (both written only when not the default), the stops
-// as `lat,lon;lat,lon;...` at 6 decimals, as they were clicked), so a link reproduces a request;
+// (`?seed=&budget=&tier=&leash=&target=&mode=&turns=&strict=&vehicle=&stops=`, the target as
+// `max`, `ratio:<x>` or `duration:<seconds>`, the mode as `distance`, `time` or `collect:<item>`
+// and the turns as `left` or `right`, with `strict=1` (both written only when not the default),
+// the vehicle as `<mpg>,<gas price>` (only when not the default), the stops as
+// `lat,lon;lat,lon;...` at 6 decimals, as they were clicked), so a link reproduces a request;
 // `?route=<id>` opens a stored route without running anything, its own request then giving the
 // stops and settings. `UrlSync` keeps the URL in step with what the app shows once it is
 // started, which is after a `?route=` link has been opened, or has failed to open (the parameter
 // then stays). The share section copies a link to the route shown, and opens its share image
 // (`GET /routes/{id}/share.png`) in a new tab.
 import { API_BASE, errorBody, getRoute, getRouteGeojson } from "../api/client";
-import type { CollectItem, LineString, Target, Tier } from "../api/types";
+import type { CollectItem, LineString, Target, Tier, Vehicle } from "../api/types";
 import type { JobRunner } from "../run/controls";
 import {
   BUDGET_MAX_S,
+  DEFAULT_SETTINGS,
+  GAS_PRICE_MAX,
+  GAS_PRICE_MIN,
   ITEMS,
   LEASH_MAX_KM,
   MODES,
+  MPG_MAX,
+  MPG_MIN,
   TARGET_MAX_DURATION_S,
   TIERS,
   targetOf,
+  vehicleOf,
   type AppState,
   type Mode,
   type Settings,
@@ -35,7 +42,7 @@ export type UrlMode =
   { objective: Exclude<Mode, "collect"> } | { objective: "collect"; item: CollectItem };
 
 /** What a URL can carry; null where it says nothing (or nothing valid). `strict` only with a
- * side to avoid; no ratio target under collect. */
+ * side to avoid; no ratio target under collect; the vehicle only within the panel's limits. */
 export interface UrlState {
   route: string | null;
   seed: number | null;
@@ -46,6 +53,7 @@ export interface UrlState {
   mode: UrlMode | null;
   turns: Exclude<TurnSetting, "any"> | null;
   strict: true | null;
+  vehicle: Vehicle | null;
   stops: { lat: number; lon: number }[] | null;
 }
 
@@ -74,6 +82,19 @@ function parseTarget(text: string | null): Target | null {
     return { kind: "duration", seconds: value };
   }
   return null;
+}
+
+/** `vehicle` when the panel takes it, else null. */
+function withinLimits(vehicle: Vehicle | null | undefined): Vehicle | null {
+  if (!vehicle) return null;
+  const { mpg, gas_price_usd: price } = vehicle;
+  const ok = mpg >= MPG_MIN && mpg <= MPG_MAX && price >= GAS_PRICE_MIN && price <= GAS_PRICE_MAX;
+  return ok ? vehicle : null;
+}
+
+function parseVehicle(text: string | null): Vehicle | null {
+  const [mpg, price, ...rest] = (text ?? "").split(",").map(Number); // "" is 0, out of range
+  return rest.length === 0 ? withinLimits({ mpg, gas_price_usd: price }) : null;
 }
 
 function parseMode(text: string | null): UrlMode | null {
@@ -113,6 +134,7 @@ export function decodeUrlState(search: string): UrlState {
     mode,
     turns,
     strict: turns !== null && params.get("strict") === "1" ? true : null,
+    vehicle: parseVehicle(params.get("vehicle")),
     stops: stops ? parseStops(stops) : null,
   };
 }
@@ -135,16 +157,21 @@ export function encodeUrlState(state: UrlState): string {
   }
   if (state.turns !== null) params.push(`turns=${state.turns === "no_left" ? "left" : "right"}`);
   if (state.strict !== null) params.push("strict=1");
+  if (state.vehicle !== null) {
+    params.push(`vehicle=${state.vehicle.mpg},${state.vehicle.gas_price_usd}`);
+  }
   if (state.stops !== null && state.stops.length > 0) {
     params.push(`stops=${state.stops.map(({ lat, lon }) => `${lat},${lon}`).join(";")}`);
   }
   return params.length ? `?${params.join("&")}` : "";
 }
 
-/** What the app shows, as a URL carries it: the mode and the turns only when not the default. */
+/** What the app shows, as a URL carries it: the mode, the turns and the vehicle only when not
+ * the default. */
 export function urlStateOf(state: Readonly<AppState>): UrlState {
   const { settings } = state;
-  const { objective, item, turns } = settings;
+  const { objective, item, turns, mpg, gasPriceUsd } = settings;
+  const usual = mpg === DEFAULT_SETTINGS.mpg && gasPriceUsd === DEFAULT_SETTINGS.gasPriceUsd;
   return {
     route: state.route?.route_id ?? null,
     seed: settings.seed,
@@ -160,6 +187,7 @@ export function urlStateOf(state: Readonly<AppState>): UrlState {
           : { objective },
     turns: turns === "any" ? null : turns,
     strict: turns !== "any" && settings.strict ? true : null,
+    vehicle: usual ? null : vehicleOf(settings),
     stops: state.stops.map(({ lat, lon }) => ({ lat, lon })),
   };
 }
@@ -188,11 +216,14 @@ export function settingsFrom(url: UrlState, defaults: Settings): Settings {
     item: url.mode?.objective === "collect" ? url.mode.item : defaults.item,
     turns: url.turns ?? defaults.turns,
     strict: url.strict ?? defaults.strict,
+    mpg: url.vehicle?.mpg ?? defaults.mpg,
+    gasPriceUsd: url.vehicle?.gas_price_usd ?? defaults.gasPriceUsd,
   };
 }
 
-/** Open stored route `routeId`: its stops and settings (its mode and turns among them), the
- * route and its baseline. Whether it opened; when not, the banner says why. */
+/** Open stored route `routeId`: its stops and settings (its mode, turns and vehicle among them;
+ * the panel's vehicle stays when it has none, or one outside the panel's limits), the route and
+ * its baseline. Whether it opened; when not, the banner says why. */
 export async function openRoute(
   routeId: string,
   store: Store,
@@ -202,6 +233,7 @@ export async function openRoute(
     const [route, geojson] = await Promise.all([getRoute(routeId), getRouteGeojson(routeId)]);
     const { request } = route;
     const { objective, item, constraints } = request;
+    const vehicle = withinLimits(request.vehicle);
     store.update({
       stops: (request.stops ?? []).map(({ lat, lon }, k) => {
         const { node, lat: snappedLat, lon: snappedLon, moved_m, note } = route.stops[k];
@@ -217,6 +249,7 @@ export async function openRoute(
       item: item ?? store.state.settings.item,
       turns: constraints?.no_left ? "no_left" : constraints?.no_right ? "no_right" : "any",
       strict: constraints?.strict ?? false,
+      ...(vehicle ? { mpg: vehicle.mpg, gasPriceUsd: vehicle.gas_price_usd } : {}),
     });
     const baseline = geojson.features.find((feature) => feature.properties.kind === "baseline");
     const geometry = baseline?.geometry?.type === "LineString" ? baseline.geometry : null;

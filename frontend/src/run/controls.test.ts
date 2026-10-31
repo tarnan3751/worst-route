@@ -240,6 +240,7 @@ describe("modes and turn constraints", () => {
       constraints: { no_left: true, no_right: false, strict: false },
       budget_s: 20,
       target: { kind: "max" },
+      vehicle: { mpg: 24, gas_price_usd: 3.89 },
     });
   });
 

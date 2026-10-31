@@ -15,6 +15,7 @@ import type {
   TargetMetrics,
   Tier,
   Turns,
+  Vehicle,
 } from "./api/types";
 import type { Units } from "./format";
 
@@ -47,6 +48,11 @@ export const ITEMS: readonly CollectItem[] = [
   "roundabout",
   "bridge",
 ];
+// The vehicle the panel takes (the API takes any mpg above 0 and any price from 0).
+export const MPG_MIN = 5;
+export const MPG_MAX = 100;
+export const GAS_PRICE_MIN = 0.5;
+export const GAS_PRICE_MAX = 20;
 
 /** The objective: the longest, the slowest, or the most of an item. */
 export type Mode = (typeof MODES)[number];
@@ -57,7 +63,8 @@ export type TurnSetting = "any" | "no_left" | "no_right";
 /** The request's settings; null seed is a random one, picked by the server. The target is
  * `target`, with `ratio` (×, more than 1) or `durationS` as its number; each keeps its value
  * while another kind is chosen. `item` is what `collect` collects, kept while another objective
- * is chosen; `strict` counts only with a side to avoid. */
+ * is chosen; `strict` counts only with a side to avoid. `mpg` and `gasPriceUsd` are the
+ * vehicle, for the route's extra fuel and its cost. */
 export interface Settings {
   seed: number | null;
   budgetS: number;
@@ -70,6 +77,8 @@ export interface Settings {
   item: CollectItem;
   turns: TurnSetting;
   strict: boolean;
+  mpg: number;
+  gasPriceUsd: number;
   units: Units;
 }
 
@@ -85,6 +94,8 @@ export const DEFAULT_SETTINGS: Settings = {
   item: "bridge",
   turns: "any",
   strict: false,
+  mpg: 24,
+  gasPriceUsd: 3.89,
   units: "mi",
 };
 
@@ -93,6 +104,11 @@ export function targetOf(settings: Settings): Target {
   if (settings.target === "ratio") return { kind: "ratio", value: settings.ratio };
   if (settings.target === "duration") return { kind: "duration", seconds: settings.durationS };
   return { kind: "max" };
+}
+
+/** The request's vehicle for `settings`. */
+export function vehicleOf(settings: Settings): Vehicle {
+  return { mpg: settings.mpg, gas_price_usd: settings.gasPriceUsd };
 }
 
 /** A request's objective, item and turn constraints. */

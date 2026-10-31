@@ -1,10 +1,11 @@
 // Running a job (docs/reference/frontend.md, **Run**): `JobRunner`, a job's lifecycle, which the
 // tests drive without a DOM, and `mountRunControls`, the Go, Cancel, Reroll and Make it worse
 // buttons and the live stat line (ratio, length, drive time, attempts, elapsed; the drive and
-// the delays under the slowest time, the items collected, the turns).
+// the delays under the slowest time, the items collected, the turns; once stored, the towns and
+// states the route passes through, its extra fuel and its share of the roads within reach).
 //
-// Go posts the stops and settings (the target, the objective with its item, and the turn
-// constraints among them), and Reroll the same without a seed,
+// Go posts the stops and settings (the target, the objective with its item, the turn
+// constraints and the vehicle among them), and Reroll the same without a seed,
 // so the server picks one; the 202's seed goes into the settings. Make it worse posts the shown route as `base_route_id`
 // with the seed after the last one tried on it (its own at first), the base route giving the
 // stops, tier and leash; the settings' seed follows the route shown, so it changes only when a
@@ -41,8 +42,11 @@ import {
   formatDistance,
   formatDuration,
   formatElapsed,
+  formatFuel,
   formatItems,
+  formatPercent,
   formatRatio,
+  formatStates,
 } from "../format";
 import type { RouteLayer } from "../map/routeLayer";
 import {
@@ -50,6 +54,7 @@ import {
   TARGET_TOLERANCE,
   modeOf,
   targetOf,
+  vehicleOf,
   type AppState,
   type RequestMode,
   type Store,
@@ -75,6 +80,7 @@ function jobRequest(state: Readonly<AppState>, seed: number | null): RouteReques
     leash_km: settings.leashKm,
     budget_s: settings.budgetS,
     target: targetOf(settings),
+    vehicle: vehicleOf(settings),
   };
   if (seed !== null) request.seed = seed;
   return request;
@@ -90,6 +96,7 @@ function worseRequest(state: Readonly<AppState>, route: RouteDocument, seed: num
     ...modeOf(settings),
     budget_s: settings.budgetS,
     target: targetOf(settings),
+    vehicle: vehicleOf(settings),
   };
 }
 
@@ -324,6 +331,8 @@ export function mountRunControls(root: HTMLElement, store: Store, runner: JobRun
   const rows = names.map((name) => el("div", `stat-${name}`));
   const [ratio, line, target, note, time, items, turns] = rows;
   root.replaceChildren(el("h2", "", "Run"), buttons, ratio, line, time, items, turns, target, note);
+  const routeRows = ["towns", "states", "fuel", "roads"].map((name) => el("div", `stat-${name}`));
+  root.append(...routeRows);
 
   store.watch(["region", "stops", "route", "run", "settings"], (state) => {
     const locked = busy(store);
@@ -333,6 +342,10 @@ export function mountRunControls(root: HTMLElement, store: Store, runner: JobRun
     worse.disabled = state.region === null || state.route === null || locked;
     cancel.disabled = state.run.phase !== "running";
     statLines(state).forEach((text, k) => (rows[k].textContent = text));
+    routeLines(state).forEach(({ text, title }, k) => {
+      routeRows[k].textContent = text;
+      routeRows[k].title = title;
+    });
   });
 }
 
@@ -415,5 +428,36 @@ export function statLines(state: Readonly<AppState>): StatLines {
       : "",
     objective === "collect" && item && items ? formatItems(items[item], item) : "",
     turns ? turnsLine(turns, run.mode) : "",
+  ];
+}
+
+/** A row drawn from the stored route: its text, and the tooltip that spells it out. */
+export interface RouteLine {
+  text: string;
+  title: string;
+}
+
+/** The stored route's rows, after the run's: the towns it passes through (the first two and how
+ * many more; all of them in the tooltip), the states (by their codes), the fuel it burns beyond
+ * the sensible route's and its cost (with a vehicle), and its share of the roads within reach.
+ * Empty where the document says nothing, and while no stored route is shown. */
+export function routeLines(
+  state: Readonly<AppState>,
+): [RouteLine, RouteLine, RouteLine, RouteLine] {
+  const none = { text: "", title: "" };
+  const { route, run } = state;
+  if (route === null || run.phase !== "done") return [none, none, none, none];
+  const { towns, states, extra_fuel_gal: fuel, extra_cost_usd: cost } = route.metrics;
+  const fraction = route.metrics.network_fraction;
+  const more = towns && towns.length > 2 ? ` +${towns.length - 2}` : "";
+  return [
+    towns?.length
+      ? { text: `towns: ${towns.slice(0, 2).join(", ")}${more}`, title: towns.join(", ") }
+      : none,
+    states?.length ? { text: `states: ${formatStates(states)}`, title: states.join(", ") } : none,
+    fuel != null && cost != null ? { text: `fuel: ${formatFuel(fuel, cost)}`, title: "" } : none,
+    fraction !== undefined
+      ? { text: `roads used: ${formatPercent(fraction)} of those within reach`, title: "" }
+      : none,
   ];
 }

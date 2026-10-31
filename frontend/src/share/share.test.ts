@@ -27,6 +27,7 @@ const full: UrlState = {
   mode: null,
   turns: null,
   strict: null,
+  vehicle: null,
   stops: [
     { lat: 45.5231, lon: -122.6765 },
     { lat: 45.519368, lon: -122.662765 },
@@ -44,6 +45,7 @@ const nothing: UrlState = {
   mode: null,
   turns: null,
   strict: null,
+  vehicle: null,
   stops: null,
 };
 

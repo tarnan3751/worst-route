@@ -87,6 +87,13 @@ or towns and draw no outlines, never an error. For a route's line in lon/lat
   Working segment by segment makes the order exact and never confused by a route that crosses
   itself on an overpass: a polygon is placed where it was first met, and a route that comes back
   into it later does not move it.
+- **Fast**: the polygons are prepared (`shapely.prepare`) when the index loads, and each segment
+  is tested only against the polygons whose bounds it meets, on the prepared polygons. On
+  Portland a 9,642-point route takes 5–7 ms against the states and the region's places, a
+  15,369-point one 49 ms; unprepared, the same lookups took 0.7–1.1 s on the same busy machine
+  (load average about 27) and about 0.23 s on a quiet one. Prepared polygons are not safe under
+  concurrent use with shapely 2.2 and GEOS 3.14, used before or not (sixteen threads asking at
+  once crash the process), so the index answers one lookup at a time.
 
 On Portland, Powell's → Reed (seed 1) crosses `[OR]` and passes through Portland first (GEOID
 4159000, "Portland city"); a straight line from Aloha (45.4943, −122.8671) to Powell's

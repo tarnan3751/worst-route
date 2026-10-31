@@ -57,6 +57,21 @@ def test_states_and_towns_come_in_route_order_cdp_included(index: PlaceIndex) ->
     assert index.towns_passed(back) == [EASTBROOK, MIDDLEFIELD, WESTVILLE]
 
 
+def test_the_polygons_are_prepared_and_answer_as_unprepared_ones(
+    index: PlaceIndex, tmp_path: Path
+) -> None:
+    assert shapely.is_prepared(index._states[0]).all()
+    assert shapely.is_prepared(index._towns[0]).all()
+    plain = PlaceIndex.load("portland", tmp_path)
+    assert plain is not None
+    shapely.destroy_prepared(plain._states[0])
+    shapely.destroy_prepared(plain._towns[0])
+    line = route_line(GRID, EAST_THEN_NORTH_EDGES)
+    for route in (line, shapely.reverse(line)):
+        assert index.states_crossed(route) == plain.states_crossed(route)
+        assert index.towns_passed(route) == plain.towns_passed(route)
+
+
 def test_the_first_meeting_decides_even_on_a_route_that_comes_back(index: PlaceIndex) -> None:
     # East through Middlefield, north to Eastbrook, then back west through Middlefield's
     # latitude band north of it and down into Westville: each is listed once, where first met.

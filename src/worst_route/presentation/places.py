@@ -25,8 +25,16 @@ that intersects the polygon, then the point of their intersection nearest that s
 keep the files' order. Segment by segment, so a route crossing itself on an overpass is never
 located at its other pass. geopandas is imported only to write; the index reads with pyarrow
 and shapely.
+
+The polygons are prepared (`shapely.prepare`) when the index loads, and each segment is tested
+only against the polygons whose bounds it meets: on Portland, a 9,642-point route against the
+states and the region's 68 places takes a few milliseconds, where the unprepared polygons took
+about a quarter of a second. Prepared polygons are not safe under concurrent use with shapely 2.2
+and GEOS 3.14, whether or not they have been used before (sixteen threads asking at once crash
+the process), so the index answers one lookup at a time.
 """
 
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -191,8 +199,11 @@ class PlaceIndex:
         self.states = tuple(states)
         self.towns = tuple(towns)
         self.outlines = outlines
+        shapely.prepare(state_shapes)
+        shapely.prepare(town_shapes)
         self._states = (state_shapes, shapely.STRtree(state_shapes))
         self._towns = (town_shapes, shapely.STRtree(town_shapes))
+        self._lock = threading.Lock()  # prepared polygons are unsafe under concurrent use
 
     @classmethod
     def load(cls, region: str, data_dir: Path | None = None) -> "PlaceIndex | None":
@@ -215,11 +226,13 @@ class PlaceIndex:
 
     def states_crossed(self, line: shapely.LineString) -> list[State]:
         """The states `line` passes through, in the order it first enters them."""
-        return [self.states[k] for k in _entered(line, *self._states)]
+        with self._lock:
+            return [self.states[k] for k in _entered(line, *self._states)]
 
     def towns_passed(self, line: shapely.LineString) -> list[Town]:
         """The towns `line` passes through, in the order it first enters them."""
-        return [self.towns[k] for k in _entered(line, *self._towns)]
+        with self._lock:
+            return [self.towns[k] for k in _entered(line, *self._towns)]
 
 
 def _load(path: Path, columns: Sequence[str]) -> tuple[list[tuple[str, ...]], Shapes]:
@@ -230,10 +243,13 @@ def _load(path: Path, columns: Sequence[str]) -> tuple[list[tuple[str, ...]], Sh
 
 
 def _entered(line: shapely.LineString, shapes: Shapes, tree: shapely.STRtree) -> list[int]:
-    """The indices of the shapes `line` intersects, by where it first meets each."""
+    """The indices of the shapes `line` intersects, by where it first meets each (`shapes`
+    prepared)."""
     coords = shapely.get_coordinates(line)
     segments = cast(Shapes, shapely.linestrings(np.stack([coords[:-1], coords[1:]], axis=1)))
-    segment, shape = tree.query(segments, predicate="intersects")
+    segment, shape = tree.query(segments)  # the bounds meet; then each pair on the prepared shape
+    meets = shapely.intersects(shapes[shape], segments[segment])
+    segment, shape = segment[meets], shape[meets]
     order = np.lexsort((segment, shape))
     shape, segment = shape[order], segment[order]
     first = np.unique(shape, return_index=True)[1]  # each shape's first segment

@@ -52,6 +52,17 @@ describe("the data sources and notices", () => {
       ["Fonts", "SIL Open Font License 1.1", "https://openfontlicense.org"],
       ["MapLibre GL JS", "BSD-3-Clause", "https://github.com/maplibre/maplibre-gl-js"],
       ["pmtiles", "BSD-3-Clause", "https://github.com/protomaps/PMTiles"],
+      ["pywebview", "BSD-3-Clause", "https://github.com/r0x0r/pywebview"],
+      [
+        "PyInstaller",
+        "GPL-2.0-or-later with the bootloader exception",
+        "https://pyinstaller.org/en/stable/license.html",
+      ],
+      [
+        "Python and its libraries",
+        "each its own: THIRD-PARTY-LICENSES.txt in the app",
+        "https://docs.python.org/3/license.html",
+      ],
     ];
     expect(entries).toHaveLength(expected.length);
     expected.forEach(([name, licence, href], k) => {

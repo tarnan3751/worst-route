@@ -19,8 +19,10 @@ when it is gone, or the pipe has no reader any more, the worker closes its end a
 once (`os._exit`), so a crashed API never leaves workers searching. With inline workers (tests)
 it runs in a thread on a `queue.Queue`, and `cancel`, an Event, ends it quietly at the next
 accepted splice. A `BaseRouteMismatch` from `plan_route` (a base route the request cannot
-continue) is reported under the API's code for it. The worker imports the engine and the graph
-package, never FastAPI, and every message is a small picklable dataclass.
+continue) is reported under the API's code for it, and a `BrandRefused` (a brand the build does
+not have or the request's area does not hold) as `INVALID_REQUEST` on the field `brand`. The
+worker imports the engine and the graph package, never FastAPI, and every message is a small
+picklable dataclass.
 """
 
 import multiprocessing
@@ -35,6 +37,7 @@ from typing import Any, Protocol
 
 from worst_route.config import BackendName
 from worst_route.engine.io import route_document
+from worst_route.engine.objectives.brand import BrandRefused
 from worst_route.engine.plan import BaseRouteMismatch, plan_route
 from worst_route.engine.request import RequestMasks, RouteRequest
 from worst_route.engine.route import IntArray, Metrics, Route
@@ -212,6 +215,8 @@ def run_job(
         raise
     except BaseRouteMismatch as error:
         out.put(Failed("BASE_ROUTE_MISMATCH", str(error), {"field": error.field}))
+    except BrandRefused as error:
+        out.put(Failed("INVALID_REQUEST", str(error), {"field": error.field}))
     except StopUnreachable as error:
         out.put(Failed(*unreachable(error)))
     except SnapError as error:

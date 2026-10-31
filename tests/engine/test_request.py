@@ -88,7 +88,10 @@ def test_a_round_trip_has_no_ratio_target() -> None:
             {"objective": "collect", "item": "bridge", "target": {"kind": "ratio", "value": 3}},
             "no ratio",
         ),
-        ({"objective": "slowest"}, "unknown objective 'slowest'; known: distance, time, collect"),
+        (
+            {"objective": "slowest"},
+            "unknown objective 'slowest'; known: distance, time, collect, brand",
+        ),
     ],
 )
 def test_only_collect_takes_an_item_and_it_takes_no_ratio(
@@ -108,6 +111,37 @@ def test_a_collecting_request_round_trips_through_json() -> None:
         assert (dumped["objective"], dumped["item"]) == ("collect", item)
         assert RouteRequest.model_validate(json.loads(json.dumps(dumped))) == request
     assert RouteRequest(stops=PORTLAND, seed=1).model_dump(mode="json")["item"] is None
+
+
+@pytest.mark.parametrize(
+    ("fields", "message"),
+    [
+        ({"objective": "brand"}, "the brand objective needs a brand"),
+        ({"brand": 3}, "only the brand objective takes a brand"),
+        ({"objective": "collect", "item": "bridge", "brand": 3}, "only the brand objective"),
+        ({"objective": "brand", "brand": -1}, "greater than or equal to 0"),
+        (
+            {"objective": "brand", "brand": 3, "target": {"kind": "ratio", "value": 3}},
+            "the brand objective takes no ratio target: it counts visits, not metres",
+        ),
+    ],
+)
+def test_only_the_brand_objective_takes_a_brand_and_it_takes_no_ratio(
+    fields: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        RouteRequest.model_validate({"stops": PORTLAND, "seed": 1, **fields})
+
+
+def test_a_pilgrimage_round_trips_through_json_and_others_leave_the_brand_out() -> None:
+    duration = Target(kind="duration", value=3600)
+    request = RouteRequest(stops=PORTLAND, seed=1, objective="brand", brand=3, target=duration)
+    dumped = request.model_dump(mode="json")
+    assert (dumped["objective"], dumped["brand"]) == ("brand", 3)
+    assert RouteRequest.model_validate(json.loads(json.dumps(dumped))) == request
+    plain = RouteRequest(stops=PORTLAND, seed=1)
+    assert "brand" not in plain.model_dump(mode="json")  # as before brands existed
+    assert plain.brand is None
 
 
 def test_round_trips_through_json() -> None:

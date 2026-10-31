@@ -1,6 +1,7 @@
 """The job manager with inline workers: events, resync, cancellation, limits, continuations."""
 
 import json
+import queue
 import time
 from pathlib import Path
 from typing import Any
@@ -358,6 +359,19 @@ async def test_a_worker_that_raises_ends_its_job_in_an_error(
         error = json.loads(events[-1].data)
         assert error == {"code": "WORKER_FAILED", "message": "RuntimeError: boom"}
         assert job.status == "error"
+
+
+async def test_a_worker_refuses_a_brand_its_request_s_area_does_not_hold(tmp_path: Path) -> None:
+    # Planning repeats the pre-flight's check: a job that skipped it ends INVALID_REQUEST.
+    root = tmp_path / "data"
+    save_build(root, lattice(10, 10, rounded_lonlat=True, brands={"Acme": [55]}), "branded")
+    out: queue.Queue[worker_module.Message] = queue.Queue()
+    req = request(GRID, [0, 2], objective="brand", brand=0, leash_km=0.05)
+    worker_module.run_job(JobSpec(root, "portland", "branded", "python", req), out)
+    failed = out.get_nowait()
+    assert isinstance(failed, worker_module.Failed) and out.empty()
+    assert (failed.code, failed.message) == ("INVALID_REQUEST", "no Acme within reach")
+    assert failed.fields == {"field": "brand"}
 
 
 async def test_a_store_that_fails_while_cancelling_still_ends_the_stream(

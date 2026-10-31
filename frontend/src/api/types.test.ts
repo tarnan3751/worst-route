@@ -8,6 +8,9 @@ import { describe, expect, it } from "vitest";
 import { RECORDINGS, loadStream } from "../__fixtures__/stream";
 import type {
   Baseline,
+  BrandEntry,
+  BrandList,
+  BrandVisits,
   Constraints,
   DirectionStep,
   DirectionsResult,
@@ -126,7 +129,13 @@ const itemCounts = object<ItemCounts>({
   roundabout: "integer",
   bridge: "integer",
 });
-// A collecting route's item and counts; absent for every other objective.
+const brandVisits = object<BrandVisits>({
+  id: "integer",
+  name: "string",
+  visits: "integer",
+  of: "integer",
+});
+// A collecting route's item and counts, a pilgrimage's brand; absent for every other objective.
 const metrics = object<Metrics>(
   {
     length_m: "number",
@@ -134,6 +143,7 @@ const metrics = object<Metrics>(
     ratio: nullable("number"),
     item: optional(collectItem),
     items: optional(itemCounts),
+    brand: optional(brandVisits),
   },
   nullable("number"),
 );
@@ -162,6 +172,7 @@ const doneMetrics = object<DoneMetrics>(
     turns: optional(turns),
     item: optional(collectItem),
     items: optional(itemCounts),
+    brand: optional(brandVisits),
   },
   nullable("number"),
 );
@@ -188,6 +199,7 @@ const routeRequest = object<RouteRequest>({
   objective: optional(literal("distance", "time", "collect", "brand", "alphabet")),
   constraints: optional(constraints),
   item: optional(nullable(collectItem)),
+  brand: optional(nullable("integer")),
   tier: optional(tier),
   leash_km: optional({ anyOf: ["number", literal("auto")] }),
   budget_s: optional("number"),
@@ -329,6 +341,7 @@ const routeDocument = object<RouteDocument>({
     delay_s: optional("number"), // the recordings predate the delays and the turns
     turns: optional(turns),
     items: optional(itemCounts),
+    brand: optional(nullable(brandVisits)), // the recordings predate it
     // the recordings predate the presentation's numbers, directions and toasts
     extra_fuel_gal: optional(nullable("number")),
     extra_cost_usd: optional(nullable("number")),
@@ -360,6 +373,18 @@ const geocodeResult = object<GeocodeResult>({
     object<GeocodeCandidate>({ label: "string", lat: "number", lon: "number", category: "string" }),
   ),
   cached: "boolean",
+});
+
+const brandList = object<BrandList>({
+  region: "string",
+  brands: array(
+    object<BrandEntry>({
+      id: "integer",
+      name: "string",
+      wikidata: nullable("string"),
+      locations: "integer",
+    }),
+  ),
 });
 
 const EVENTS: Record<string, Spec> = {
@@ -502,6 +527,15 @@ describe("the types against docs/reference/api.md", () => {
     const status = /\*\*The job status\*\*[^`]*`[^`]*`[^`]*`(\{[^`]*\})`/.exec(reference)?.[1];
     expect(status).toBeDefined();
     expect(differences(parseFields(status!), jobStatus, "status")).toEqual([]);
+  });
+
+  it("has the fields of /brands", () => {
+    expect(differences(documentedOn("| GET | `/brands` |"), brandList, "brands")).toEqual([]);
+    const example = {
+      region: "portland",
+      brands: [{ id: 1, name: "Starbucks", wikidata: "Q37158", locations: 152 }],
+    };
+    expect(problems(example, brandList)).toEqual([]);
   });
 
   it("has the fields of /routes/{id}/directions", () => {

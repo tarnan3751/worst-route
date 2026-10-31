@@ -17,6 +17,10 @@ most r_max, as collecting's: a brand's locations are sparse.
 many of its nodes the route passes and how many lie within `area`. A pilgrimage's counters are
 `{"brand": brand_counts(...)}`, its target value the visits, and `describe` the same counts; the
 validator and the API recount them with this function from the route and the build alone.
+
+`brand_problem(data, brand, area)` is why a pilgrimage to `brand` cannot be planned on this
+build ("unknown brand 999"), or within `area` ("no Starbucks within reach"), else None; planning
+raises it as `BrandRefused`, a `ValueError` whose `field` is `"brand"`.
 """
 
 from dataclasses import replace
@@ -28,6 +32,21 @@ from worst_route.config import COLLECT_ITEM_WEIGHT, COLLECT_RADIUS_FRACTION, COL
 from worst_route.engine.objectives.base import BaseObjective, BoolArray, FloatArray, counted_nodes
 from worst_route.engine.route import IntArray, Metrics, Route
 from worst_route.graph.data import GraphData
+
+
+class BrandRefused(ValueError):  # noqa: N818 (the request's refusal, as the API names it)
+    """A brand the build does not have, or none of whose locations the request's area holds."""
+
+    field = "brand"
+
+
+def brand_problem(data: GraphData, brand: int, area: BoolArray | None = None) -> str | None:
+    """Why a pilgrimage to `brand` cannot be planned on this build within `area`, or None."""
+    if not 0 <= brand < len(data.strings.brands):
+        return f"unknown brand {brand}"
+    if area is not None and not area[data.nodes_of_brand(brand)].any():
+        return f"no {data.strings.brands[brand]} within reach"
+    return None
 
 
 def brand_counts(

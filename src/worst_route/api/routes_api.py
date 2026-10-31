@@ -3,6 +3,7 @@
     GET    /health                     the loaded builds
     GET    /regions                    each region's build, bbox, counts and tiers
     POST   /snap                       where a stop would go
+    GET    /brands                     the region's brands, for a pilgrimage
     POST   /jobs                       plan a route: 202 {job_id, events_url, seed}
     GET    /jobs/{id}/events           the job's events (SSE; Last-Event-ID resumes)
     GET    /jobs/{id}                  its status and current snapshot (polling)
@@ -12,12 +13,14 @@
     POST   /routes/{id}/validate       the validator's report on it
 
 `POST /jobs` refuses before a job exists: a ratio target for a round trip first, then the
-objective (one not built yet, an unknown one, or one whose item or target does not fit it:
-`request.objective_problem`) and the budget (the target's bounds are the body's), then the job
+objective (one not built yet, an unknown one, or one whose item, brand or target does not fit
+it: `request.objective_problem`; a brand the build does not have) and the budget (the target's
+bounds are the body's), then the job
 limit, then for "make it worse" (`base_route_id`) the base route (its build, engine and stops,
 tier and leash, which the request may leave out; a ratio target for a base round trip too),
 then each stop against the region's bbox (`meta.params.bbox`, else the nodes' extent), then the
-pre-flight (`jobs.prepare`: snapping and the re-snap fallback, in a worker thread), and for a
+pre-flight (`jobs.prepare`: a pilgrimage's brand within the request's area, snapping and the
+re-snap fallback, in a worker thread), and for a
 base route `plan.check_base` on the pre-flight's stops and masks (`BASE_ROUTE_MISMATCH`). The
 errors are
 `ApiError`s, answered as `ErrorBody`: 422 `INVALID_REQUEST`, `UNKNOWN_REGION`,
@@ -54,6 +57,8 @@ from sse_starlette import EventSourceResponse, ServerSentEvent
 from worst_route.api.jobs import Job, Prepared, TooManyJobs, prepare
 from worst_route.api.schemas import (
     PLANNED_OBJECTIVES,
+    BrandOut,
+    BrandsOut,
     BuildOut,
     CheckOut,
     DirectionStep,
@@ -83,6 +88,7 @@ from worst_route.engine import ENGINE_VERSION
 from worst_route.engine.io import feature_collection, line_coordinates
 from worst_route.engine.objectives import OBJECTIVES
 from worst_route.engine.objectives.base import route_delay_s
+from worst_route.engine.objectives.brand import BrandRefused, brand_counts, brand_problem
 from worst_route.engine.objectives.collect import count_items
 from worst_route.engine.plan import BaseRouteMismatch, check_base
 from worst_route.engine.request import RouteRequest, objective_problem, request_masks
@@ -257,9 +263,12 @@ async def create_job(body: RouteRequestIn, request: Request) -> JobCreated:
     if body.objective not in OBJECTIVES:
         message = f"unknown objective {body.objective!r}; known: {', '.join(OBJECTIVES)}"
         raise ApiError(422, "INVALID_REQUEST", message)
-    problem = objective_problem(body.objective, body.item, body.target.kind)
+    problem = objective_problem(body.objective, body.item, body.target.kind, body.brand)
     if problem is not None:
         raise ApiError(422, "INVALID_REQUEST", problem[1], field=problem[0])
+    if body.brand is not None and (unknown := brand_problem(loaded.data, body.brand)) is not None:
+        message = f"{unknown}; GET /brands?region={body.region} lists the brands"
+        raise ApiError(422, "INVALID_REQUEST", message, field="brand")
     if body.budget_s > BUDGET_MAX_S:
         message = f"a budget of {body.budget_s:g} s is over the {BUDGET_MAX_S:g} s allowed"
         raise ApiError(422, "BUDGET_TOO_LARGE", message, max_s=BUDGET_MAX_S)
@@ -352,6 +361,8 @@ def _preflight(loaded: Loaded, request: RouteRequest) -> Prepared:
     """`jobs.prepare`, its errors as the endpoint's."""
     try:
         return prepare(loaded, request)
+    except BrandRefused as error:
+        raise ApiError(422, "INVALID_REQUEST", str(error), field=error.field) from None
     except SnapError as error:
         stop_index = _unsnappable(loaded, request)
         raise ApiError(422, "NO_NODE_NEAR", str(error), stop_index=stop_index) from None
@@ -435,6 +446,7 @@ def route(route_id: str, request: Request) -> RouteDocument:
         "delay_s": delay_s,
         "turns": count_turns(data, stored.edges),
         "items": count_items(data, stored.nodes, stored.edges),
+        "brand": _brand_visits(loaded, stored),
     }
     presented = presentation_of(api, loaded, stored, asked, metrics)
     return RouteDocument(
@@ -504,6 +516,29 @@ def directions_of(data: GraphData, stored: StoredRoute) -> list[Step]:
         seed=stored.seed,
         ratio=stored.metrics_json["ratio"],
     )
+
+
+def _brand_visits(loaded: Loaded, stored: StoredRoute) -> dict[str, Any] | None:
+    """A pilgrimage's brand counts, recounted on the stored route within its request's area."""
+    if stored.request.brand is None:
+        return None
+    masks = request_masks(loaded.spatial, loaded.data, stored.request)
+    return brand_counts(loaded.data, stored.request.brand, stored.nodes, masks.active)
+
+
+@router.get("/brands")
+def brands(region: str, request: Request) -> BrandsOut:
+    """The region's brands, the most located first, then by name."""
+    data = region_of(api_of(request), region).data
+    locations = np.diff(data.brand_indptr).tolist()
+    out = [
+        BrandOut(id=k, name=name, wikidata=wikidata, locations=located)
+        for k, (name, wikidata, located) in enumerate(
+            zip(data.strings.brands, data.strings.brand_wikidata, locations, strict=True)
+        )
+    ]
+    out.sort(key=lambda b: (-b.locations, b.name, b.id))
+    return BrandsOut(region=region, brands=out)
 
 
 @router.get("/routes/{route_id}/geojson")

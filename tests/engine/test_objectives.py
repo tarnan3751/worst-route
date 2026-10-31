@@ -9,6 +9,7 @@ from worst_route.config import HighwayClass
 from worst_route.engine.detour import find_detour
 from worst_route.engine.objectives import OBJECTIVES, make_objective
 from worst_route.engine.objectives.base import BaseObjective, FloatArray, Objective, route_delay_s
+from worst_route.engine.objectives.brand import Brand
 from worst_route.engine.objectives.collect import Collect
 from worst_route.engine.objectives.distance import Distance
 from worst_route.engine.objectives.time import SlowestTime
@@ -97,7 +98,7 @@ def test_initial_radius(baseline: float, r_max: float, radius: float) -> None:
 
 
 def test_the_registry_and_the_request_know_distance() -> None:
-    assert set(OBJECTIVES) == {"distance", "time", "collect"}
+    assert set(OBJECTIVES) == {"distance", "time", "collect", "brand"}
     objective: Objective = make_objective(
         "distance", GRID, baseline=Metrics(500.0, 45.0), r_max=9000.0
     )
@@ -108,6 +109,11 @@ def test_the_registry_and_the_request_know_distance() -> None:
     assert isinstance(collecting, Collect) and collecting.item == "bridge"
     with pytest.raises(ValueError, match="needs an item"):
         make_objective("collect", GRID, baseline=Metrics(500.0, 45.0), r_max=9000.0)
+    branded = lattice(3, 3, brands={"Acme": [4]})
+    visiting = make_objective("brand", branded, baseline=Metrics(500.0, 45.0), r_max=9e3, brand=0)
+    assert isinstance(visiting, Brand) and visiting.brand == 0
+    with pytest.raises(ValueError, match="needs a brand"):
+        make_objective("brand", branded, baseline=Metrics(500.0, 45.0), r_max=9000.0)
     with pytest.raises(ValidationError, match="unknown objective"):
         RouteRequest(stops=[(45.5, -122.6), (45.6, -122.5)], objective="slowest", seed=0)
 

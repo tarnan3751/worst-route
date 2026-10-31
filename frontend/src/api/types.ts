@@ -61,6 +61,7 @@ export interface RouteRequest {
   objective?: Objective;
   constraints?: Constraints;
   item?: CollectItem | null; // what `collect` collects; only with it
+  brand?: number | null; // the id of the brand `brand` visits (GET /brands); only with it
   tier?: Tier;
   leash_km?: number | "auto";
   budget_s?: number;
@@ -105,14 +106,24 @@ export interface ItemCounts {
   bridge: number;
 }
 
+/** A pilgrimage's brand, how many of its locations the route passes and how many the request's
+ * area holds. */
+export interface BrandVisits {
+  id: number;
+  name: string;
+  visits: number;
+  of: number;
+}
+
 /** A route's numbers while it grows; the objective's counters ride along (a collecting route's
- * `item` and `items`). */
+ * `item` and `items`, a pilgrimage's `brand`). */
 export interface Metrics {
   length_m: number;
   time_s: number;
   ratio: number | null;
   item?: CollectItem;
   items?: ItemCounts;
+  brand?: BrandVisits;
   [counter: string]: unknown;
 }
 
@@ -192,6 +203,7 @@ export interface DocumentMetrics {
   delay_s?: number; // absent from servers older than the turn counts
   turns?: Turns;
   items?: ItemCounts; // absent from servers older than the collectibles
+  brand?: BrandVisits | null; // a pilgrimage's; null for other objectives, absent from older servers
   // The presentation's, absent from servers older than it; null where unknown: the fuel
   // without the request's vehicle, the states and towns without the places index (the share
   // of the roads is always known).
@@ -326,6 +338,22 @@ export interface Done {
   route_id: string;
   stopped_because: StopReason;
   metrics: DoneMetrics;
+}
+
+// --- Brands (GET /brands) -------------------------------------------------------------------
+
+/** One brand of `GET /brands?region=`: `locations` is the number of places a route can visit. */
+export interface BrandEntry {
+  id: number;
+  name: string;
+  wikidata: string | null;
+  locations: number;
+}
+
+/** `GET /brands?region=`: the region's brands, the most located first, then by name. */
+export interface BrandList {
+  region: string;
+  brands: BrandEntry[];
 }
 
 // --- Geocoding (GET /geocode) ---------------------------------------------------------------

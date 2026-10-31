@@ -1,5 +1,7 @@
+import json
 import math
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -7,8 +9,12 @@ import pytest
 
 from worst_route.config import COLLECT_ITEM_WEIGHT
 from worst_route.engine.detour import find_detour
-from worst_route.engine.objectives.brand import Brand, brand_counts
+from worst_route.engine.io import read_route, route_document
+from worst_route.engine.objectives.brand import Brand, BrandRefused, brand_counts, brand_problem
+from worst_route.engine.plan import plan_route
+from worst_route.engine.request import RouteRequest, request_masks
 from worst_route.engine.route import Metrics, Route
+from worst_route.engine.target import Target
 from worst_route.engine.validator import validate_route
 from worst_route.engine.worsen import Budget, run_worsen
 from worst_route.graph.csr_backend import CsrBackend
@@ -16,7 +22,7 @@ from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
 from worst_route.graph.spatial import SpatialIndex
 
-from .graphs import lattice, route_on
+from .graphs import at_node, lattice, route_on
 
 # A 6 × 6 lattice (node r * 6 + c, 100 m apart) with two brands: 0 Acme at five nodes, 1 Zed at
 # two.
@@ -226,3 +232,73 @@ def test_the_validator_recounts_a_reported_brand(change: dict[str, Any], detail:
     area[33] = False  # the request's area holds four of Acme's five nodes, not the reported five
     report = validate_route(TOWN, route, stop_nodes=[0, 8], node_mask=area, banned_edges=NOWHERE)
     assert not report.check("metrics").ok
+
+
+def test_a_request_plans_a_pilgrimage_the_same_on_both_backends(tmp_path: Path) -> None:
+    g = scattered()
+    request = RouteRequest(
+        stops=[at_node(g, 0), at_node(g, 9)], seed=5, objective="brand", brand=0, max_iterations=400
+    )
+    documents = []
+    for backend_type in (PythonBackend, CsrBackend):
+        result = plan_route(g, request, backend=backend_type(g), check_delta=True)
+        assert result.report.ok
+        documents.append(route_document(g, result))
+    first, second = documents
+    assert first["edges"] == second["edges"] and first["metrics"] == second["metrics"]
+    assert first["request"]["brand"] == 0
+    brand = first["metrics"]["brand"]
+    assert brand["name"] == "Pilgrim Coffee" and brand["of"] == 13 and brand["visits"] >= 5
+    assert brand == brand_counts(g, 0, np.array(first["nodes"]))
+
+    path = tmp_path / "route.json"
+    path.write_text(json.dumps(first))
+    saved = read_route(path)
+    assert saved.metrics.counters == {"items": first["metrics"]["items"], "brand": brand}
+    masks = request_masks(SpatialIndex(g), g, saved.request)
+
+    def check(route: Any) -> bool:
+        report = validate_route(
+            g, route, stop_nodes=[0, 9], node_mask=masks.active, banned_edges=masks.banned
+        )
+        return report.ok
+
+    assert check(saved)
+    path.write_text(
+        json.dumps(
+            {
+                **first,
+                "metrics": {**first["metrics"], "brand": {**brand, "visits": brand["visits"] - 1}},
+            }
+        )
+    )
+    assert not check(read_route(path))
+
+
+def test_a_brand_the_build_does_not_have_or_the_area_does_not_hold_is_refused() -> None:
+    g = scattered()
+    stops = [at_node(g, 0), at_node(g, 2)]
+    unknown = RouteRequest(stops=stops, seed=1, objective="brand", brand=1)
+    with pytest.raises(BrandRefused, match="^unknown brand 1$") as refused:
+        plan_route(g, unknown, backend=PythonBackend(g))
+    assert refused.value.field == "brand"
+    # a 50 m leash along the bottom row: none of the brand's nodes, which lie above it
+    narrow = RouteRequest(stops=stops, seed=1, objective="brand", brand=0, leash_km=0.05)
+    with pytest.raises(BrandRefused, match="^no Pilgrim Coffee within reach$"):
+        plan_route(g, narrow, backend=PythonBackend(g))
+    assert brand_problem(g, 0, None) is None and brand_problem(g, -1) == "unknown brand -1"
+
+
+def test_a_pilgrimage_reaches_a_duration_target() -> None:
+    g = scattered()
+    request = RouteRequest(
+        stops=[at_node(g, 0), at_node(g, 9)],
+        seed=2,
+        objective="brand",
+        brand=0,
+        target=Target(kind="duration", value=600),  # the baseline drives 900 m in 81 s
+    )
+    result = plan_route(g, request, backend=PythonBackend(g), check_delta=True)
+    assert result.run.stopped_because == "target"
+    assert 588 <= result.route.metrics.time_s <= 612
+    assert result.route.metrics.counters["brand"]["visits"] > 0

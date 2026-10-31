@@ -1,8 +1,9 @@
 """The job manager: workers, their events, cancellation (`docs/reference/api.md`, **Jobs**).
 
 A job plans one request. `prepare(loaded, request)` is the pre-flight the endpoint runs before a
-job exists (the request's masks and `resolve_stops`, so a stop that cannot be snapped or reached
-is a 422, not a job); the worker repeats it, deterministically. `JobManager.submit` makes the job,
+job exists (the request's masks, a pilgrimage's brand within them, and `resolve_stops`, so a
+brand out of reach or a stop that cannot be snapped or reached is a 422, not a job); the worker
+repeats it, deterministically. `JobManager.submit` makes the job,
 emits its `snapped` event from the pre-flight, and starts its worker (`api/worker.py`) in a
 spawned process, or queues it when `max_jobs` are running; with `max_queued` waiting too it
 raises `TooManyJobs` (the endpoint's 429).
@@ -108,6 +109,7 @@ from worst_route.config import (
 )
 from worst_route.engine import ENGINE_VERSION
 from worst_route.engine.objectives import OBJECTIVES
+from worst_route.engine.objectives.brand import BrandRefused, brand_problem
 from worst_route.engine.objectives.collect import count_items
 from worst_route.engine.request import RequestMasks, RouteRequest, request_masks
 from worst_route.engine.route import IntArray, Metrics
@@ -155,8 +157,13 @@ class Prepared:
 
 
 def prepare(loaded: Loaded, request: RouteRequest) -> Prepared:
-    """The pre-flight: raises `SnapError` or `StopUnreachable` as the worker would."""
+    """The pre-flight: raises `BrandRefused`, `SnapError` or `StopUnreachable` as the worker
+    would."""
     masks = request_masks(loaded.spatial, loaded.data, request)
+    if request.brand is not None:
+        problem = brand_problem(loaded.data, request.brand, masks.active)
+        if problem is not None:
+            raise BrandRefused(problem)
     snaps = resolve_stops(loaded.data, loaded.spatial, loaded.backend, request, masks)
     return Prepared(request, masks, tuple(snaps))
 

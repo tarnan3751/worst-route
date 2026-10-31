@@ -1,11 +1,14 @@
 """Planning a route end to end: the engine's entry point (`docs/reference/engine.md`, **Planning**).
 
-`plan_route(data, request, ...)` computes the request's masks (`request_masks`), makes one
+`plan_route(data, request, ...)` computes the request's masks (`request_masks`) and, for a
+pilgrimage, refuses a brand the build does not have or the area does not hold (`BrandRefused`,
+`objectives.brand.brand_problem`), makes one
 `numpy.random.Generator(PCG64(request.seed))` for every random draw that follows, settles the
 stops (`resolve_stops`: snapping and its fallback, which may move stops), builds the seed route
 and the baseline on them, makes the request's objective with the baseline's metrics and
 the radius bound r_max = min(leash, the active area's extent), a collecting one also with the
-request's item and active nodes, with the request's turn constraints (`constraints.constrain`;
+request's item and active nodes, a pilgrimage with its brand and active nodes, with the
+request's turn constraints (`constraints.constrain`;
 a strict one constrains the seed too), and its goal (`target.Goal`, the request's target
 against that baseline), and runs the worsen loop toward that goal within the request's budget,
 handing each accepted splice and the baseline to `on_progress`. It searches with the backend it
@@ -39,6 +42,7 @@ import numpy as np
 
 from worst_route.engine.constraints import Constraints, constrain
 from worst_route.engine.objectives import make_objective
+from worst_route.engine.objectives.brand import BrandRefused, brand_problem
 from worst_route.engine.request import RequestMasks, RouteRequest, request_masks
 from worst_route.engine.route import IllegalSplice, Route
 from worst_route.engine.seed_route import Baseline, baseline_route, resolve_stops, seed_route
@@ -89,6 +93,10 @@ def plan_route(
     backend = backend if backend is not None else make_backend(data)
     spatial = spatial if spatial is not None else SpatialIndex(data)
     masks = request_masks(spatial, data, request)
+    if request.brand is not None:
+        problem = brand_problem(data, request.brand, masks.active)
+        if problem is not None:
+            raise BrandRefused(problem)
     rng = np.random.Generator(np.random.PCG64(request.seed))
     r_max = min(masks.leash_m, masks.extent_m)
 
@@ -121,6 +129,7 @@ def plan_route(
             baseline=baseline.metrics,
             r_max=r_max,
             item=request.item,
+            brand=request.brand,
             area=masks.active,
         ),
         request.constraints,

@@ -29,6 +29,14 @@ def test_the_request_mirrors_the_engine_s() -> None:
     )
 
 
+def test_a_pilgrimage_s_brand_reaches_the_engine() -> None:
+    body = {"region": "portland", "stops": STOPS, "objective": "brand", "brand": 4}
+    engine = RouteRequestIn.model_validate(body).engine_request(1)
+    assert (engine.objective, engine.brand) == ("brand", 4)
+    with pytest.raises(ValidationError, match="greater than or equal to 0"):
+        RouteRequestIn.model_validate({**body, "brand": -1})
+
+
 def test_a_seed_is_at_most_the_largest_int64() -> None:
     req = RouteRequestIn.model_validate({"region": "portland", "stops": STOPS, "seed": 2**63 - 1})
     assert req.engine_request(2**63 - 1).seed == 2**63 - 1

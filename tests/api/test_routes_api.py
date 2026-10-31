@@ -364,7 +364,15 @@ async def test_a_departure_gives_an_arrival(data: Path) -> None:
         ({"constraints": {"strict": True}}, "INVALID_REQUEST"),
         ({"objective": "nonsense"}, "INVALID_REQUEST"),
         ({"region": "atlantis"}, "UNKNOWN_REGION"),
-        ({"objective": "brand"}, "NOT_YET"),
+        ({"objective": "alphabet"}, "NOT_YET"),
+        ({"objective": "brand"}, "INVALID_REQUEST"),
+        ({"brand": 0}, "INVALID_REQUEST"),
+        ({"objective": "brand", "brand": -1}, "INVALID_REQUEST"),
+        ({"objective": "brand", "brand": 0}, "INVALID_REQUEST"),  # the lattice has no brands
+        (
+            {"objective": "brand", "brand": 0, "target": {"kind": "ratio", "value": 3}},
+            "INVALID_REQUEST",
+        ),
         ({"objective": "collect"}, "INVALID_REQUEST"),
         ({"objective": "collect", "item": "ufo"}, "INVALID_REQUEST"),
         ({"item": "bridge"}, "INVALID_REQUEST"),
@@ -397,6 +405,9 @@ async def test_an_item_or_target_that_does_not_fit_the_objective_names_its_field
         for fields, field in (
             ({"objective": "collect"}, "item"),
             ({"item": "roundabout"}, "item"),
+            ({"objective": "brand"}, "brand"),
+            ({"brand": 0}, "brand"),
+            ({"objective": "brand", "brand": 0, "target": {"kind": "ratio", "value": 3}}, "target"),
             (
                 {"objective": "collect", "item": "bridge", "target": {"kind": "ratio", "value": 3}},
                 "target",
@@ -428,6 +439,77 @@ async def test_a_collecting_job_counts_its_item_as_it_grows(tmp_path: Path) -> N
         assert "item" not in done["metrics"] and done["metrics"]["items"]["toll_booth"] == 0
         doc = (await client.get(f"/routes/{done['route_id']}")).json()
         assert doc["metrics"]["items"] == done["metrics"]["items"]
+
+
+# Brands of the GRID lattice, off its bottom row: ids in name order, 0 Acme, 1 Pilgrim Coffee,
+# 2 Zed Mart.
+BRANDS = {"Pilgrim Coffee": [12, 27, 45, 63, 78, 86], "Acme": [55, 95], "Zed Mart": [33, 66]}
+
+
+def branded(tmp_path: Path) -> Path:
+    """A data directory whose latest build is GRID's lattice with BRANDS."""
+    root = tmp_path / "data"
+    g = lattice(10, 10, rounded_lonlat=True, brands=BRANDS)
+    save_build(root, g, "branded", bbox=GRID_BBOX)
+    return root
+
+
+async def test_brands_lists_the_region_s_brands_the_most_located_first(tmp_path: Path) -> None:
+    async with serving(branded(tmp_path)) as (client, _):
+        r = await client.get("/brands", params={"region": "portland"})
+        assert r.status_code == 200 and r.json() == {
+            "region": "portland",
+            "brands": [
+                {"id": 1, "name": "Pilgrim Coffee", "wikidata": None, "locations": 6},
+                {"id": 0, "name": "Acme", "wikidata": None, "locations": 2},
+                {"id": 2, "name": "Zed Mart", "wikidata": None, "locations": 2},
+            ],
+        }
+        unknown = await client.get("/brands", params={"region": "atlantis"})
+        assert unknown.status_code == 422 and unknown.json()["code"] == "UNKNOWN_REGION"
+        missing = await client.get("/brands")
+        assert missing.status_code == 422 and missing.json()["code"] == "INVALID_REQUEST"
+
+
+async def test_a_pilgrimage_counts_its_visits_as_it_grows(tmp_path: Path) -> None:
+    async with serving(branded(tmp_path)) as (client, _):
+        body = job_body(objective="brand", brand=1, stops=[stop(0), stop(9)])
+        _, events = await finished(client, body)
+        progress = [e["data"]["metrics"]["brand"] for e in events if e["event"] == "progress"]
+        assert progress and all(
+            (b["id"], b["name"], b["of"]) == (1, "Pilgrim Coffee", 6) for b in progress
+        )
+        visits = [b["visits"] for b in progress]
+        assert visits == sorted(visits) and visits[-1] > 0
+        done = events[-1]["data"]
+        assert done["metrics"]["brand"] == progress[-1]
+        doc = (await client.get(f"/routes/{done['route_id']}")).json()
+        assert (doc["request"]["objective"], doc["request"]["brand"]) == ("brand", 1)
+        assert doc["metrics"]["brand"] == done["metrics"]["brand"]
+        report = (await client.post(f"/routes/{done['route_id']}/validate")).json()
+        assert report["ok"] is True
+
+        _, events = await finished(client, job_body(stops=[stop(0), stop(9)]))  # distance
+        done = events[-1]["data"]
+        assert "brand" not in done["metrics"]
+        doc = (await client.get(f"/routes/{done['route_id']}")).json()
+        assert doc["metrics"]["brand"] is None and doc["request"]["brand"] is None
+
+
+async def test_a_brand_the_build_lacks_or_the_area_does_not_hold_names_its_field(
+    tmp_path: Path,
+) -> None:
+    async with serving(branded(tmp_path)) as (client, _):
+        for fields, message in (
+            ({"brand": 3}, "unknown brand 3; GET /brands?region=portland lists the brands"),
+            (  # a 50 m leash along the bottom row holds none of its nodes
+                {"brand": 2, "leash_km": 0.05, "stops": [stop(0), stop(2)]},
+                "no Zed Mart within reach",
+            ),
+        ):
+            r = await client.post("/jobs", json=job_body(objective="brand", **fields))
+            assert r.status_code == 422, r.text
+            assert r.json() == {"code": "INVALID_REQUEST", "message": message, "field": "brand"}
 
 
 async def test_stops_outside_the_region_or_far_from_roads_are_named(data: Path) -> None:

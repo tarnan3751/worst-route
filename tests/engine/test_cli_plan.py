@@ -504,7 +504,9 @@ def test_an_objective_s_item_and_target_must_fit(data_dir: Path, tmp_path: Path)
         ),
     ):
         assert plan(*trip, *args) == (2, "", f"{line}\n")
-    unknown = "invalid --objective: unknown objective 'bogus'; known: distance, time, collect"
+    unknown = (
+        "invalid --objective: unknown objective 'bogus'; known: distance, time, collect, brand"
+    )
     assert plan(*trip, "--objective", "bogus", "--item", "bridge") == (2, "", f"{unknown}\n")
     for args in (["--objective", "collect", "--item", "ufo"], ["--objective", "brand"]):
         code, stdout, _ = plan(*trip, *args)
@@ -513,7 +515,7 @@ def test_an_objective_s_item_and_target_must_fit(data_dir: Path, tmp_path: Path)
     first = tmp_path / "first.json"
     collect = ["--objective", "collect", "--item", "roundabout"]
     assert plan(*trip, *collect, "--max-iterations", "20", "--out", str(first))[0] == 0
-    takes = "--base takes the objective, item and constraints from its route: drop"
+    takes = "--base takes the objective, item, brand and constraints from its route: drop"
     for given, named in (
         (["--objective", "distance"], "--objective"),
         (["--item", "bridge"], "--item"),
@@ -523,6 +525,113 @@ def test_an_objective_s_item_and_target_must_fit(data_dir: Path, tmp_path: Path)
     no_ratio = "invalid --target: the collect objective takes no ratio target"
     code, _, stderr = plan("--base", str(first), "--target", "ratio:3")
     assert code == 2 and stderr.startswith(no_ratio)
+
+
+# Brands of the 10 × 10 lattice, off its bottom row: ids in name order, 0 ACME and 1 Acme (one
+# name, any case), 2 Pilgrim Coffee.
+BRANDED = lattice(
+    10,
+    10,
+    rounded_lonlat=True,
+    brands={"Pilgrim Coffee": [12, 27, 45, 63, 78, 86], "Acme": [55, 95], "ACME": [33, 66]},
+)
+
+
+def test_a_pilgrimage_is_planned_by_brand_id_or_name(data_dir: Path, tmp_path: Path) -> None:
+    save(data_dir, BRANDED, "b1")
+    trip = ["--from", latlon(BRANDED, 0), "--to", latlon(BRANDED, 9), "--seed", "1"]
+    out, again = tmp_path / "route.json", tmp_path / "again.json"
+    pilgrimage = ["--objective", "brand", "--max-iterations", "200"]
+    code, stdout, stderr = plan(*trip, *pilgrimage, "--brand", "pilgrim COFFEE", "--out", str(out))
+    assert code == 0, stdout + stderr
+    doc = json.loads(out.read_text())
+    assert (doc["request"]["objective"], doc["request"]["brand"]) == ("brand", 2)
+    brand = doc["metrics"]["brand"]
+    assert brand["name"] == "Pilgrim Coffee" and brand["of"] == 6 and brand["visits"] > 0
+    assert "objective: brand" in stdout.splitlines()
+    visited = f"visited: {brand['visits']} of 6 Pilgrim Coffee (brand 2)"
+    assert visited in stdout.splitlines()
+    by_id = plan(*trip, *pilgrimage, "--brand", "2", "--out", str(again))
+    assert by_id[0] == 0 and visited in by_id[1].splitlines()
+    assert json.loads(again.read_text())["edges"] == doc["edges"]
+    assert runner.invoke(app, ["validate", str(out)]).exit_code == 0
+
+    more = tmp_path / "more.json"  # --base keeps the file's objective and brand
+    code, stdout, stderr = plan("--base", str(out), "--seed", "2", "--out", str(more))
+    assert code == 0, stdout + stderr
+    assert json.loads(more.read_text())["metrics"]["brand"]["visits"] >= brand["visits"]
+    takes = "--base takes the objective, item, brand and constraints from its route: drop"
+    assert plan("--base", str(out), "--brand", "2") == (2, "", f"{takes} --brand\n")
+
+    tampered = tmp_path / "tampered.json"
+    doc["metrics"]["brand"]["visits"] += 1
+    tampered.write_text(json.dumps(doc))
+    result = runner.invoke(app, ["validate", str(tampered)])
+    assert result.exit_code == 1 and "metrics: FAILED" in result.stdout
+
+
+def test_a_brand_must_fit_the_objective_and_the_build(data_dir: Path) -> None:
+    save(data_dir, BRANDED, "b1")
+    trip = ["--from", latlon(BRANDED, 0), "--to", latlon(BRANDED, 9)]
+    ambiguous = "invalid --brand: 'acme' names 2 brands: 0 ACME (None), 1 Acme (None); give its id"
+    for args, line in (
+        (["--objective", "brand"], "invalid --brand: the brand objective needs a brand"),
+        (["--brand", "2"], "invalid --brand: only the brand objective takes a brand"),
+        (["--brand", "Acme"], "invalid --brand: only the brand objective takes a brand"),
+        (
+            ["--objective", "brand", "--brand", "2", "--target", "ratio:3"],
+            "invalid --target: the brand objective takes no ratio target: it counts visits, "
+            "not metres",
+        ),
+        (["--objective", "brand", "--brand", "acme"], ambiguous),
+        (
+            ["--objective", "brand", "--brand", "Starbucks"],
+            "invalid --brand: no brand named 'Starbucks' in this build",
+        ),
+        (["--objective", "brand", "--brand", "3"], "invalid --brand: unknown brand 3"),
+        (  # a 50 m leash along the bottom row holds none of its nodes
+            ["--objective", "brand", "--brand", "0", "--leash-km", "0.05"],
+            "invalid --brand: no ACME within reach",
+        ),
+    ):
+        assert plan(*trip, *args) == (2, "", f"{line}\n"), args
+
+
+# Portland's "76" (a fuel brand) and another brand's id 76: here "76" is brand 0 and the 76th
+# of eighty more, "Brand 75", is brand 76.
+NUMBERED = lattice(
+    10,
+    10,
+    rounded_lonlat=True,
+    brands={"76": [12, 45, 78], **{f"Brand {k:02d}": [10 + k % 80] for k in range(80)}},
+)
+
+
+def test_a_brand_named_by_a_number_is_not_taken_for_an_id(data_dir: Path) -> None:
+    save(data_dir, NUMBERED, "b1")
+    trip = ["--from", latlon(NUMBERED, 0), "--to", latlon(NUMBERED, 9), "--seed", "1"]
+    pilgrimage = [*trip, "--objective", "brand", "--max-iterations", "20", "--brand"]
+    both = (
+        "invalid --brand: '76' names brand 0 (76) and is also the id of brand 76 (Brand 75): "
+        """give the name in quotes ('"76"') or the id with # ('#76')"""
+    )
+    assert plan(*pilgrimage, "76") == (2, "", f"{both}\n")
+    for given, brand in (('"76"', "(brand 0)"), ("#76", "(brand 76)"), ("77", "(brand 77)")):
+        code, stdout, stderr = plan(*pilgrimage, given)
+        assert code == 0, stdout + stderr
+        assert [line for line in stdout.splitlines() if line.startswith("visited: ")][0].endswith(
+            brand
+        ), given
+    for given, line in (
+        ("#x", "invalid --brand: '#x' is not a brand id: # takes a number"),
+        ("#", "invalid --brand: '#' is not a brand id: # takes a number"),
+        ("#²", "invalid --brand: '#²' is not a brand id: # takes a number"),
+        ("²", "invalid --brand: no brand named '²' in this build"),  # a digit, not a decimal
+        ('"77"', "invalid --brand: no brand named '77' in this build"),  # quoted: a name only
+        ("#999", "invalid --brand: unknown brand 999"),
+        ("999", "invalid --brand: unknown brand 999"),
+    ):
+        assert plan(*pilgrimage, given) == (2, "", f"{line}\n"), given
 
 
 def test_validate_re_derives_the_stops(data_dir: Path, tmp_path: Path) -> None:
@@ -650,8 +759,8 @@ def test_base_takes_its_objective_and_constraints_from_its_file(
     assert plan("--base", str(first), "--no-right", "--strict") == (
         2,
         "",
-        "--base takes the objective, item and constraints from its route: drop --no-right, "
-        "--strict\n",
+        "--base takes the objective, item, brand and constraints from its route: drop "
+        "--no-right, --strict\n",
     )
 
 

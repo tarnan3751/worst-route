@@ -15,7 +15,8 @@ never overwrites one without `--force`; `qa` prints its thresholds, also when it
 do not load the geo stack.
 
 `plan` plans a route on a saved build (`docs/reference/engine.md`, **The CLI**), on the
-`--objective` (distance or time), with `--no-left` or `--no-right` (such turns cost a kilometre
+`--objective` (distance, time, collect with an `--item`, or brand with a `--brand`, an id or a
+name of the build's brand index), with `--no-left` or `--no-right` (such turns cost a kilometre
 each; none with `--strict`): it prints the objective and constraints when not the default, the
 snapped stops, the baseline, the worst route, the ratio and the time ratio (of the experienced
 time, with its drive and delays), its turns and delays, the target and what was achieved (for
@@ -695,6 +696,49 @@ def _target_line(kind: str, wanted: float, achieved: float, within: bool) -> str
     return f"target: {what} → achieved {got} ({band})"
 
 
+def _brand_id(data: "GraphData", text: str) -> int:
+    """`--brand`'s brand in this build: `#N` is the id N (which planning checks), `"NAME"` in
+    double quotes the brand named NAME, any case, and anything else the brand of that name, or
+    else, when it is a number, the id. Exit 2 when it names no brand, several, or one brand and
+    another's id."""
+    names = data.strings.brands
+    if text.startswith("#"):
+        number = _decimal(text[1:])
+        if number is None:
+            _fail(f"invalid --brand: {text!r} is not a brand id: # takes a number", code=2)
+        return number
+    quoted = len(text) >= 2 and text[0] == text[-1] == '"'
+    name = text[1:-1] if quoted else text
+    found = [k for k, known in enumerate(names) if known.casefold() == name.casefold()]
+    if len(found) > 1:
+        each = ", ".join(f"{k} {names[k]} ({data.strings.brand_wikidata[k]})" for k in found)
+        _fail(f"invalid --brand: {text!r} names {len(found)} brands: {each}; give its id", code=2)
+    number = None if quoted else _decimal(text)
+    if found and number is not None and number < len(names) and number != found[0]:
+        k = found[0]
+        _fail(
+            f"invalid --brand: {text!r} names brand {k} ({names[k]}) and is also the id of brand "
+            f"{number} ({names[number]}): give the name in quotes ('\"{name}\"') or the id with "
+            f"# ('#{number}')",
+            code=2,
+        )
+    if found:
+        return found[0]
+    if number is None:
+        _fail(f"invalid --brand: no brand named {name!r} in this build", code=2)
+    return number
+
+
+def _decimal(text: str) -> int | None:
+    """`text` as a non-negative whole number when it is one (decimal digits only), else None."""
+    if not text.isdecimal():
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
 def _mode_line(request: "RouteRequest") -> str:
     """`objective: time, few left turns` (or `no left turns` when strict)."""
     parts: list[str] = [request.objective]
@@ -731,12 +775,19 @@ def plan(
     target: Annotated[
         str, typer.Option(help="max, ratio:<x> (× the baseline) or duration:<time> (9h, 2h30m).")
     ] = "max",
-    objective: Annotated[str, typer.Option(help="distance, time or collect.")] = "distance",
+    objective: Annotated[str, typer.Option(help="distance, time, collect or brand.")] = "distance",
     item: Annotated[
         str | None,
         typer.Option(
             help="What --objective collect collects: toll_booth, level_crossing, roundabout or "
             "bridge."
+        ),
+    ] = None,
+    brand: Annotated[
+        str | None,
+        typer.Option(
+            help="What --objective brand visits: a brand's name (any case) in the build's brand "
+            'index, or its id; #N is always the id N, "NAME" always the name.'
         ),
     ] = None,
     no_left: Annotated[
@@ -763,6 +814,7 @@ def plan(
     from worst_route.engine import ENGINE_VERSION
     from worst_route.engine.io import SavedRoute, read_route, route_document, route_geojson
     from worst_route.engine.objectives import OBJECTIVES
+    from worst_route.engine.objectives.brand import BrandRefused
     from worst_route.engine.plan import BaseRouteMismatch, plan_route
     from worst_route.engine.request import RouteRequest, objective_problem
     from worst_route.engine.route import IllegalSplice
@@ -780,6 +832,7 @@ def plan(
         "target": _target(target),
         "objective": objective,
         "item": item,
+        "brand": None if brand is None else 0,  # resolved once the build is loaded
         "constraints": {"no_left": no_left, "no_right": no_right, "strict": strict},
     }
     saved: SavedRoute | None = None
@@ -807,12 +860,12 @@ def plan(
             _fail(message, code=2)
         mode = [
             f"--{name.replace('_', '-')}"
-            for name in ("objective", "item", "no_left", "no_right", "strict")
+            for name in ("objective", "item", "brand", "no_left", "no_right", "strict")
             if (source := ctx.get_parameter_source(name)) is not None and source.name != "DEFAULT"
         ]
         if mode:
             message = (
-                "--base takes the objective, item and constraints from its route: drop "
+                "--base takes the objective, item, brand and constraints from its route: drop "
                 f"{', '.join(mode)}"
             )
             _fail(message, code=2)
@@ -832,6 +885,7 @@ def plan(
             stops=saved.request.stops,
             objective=saved.request.objective,
             item=saved.request.item,
+            brand=saved.request.brand,
             constraints=saved.request.constraints,
             tier=saved.request.tier,
             leash_km=saved.request.leash_km,
@@ -841,7 +895,9 @@ def plan(
     if fields["objective"] not in OBJECTIVES:  # before its item: the API refuses it first too
         unknown, known = fields["objective"], ", ".join(OBJECTIVES)
         _fail(f"invalid --objective: unknown objective {unknown!r}; known: {known}", code=2)
-    problem = objective_problem(fields["objective"], fields["item"], fields["target"]["kind"])
+    problem = objective_problem(
+        fields["objective"], fields["item"], fields["target"]["kind"], fields["brand"]
+    )
     if problem is not None:
         _fail(f"invalid --{problem[0]}: {problem[1]}", code=2)
     try:
@@ -850,6 +906,8 @@ def plan(
         problems = [f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in error.errors()]
         raise typer.BadParameter("; ".join(problems)) from None
     data = _load_build(region, build_id)
+    if brand is not None:
+        request = request.model_copy(update={"brand": _brand_id(data, brand)})
     if saved is not None and data.meta["graph_version"] != saved.graph_version:
         _fail(
             f"{base} was planned on graph_version {saved.graph_version[:12]}, "
@@ -871,6 +929,8 @@ def plan(
         result = plan_route(data, request, backend=engine, base=saved, on_progress=progress)
     except InfeasibleTurnConstraint as error:
         _fail(f"cannot plan: {error}; try without --strict")
+    except BrandRefused as error:
+        _fail(f"invalid --brand: {error}", code=2)
     except (SnapError, StopUnreachable, BaseRouteMismatch) as error:
         _fail(f"cannot plan: {error}")
     except (IllegalSplice, IndexError) as error:
@@ -930,6 +990,9 @@ def plan(
         wanted, items = route.metrics.counters["item"], route.metrics.counters["items"]
         every = ", ".join(f"{name} {count}" for name, count in items.items())
         typer.echo(f"collected: {items[wanted]} {wanted} ({every})")
+    if "brand" in route.metrics.counters:
+        b = route.metrics.counters["brand"]
+        typer.echo(f"visited: {b['visits']} of {b['of']} {b['name']} (brand {b['id']})")
     typer.echo(f"route: {len(route.nodes)} nodes, {len(route.edges)} edges")
     typer.echo(
         f"search: {run.attempts} attempts, {run.accepted} accepted, {run.elapsed_s:.1f} s, "

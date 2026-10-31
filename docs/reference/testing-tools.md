@@ -93,8 +93,9 @@ it is a heavy job when the region is a state (`docs/reference/pipeline.md`, **Or
 
 `uv run python tools/parity.py --region R` runs both pipeline engines on a region's filtered
 roads, each step in its own process, into a temporary directory, and reports each step's
-seconds and peak memory and whether the two builds are the same, array by array, the geometry's
-too, each written as `pipeline save` writes it
+seconds and peak memory and whether the two engines' cleanup, enrich and tiers reports and
+builds are the same, array by array, the geometry's too, each step on its own engine's stages as
+the CLI runs it
 (`docs/reference/pipeline.md`, **The arrays engine**). It reads `WORST_ROUTE_DATA` and writes
 under `tools/out/`. A state's run is a heavy job, arranged by the brief.
 

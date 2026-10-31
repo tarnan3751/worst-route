@@ -61,9 +61,10 @@ The compact build format (format 4, pipeline version 6) is built too: a build's 
 hold only what the engine and the validator read, and the roads' shapes, simplified to 2 m,
 sit apart in `geometry/`, which only the drawing of a route reads (`docs/reference/graph.md`,
 **Geometry**).
-M5.2's array pipeline has begun: `build` and the whole of cleanup (simplification,
-stage A, twins, stage B, connectivity) run on arrays, the default engine (`docs/reference/pipeline.md`, **The arrays engine**), to
-the networkx engine's build byte for byte (`--engine networkx`).
+M5.2's array pipeline is built: every step from `build` to `save` runs on arrays, the default
+engine, its stages directories of `.npy` files (`docs/reference/pipeline.md`, **The arrays
+engine**), to the networkx engine's build byte for byte (`--engine networkx`); Oregon's cleanup
+takes 5 s where networkx's takes 91.
 The engine is at version 4: when the cheapest legal walk the transition-aware search finds
 passes a node twice, it searches again with the edge that comes back to it banned, up to 8
 times (`docs/reference/engine.md`, **Searches**).

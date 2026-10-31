@@ -7,9 +7,9 @@ contract.
 
 Built: every step, `download`, `filter`, `build`, `cleanup`, `enrich`, `tiers`, `save` and `qa`.
 `save` writes the build in the format `docs/reference/graph.md` describes, which `worst-route
-plan` reads. Portland and the whole of Oregon (**Oregon**) build and pass QA. `build` and the
-whole of cleanup (simplification, stage A, twins, stage B, connectivity) run on arrays, the
-default engine (**The arrays engine**), to the networkx engine's build (`--engine networkx`).
+plan` reads. Portland and the whole of Oregon (**Oregon**) build and pass QA. Every step from
+`build` to `save` runs on arrays, the default engine (**The arrays engine**), to the networkx
+engine's build (`--engine networkx`).
 
 ## Commands
 
@@ -51,8 +51,8 @@ is the one place that names these paths.
 | `filtered/<region>.roads.osm.pbf`, `filtered/<region>.pois.parquet` | `filter` |
 | `graphs/<region>/<build_id>/stages/build/`, `stages/build.json` | `build` (`stages/build.pkl` instead of `build/` with `--engine networkx`) |
 | `graphs/<region>/latest` (the region's current build id, one line) | `build` |
-| `graphs/<region>/<build_id>/stages/cleanup.pkl`, `stages/cleanup.json` | `cleanup` |
-| `graphs/<region>/<build_id>/stages/enrich.pkl`, `stages/enrich.json` | `enrich` |
+| `graphs/<region>/<build_id>/stages/cleanup/`, `stages/cleanup.json` | `cleanup` (`stages/cleanup.pkl` with `--engine networkx`) |
+| `graphs/<region>/<build_id>/stages/enrich/`, `stages/enrich.json` | `enrich` (`stages/enrich.pkl` after a networkx cleanup) |
 | `graphs/<region>/<build_id>/stages/tiers.json` | `tiers` |
 | `graphs/<region>/<build_id>/meta.json`, `strings.json`, `arrays/`, `geometry/`; `stages/save.json` | `save` (the build, through `graph.store.write_build`) |
 | `graphs/<region>/<build_id>/qa/qa.json`, `qa/*.geojson` | `qa` |
@@ -99,15 +99,16 @@ report beside it in `qa/`.
   `{"step", "inputs": [{"file", "md5"}], "params"}` in `<output>.inputs.json` (filter: the
   bbox and the pipeline version; build: the region, bbox, CRS and pipeline version; cleanup:
   `allow_fragmented`, the config values it depends on, `cleanup.parameters()`, and the pipeline
-  version, its input being `build.pkl` or, from the arrays engine, `build/manifest.json`; build
+  version, its input being `build/manifest.json` or, from the networkx engine, `build.pkl`; build
   and cleanup also record their `engine`, beside `params` rather than in them, so that changing
   the engine reruns the step while the build's params, and its `graph_version`, do not depend on
   it (a sidecar written before the engine was recorded is the networkx engine's, and an arrays
   stage counts as written once its manifest is); enrich: its config and the pipeline version, its inputs
-  `cleanup.pkl` and the POI table; tiers: like cleanup, its input `enrich.pkl`; save: the
-  pipeline version and the `params` it copies into the build's meta, so a changed parameter that
-  leaves every stage byte-identical is still another input, its inputs `enrich.pkl` and
-  `tiers.json`, its output `stages/save.json`;
+  the cleanup stage (`cleanup/manifest.json`, or `cleanup.pkl` from the networkx engine) and the
+  POI table; tiers: like cleanup, its input the enrich stage (`enrich/manifest.json` or
+  `enrich.pkl`); save: the pipeline version and the `params` it copies into the build's meta, so
+  a changed parameter that leaves every stage byte-identical is still another input, its inputs
+  the enrich stage and `tiers.json`, its output `stages/save.json`;
   qa: its thresholds, its inputs `meta.json` and the stage reports, its output `qa/qa.json`).
   Inputs are recorded by file name and md5, so moving the data directory does not invalidate
   them. The
@@ -123,8 +124,9 @@ report beside it in `qa/`.
   inputs it refuses without `--force`; `--force` deletes the build (`meta.json` first) and writes
   it again. `qa` prints its stored thresholds when it skips, and fails again when they fail.
 - **Stale stages:** a step reads earlier stages only when they are fresh. `layout.stale_stages`
-  walks the chain `STAGE_CHAIN` (cleanup from `build.pkl` or `build/manifest.json`, enrich from
-  `cleanup.pkl`, tiers from `enrich.pkl`, save from `enrich.pkl` and `tiers.json`) and names each
+  walks the chain `STAGE_CHAIN` (cleanup from `build/manifest.json` or `build.pkl`, enrich from
+  the cleanup stage of the same engine, tiers from the enrich stage, save from the enrich stage
+  and `tiers.json`) and names each
   stage whose sidecar records an input md5 that the file there no longer has (or a file now
   gone), or records none of the chain's inputs; a stage not yet made is not stale. `save` checks
   the filtered extract against the sidecar of the build stage cleanup read
@@ -469,7 +471,8 @@ twice.
      line adds ", N super-junctions dropped with no allowed turn" when there are any. Portland
      and Oregon have none, so their builds are unchanged.
 
-**The stage file.** `stages/cleanup.pkl` is the cleaned `MultiDiGraph`:
+**The stage file.** The networkx engine's `stages/cleanup.pkl` is the cleaned `MultiDiGraph`
+(the arrays engine's `stages/cleanup/` holds the same graph as arrays, **The arrays engine**):
 
 - `G.graph`: `crs`, `pipeline_version`, `superjunctions`, `twins`.
 - Nodes `0..n-1`: `x, y` (projected), `lon, lat`, `kind` (`plain`, `cluster`, `interchange`,
@@ -520,8 +523,8 @@ and trunk length with a twin, the QA metric);
 `edges`); `connectivity` (nodes and edges before and after, dropped nodes, edges and length, a
 two-way road counted once, the number of dropped components and the 20 largest with their size,
 length and centroid, `retained`, `dropped_no_turn`: the super-junctions dropped for allowing no
-turn, the rounds after them added in); `seconds` per step (the arrays engine's with `handover`,
-the graph handed to the networkx steps after cleanup).
+turn, the rounds after them added in); `seconds` per step (with `handover` where
+`cleanup.run_cleanup` hands the arrays engine's graph to networkx, as the tests do).
 
 **Portland, for scale** (the 2026-10-30 extract; about 30–110 s depending on the machine's load,
 most of it stage A): simplify drops 267 self-loops and removes 12,833 nodes; stage A merges 9,771
@@ -544,7 +547,8 @@ transitions, 304 passages); connectivity keeps 65,779 of 66,041 nodes, dropping 
 
 `enrich.run_enrich(graph, pois) -> EnrichReport` adds to the cleaned graph, in place, what the
 engine and the modes read, then `enrich.save_stage` pickles it to `stages/enrich.pkl` and writes
-the report to `stages/enrich.json`. Edges are visited in key order; nothing is random. The
+the report to `stages/enrich.json` (the arrays engine computes the same values as arrays into
+`stages/enrich/`, **The arrays engine**). Edges are visited in key order; nothing is random. The
 constants are in `config.py`.
 
 - **Speed and time.** `parse_maxspeed` reads the `maxspeed` tag: `"45 mph"`, `"45mph"`; a bare
@@ -735,7 +739,8 @@ extract; about 4 s, the checks and the geometry included), the same nodes, edges
 ## `qa`
 
 `qa.run_qa(build_dir) -> QaReport` reads the saved build, the stage reports and the
-super-junction records in `stages/enrich.pkl`, and writes under the build's `qa/` (a build
+super-junction records (`qa.superjunctions`: in `stages/enrich.pkl`, or the arrays engine's
+`stages/cleanup/`), and writes under the build's `qa/` (a build
 without an array of the format is one line naming its remedy, the rebuild from `filter` for one
 another pipeline version wrote, and exit 1; a plain `save` refuses such a build with the same
 line):
@@ -860,17 +865,27 @@ two halves are now one interchange through which the Newberg Highway, OR 219 on 
 
 ## The arrays engine
 
-`--engine arrays`, the default, runs `build` and the whole of `cleanup` on NumPy arrays, scipy,
+`--engine arrays`, the default, runs every step from `build` to `save` on NumPy arrays, scipy,
 shapely and Numba instead of networkx and OSMnx (`--engine networkx`;
 `src/worst_route/pipeline/arrays/`), so that a state and later the whole country fit in memory
 and take hours rather than days (`docs/PLAN.md` §7 M5.2). It makes exactly the networkx engine's
-build: the same arrays byte for byte, the same strings, the same `graph_version`; the parity
-tests and `tools/parity.py` (below) hold it to that. The steps after cleanup are still
-networkx's, handed the cleaned graph by `arrays/to_nx.py` as networkx itself would hold it;
-enrich, tiers and save's input join in a later series. On a build the networkx engine made, the
-new default needs `build` run again before `cleanup`, whose input is now the arrays engine's
-build stage; `enrich`, `tiers` and `save` then skip, the cleanup stage being the same bytes, and
-`qa` runs again, the cleanup report's seconds being new.
+build: the same arrays byte for byte, the same geometry, strings and `graph_version`, and the
+same cleanup, enrich and tiers reports; the parity tests and `tools/parity.py` (below) hold it
+to that. `build` and `cleanup` take `--engine`; `enrich`, `tiers` and `save` follow the engine
+the build's cleanup ran (`layout.cleanup_engine`: a build holds one engine's cleanup stage,
+since `cleanup` removes the other's, and `enrich` likewise the other enrich stage); `tiers` and
+`save` record the cleanup stage among their inputs beside the enrich stage
+(`layout.enriched_stages`), and the enrich stage records the cleanup stage's md5, so a cleanup
+that changes only what enrich never reads (twins, transitions, records) still reruns them. Its
+stages are directories, no pickle among them: `stages/build/`, `stages/cleanup/`,
+`stages/enrich/`. Switching a build's engine in place reruns the stages after cleanup, each
+engine's own, and the build is the same. On a build the networkx engine made, the default needs
+`build` run again before `cleanup`; the steps after it then run again on the arrays engine's
+stages, `save` with `--force` (a build is never overwritten), to the same build. A build the
+arrays engine made before its stages after cleanup were its own holds `stages/build/` and a
+`cleanup.pkl` it handed over (its sidecar's engine `arrays`), which `layout.cleanup_engine`
+reads as the networkx engine's: the default `cleanup` then runs again into `stages/cleanup/`,
+`enrich` and `tiers` run again, and `save` needs `--force`, to the same build.
 
 **Stages** (`arrays/stage.py`). A stage is a directory under `stages/`, one `.npy` per array
 (no pickles) and `tables.json` for the rest (the tag sets, the CRS), with `manifest.json`
@@ -916,14 +931,14 @@ the tests compare the arrays' own order with networkx's (a case where two roads 
 were drawn before and after a road to another pins the by-neighbour grouping).
 `arrays/order.py` holds the order (`iteration_order`), which stage A sorts by too.
 
-**Handing over** (`arrays/to_nx.py`). The steps after the arrays engine's are handed the graph
-as networkx itself holds it, which the tests check, and the cleanup stage both engines write,
-`cleanup.pkl`, is the same to the byte, so switching engines in place reruns nothing after
-cleanup but `qa`, which reads the cleanup report, its seconds new (a pickle of the graph handed
-over, taken in memory, can differ: networkx caches in a graph the views asked of it, and the two
-engines ask for different ones). What makes it so: the edges added in the order networkx added
-them (simplification copies the raw graph, adding its edges in the raw graph's iteration order,
-which sets each node's predecessors in the order of their places, then merges), so successors,
+**Handing over** (`arrays/to_nx.py`). The tests hand the arrays engine's graphs to networkx
+(`cleanup.run_cleanup` still hands its cleaned graph over, through `to_nx.cleanup_graph`) to
+compare them with the networkx engine's as networkx itself holds them, and the cleaned graph
+handed over pickles to the networkx engine's bytes (a pickle of a graph handed over, taken in
+memory, can differ: networkx caches in a graph the views asked of it, and the two engines ask
+for different ones). What makes it so: the edges added in the order networkx added them
+(simplification copies the raw graph, adding its edges in the raw graph's iteration order, which
+sets each node's predecessors in the order of their places, then merges), so successors,
 predecessors and keys come out as networkx's (0, 1, ... per pair of nodes: an edge between two
 nodes that both stay is never removed); each edge's attributes in networkx's order (a raw edge's
 build order with `osmids` last, a merged edge's as `simplify._merged` writes it); and the
@@ -995,38 +1010,69 @@ super-junctions left with edges in and out and no allowed pair, round by round w
 after each, as cleanup does (step 5), its sums added into the report in the same order; a round
 reruns connectivity over the whole graph, which on arrays costs what the first did (on Portland
 0.03 s a round, where networkx's relabel and search take seconds).
-`to_nx.cleanup_graph` hands the result on as networkx holds it: each edge named in its tables by
-a tuple of its own, as relabel writes them, and the view of the in-degrees that cleanup's last
-look for a super-junction without a turn caches in the graph when it finds one (a single
-super-node without edges), since a pickle holds it. The cleanup report's `seconds` give that
-hand-over as `handover`. The tests include components of one size, a twin whose pair is dropped,
-the interchanges a region cuts, and a detached super-junction.
+`cleanup.run_arrays_cleanup` returns that graph; `to_nx.cleanup_graph` hands it over as networkx
+holds it, for the tests: each edge named in its tables by a tuple of its own, as relabel writes
+them, and the view of the in-degrees that cleanup's last look for a super-junction without a
+turn caches in the graph when it finds one (a single super-node without edges), since a pickle
+holds it. The tests include components of one size, a twin whose pair is dropped, the
+interchanges a region cuts, and a detached super-junction.
+
+**The cleanup stage** (`arrays/cleaned.py`). `stages/cleanup/` holds the cleaned graph's arrays
+and those of the stage A graph its edges and super-junctions name (`b_` and `a_` fields), the
+tag sets and the CRS in its tables, and `cleanup.json` beside it as the networkx engine writes
+it; the steps after cleanup read it memory-mapped. It is about 1.5 times the pickle (Portland:
+72 MB against 47.9 MB) because it carries the whole stage A graph, internal and dropped edges
+included; a leaner stage is a later item.
+
+**Enrich** (`arrays/enrich.py`). What `enrich.run_enrich` sets, as arrays on the cleaned graph,
+each value as networkx's (**enrich**): the speed, its source and the time per tag set and then
+the edge's length, in the same float operations; the identity and flags per tag set; the road
+units, the edges grouped by their OSM node run, a run paired with its reverse in key order; the
+bearings, through `enrich.bearings`, of the road less the stubs at merged ends (the part holding
+an end's OSM node found among the super-junctions' parts); the toll booths, level crossings and
+delays placed as `_place_pois` places them (an OSM node's edges by a sorted search, a junction's
+lowest-key out-edge the first of its out-edges, one without any off the graph); `pass_through`
+from the distinct neighbour pairs; the brand index through `enrich.brand_index`, which both
+engines call. `stages/enrich/` holds the values, the identities, the brand index and the md5 of
+the cleanup stage's manifest, and `enrich.json` the report.
+
+**Tiers and save** (`arrays/tiers.py`, `save.graph_data_of`, `save.graph_geometry_of`). Each
+tier's largest strongly connected part of its roads by scipy's strongly connected components
+over the nodes they touch (ties to the smallest node), and the same `tiers.json`; then the build
+array for array as `graph_data` makes it, and its geometry as `graph_geometry` does, with the
+same refusals (the shape-point rules checked on arrays, and on a breach the edges walked in key
+order as `graph_data` walks them, so the first breach raises the same error). `qa` and
+`tools/turn_bearings.py` read the super-junction records and the stages' geometry from either
+engine's stages.
 
 **Portland** (2026-10-30 extract, on a loaded machine): `build` 2–5 s against 3–7 s, the raw
 stage 22 MB against `build.pkl`'s 58 MB (45 bytes per OSM way segment: 493,206 consecutive
 node pairs, 604,539 refs); simplification 0.2 s against 3.5 s; stage A 0.6 s against 31–37 s
 (OSMnx's union of every buffer alone is about 10 s); twins 0.5–0.9 s against 0.8–1.6 s, the
 STRtree's work on both sides; stage B about 0.5–0.8 s against 3–8 s; connectivity 0.03 s
-against 2.7 s, then 1.7 s to hand the graph to networkx, which a later series removes; the whole
-of cleanup about 5–8 s against 45–67 s (`tools/parity.py`).
+against 2.7 s; the whole of cleanup about 4–8 s against 45–67 s; enrich, tiers and the build
+together 2.6 s against 21 s (`tools/parity.py`).
 
 **Checking it.** `tests/pipeline/test_arrays.py` compares the engines on every fixture and on
 cases of its own (rings and loops closing on themselves, parallel chains, a way drawn against
 its chain, duplicate ways, two one-way ways overlapping in part, two carriageways meeting at one
 node (US 322's, which the national build's save refused), merged edges at a node with two in and
 two out, a road mapped several times over one run, an adjacency entry's place, small inputs, a
-node without a location;
-pairs near the sum of their radii, buffers meeting at a corner, a split group, a cluster's edges
-by neighbour; a stub beside a carriageway, a way beside itself, a road mapped twice, the
-review's random roads; the networkx engine's stage B cases (a carriageway that would come back
-by turning back among them), the interchanges a region cuts and a twin that is a boundary edge;
-components of one size, a twin left without its pair): the raw graph, the simplified graph and
-the stage A graph in iteration order, the twins, the stage B graph, the cleanup graph and report
-and their pickles, and the saved build (`tests/pipeline/parity.py`'s `assert_same_graph`, which
-compares keys, predecessors and attribute order too, and `assert_same_build`).
-`test_arrays_property.py` does the same on 40 random street lattices (`slow`), and
-`test_arrays_data.py` (`data`) on Portland's filtered roads, to the build and, when this
-pipeline version saved Portland, its `graph_version`.
+node without a location; pairs near the sum of their radii, buffers meeting at a corner, a split
+group, a cluster's edges by neighbour; a stub beside a carriageway, a way beside itself, a road
+mapped twice, the review's random roads; the networkx engine's stage B cases (a carriageway that
+would come back by turning back among them), the interchanges a region cuts and a twin that is a
+boundary edge; components of one size, a twin left without its pair): the raw graph, the
+simplified graph and the stage A graph in iteration order, the twins, the stage B graph, the
+cleanup graph and report and their pickles, and the saved build (`tests/pipeline/parity.py`'s
+`assert_same_graph`, which compares keys, predecessors and attribute order too, and
+`assert_same_build`). `test_arrays_enrich.py` compares enrich's values, brand index and report
+(and pins the brand snap's tie to the lower node), and `test_arrays_build.py` the tiers, the
+build, its geometry and the refusals, on every fixture, the stage B cases and the review's
+random roads, each with POIs of every kind on every node of its file. `test_arrays_property.py`
+does the cleanup comparison on 40 random street lattices (`slow`), and `test_arrays_data.py`
+(`data`) everything on Portland's filtered roads, to the build and, when this pipeline version
+saved Portland, its `graph_version`.
 
 ```
 uv run python tools/parity.py --region portland [--engines networkx,arrays] [--allow-fragmented]
@@ -1035,14 +1081,17 @@ uv run python tools/parity.py --region portland [--engines networkx,arrays] [--a
 
 runs each engine's `build`, `cleanup` and the build (enrich, tiers, then the arrays and the
 geometry, written by `save`'s own functions as `pipeline save` writes them) on the region's
-filtered roads, each step in its own process, into a temporary directory (nothing under
-`WORST_ROUTE_DATA` is written), prints each step's seconds and peak memory, compares the cleanup
-reports and the builds array by array, the geometry's too, and exits 1 when they differ. On
-Portland: the same graph_version, the same report, no array differing. On Oregon (the 2026-10-29
-snapshot, a loaded machine, `build` to stage B on arrays, on the code before c928233's skip of a
-road mapped twice, which changes no Oregon pair) the run gave the same graph_version, report,
-strings and arrays, the geometry's included; cleanup 15 s against 124 s, stage A 0.9 s of it
-against 88 s.
+filtered roads, each step in its own process on its own engine's stages, into a temporary
+directory (nothing under `WORST_ROUTE_DATA` is written), prints each step's seconds and peak
+memory, compares the cleanup, enrich and tiers reports and the builds array by array, the
+geometry's too, and exits 1 when they differ. On Portland (pipeline version 7): the same
+graph_version, the same reports, no array differing. On Oregon (the 2026-10-29 snapshot at
+pipeline version 7, every step on arrays, on a loaded machine): the same graph_version, reports,
+strings and arrays, the geometry's included, Ponderosa Lane's copies one unit on both; `build` 7
+s against 12 s, cleanup 5 s against 91 s (stage A 0.8 s of it against 64 s, connectivity 0.05 s
+against 4 s), enrich, tiers and the build 6.5 s against 23 s. No super-junction is left without
+a turn there; a round dropping one (tables emptied by hand) takes 0.08 s on arrays, as long as a
+connectivity pass.
 
 ## Fixtures
 
@@ -1069,30 +1118,34 @@ The tests are `tests/pipeline/`: `test_exclusions.py`, `test_download.py`, `test
 (stages A and B, with in-memory cases: a half-diamond, a slip lane near and far from its
 crossing, two branches of one road merging, two interchanges on one freeway, a cluster too wide
 and one touching no other road, a diamond whose cross road bridges between its terminals, a
-crossover between carriageways, a roundabout bypassed by a slip lane),
-`test_carriageways.py` (with in-memory cases: ramps on one side only, offset gores),
-`test_connectivity.py`, `test_cleanup.py` (the whole step on every fixture, determinism, the
-fragmented failure), `test_enrich.py` (maxspeed parsing, bearings, at a cluster the road's and not the stub's,
-identities, units (a road mapped several times one unit per run), flags,
-collectibles inside edges and at junctions, delays, pass-through, determinism; the brand index:
-grouping by wikidata id or name, the display name, the cut on distinct nodes, the 100 m limit, a
-POI with only a dead end near), `test_tiers.py`
-(each fixture's tiers, the tie rule, the fragmented failure), `test_save.py` (every fixture saved,
-read back and checked with `check_build` and `check_saved`, the brand index saved and read back,
-the speed table, the empty-transitions, too-many-speeds and shape-point refusals, two one-way
-ways overlapping in part saved, a stable
-`graph_version`, and hypothesis: a shape drawn within the tolerance and the rounding, its ends
-exact), `test_qa.py` (a passing and a failing build, the layers),
-`test_cli_steps.py` (the steps through the CLI under a temporary `WORST_ROUTE_DATA`, including
-the sidecar skips, save's refusal, `worst-route plan` and `validate` on a build the pipeline
-saved, and both engines through `save` to one `graph_version`), `test_arrays.py` and
+crossover between carriageways, a roundabout bypassed by a slip lane), `test_carriageways.py`
+(with in-memory cases: ramps on one side only, offset gores), `test_connectivity.py`,
+`test_cleanup.py` (the whole step on every fixture, determinism, the fragmented failure),
+`test_enrich.py` (maxspeed parsing, bearings, at a cluster the road's and not the stub's,
+identities, units (a road mapped several times one unit per run), flags, collectibles inside
+edges and at junctions, delays, pass-through, determinism; the brand index: grouping by wikidata
+id or name, the display name, the cut on distinct nodes, the 100 m limit, a POI with only a dead
+end near), `test_tiers.py` (each fixture's tiers, the tie rule, the fragmented failure),
+`test_save.py` (every fixture saved, read back and checked with `check_build` and `check_saved`,
+the brand index saved and read back, the speed table, the empty-transitions, too-many-speeds and
+shape-point refusals, two one-way ways overlapping in part saved, a stable `graph_version`, and
+hypothesis: a shape drawn within the tolerance and the rounding, its ends exact), `test_qa.py`
+(a passing and a failing build, the layers), `test_cli_steps.py` (the steps through the CLI
+under a temporary `WORST_ROUTE_DATA`, including the sidecar skips, save's refusal, `worst-route
+plan` and `validate` on a build the pipeline saved, both engines through `save` to one
+`graph_version`, a build switched between them in place, and a cleanup changing only what enrich
+never reads), `test_arrays.py`, `test_arrays_enrich.py`, `test_arrays_build.py` and
 `test_arrays_property.py` (the arrays engine against networkx's, **The arrays engine**), and,
-marked `data`, `test_arrays_data.py` (both engines on Portland), `test_cleanup_data.py` (the invariants and the report on
-Portland's latest build) and `test_build_data.py` (Portland's saved build: valid, its
-`graph_version`, `check_build`, `check_saved` against `stages/enrich.pkl`, the tier masks, the
-brands (each on at least 3 pass-through nodes, ids in name order), QA passed). `invariants.py` holds the invariant checks the tests share (`check_build` on a saved build's
-arrays; `check_saved` of a build and its geometry against the enriched graph, the OSM nodes
-along the edges that the validator's proof assumes included), `chain.py` runs the steps in memory on a fixture,
-`parity.py` compares the two engines' graphs and builds exactly, `osm.py` writes the in-memory cases' OSM files from positions in metres,
-and `copies.py` the cases of a road mapped more than once (copies over one run, two one-way ways overlapping in part, US 322's two carriageways meeting at one node), which
+marked `data`, `test_arrays_data.py` (both engines on Portland), `test_cleanup_data.py` (the
+invariants and the report on Portland's latest build, either engine's stages) and
+`test_build_data.py` (Portland's saved build: valid, its `graph_version`, `check_build`,
+`check_saved` against the enriched graph, `stages/enrich.pkl` or the arrays engine's cleaned
+graph enriched by networkx, the tier masks, the brands (each on at least 3 pass-through nodes,
+ids in name order), QA passed). `invariants.py` holds the invariant checks the tests share
+(`check_build` on a saved build's arrays; `check_saved` of a build and its geometry against the
+enriched graph, the OSM nodes along the edges that the validator's proof assumes included),
+`chain.py` runs the steps in memory on a fixture, `parity.py` compares the two engines' graphs
+and builds exactly, `osm.py` writes the in-memory cases' OSM files from positions in metres, and
+`copies.py` the cases of a road mapped more than once (copies over one run, two one-way ways
+overlapping in part, US 322's two carriageways meeting at one node), which
 `tests/engine/test_road_copies.py` builds too.

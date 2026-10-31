@@ -90,7 +90,6 @@ from worst_route.api.worker import RouteArrays, unreachable
 from worst_route.config import BUBBLE_KM
 from worst_route.engine import ENGINE_VERSION
 from worst_route.engine.alphabet_search import alphabet_counts, edge_letters
-from worst_route.engine.io import feature_collection, line_coordinates
 from worst_route.engine.objectives import OBJECTIVE_KEYS
 from worst_route.engine.objectives.base import route_delay_s
 from worst_route.engine.objectives.brand import BrandRefused, brand_counts, brand_problem
@@ -106,6 +105,7 @@ from worst_route.graph.loader import BuildNotFound, Loaded, load_build
 from worst_route.graph.spatial import SnapError
 from worst_route.presentation.directions import Step
 from worst_route.presentation.document import present, route_directions
+from worst_route.presentation.geojson import feature_collection, line_coordinates
 
 if TYPE_CHECKING:
     from worst_route.api.app import Api

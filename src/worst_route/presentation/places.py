@@ -46,9 +46,9 @@ import shapely
 from numpy.typing import NDArray
 
 from worst_route.config import CENSUS_VINTAGE, REGIONS, STATES, settings
-from worst_route.engine.io import line_coordinates
 from worst_route.engine.route import IntArray
 from worst_route.graph.data import GraphData
+from worst_route.presentation.geojson import line_coordinates
 
 STATE_COLUMNS = ("STATEFP", "STUSPS", "NAME")
 PLACE_COLUMNS = ("GEOID", "NAME", "NAMELSAD", "LSAD", "STUSPS")

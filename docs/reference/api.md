@@ -233,7 +233,7 @@ later.
 | DELETE | `/jobs/{id}` | cancels it (**Jobs**); answers its status, without the snapshot |
 | GET | `/routes/{id}` | the route document, with its directions and toasts |
 | GET | `/routes/{id}/directions` | `{route_id, directions: [{step, text, distance_m, time_s, edge_range, kind}]}`: the document's directions alone |
-| GET | `/routes/{id}/geojson` | the FeatureCollection `engine.io.feature_collection` makes: the route, the baseline (null for a round trip) and the stops |
+| GET | `/routes/{id}/geojson` | the FeatureCollection `presentation.geojson.feature_collection` makes: the route, the baseline (null for a round trip) and the stops |
 | POST | `/routes/{id}/validate` | `{route_id, graph_version, ok, checks: [{name, ok, index, detail}]}`, the stops re-derived from the stored request (by this engine version only); an alphabet route's checks end with `alphabet` |
 | GET | `/geocode` | `{query, region, candidates: [{label, lat, lon, category}], cached}`, for `?q=&region=` (**Geocoding**) |
 | GET, HEAD | `/routes/{id}/share.png` | the route's share image, a 1200 × 630 PNG (`image/png`), cached; HEAD the same headers without it (**Share image**) |

@@ -43,10 +43,10 @@ from matplotlib.patheffects import withStroke
 from matplotlib.text import Text
 from numpy.typing import NDArray
 
-from worst_route.engine.io import line_coordinates
 from worst_route.engine.route import IntArray
 from worst_route.graph.data import GraphData
 from worst_route.presentation.comparisons import METRES_PER_MILE
+from worst_route.presentation.geojson import line_coordinates
 from worst_route.presentation.places import PlaceIndex
 
 WIDTH_PX, HEIGHT_PX, DPI = 1200, 630, 100

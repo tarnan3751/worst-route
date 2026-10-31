@@ -23,16 +23,10 @@
 replayed exactly with `max_iterations` set to its `run.attempts` and a budget in seconds at
 least as large as the first run's.
 
-`route_geojson(data, result)` is a FeatureCollection: the route and the baseline as
-LineStrings along their edges' geometry (`[lon, lat]`, 7 decimals, a point repeated where two
-edges meet kept once; the baseline of a round trip has no geometry), and one Point per stop.
-`feature_collection(...)` makes the same from the route's parts, for a route that was stored
-rather than planned in this process (the API's), and `line_coordinates(data, edges)` is one such
-line's points.
+A route's GeoJSON is `presentation/geojson.py`'s.
 """
 
 import json
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -140,77 +134,3 @@ def read_route(path: Path) -> SavedRoute:
         ),
         document=doc,
     )
-
-
-def route_geojson(data: GraphData, result: PlanResult) -> dict[str, Any]:
-    """The route, the baseline and the stops as a GeoJSON FeatureCollection."""
-    route, baseline = result.route, result.baseline
-    return feature_collection(
-        data,
-        edges=route.edges,
-        length_m=route.metrics.length_m,
-        time_s=route.metrics.time_s,
-        baseline_edges=baseline.edges,
-        baseline_length_m=baseline.length_m,
-        baseline_time_s=baseline.time_s,
-        snaps=result.snaps,
-    )
-
-
-def feature_collection(
-    data: GraphData,
-    *,
-    edges: IntArray,
-    length_m: float,
-    time_s: float,
-    baseline_edges: IntArray,
-    baseline_length_m: float,
-    baseline_time_s: float,
-    snaps: Sequence[Snap],
-) -> dict[str, Any]:
-    """`route_geojson`'s FeatureCollection, from the route's parts."""
-    lines = [
-        _line(data, edges, "route", length_m, time_s),
-        _line(data, baseline_edges, "baseline", baseline_length_m, baseline_time_s),
-    ]
-    stops = [
-        {
-            "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [round(s.lon, 7), round(s.lat, 7)]},
-            "properties": {
-                "kind": "stop",
-                "index": k,
-                "node": s.node,
-                "moved_m": s.moved_m,
-                "note": s.note,
-            },
-        }
-        for k, s in enumerate(snaps)
-    ]
-    return {"type": "FeatureCollection", "features": [*lines, *stops]}
-
-
-def line_coordinates(data: GraphData, edges: IntArray) -> list[list[float]]:
-    """The `[lon, lat]` points along `edges`, 7 decimals, a point repeated where two edges meet
-    kept once."""
-    starts = data.coord_indptr[edges]
-    counts = data.coord_indptr[edges + 1] - starts
-    within = np.arange(counts.sum()) - np.repeat(np.cumsum(counts) - counts, counts)
-    points = data.coords[np.repeat(starts, counts) + within].astype(np.float64)
-    fresh = np.ones(len(points), dtype=np.bool_)
-    fresh[1:] = (points[1:] != points[:-1]).any(axis=1)
-    coordinates: list[list[float]] = np.round(points[fresh], 7).tolist()
-    return coordinates
-
-
-def _line(
-    data: GraphData, edges: IntArray, kind: str, length_m: float, time_s: float
-) -> dict[str, Any]:
-    properties = {"kind": kind, "length_m": length_m, "time_s": time_s}
-    if len(edges) == 0:
-        return {"type": "Feature", "geometry": None, "properties": properties}
-    return {
-        "type": "Feature",
-        "geometry": {"type": "LineString", "coordinates": line_coordinates(data, edges)},
-        "properties": properties,
-    }

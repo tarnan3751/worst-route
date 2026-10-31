@@ -856,7 +856,7 @@ def plan(
     from pydantic import ValidationError
 
     from worst_route.engine import ENGINE_VERSION
-    from worst_route.engine.io import SavedRoute, read_route, route_document, route_geojson
+    from worst_route.engine.io import SavedRoute, read_route, route_document
     from worst_route.engine.objectives import OBJECTIVE_KEYS
     from worst_route.engine.objectives.brand import BrandRefused
     from worst_route.engine.plan import BaseRouteMismatch, plan_route
@@ -1088,6 +1088,8 @@ def plan(
         out.write_text(json.dumps(with_presentation(document, presented), indent=2) + "\n")
         typer.echo(f"wrote {out}")
     if geojson is not None:
+        from worst_route.presentation.geojson import route_geojson
+
         geojson.write_text(json.dumps(route_geojson(data, result)) + "\n")
         typer.echo(f"wrote {geojson}")
 

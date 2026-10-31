@@ -27,7 +27,7 @@ routes either way, on every build, transition tables included (**Searches**).
 | `worsen.py` | `worsen`, `run_worsen`, `pick_segment`, `UnusedNodes`, `Budget`, `ProgressEvent`, `WorsenResult` |
 | `alphabet_search.py` | `alphabet_route`, `edge_letters`, `alphabet_counts`, `alphabet_scored` (**Alphabet**) |
 | `plan.py` | `plan_route`, `PlanResult`, `check_base`, `BaseRouteMismatch` |
-| `io.py` | `route_document`, `read_route` / `SavedRoute`, `route_geojson` |
+| `io.py` | `route_document`, `read_route` / `SavedRoute` |
 
 `ENGINE_VERSION` (`engine/__init__.py`) is recorded with every route: bump it when the same
 build, request and seed would give a different route. The engine's numbers (thresholds,
@@ -949,15 +949,8 @@ it does not read, the presentation's among them, are kept in its `document`). A 
 not one raises `KeyError`, `TypeError`, `ValueError`, `OverflowError` (an id beyond
 int32) or pydantic's `ValidationError`.
 
-**GeoJSON** (`route_geojson`; `plan --geojson`) is a FeatureCollection:
-
-- the route and the baseline as LineStrings along their edges' `coords` (`[lon, lat]`, 7
-  decimals; a point repeated where two edges meet is kept once);
-- one Point per stop, at its snapped node.
-
-Each feature has a `kind` property (`route`, `baseline`, `stop`). The lines carry `length_m`
-and `time_s`; the stops carry `index`, `node`, `moved_m` and `note`. A round trip's baseline
-has a null geometry.
+A route's GeoJSON (`plan --geojson`) is the presentation's (`docs/reference/presentation.md`,
+**GeoJSON**).
 
 ## The CLI
 

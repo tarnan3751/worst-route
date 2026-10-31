@@ -18,10 +18,10 @@ from worst_route.api import routes_api
 from worst_route.api.app import Api, ApiSettings, create_app
 from worst_route.api.jobs import JobSettings
 from worst_route.engine.constraints import Constraints, returning
-from worst_route.engine.io import feature_collection
 from worst_route.engine.snap import StopUnreachable
 from worst_route.graph.data import EdgeFlag
 from worst_route.graph.testing import Edge, make_graph
+from worst_route.presentation.geojson import feature_collection
 
 from ..engine.graphs import TREES, X0, Y0, at, at_node, avenue, lattice, named_roads, two_rings
 from .support import GRID, GRID_BBOX, SLOW, save_build, slow_splices, until

@@ -19,6 +19,7 @@ builds and the places index.
 | `jokes.py` | `JOKES`, `inject` |
 | `stats.py` | `stats`, `Stats`, `toasts`, `Vehicle` |
 | `document.py` | `present`, `with_presentation`, `route_directions` |
+| `geojson.py` | `route_geojson`, `feature_collection`, `line_coordinates` |
 
 `config.py` holds `CENSUS_VINTAGE` (2025) and `STATES`: each state's Geofabrik slug (a `Region`'s
 `state`) to its USPS and FIPS codes, for the 50 states and DC, which match the Census state
@@ -191,6 +192,21 @@ takes 17–47 ms, the directions about 10 ms, the places lookups 5–7 ms and th
 4 ms. Before the places lookups were prepared (**Places**), the same document took 0.26–0.38 s
 on a quiet machine and 1.8–2.6 s at load average 30, nine tenths of it the lookups.
 
+## GeoJSON
+
+`route_geojson(data, result)` (`plan --geojson`) is a FeatureCollection:
+
+- the route and the baseline as LineStrings along their edges' `coords` (`[lon, lat]`, 7
+  decimals; a point repeated where two edges meet is kept once);
+- one Point per stop, at its snapped node.
+
+Each feature has a `kind` property (`route`, `baseline`, `stop`). The lines carry `length_m`
+and `time_s`; the stops carry `index`, `node`, `moved_m` and `note`. A round trip's baseline
+has a null geometry. `feature_collection(data, *, edges, length_m, time_s, baseline_edges,
+baseline_length_m, baseline_time_s, snaps)` makes the same from a stored route's parts (the
+API's `GET /routes/{id}/geojson`), and `line_coordinates(data, edges)` is one line's points. The
+engine and the job workers never import the module.
+
 ## Places
 
 **The Census files.** Cartographic boundary files of the 2025 vintage, free to use with
@@ -248,7 +264,7 @@ Without Washington's file it writes Oregon's 53 places and warns
 shapely, no geopandas) into two shapely STRtrees, the states and the region's places, and keeps
 the outlines to draw; it returns None when any file is missing, and callers then know no states
 or towns and draw no outlines, never an error. For a route's line in lon/lat
-(`route_line(data, edges)`, the points `engine.io.line_coordinates` gives):
+(`route_line(data, edges)`, the points `geojson.line_coordinates` gives):
 
 - `states_crossed(line) -> list[State(fips, usps, name)]` and `towns_passed(line) ->
   list[Town(name, lsad, usps, geoid)]` list every polygon the line **intersects** (a touch
@@ -376,6 +392,7 @@ data directory and holds a route over the API tests' 10 × 10 lattice):
 | `test_directions.py` | each step's words on small named graphs (`streets.py`): the town's turns, an interior stop with and without a label (the road going on as "Continue on"), a round trip's arrival, the turn words at the slight and sharp bands' ends, straight on continuing only on a new road, a turn on the same road its own step ("to stay on"), never "to stay on" an unnamed road, US 26 through downtown (a ref joining a name straight on unannounced, then each turn a step), unnamed roads and an alley in words, a ramp of two links toward the motorway's first ref and one the route ends on, a ramp carrying the ref of the road it joins (US 30) still ending, toward that road, an interchange on the ramp or where it meets the motorway adding no second ramp, an interchange without a link a junction like another and a roundabout node (the same road through it cut too), the diamond and roundabout fixtures through the pipeline; planned lattice routes with signals, a round trip included: the ranges tiling the edges, the distances adding up to the length and the times to the driving and delays; names, refs and the compass, half-way bearings clockwise |
 | `test_jokes.py` | forty distinct jokes and their placeholders, one turn counted as "1 turn"; the same seed the same jokes, another seed others; over 20 seeds no joke twice, every placeholder filled, the real steps kept in order and numbered again, each joke empty after a driving step, the gaps within their band; a long route spreading nearly all forty to its end; the ratio, the turns before and the step's distance filled in; a round trip without ratio jokes and a route without turns without turn counts; a short route without a joke; the distances' format; `route_directions` with and without jokes |
 | `test_stats.py` | fuel and cost from a vehicle (the API's `Vehicle`), null without; states and towns from the census fixture in route order, null without an index; the network fraction over the units within reach, less what the request bans or leaves outside its area, a unit of two edges counted once; the toasts in order with everything known, six without places, a vehicle or delays, never turning one way, one town, one state left out, under 1 %, the items, a round trip with and without a via (its ratio first, then its ending where it began), twelve at most and the items never dropped |
+| `test_geojson.py` | the route, the baseline and the stops as features, one point per node along a lattice route, a round trip's null baseline, and the collection from a stored route's parts equal to the planned route's |
 | `test_document.py` | `present`'s keys, `with_presentation`'s layout, and the same presentation from a planned route and from its route.json |
 | `test_cli_directions.py` | `plan --out` writing the directions (the ones `route_directions` gives), the toasts and the metrics (no fuel, the fixture's states and towns, null without an index) into route.json, which `validate` and `plan --base` still read; `worst-route directions` printing the file's steps with and without jokes, and refusing another graph_version or a file it cannot read |
 | `test_directions_data.py` (`data`) | Portland: Powell's → Reed's first step heads along a road at Powell's (West Burnside Street, NW Couch Street, NW or SW 10th or 11th Avenue), every step has words, the driving steps tile the route, there are jokes, and the toasts open with the ratio, six to twelve of them |

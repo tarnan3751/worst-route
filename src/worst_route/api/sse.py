@@ -26,9 +26,9 @@ import shapely
 from sse_starlette import ServerSentEvent
 
 from worst_route.api.schemas import BaselineOut, LineString, RouteMetrics, Snapshot, SpliceOut
-from worst_route.engine.io import line_coordinates
 from worst_route.engine.route import IntArray, Metrics
 from worst_route.graph.data import GraphData
+from worst_route.presentation.geojson import line_coordinates
 
 METRES_PER_DEGREE = 111_320.0  # of latitude
 

@@ -9,7 +9,16 @@ import shapely
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from tests.pipeline.chain import FIXTURES, brand_pois, cleaned, east_of, enriched, tier_nodes
+from tests.pipeline.chain import (
+    FIXTURES,
+    brand_pois,
+    cleaned,
+    east_of,
+    enriched,
+    poi_table,
+    tier_nodes,
+)
+from tests.pipeline.copies import overlapping
 from tests.pipeline.invariants import check_build, check_saved
 from tests.pipeline.osm import write_osm
 from worst_route.config import GEOMETRY_SIMPLIFY_M, PIPELINE_VERSION, TIERS
@@ -83,6 +92,21 @@ def test_save_each_fixture(name: str, tmp_path: Path) -> None:
         out = loaded.out_edges[loaded.out_indptr[v] : loaded.out_indptr[v + 1]]
         into = loaded.in_edges[loaded.in_indptr[v] : loaded.in_indptr[v + 1]]
         assert (np.diff(out) > 0).all() and (np.diff(into) > 0).all()
+
+
+def test_two_ways_overlapping_in_part_save(tmp_path: Path) -> None:
+    """Mill Rd as two one-way ways in opposite directions, the second with a node of its own
+    (`copies.overlapping`): the node they share stays a junction, so no OSM node lies inside
+    two roads, and the build saves, reads back and validates."""
+    graph = cleaned(overlapping(tmp_path / "overlap.osm", [(1, [1, 2, 3]), (2, [3, 2, 6, 1])]))
+    run_enrich(graph, poi_table([]))
+    data = graph_data(graph, tier_nodes(graph), META)
+    path = build_dir(tmp_path)
+    save_build(data, path, graph_geometry(graph, data))
+    loaded = read_build(path)
+    loaded.validate()  # deep
+    check_build(loaded)
+    check_saved(graph, loaded, read_geometry(path, loaded.m))
 
 
 def test_the_build_holds_the_enriched_values(tmp_path: Path) -> None:

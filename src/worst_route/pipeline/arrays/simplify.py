@@ -4,14 +4,20 @@ The arrays engine's `simplify` (`docs/reference/pipeline.md`, **The arrays engin
 graph `pipeline.simplify.simplify` makes, from a `build.RawGraph`, by running the same algorithm:
 nodes visited one at a time in ascending OSM id (`_contract`, Numba), each contracted when its
 edges form exactly one through path per allowed direction (one in and one out, or two in and two
-out pairing into the two directions of one road) whose two edges carry the same class, tags,
-`oneway` and `reversed`, and whose far ends differ. That last test is networkx's "the merge would
-repeat an OSM node" test: segments share only junctions, and a contracted node lies inside one
-chain only, so two edges through a node share an OSM node exactly when their far ends are one
-node (a ring's or a loop's last merge, a dead end). Each merge adds an edge whose length is the
-sum of its two in the order networkx adds them, so the float sums agree; its geometry, OSM nodes
-and ways (a way repeated back to back once) are the leaves of its merge tree in order, expanded
-at the end (`_expand`).
+out that are the two directions of one road) whose two edges carry the same class, tags,
+`oneway` and `reversed`, and whose far ends differ. The two directions of one road are
+networkx's test, the edges to and from each neighbour one run of OSM nodes reversed
+(`_reverses`). Two raw edges are compared node by node. A merged edge holds a contracted
+junction inside, which no raw edge does, and the one other edge that can hold it is the edge its
+contraction made beside it (or what each became since), its reverse when that contraction was
+of the two directions of a road (`partner`); they stay reverses as they grow, since they share
+their ends and a contraction at either end takes both. The far ends test is networkx's "the
+merge would repeat an OSM node" test: segments share only junctions, and a contracted node lies
+inside one edge or inside the two directions of one road, so two edges through a node share an
+OSM node exactly when their far ends are one node (a ring's or a loop's last merge, a dead end).
+Each merge adds an edge whose length is the sum of its two in the order networkx adds them, so
+the float sums agree; its geometry, OSM nodes and ways (a way repeated back to back once) are
+the leaves of its merge tree in order, expanded at the end (`_expand`).
 
 The order of the result is networkx's, which the steps after it depend on: nodes in the raw
 graph's order; edges by their tail's position, then their entry in the tail's adjacency (the
@@ -94,7 +100,7 @@ def simplify(raw: RawGraph) -> tuple[SimplifiedGraph, SimplifyStats]:
     visit = np.argsort(raw.node_id, kind="stable").astype(np.int32)
     lengths = raw.seg_length[seg]
     p_tail, p_head, p_key, p_length, left, right, made_at, alive, removed = _contract(
-        n, visit, tail, head, key, lengths
+        n, visit, tail, head, key, lengths, seg, backward, raw.ref_indptr, raw.ref_id
     )
 
     live = np.flatnonzero(alive)
@@ -168,6 +174,10 @@ def _contract(
     head0: NDArray[np.int32],
     key0: NDArray[np.int64],
     length0: NDArray[np.float64],
+    seg0: NDArray[np.int64],
+    backward0: NDArray[np.bool_],
+    ref_indptr: NDArray[np.int64],
+    ref_id: NDArray[np.int64],
 ) -> tuple[
     NDArray[np.int32],
     NDArray[np.int32],
@@ -181,8 +191,9 @@ def _contract(
 ]:
     """networkx's contraction, node by node in `visit` order, over a pool of edges: the raw edges
     first, then one per merge, each with its two children and the node whose contraction made it
-    (-1 for a raw edge). Each node's edges sit in fixed slots, one per raw in- or out-edge: a
-    merge puts the new edge in the slots its children held at its two ends."""
+    (-1 for a raw edge), and the edge made beside it when the two are the two directions of one
+    road (`partner`, -1 otherwise). Each node's edges sit in fixed slots, one per raw in- or
+    out-edge: a merge puts the new edge in the slots its children held at its two ends."""
     m0 = len(tail0)
     cap = m0 + 2 * n
     tail = np.empty(cap, np.int32)
@@ -192,6 +203,7 @@ def _contract(
     left = np.full(cap, -1, np.int64)
     right = np.full(cap, -1, np.int64)
     made_at = np.full(cap, -1, np.int32)
+    partner = np.full(cap, -1, np.int64)
     alive = np.zeros(cap, np.bool_)
     tail[:m0] = tail0
     head[:m0] = head0
@@ -245,6 +257,11 @@ def _contract(
                 to_a, to_b = o1, o0
             else:
                 continue
+            if not (
+                _reverses(i0, to_a, m0, partner, seg0, backward0, ref_indptr, ref_id)
+                and _reverses(i1, to_b, m0, partner, seg0, backward0, ref_indptr, ref_id)
+            ):
+                continue
             if key[i0] != key[to_b] or key[i1] != key[to_a]:
                 continue
             pairs = ((i0, to_b), (i1, to_a))
@@ -268,6 +285,9 @@ def _contract(
             in_pos[m] = in_pos[out]
             in_slot[in_pos[out]] = m
             m += 1
+        if pairs[1][0] >= 0:  # the two directions of one road: each the other's reverse
+            partner[m - 2] = m - 1
+            partner[m - 1] = m - 2
         removed[node] = True
     return (
         tail[:m],
@@ -280,6 +300,36 @@ def _contract(
         alive[:m],
         removed,
     )
+
+
+@_jit
+def _reverses(
+    e: int,
+    f: int,
+    m0: int,
+    partner: NDArray[np.int64],
+    seg: NDArray[np.int64],
+    backward: NDArray[np.bool_],
+    ref_indptr: NDArray[np.int64],
+    ref_id: NDArray[np.int64],
+) -> bool:
+    """Whether edge `f` runs over edge `e`'s OSM nodes reversed: for two raw edges, the same
+    segment's two directions or two segments whose refs, each in its edge's direction, are one
+    sequence reversed; else `f` is `e`'s partner."""
+    if e >= m0 or f >= m0:
+        return bool(partner[e] == f)
+    s, t = seg[e], seg[f]
+    if s == t:
+        return True
+    size = ref_indptr[s + 1] - ref_indptr[s]
+    if ref_indptr[t + 1] - ref_indptr[t] != size:
+        return False
+    for k in range(size):
+        x = ref_id[ref_indptr[s + 1] - 1 - k] if backward[e] else ref_id[ref_indptr[s] + k]
+        y = ref_id[ref_indptr[t] + k] if backward[f] else ref_id[ref_indptr[t + 1] - 1 - k]
+        if x != y:
+            return False
+    return True
 
 
 @_jit

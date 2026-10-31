@@ -4,8 +4,8 @@ Each stage the arrays engine runs is compared with the networkx engine's: the ra
 simplified graph (in networkx's iteration order, keys aside), then the whole of cleanup, and the
 saved build (every array, the strings, the graph_version). Cases beyond the fixtures exercise
 what simplification can meet: rings and loops that close on themselves, parallel chains, a way
-drawn against its neighbours, a chain whose nodes are visited in no particular order, a road
-mapped several times over one run of nodes.
+drawn against its neighbours, a chain whose nodes are visited in no particular order, two one-way
+ways overlapping in part, a road mapped several times over one run of nodes.
 """
 
 import dataclasses
@@ -23,13 +23,20 @@ from tests.pipeline import test_carriageways as carriageway_cases
 from tests.pipeline import test_cleanup as cleanup_cases
 from tests.pipeline import test_consolidate as consolidate_cases
 from tests.pipeline.chain import FIXTURES, UTM_10N, pois_of
-from tests.pipeline.copies import COPIES, mapped_copies
+from tests.pipeline.copies import (
+    COPIES,
+    OVERLAPS,
+    US_322_NODE,
+    mapped_copies,
+    overlapping,
+    us_322,
+)
 from tests.pipeline.invariants import check_all
 from tests.pipeline.osm import write_osm
 from tests.pipeline.parity import assert_same_build, assert_same_graph, raw_graph, read_back, same
 from tests.pipeline.random_roads import random_roads
 from tests.pipeline.test_consolidate import _near_pair
-from worst_route.graph.data import GraphData
+from worst_route.graph.data import FORMAT_VERSION, GraphData
 from worst_route.pipeline import cleanup
 from worst_route.pipeline.arrays import connectivity as arrays_connectivity
 from worst_route.pipeline.arrays.build import build_raw_arrays, load_stage, save_stage
@@ -282,6 +289,64 @@ def test_an_adjacency_entry_keeps_its_place(tmp_path: Path) -> None:
 def test_small_inputs(tmp_path: Path, ways: list[tuple[int, list[int], dict[str, str]]]) -> None:
     nodes = {1: (0.0, 0.0), 2: (50.0, 0.0), 3: (0.0, 50.0)}
     assert_same_cleanup(write_osm(tmp_path / "small.osm", nodes, ways))
+
+
+def test_two_carriageways_meeting_at_a_node(tmp_path: Path) -> None:
+    """US 322 (`copies.us_322`), whose node 106661013 the national build's save refused: the node
+    stays on both engines, whose cleanup and build are the same, and the build saves and
+    validates."""
+    source = us_322(tmp_path / "us322.osm")
+    assert US_322_NODE in assert_same_cleanup(source)
+    want, got = build_of(source, tmp_path, arrays=False), build_of(source, tmp_path, arrays=True)
+    assert_same_build(want, got)
+    for data in (want, got):  # deep, with the format a written build's meta names
+        dataclasses.replace(data, meta={**data.meta, "format": FORMAT_VERSION}).validate()
+
+
+def test_merged_edges_through_a_node(tmp_path: Path) -> None:
+    """At a node with two edges in and two out, merged edges are the two directions of one road
+    only when one contraction made them so. A two-way street in three ways: 20 goes, then 30,
+    whose edges to 10 are the two merged at 20. A one-way ring 50 -> 1 -> 60 -> 2 -> 50 meeting
+    one-way ways 60 -> 70 and 70 -> 60: 1 and 2 go, but 60 stays, its two edges to 50 merged at
+    different nodes and not one run reversed."""
+    one_way = {**STREET, "oneway": "yes"}
+    oak = {"highway": "residential", "name": "Oak Street"}
+    nodes = {10: (0.0, 0.0), 20: (100.0, 0.0), 30: (200.0, 0.0), 40: (300.0, 0.0)}
+    nodes |= {11: (0.0, -100.0), 41: (300.0, -100.0)}
+    nodes |= {50: (0.0, 500.0), 1: (100.0, 550.0), 60: (200.0, 500.0), 2: (100.0, 450.0)}
+    nodes |= {70: (300.0, 500.0), 71: (300.0, 400.0)}
+    ways = [
+        (1, [10, 20], STREET),
+        (2, [20, 30], STREET),
+        (3, [30, 40], STREET),
+        (4, [11, 10], oak),
+        (5, [40, 41], oak),
+        (6, [50, 1], one_way),
+        (7, [1, 60], one_way),
+        (8, [60, 2], one_way),
+        (9, [2, 50], one_way),
+        (10, [60, 70], one_way),
+        (11, [70, 60], one_way),
+        (12, [70, 71], oak),
+    ]
+    simplified = assert_same_cleanup(write_osm(tmp_path / "merged.osm", nodes, ways))
+    assert sorted(simplified) == [10, 11, 40, 41, 50, 60, 70, 71]
+
+
+@pytest.mark.parametrize(("mill_rd", "runs"), OVERLAPS.values(), ids=OVERLAPS.keys())
+def test_two_one_way_ways_over_a_node_in_opposite_directions(
+    tmp_path: Path, mill_rd: list[tuple[int, list[int]]], runs: list[tuple[int, ...]]
+) -> None:
+    """Two one-way ways over node 2 in opposite directions (`copies.overlapping`): over the same
+    nodes, one road whose node 2 goes; overlapping in part, node 2 stays, whichever way the file
+    lists first (the arrays engine then meets the pair that is no reverse at the second
+    neighbour) and when both ways have a node of their own between 1 and 2 (two runs as long,
+    compared ref by ref). The same cleanup and build on both engines."""
+    source = overlapping(tmp_path / "overlap.osm", mill_rd)
+    assert (2 in assert_same_cleanup(source)) == (len(runs) == 4)
+    assert_same_build(
+        build_of(source, tmp_path, arrays=False), build_of(source, tmp_path, arrays=True)
+    )
 
 
 @pytest.mark.parametrize("inner", [False, True], ids=["one segment", "an inner junction"])

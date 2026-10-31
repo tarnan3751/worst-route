@@ -4,6 +4,7 @@ from pathlib import Path
 import networkx as nx
 import pytest
 
+from tests.pipeline.copies import OVERLAPS, US_322_NODE, overlapping, us_322
 from tests.pipeline.invariants import check_edges, check_partition
 from worst_route.pipeline.build import build_raw_graph
 from worst_route.pipeline.simplify import SimplifyStats, simplify
@@ -107,6 +108,35 @@ def test_ways_drawn_in_opposite_directions_do_not_merge(tmp_path: Path) -> None:
     graph, stats = simplify(build_raw_graph(source, UTM_10N)[0])
     assert graph.has_node(5)  # its two edges' `reversed` flags differ
     assert stats.nodes_removed == 2
+
+
+@pytest.mark.parametrize(("mill_rd", "runs"), OVERLAPS.values(), ids=OVERLAPS.keys())
+def test_two_one_way_ways_over_a_node_in_opposite_directions(
+    tmp_path: Path, mill_rd: list[tuple[int, list[int]]], runs: list[tuple[int, ...]]
+) -> None:
+    """Node 2 has two edges in and two out each time. Over the same nodes the two ways are the
+    two directions of one road, and node 2 goes; when the way back has a node of its own between
+    2 and 1 they overlap in part (whichever the file lists first, and when the way east has a
+    node of its own there too, so the two runs between 1 and 2 are as long), and contracting
+    node 2 would put it inside two roads, so it stays."""
+    before = build_raw_graph(overlapping(tmp_path / "overlap.osm", mill_rd), UTM_10N)[0]
+    graph, stats = simplify(before)
+    mill = sorted(d["osm_nodes"] for _, _, d in graph.edges(data=True) if d["name"] == "Mill Rd")
+    assert mill == runs
+    assert graph.has_node(2) == (len(runs) == 4)
+    check_partition(before, graph, complete=True)  # no OSM id inside two roads
+    check_edges(graph)
+
+
+def test_two_carriageways_meeting_at_a_node_keep_it(tmp_path: Path) -> None:
+    """US 322 (`copies.us_322`), the national build's refusal: two loops of one-way ways through
+    one node, two edges in and two out with no in-edge the reverse of an out-edge. The node
+    stays a junction, so it lies inside no edge."""
+    before = build_raw_graph(us_322(tmp_path / "us322.osm"), UTM_10N)[0]
+    graph, stats = simplify(before)
+    assert graph.has_node(US_322_NODE) and stats.nodes_removed == 0
+    check_partition(before, graph, complete=True)  # no OSM id inside two roads
+    check_edges(graph)
 
 
 def test_a_tag_change_keeps_the_node() -> None:

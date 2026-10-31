@@ -7,12 +7,16 @@ route can use one, and an edge's `osm_nodes` never repeat an id after cleanup. E
 `osmid` becomes `osmids`, the tuple of way ids it runs along, in order.
 
 A node is contracted when its edges form exactly one through path per allowed direction (one
-in and one out from two different neighbours, or two in and two out pairing into the two
-directions of one road) and the two edges of each pair carry the same `MERGE_ATTRIBUTES`:
+in and one out from two different neighbours, or two in and two out that are the two directions
+of one road: the edges to and from each neighbour run over one run of OSM nodes, opposite ways)
+and the two edges of each pair carry the same `MERGE_ATTRIBUTES`:
 `highway`, `oneway`, `reversed` and every tag the build stores. In the raw graph such a node
 always ends a way, so comparing every stored tag is what keeps a node where a way's tags change
 (a new ref, name, speed limit or bridge); merged edges stay homogeneous. A pair whose merge
-would repeat an OSM node id (a chain closing on itself) is left split. The merged edge
+would repeat an OSM node id (a chain closing on itself) is left split. Two ways over some of
+the same nodes in opposite directions, one with a node of its own between two they share, are
+not one road: their shared node stays, so a contracted node lies inside one edge or inside the
+two directions of one road, never inside two roads (`save` checks it). The merged edge
 concatenates `geometry` and `osm_nodes` (the shared node once) and `osmids` (a way repeated
 back to back once), and sums `length`. Nodes are visited in ascending id order, so the result
 is deterministic.
@@ -79,6 +83,8 @@ def _through_pairs(graph: nx.MultiDiGraph, node: int) -> list[tuple[_Edge, _Edge
         out_to = {edge[1]: edge for edge in outs}
         if a == b or set(out_to) != {a, b}:
             return None
+        if any(into[3]["osm_nodes"][::-1] != out_to[into[0]][3]["osm_nodes"] for into in ins):
+            return None  # not the two directions of one road: two ways overlapping in part
         pairs = [(ins[0], out_to[b]), (ins[1], out_to[a])]
     else:
         return None

@@ -34,6 +34,17 @@ describe("the data sources and notices", () => {
       ["Basemap style", "BSD-3-Clause", "https://github.com/protomaps/basemaps"],
       ["Land cover", "CC BY 4.0", "https://esa-worldcover.org"],
       [
+        "Online basemap tiles",
+        "Open Database License (ODbL), © OpenMapTiles",
+        "https://openfreemap.org",
+      ],
+      [
+        "Online basemap style",
+        "CC BY 4.0 (design), BSD-3-Clause (code)",
+        "https://github.com/hyperknot/openfreemap-styles",
+      ],
+      ["Online map icons", "CC0 1.0", "https://github.com/mapbox/maki"],
+      [
         "Map icons",
         "MIT License, Copyright (c) 2017 Mapzen",
         "https://github.com/tangrams/icons/blob/master/LICENSE.md",

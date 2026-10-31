@@ -401,10 +401,11 @@ const geocodeResult = object<GeocodeResult>({
 const serverConfig = object<ServerConfig>({
   public: "boolean",
   basemap: object<BasemapConfig>({
-    kind: literal("raster", "pmtiles"),
+    kind: literal("raster", "pmtiles", "openfreemap"),
     tiles: nullable("string"),
     glyphs: nullable("string"),
     sprite: nullable("string"),
+    style: nullable("string"),
   }),
   limits: object<ServerLimits>({ budget_max_s: "number", leash_max_km: "number" }),
 });
@@ -612,10 +613,14 @@ describe("the types against docs/reference/api.md", () => {
         tiles: "/basemap/portland.pmtiles",
         glyphs: "/basemap/fonts/{fontstack}/{range}.pbf",
         sprite: "/basemap/sprites/grayscale",
+        style: null,
       },
       limits: { budget_max_s: 60, leash_max_km: 150 },
     };
     expect(problems(example, serverConfig)).toEqual([]);
+    const online = { kind: "openfreemap", tiles: null, glyphs: null, sprite: null };
+    const style = "https://tiles.openfreemap.org/styles/positron";
+    expect(problems({ ...example, basemap: { ...online, style } }, serverConfig)).toEqual([]);
     expect(problems({ ...example, basemap: { kind: "vector" } }, serverConfig)).not.toEqual([]);
   });
 

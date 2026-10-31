@@ -7,7 +7,11 @@
 // the `pmtiles://` protocol (registered in map.ts), drawn in Protomaps' grayscale flavor, muted
 // for the same reason; with the labels when the server has their fonts and icons, without them
 // otherwise. A `pmtiles` basemap without its file draws nothing (and says so on the console):
-// never OSM's tiles in its place. The attribution strings are the app's own, never a tileset's.
+// never OSM's tiles in its place. `openfreemap`: OpenFreeMap's vector tiles from its public
+// instance (https://openfreemap.org), drawn in the style the server names (Positron, muted),
+// which `fetchStyle` fetches first: its layers, the sources they read, its fonts and its icons; a
+// style that does not load draws nothing either. The attribution strings are the app's own,
+// never a tileset's.
 //
 // `basemapParts` is pure and imports MapLibre's types only, so the tests load it in Node;
 // `addBasemap` puts the parts under whatever the map draws already (the route's layers).
@@ -24,6 +28,9 @@ const LINK = 'target="_blank" rel="noopener"';
 const OSM_COPYRIGHT = `<a href="https://www.openstreetmap.org/copyright" ${LINK}>OpenStreetMap</a>`;
 const OSM_ATTRIBUTION = `© ${OSM_COPYRIGHT} contributors`;
 const PROTOMAPS_ATTRIBUTION = `<a href="https://protomaps.com" ${LINK}>Protomaps</a> © ${OSM_COPYRIGHT}`;
+const OPENFREEMAP_ATTRIBUTION =
+  `<a href="https://openfreemap.org" ${LINK}>OpenFreeMap</a> ` +
+  `<a href="https://www.openmaptiles.org/" ${LINK}>© OpenMapTiles</a> Data from ${OSM_COPYRIGHT}`;
 const SOURCE = "protomaps";
 const FLAVOR = "grayscale"; // the sprite the server offers is this flavor's (basemap_api.py)
 
@@ -41,8 +48,14 @@ export interface BasemapParts {
 const NO_BASEMAP: BasemapParts = { sources: {}, layers: [], glyphs: null, sprite: null };
 
 /** The parts of `basemap`, its server paths made absolute under `apiRoot` (the page's origin and
- * /api: MapLibre needs absolute URLs, and its templates' braces must stay as they are). */
-export function basemapParts(basemap: BasemapConfig, apiRoot: string): BasemapParts {
+ * /api: MapLibre needs absolute URLs, and its templates' braces must stay as they are); for
+ * `openfreemap`, those of `style`, its style as `fetchStyle` loaded it (none: nothing drawn). */
+export function basemapParts(
+  basemap: BasemapConfig,
+  apiRoot: string,
+  style: StyleSpecification | null = null,
+): BasemapParts {
+  if (basemap.kind === "openfreemap") return style === null ? NO_BASEMAP : styleParts(style);
   if (basemap.kind === "raster") {
     const osm: SourceSpecification = {
       type: "raster",
@@ -78,6 +91,36 @@ export function basemapParts(basemap: BasemapConfig, apiRoot: string): BasemapPa
     glyphs: labelled ? `${apiRoot}${basemap.glyphs}` : null,
     sprite: labelled ? `${apiRoot}${basemap.sprite}` : null,
   };
+}
+
+/** The parts of a whole MapLibre style: its layers, the sources they read (each with the app's
+ * attribution), its fonts, and its icons when they are one sprite. */
+function styleParts(style: StyleSpecification): BasemapParts {
+  const read = new Set(style.layers.map((layer) => ("source" in layer ? layer.source : null)));
+  const sources = Object.fromEntries(
+    Object.entries(style.sources)
+      .filter(([id]) => read.has(id))
+      .map(([id, source]) => [id, { ...source, attribution: OPENFREEMAP_ATTRIBUTION }]),
+  ) as Record<string, SourceSpecification>;
+  return {
+    sources,
+    layers: style.layers as AddLayerObject[],
+    glyphs: style.glyphs ?? null,
+    sprite: typeof style.sprite === "string" ? style.sprite : null,
+  };
+}
+
+/** The style at `url`, or null (said on the console) when it does not load: offline, say. */
+export async function fetchStyle(url: string | null): Promise<StyleSpecification | null> {
+  try {
+    if (url === null) throw new Error("the server names no style");
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return (await response.json()) as StyleSpecification;
+  } catch (error) {
+    console.error(`the basemap's style did not load (${String(error)}): no basemap drawn`);
+    return null;
+  }
 }
 
 /** What `addBasemap` asks of the map. */

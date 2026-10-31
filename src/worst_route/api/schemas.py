@@ -543,14 +543,15 @@ class ReadyOut(_Out):
 
 
 class BasemapOut(_Out):
-    """The basemap to draw: OpenStreetMap's raster tiles, or Protomaps' vector tiles from the
-    server (`tiles`), with the labels' fonts (`glyphs`) and icons (`sprite`) when it has them;
-    paths are the API's."""
+    """The basemap to draw: OpenStreetMap's raster tiles, Protomaps' vector tiles from the
+    server (`tiles`), with the labels' fonts (`glyphs`) and icons (`sprite`) when it has them,
+    paths the API's; or OpenFreeMap's vector tiles, drawn in the style at `style` (a URL)."""
 
-    kind: Literal["raster", "pmtiles"]
+    kind: Literal["raster", "pmtiles", "openfreemap"]
     tiles: str | None = None
     glyphs: str | None = None
     sprite: str | None = None
+    style: str | None = None
 
 
 class LimitsOut(_Out):

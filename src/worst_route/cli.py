@@ -64,10 +64,10 @@ the contact from `WORST_ROUTE_CONTACT` included. `--trust-proxy` believes a reve
 `X-Forwarded-For` and `X-Request-ID` (uvicorn's own proxy headers are off), and `--log-format
 json` logs a JSON object a line on stdout, with request ids and without uvicorn's access lines
 (`api/logs.py`); `--public` applies the public limits (`api/limits.py`) and prints them. The
-basemap the frontend draws is `WORST_ROUTE_BASEMAP`'s (`raster` or `pmtiles`, whose file,
-`--basemap-name`'s, by default the first region's, it then names). `--frontend DIR` serves the
-frontend's build at `/` and the API under `/api` (`api/static.py`), from one process; a directory
-without `index.html` is one line and exit 1.
+basemap the frontend draws is `WORST_ROUTE_BASEMAP`'s (`raster`, `openfreemap` or `pmtiles`,
+whose file, `--basemap-name`'s, by default the first region's, it then names). `--frontend DIR`
+serves the frontend's build at `/` and the API under `/api` (`api/static.py`), from one process;
+a directory without `index.html` is one line and exit 1.
 
 `aux places` writes the places index (`docs/reference/presentation.md`, **Places**) under
 `<WORST_ROUTE_DATA>/aux/places/` from the Census files `tools/fetch_census.sh` fetched into

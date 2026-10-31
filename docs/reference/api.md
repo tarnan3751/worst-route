@@ -238,7 +238,7 @@ state build, since every failing seed search looks again for a node-simple path
 |---|---|---|
 | GET | `/health` | `{status: "ok", builds: [{region, build_id, graph_version}]}` |
 | GET | `/ready` | `{status: "ready"\|"not_ready", checks: [{name, ok, detail}]}`: 200 when every check passes, else 503 (below) |
-| GET | `/config` | `{public, basemap: {kind, tiles, glyphs, sprite}, limits: {budget_max_s, leash_max_km}}` (**Basemap**) |
+| GET | `/config` | `{public, basemap: {kind, tiles, glyphs, sprite, style}, limits: {budget_max_s, leash_max_km}}` (**Basemap**) |
 | GET, HEAD | `/basemap/{path}` | the files under `<WORST_ROUTE_DATA>/basemap/`, with byte ranges (**Basemap**) |
 | GET | `/regions` | `[{region, name, build_id, graph_version, bbox: [w, s, e, n], counts, tiers: [{tier, nodes, edges}]}]`, in the order served; `name` is what the frontend calls the region (`config.Region.display`: "Oregon", "United States"; the id for a region `config.REGIONS` does not name) |
 | POST | `/regions/pick` | `{stops: [{lat, lon}]}` (one or more) → `{region, build_id, reason}`: the served region a trip with those stops runs on (**Picking a build**) |
@@ -948,8 +948,10 @@ machine, with curl:
 The frontend draws the basemap the server names (`docs/reference/frontend.md`, **Basemap**;
 `docs/reference/hosting.md`). `WORST_ROUTE_BASEMAP` (`config.Settings.basemap`,
 `ApiSettings.basemap`) picks it: `raster`, the default, OpenStreetMap's raster tiles, which their
-usage policy allows at hobby volume and so only locally; or `pmtiles`, Protomaps' vector tiles
-from one file the server holds, `<WORST_ROUTE_DATA>/basemap/<name>.pmtiles`, which
+usage policy allows at hobby volume and so only locally; `openfreemap`, OpenFreeMap's vector tiles
+from its public instance (no key, no limits; https://openfreemap.org), drawn in the style
+`config.OPENFREEMAP_STYLE` names, its Positron; or `pmtiles`, Protomaps' vector tiles from one
+file the server holds, `<WORST_ROUTE_DATA>/basemap/<name>.pmtiles`, which
 `tools/fetch_basemap.sh` cuts from a Protomaps build (`docs/reference/hosting.md`); the name is
 `serve --basemap-name`'s (`ApiSettings.basemap_name`), by default the first region served, so
 one file, a national extract, may serve every build.
@@ -960,14 +962,17 @@ one file, a national extract, may serve every build.
 {"public": false,
  "basemap": {"kind": "pmtiles", "tiles": "/basemap/portland.pmtiles",
              "glyphs": "/basemap/fonts/{fontstack}/{range}.pbf",
-             "sprite": "/basemap/sprites/grayscale"},
+             "sprite": "/basemap/sprites/grayscale", "style": null},
  "limits": {"budget_max_s": 120.0, "leash_max_km": 150.0}}
 ```
 
 `public` is `--public`'s, `limits` the budget and leash a request may ask for (**Public
-limits**); an auto leash on a trip of more than 750 km is longer than `leash_max_km`. `basemap.kind` is `raster` or `pmtiles`; with `raster` the other three are null.
-With `pmtiles`, `tiles` is the file's path; `glyphs` (a MapLibre template of the labels' fonts)
-is given when `<data>/basemap/fonts/` exists, and `sprite` (the base of the icons' files, of
+limits**); an auto leash on a trip of more than 750 km is longer than `leash_max_km`.
+`basemap.kind` is `raster`, `openfreemap` or `pmtiles`; with `raster` the other four are null,
+and with `openfreemap` all but `style`, the style's URL
+(`https://tiles.openfreemap.org/styles/positron`), which the frontend fetches. With `pmtiles`,
+`style` is null and `tiles` is the file's path; `glyphs` (a MapLibre template of the labels'
+fonts) is given when `<data>/basemap/fonts/` exists, and `sprite` (the base of the icons' files, of
 Protomaps' grayscale flavor, the one the frontend draws: `basemap_api.SPRITE`) when
 `<data>/basemap/sprites/grayscale.json` does, both from `tools/fetch_basemap.sh --assets`; null,
 the frontend draws the basemap without labels. Every path is the API's own: the frontend reaches
@@ -1084,7 +1089,7 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 | `test_schemas.py` | the request mirrors the engine's (a pilgrimage's brand included), its defaults, the seed's bounds, stops left out only with a base, malformed requests refused (both turn constraints at once, an unknown one); the target as the engine's, each kind with its own number and within its bounds; `done`'s time ratio, target, delays and turns typed |
 | `test_logs.py` | who a client is (the peer; the last `X-Forwarded-For` address only when trusted, without a port; IPv6 by its /64), its hash; a request id and one access line per request, without the address or the query; a proxy's request id kept only when trusted and well formed; a job's end line with its id, outcome and route and the id of the request that started it; a queued job's lines with its own request's id, not the one that freed its slot; an unhandled error's 500 `INTERNAL_ERROR` with the request's id, logged with it; a JSON line's fields and traceback |
 | `test_limits.py` | each client's searches on a fake clock (ten in any minute, `retry_after_s`, other clients apart, idle ones forgotten); the manager's per-client jobs (one running and three waiting while workers are free, the fifth refused with its counts, another client and a job without a client unaffected, the next of a client starting in order when its running one ends, a waiting job whose client is busy letting the next one start, a full server's refusal without counts); over HTTP the public budget (and 120 s otherwise), a client's share of the jobs from one peer and behind a trusted proxy (the last forwarded address counting, an untrusted header ignored), a client's eleventh search refused, cached answers counted, none of it when not public |
-| `test_basemap_api.py` | `/config` for each basemap, with and without the labels' assets, and its public flag and limits; the basemap's file: whole, its first 127 bytes, a suffix, a range running past the end (cut), one starting past it (416 with the length), `If-Range` current and stale, `HEAD`, the media types and caching; a font; a missing file, a missing directory and a path leaving it, 404; a linked file served and ready, and a small one's first 16 kB read whole; `/ready`'s basemap check, failing without the file (no path in its detail) and naming the labels; one file named for every build served, by `basemap_name` or the first region |
+| `test_basemap_api.py` | `/config` for each basemap (OpenFreeMap's with its style, and `/ready` passing it), with and without the labels' assets, and its public flag and limits; the basemap's file: whole, its first 127 bytes, a suffix, a range running past the end (cut), one starting past it (416 with the length), `If-Range` current and stale, `HEAD`, the media types and caching; a font; a missing file, a missing directory and a path leaving it, 404; a linked file served and ready, and a small one's first 16 kB read whole; `/ready`'s basemap check, failing without the file (no path in its detail) and naming the labels; one file named for every build served, by `basemap_name` or the first region |
 | `test_several_builds.py` | two regions served at once (`lands` in `conftest.py`: one fake state's region and one of two, `config.REGIONS` and `STATES` given them): `/regions` (in the order served, each with its `name`; a region config does not name by its id), `/health` and `/ready`'s build check over both, `UNKNOWN_REGION` naming them; a job on each build, its document, `/validate` and the stored route's build the served one; a stop beyond one build's bbox; a stored route's document and share image after a restart serving the regions the other way round, and serving only another region (its build read from disk, its places from a covering index); a region without its own places index taking a covering one (`/ready`'s detail saying so), then its own; a region clipped to a bbox covering no other but covered by a whole state's |
 | `test_pick_api.py` | `POST /regions/pick` on the same regions: stops in one state (whatever the order served, one stop too), in both, in both with only the one-state region served (by bounding box), a stop in no state, no places index; a region clipped to a bbox first, the smallest first, passed over for a stop in a state it does not name while a places index is loaded, by its bbox alone without one; the reason naming a stop beyond the smaller build; a tie to the region served first; a public server's sixty picks a minute a client, apart from its searches; `STOP_OUTSIDE_REGION` for a stop outside every region and for one outside the region holding the most; the body's refusals (no stop, a bad one, an unknown field); a job planned on the region picked |
 | `test_pick_data.py` (`data`) | the pick with Portland's, Oregon's and the national T1 build served from `WORST_ROUTE_DATA` with their places indexes: Powell's → Reed on `portland`, Portland → Bend on `oregon` ("all stops in Oregon"), Portland → Chicago, Portland → Bend → Vancouver (WA) and Portland → Vancouver (both in Portland's bbox) on `us-t1`, Honolulu refused |

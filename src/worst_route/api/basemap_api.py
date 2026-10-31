@@ -1,12 +1,14 @@
 """The client's configuration and the basemap's files (`docs/reference/api.md`, **Basemap**;
 `docs/reference/hosting.md`).
 
-    GET /config            {public, basemap: {kind, tiles, glyphs, sprite}, limits}
+    GET /config            {public, basemap: {kind, tiles, glyphs, sprite, style}, limits}
     GET /basemap/<path>    the files under <WORST_ROUTE_DATA>/basemap/, with byte ranges
 
 `/config` tells the frontend which basemap to draw (`ApiSettings.basemap`, from
-`WORST_ROUTE_BASEMAP`): `raster`, OpenStreetMap's tiles at hobby volume, or `pmtiles`, Protomaps'
-vector tiles from `<data>/basemap/<name>.pmtiles`, a file `tools/fetch_basemap.sh` cuts from a
+`WORST_ROUTE_BASEMAP`): `raster`, OpenStreetMap's tiles at hobby volume; `openfreemap`,
+OpenFreeMap's vector tiles from its public instance, in the style `config.OPENFREEMAP_STYLE`
+names (`style`), which the frontend fetches; or `pmtiles`, Protomaps' vector tiles from
+`<data>/basemap/<name>.pmtiles`, a file `tools/fetch_basemap.sh` cuts from a
 Protomaps build, the name `ApiSettings.basemap_name` (`serve --basemap-name`), by default the
 first region served, so one file may serve every build. With `pmtiles` it names the file
 (`tiles`) and, when that script's `--assets` put them there, the labels' fonts (`glyphs`, a
@@ -35,6 +37,7 @@ from starlette.types import Scope
 
 from worst_route.api.routes_api import api_of
 from worst_route.api.schemas import BasemapOut, ConfigOut, LimitsOut
+from worst_route.config import OPENFREEMAP_STYLE
 
 if TYPE_CHECKING:
     from worst_route.api.app import Api
@@ -65,6 +68,8 @@ def basemap_of(api: "Api") -> BasemapOut:
     """The basemap `/config` describes."""
     if api.settings.basemap == "raster":
         return BasemapOut(kind="raster")
+    if api.settings.basemap == "openfreemap":
+        return BasemapOut(kind="openfreemap", style=OPENFREEMAP_STYLE)
     directory = basemap_dir(api.settings.data_dir)
     fonts = (directory / "fonts").is_dir()
     sprite = (directory / "sprites" / f"{SPRITE}.json").is_file()

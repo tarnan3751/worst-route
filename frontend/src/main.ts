@@ -7,13 +7,13 @@
 // clicks on the map and a place search's picks add stops, the same way (placeStop); leaving the
 // page cancels a running job.
 // The basemap the server names (GET /config) goes under the route's layers once the map has
-// loaded.
+// loaded (OpenFreeMap's once its style has).
 import "./style.css";
 import { API_BASE, errorBody, getConfig, getRegions } from "./api/client";
 import { mountBanner } from "./banner";
 import { DailyRoute, mountDaily, openDailyAtStart } from "./daily/panel";
 import { DirectionsPanel, mountDirections } from "./directions/panel";
-import { addBasemap, basemapParts } from "./map/basemap";
+import { addBasemap, basemapParts, fetchStyle } from "./map/basemap";
 import { createMap, fitTo } from "./map/map";
 import { RouteLayer } from "./map/routeLayer";
 import { StopsLayer } from "./map/stopsLayer";
@@ -98,7 +98,10 @@ map.once("load", () => {
     void openRoute(url.route, store, runner).then((opened) => urlSync.start(opened));
   }
   config
-    .then(({ basemap }) => addBasemap(map, basemapParts(basemap, location.origin + API_BASE)))
+    .then(async ({ basemap }) => {
+      const style = basemap.kind === "openfreemap" ? await fetchStyle(basemap.style) : null;
+      addBasemap(map, basemapParts(basemap, location.origin + API_BASE, style));
+    })
     .catch((error: unknown) => store.update({ error: errorBody(error) }));
 });
 

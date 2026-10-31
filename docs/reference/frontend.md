@@ -14,7 +14,7 @@ nothing there.
 | `state.ts` | `Store`, the app's state on an `EventTarget`; `Settings`, `Stop`, `RunView`, `targetOf`, `takesTarget` (the targets a mode takes), `modeOf` (the request's objective, item, brand and constraints), `vehicleOf`, `departureOf`; the API's limits (tiers, budget, leash, targets), the vehicle's, and the modes and items it plans |
 | `api/types.ts` | the API's shapes, written by hand from `api.md` |
 | `api/client.ts` | the fetch wrappers (`getConfig`, `pickRegion`, `getBrands`, `geocode` and `getDaily` among them), `ApiError`, `errorBody`, `subscribe` (a job's events over `EventSource`) |
-| `map/basemap.ts` | `basemapParts` (the basemap `/config` names, as sources and layers), `addBasemap`, `EMPTY_STYLE` (**Basemap**) |
+| `map/basemap.ts` | `basemapParts` (the basemap `/config` names, as sources and layers), `fetchStyle` (OpenFreeMap's style), `addBasemap`, `EMPTY_STYLE` (**Basemap**) |
 | `map/map.ts` | the MapLibre map, its controls, MapLibre's worker and the `pmtiles://` protocol, `fitTo` |
 | `map/routeLayer.ts` | `spliceLine` and `RouteLayer`: the baseline, the growing route, the flash (**Live growth**), and the highlight of a step of the directions |
 | `map/stopsLayer.ts` | the stop markers and the snapped-position ghosts |
@@ -383,10 +383,12 @@ the browser closes for good (an answer that is not a stream, as a 404 for a job 
 The server names the basemap (`GET /config`, `docs/reference/api.md`, **Basemap**; its
 `WORST_ROUTE_BASEMAP`), and `map/basemap.ts` draws it. The map starts with nothing drawn
 (`EMPTY_STYLE`); once it has loaded, the route's layers are added, and once `/config` has
-answered, `addBasemap` adds the basemap's sources and layers below them (before the first layer
-the map has), its fonts (`setGlyphs`) and icons (`setSprite`) when it has labels. If `/config`
-fails the banner shows the error and the map has no basemap: it never falls back to another,
-and a `pmtiles` answer without its file draws none either (and logs an error on the console).
+answered (and for `openfreemap` its style has loaded), `addBasemap` adds the basemap's sources
+and layers below them (before the first layer the map has), its fonts (`setGlyphs`) and icons
+(`setSprite`) when it has labels. If `/config` fails the banner shows the error and the map has
+no basemap: it never falls back to another, and a `pmtiles` answer without its file, or an
+`openfreemap` style that does not load (offline), draws none either (and logs an error on the
+console).
 
 - **`raster`** (the server's default): OpenStreetMap's raster tiles
   (`https://tile.openstreetmap.org/{z}/{x}/{y}.png`, desaturated so the route stands out) with
@@ -403,6 +405,13 @@ and a `pmtiles` answer without its file draws none either (and logs an error on 
   fonts, the ones the script fetches (`basemap.test.ts` holds the style to them). The source's
   attribution is "Protomaps © OpenStreetMap", linked, the app's own string: never a tileset's
   metadata, whose HTML the attribution control would render.
+- **`openfreemap`**: OpenFreeMap's vector tiles (the OpenMapTiles schema) from its public
+  instance, no key and no limits, drawn in the style the server names (`style`: OpenFreeMap's
+  Positron, light grey, so the route stands out), which `fetchStyle` fetches once: its layers as
+  they are, the sources they read (not the Natural Earth relief it declares and never draws), its
+  fonts and its icons from OpenFreeMap. The source's attribution is the app's own string,
+  "OpenFreeMap © OpenMapTiles Data from OpenStreetMap", linked; Positron's design is CC BY 4.0,
+  credited on the notices page. MapLibre fetches only the tiles in view, as with `raster`.
 
 The URLs are made absolute under the page's origin and `/api` (MapLibre needs absolute ones,
 and the templates' braces must stay unencoded). Below the panel a footer credits the data: "Road

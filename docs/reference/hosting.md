@@ -275,7 +275,8 @@ the search off, and `--nominatim-url` points the proxy at a self-hosted Nominati
 
 - **On the map**, in MapLibre's attribution control, bottom right and not collapsed: "©
   OpenStreetMap contributors" with the raster basemap, "Protomaps © OpenStreetMap" with the
-  vector one, linked to openstreetmap.org/copyright (the OSMF's attribution guideline; the
+  vector one, "OpenFreeMap © OpenMapTiles Data from OpenStreetMap" with OpenFreeMap's, linked to
+  openstreetmap.org/copyright (the OSMF's attribution guideline; the
   basemap is an ODbL Produced Work). The strings are the app's own: a tileset's metadata is never
   shown, so no third party's HTML reaches the attribution control.
 - **Under the panel**, a footer: "Road data © OpenStreetMap contributors (ODbL) · Towns and
@@ -287,8 +288,9 @@ the search off, and `--nominatim-url` points the proxy at a self-hosted Nominati
   data (OpenStreetMap contributors, ODbL), the towns and states (U.S. Census Bureau, public
   domain), the basemap tiles (Protomaps' daily builds of OpenStreetMap data, ODbL) and their
   style (`@protomaps/basemaps`, BSD-3-Clause), the land cover (ESA WorldCover, CC BY 4.0, in
-  Protomaps' builds), the map icons (derived from `tangrams/icons`, MIT, Copyright (c) 2017
-  Mapzen), the fonts (Noto Sans, SIL OFL 1.1), MapLibre GL JS and `pmtiles` (BSD-3-Clause).
+  Protomaps' builds), OpenFreeMap's tiles (OpenMapTiles of OpenStreetMap data, ODbL), its
+  Positron style (CC BY 4.0 design, BSD-3-Clause code) and icons (Maki, CC0), the map icons
+  (derived from `tangrams/icons`, MIT, Copyright (c) 2017 Mapzen), the fonts (Noto Sans, SIL OFL 1.1), MapLibre GL JS and `pmtiles` (BSD-3-Clause).
   It is the "(more)" the Protomaps maintainer suggests for the credits the attribution control
   has no room for.
 - **The land cover is not drawn**: `@protomaps/basemaps` 5.7's grayscale flavor has no

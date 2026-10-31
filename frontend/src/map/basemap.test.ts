@@ -1,17 +1,43 @@
-// The basemap the server's GET /config names: OSM's raster tiles, or Protomaps' vector tiles
-// from the server with or without labels, its URLs absolute under /api, the attribution the app's
-// own; and addBasemap putting it under the layers the map already draws.
-import { describe, expect, it, vi } from "vitest";
+// The basemap the server's GET /config names: OSM's raster tiles, Protomaps' vector tiles from
+// the server with or without labels, its URLs absolute under /api, or OpenFreeMap's tiles in the
+// style the server names, fetched first; the attribution the app's own; and addBasemap putting it
+// under the layers the map already draws.
+import type { StyleSpecification } from "maplibre-gl";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BasemapConfig } from "../api/types";
-import { type BasemapMap, addBasemap, basemapParts } from "./basemap";
+import { type BasemapMap, addBasemap, basemapParts, fetchStyle } from "./basemap";
 
 const ROOT = "http://test/api";
-const RASTER: BasemapConfig = { kind: "raster", tiles: null, glyphs: null, sprite: null };
-const VECTOR: BasemapConfig = {
-  kind: "pmtiles",
-  tiles: "/basemap/portland.pmtiles",
-  glyphs: null,
-  sprite: null,
+const NONE = { tiles: null, glyphs: null, sprite: null, style: null };
+const RASTER: BasemapConfig = { ...NONE, kind: "raster" };
+const VECTOR: BasemapConfig = { ...NONE, kind: "pmtiles", tiles: "/basemap/portland.pmtiles" };
+const STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
+const ONLINE: BasemapConfig = { ...NONE, kind: "openfreemap", style: STYLE_URL };
+// The shape of OpenFreeMap's Positron, by hand: a source no layer reads, and one the layers do.
+const POSITRON: StyleSpecification = {
+  version: 8,
+  sources: {
+    ne2_shaded: {
+      type: "raster",
+      tiles: ["https://tiles.openfreemap.org/natural_earth/ne2sr/{z}/{x}/{y}.png"],
+      tileSize: 256,
+      maxzoom: 6,
+    },
+    openmaptiles: { type: "vector", url: "https://tiles.openfreemap.org/planet" },
+  },
+  sprite: "https://tiles.openfreemap.org/sprites/ofm_f384/ofm",
+  glyphs: "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
+  layers: [
+    { id: "background", type: "background", paint: { "background-color": "#f2f3f0" } },
+    { id: "water", type: "fill", source: "openmaptiles", "source-layer": "water" },
+    {
+      id: "label_city",
+      type: "symbol",
+      source: "openmaptiles",
+      "source-layer": "place",
+      layout: { "text-field": "{name}", "text-font": ["Noto Sans Regular"] },
+    },
+  ],
 };
 const LABELLED: BasemapConfig = {
   ...VECTOR,
@@ -78,6 +104,29 @@ describe("basemapParts", () => {
     }
   });
 
+  it("draws OpenFreeMap's style: the sources its layers read, with the app's attribution", () => {
+    const parts = basemapParts(ONLINE, ROOT, POSITRON);
+    expect(Object.keys(parts.sources)).toEqual(["openmaptiles"]);
+    const source = parts.sources.openmaptiles as { type: string; url: string; attribution: string };
+    expect(source.type).toBe("vector");
+    expect(source.url).toBe("https://tiles.openfreemap.org/planet");
+    expect(source.attribution).toContain('href="https://openfreemap.org"');
+    expect(source.attribution).toContain("© OpenMapTiles");
+    expect(source.attribution).toContain("www.openstreetmap.org/copyright");
+    expect(parts.layers).toEqual(POSITRON.layers);
+    expect(parts.glyphs).toBe("https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf");
+    expect(parts.sprite).toBe("https://tiles.openfreemap.org/sprites/ofm_f384/ofm");
+  });
+
+  it("draws nothing, never OSM's tiles, for OpenFreeMap without its style", () => {
+    expect(basemapParts(ONLINE, ROOT, null)).toEqual({
+      sources: {},
+      layers: [],
+      glyphs: null,
+      sprite: null,
+    });
+  });
+
   it("labels it with the server's fonts and icons, the template's braces kept", () => {
     const parts = basemapParts(LABELLED, ROOT);
     expect(parts.glyphs).toBe("http://test/api/basemap/fonts/{fontstack}/{range}.pbf");
@@ -86,6 +135,31 @@ describe("basemapParts", () => {
     expect(symbols.length).toBeGreaterThan(5);
     const fonts = fontsOf(symbols.map((l) => (l as { layout?: Record<string, unknown> }).layout));
     expect([...fonts].sort()).toEqual([...FETCHED_FONTS].sort());
+  });
+});
+
+describe("fetchStyle", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("loads the style the server names", async () => {
+    const fetched = vi.fn(async () => new Response(JSON.stringify(POSITRON)));
+    vi.stubGlobal("fetch", fetched);
+    expect(await fetchStyle(STYLE_URL)).toEqual(POSITRON);
+    expect(fetched).toHaveBeenCalledWith(STYLE_URL);
+  });
+
+  it("is null, said on the console, when the style does not load", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("fetch", async () => new Response("gone", { status: 404 }));
+    expect(await fetchStyle(STYLE_URL)).toBeNull();
+    vi.stubGlobal("fetch", async () => Promise.reject(new TypeError("offline")));
+    expect(await fetchStyle(STYLE_URL)).toBeNull();
+    expect(await fetchStyle(null)).toBeNull();
+    expect(logged).toHaveBeenCalledTimes(3);
+    expect(String(logged.mock.calls[1][0])).toContain("offline");
   });
 });
 

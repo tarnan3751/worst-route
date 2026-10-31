@@ -34,7 +34,13 @@ async def test_config_names_the_basemap_and_the_limits(data: Path) -> None:
     async with hosted(data) as (http, _):
         assert (await http.get("/config")).json() == {
             "public": False,
-            "basemap": {"kind": "raster", "tiles": None, "glyphs": None, "sprite": None},
+            "basemap": {
+                "kind": "raster",
+                "tiles": None,
+                "glyphs": None,
+                "sprite": None,
+                "style": None,
+            },
             "limits": {"budget_max_s": 120.0, "leash_max_km": 150.0},
         }
     async with hosted(data, public=True, basemap="pmtiles") as (http, _):
@@ -45,11 +51,31 @@ async def test_config_names_the_basemap_and_the_limits(data: Path) -> None:
             "tiles": "/basemap/portland.pmtiles",
             "glyphs": None,
             "sprite": None,
+            "style": None,
         }
         write_assets(data)
         basemap = (await http.get("/config")).json()["basemap"]
         assert basemap["glyphs"] == "/basemap/fonts/{fontstack}/{range}.pbf"
         assert basemap["sprite"] == "/basemap/sprites/grayscale"
+
+
+async def test_openfreemap_names_its_style(data: Path) -> None:
+    # A third party's tiles: no file of the server's, nothing for /ready to check.
+    from ..presentation.support import write_fixture_places
+
+    write_fixture_places(data)
+    async with hosted(data, basemap="openfreemap") as (http, _):
+        assert (await http.get("/config")).json()["basemap"] == {
+            "kind": "openfreemap",
+            "tiles": None,
+            "glyphs": None,
+            "sprite": None,
+            "style": "https://tiles.openfreemap.org/styles/positron",
+        }
+        answer = await http.get("/ready")
+        assert answer.status_code == 200
+        [basemap] = [c for c in answer.json()["checks"] if c["name"] == "basemap"]
+        assert basemap["detail"] == "openfreemap: OpenFreeMap's tiles"
 
 
 async def test_the_tiles_are_served_with_byte_ranges(data: Path) -> None:

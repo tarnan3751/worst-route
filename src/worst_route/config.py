@@ -4,7 +4,7 @@
 (`WORST_ROUTE_DATA`, default `./data`; `CLAUDE.md`, **Commands**), the User-Agent sent to
 outside services (`user_agent_of`: a product, the package's version and `PROJECT_URL`), the
 contact (`WORST_ROUTE_CONTACT`) the geocoder adds to it, and the basemap the API offers the
-frontend (`WORST_ROUTE_BASEMAP`, `raster` or `pmtiles`; `docs/reference/hosting.md`).
+frontend (`WORST_ROUTE_BASEMAP`, `raster`, `pmtiles` or `openfreemap`; `docs/reference/hosting.md`).
 `settings()` returns one cached instance; tests that change the environment call
 `settings.cache_clear()`.
 
@@ -35,8 +35,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from worst_route import __version__
 
 # The basemap the API offers the frontend: OpenStreetMap's raster tiles (hobby volume, local
-# use) or Protomaps' vector tiles from a file the server holds (`api/basemap_api.py`).
-BasemapName = Literal["raster", "pmtiles"]
+# use), Protomaps' vector tiles from a file the server holds (`api/basemap_api.py`), or
+# OpenFreeMap's vector tiles from its public instance, drawn in the style OPENFREEMAP_STYLE names
+# (no key, no limits, attribution to OpenMapTiles and OpenStreetMap; https://openfreemap.org).
+BasemapName = Literal["raster", "pmtiles", "openfreemap"]
+OPENFREEMAP_STYLE = "https://tiles.openfreemap.org/styles/positron"
 
 # Where the project lives, named in the User-Agent of every request to an outside service.
 PROJECT_URL = "https://github.com/tarnan3751/worst-route"
@@ -56,7 +59,7 @@ class Settings(BaseSettings):
     data_dir: Path = Field(default=Path("data"), validation_alias="WORST_ROUTE_DATA")
     user_agent: str = user_agent_of("worst-route")
     contact: str | None = None  # WORST_ROUTE_CONTACT: added to the geocoder's User-Agent
-    basemap: BasemapName = "raster"  # WORST_ROUTE_BASEMAP: OSM's raster tiles, or pmtiles
+    basemap: BasemapName = "raster"  # WORST_ROUTE_BASEMAP: OSM's raster tiles, pmtiles, openfreemap
 
 
 def display_name(slug: str) -> str:

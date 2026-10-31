@@ -6,7 +6,8 @@ Where `GET /health` says the process lives, `/ready` says the deployment is whol
 build still on disk at the `graph_version` loaded (`build`), the route store answering (`store`),
 a places index for each served region, its own or a served region's that covers its states
 (`places`, `routes_api.places_of`), and with the `pmtiles` basemap its file there (`basemap`; the
-labels' fonts and icons are optional). A failed check says what is missing and
+labels' fonts and icons are optional; the `raster` and `openfreemap` basemaps are a third
+party's, never checked). A failed check says what is missing and
 its remedy, never a path on the server or an error of its system, which go to the log instead.
 """
 
@@ -86,6 +87,8 @@ def _basemap(api: "Api") -> ReadyCheck:
     basemap = basemap_of(api)
     if basemap.kind == "raster":
         return ReadyCheck(name="basemap", ok=True, detail="raster: OpenStreetMap's tiles")
+    if basemap.kind == "openfreemap":
+        return ReadyCheck(name="basemap", ok=True, detail="openfreemap: OpenFreeMap's tiles")
     path = tiles_path(api)
     if not path.is_file():
         detail = f"no basemap file {path.name}: run `tools/fetch_basemap.sh {basemap_name(api)}`"

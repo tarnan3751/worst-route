@@ -404,14 +404,16 @@ export interface GeocodeResult {
 
 // --- The server (GET /config) ---------------------------------------------------------------
 
-/** The basemap to draw: OpenStreetMap's raster tiles, or Protomaps' vector tiles from the server
+/** The basemap to draw: OpenStreetMap's raster tiles; Protomaps' vector tiles from the server
  * (`tiles`), with the labels' fonts (`glyphs`, a MapLibre template) and icons (`sprite`) when it
- * has them; the paths are the API's (under /api). */
+ * has them, the paths the API's (under /api); or OpenFreeMap's vector tiles, drawn in the style
+ * at `style` (a URL). */
 export interface BasemapConfig {
-  kind: "raster" | "pmtiles";
+  kind: "raster" | "pmtiles" | "openfreemap";
   tiles: string | null;
   glyphs: string | null;
   sprite: string | null;
+  style: string | null;
 }
 
 /** The limits a request meets on this server (`BUDGET_TOO_LARGE` above `budget_max_s`). */

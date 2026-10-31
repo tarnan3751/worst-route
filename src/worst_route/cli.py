@@ -388,9 +388,12 @@ def cleanup(
         f"removed {simplified.nodes_removed} nodes"
     )
     typer.echo(f"stage A: {a.clusters} clusters from {a.nodes_merged} nodes")
+    same_road = ""
+    if twins.same_road_pairs:
+        same_road = f", {twins.same_road_pairs} pairs of one road mapped twice"
     typer.echo(
         f"twins: {twins.paired} of {twins.candidates} candidate edges paired; "
-        f"motorway and trunk coverage {coverage}"
+        f"motorway and trunk coverage {coverage}{same_road}"
     )
     kinds = ", ".join(f"{kind} {n}" for kind, n in b.superjunctions.items())
     typer.echo(

@@ -6,8 +6,11 @@ from typing import Any
 import networkx as nx
 import pytest
 
+from tests.pipeline.chain import poi_table, tier_nodes
 from tests.pipeline.invariants import check_all
 from tests.pipeline.osm import write_osm
+from tests.pipeline.test_carriageways import mapped_twice
+from tests.pipeline.test_save import META
 from worst_route import config
 from worst_route.pipeline.build import build_raw_graph
 from worst_route.pipeline.carriageways import find_twins
@@ -18,6 +21,8 @@ from worst_route.pipeline.cleanup import (
     save_stage,
 )
 from worst_route.pipeline.consolidate import stage_a, stage_b
+from worst_route.pipeline.enrich import run_enrich
+from worst_route.pipeline.save import graph_data
 from worst_route.pipeline.simplify import simplify
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "osm"
@@ -163,6 +168,19 @@ def test_stage_b_allows_the_pairs_through_the_stubs(tmp_path: Path) -> None:
         build_raw_graph(cut_beyond(tmp_path), UTM_10N)[0], allow_fragmented=True
     )
     assert report.connectivity.dropped_components == 2
+
+
+def test_a_road_mapped_twice_is_cleaned_and_saved(tmp_path: Path) -> None:
+    before = build_raw_graph(mapped_twice(tmp_path), UTM_10N)[0]
+    graph, report = run_cleanup(before)
+    check_all(before, graph)
+    assert (report.twins.pairs, report.twins.same_road_pairs) == (0, 1)
+    assert report.connectivity.retained == 1.0 and graph.graph["twins"] == {}
+    # Save accepts it: Mill Rd's inner node lies inside the two edges of one road unit.
+    run_enrich(graph, poi_table([]))
+    data = graph_data(graph, tier_nodes(graph), META)
+    data.validate()
+    assert data.m == graph.number_of_edges() == 6 and len(set(data.edge_unit.tolist())) == 3
 
 
 @pytest.mark.parametrize("name", ["divided", "cloverleaf"])

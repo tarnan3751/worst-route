@@ -323,9 +323,16 @@ twice.
    side, not end to end).
    Edges with a pair of segments are twins, unless they share an OSM way: a way curling back
    beside itself (a hairpin ramp, a loop) is one road, and real carriageways are always separate
-   ways. The relation is symmetric. Using an edge bans its twins. A one-way couplet a block
-   apart shares a ref but not a name, so it is not a twin pair: OR 99E's Grand Avenue and MLK
-   Boulevard, OR 8's Baseline and Oak Streets.
+   ways; or unless their `osm_nodes` are the same run reversed: two ways over the same nodes in
+   opposite directions are one road mapped twice (a duplicate, an import artefact), not two
+   carriageways. Such a pair is not twinned but counted (`same_road_pairs`; the CLI's twins line
+   adds ", N pairs of one road mapped twice" when there are any), and enrich's units make its two
+   edges one road unit, as they do the two directions of a two-way road, so the engine never
+   drives both. A known limitation: a reversed copy of one carriageway of a divided road runs the
+   same way as the opposite carriageway, so it is not twinned with it. The relation is symmetric.
+   Using an edge bans its twins. A one-way couplet a block apart shares a ref but not a name, so
+   it is not a twin pair: OR 99E's Grand Avenue and MLK Boulevard, OR 8's Baseline and Oak
+   Streets.
 4. **Stage B** (`consolidate.stage_b`, ours): interchanges and roundabouts become one
    super-junction each.
    - The ramp (`*_link`) and roundabout edges, undirected, form components. A component's
@@ -496,8 +503,9 @@ among its internal edges. These are what the validator's proof from original ids
 **The report.** `stages/cleanup.json` is `CleanupReport`: `input` (raw nodes and edges);
 `simplify` (`self_loops_dropped`, `nodes_removed`, `nodes`, `edges`); `stage_a` (`clusters`,
 `nodes_merged`, `edges_absorbed`, `cluster_sizes`: nodes merged → clusters, `nodes`, `edges`);
-`twins`, found on the stage A graph (`candidates`, `paired`, `pairs`, `motorway_trunk_m`,
-`coverage`: the share of one-way motorway and trunk length with a twin, the QA metric);
+`twins`, found on the stage A graph (`candidates`, `paired`, `pairs`, `same_road_pairs`: pairs
+left out as one road mapped twice, `motorway_trunk_m`, `coverage`: the share of one-way motorway
+and trunk length with a twin, the QA metric);
 `stage_b` (`superjunctions` by kind, `sizes`: nodes replaced → super-nodes, `joined`,
 `rejoined`: joins made along a carriageway, `slip_centres`, `pocket_nodes`, `split`,
 `internal_edges`, `twin_pairs` carried across,

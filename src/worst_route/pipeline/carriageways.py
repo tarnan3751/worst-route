@@ -19,9 +19,13 @@ midpoint lies within that distance of the other's line, and the foot of at least
 perpendiculars falls on the other segment (the two run side by side): two edges leaving one
 crossing in opposite directions on opposite carriageways, end to end, do not pair. E and F are
 twins when any of their segments pair, unless they share an OSM way: a way curling back beside
-itself (a hairpin ramp, a loop) is one road, and real carriageways are always separate ways. The
-relation is symmetric and never holds between the two directions of one two-way road
-(candidates are one way). Segments of zero length are left out.
+itself (a hairpin ramp, a loop) is one road, and real carriageways are always separate ways; or
+unless their `osm_nodes` are the same run reversed: two ways over the same nodes in opposite
+directions are one road mapped twice (a duplicate, an import artefact), not two carriageways.
+Such a pair is counted in `same_road_pairs` and left out; `enrich` makes the two edges one road
+unit, as it does the two directions of a two-way road, and the engine never drives both. So the
+relation is symmetric and never holds between the two directions of one road. Segments of zero
+length are left out.
 `G.graph["twins"]` maps each edge key `(u, v, key)` with a twin to the sorted tuple of its
 twins' keys.
 """
@@ -51,6 +55,7 @@ class TwinStats:
     candidates: int = 0  # candidate edges
     paired: int = 0  # candidate edges with at least one twin
     pairs: int = 0  # unordered twin pairs
+    same_road_pairs: int = 0  # unordered pairs left out as one road mapped twice
     motorway_trunk_m: float = 0.0  # length of one-way motorway and trunk edges
     coverage: float | None = None  # the fraction of that length with a twin (None if none)
 
@@ -96,6 +101,7 @@ def find_twins(graph: nx.MultiDiGraph) -> TwinStats:
     stats.candidates = len(keys)
 
     twins: dict[EdgeKey, set[EdgeKey]] = {}
+    same_road: set[tuple[EdgeKey, EdgeKey]] = set()
     if keys:
         a, b, owner = np.vstack(starts), np.vstack(ends), np.concatenate(owners)
         segments = np.asarray(shapely.linestrings(np.stack([a, b], axis=1)))
@@ -120,14 +126,16 @@ def find_twins(graph: nx.MultiDiGraph) -> TwinStats:
             e, f = keys[i], keys[j]
             if set(graph.edges[e]["osmids"]) & set(graph.edges[f]["osmids"]):
                 continue  # one way curling back beside itself is one road, not two carriageways
-            ends_e, ends_f = graph.edges[e]["osm_nodes"], graph.edges[f]["osm_nodes"]
-            assert ends_e != ends_f[::-1], f"twins {e} and {f} are one two-way road"
+            if graph.edges[e]["osm_nodes"] == graph.edges[f]["osm_nodes"][::-1]:
+                same_road.add((min(e, f), max(e, f)))
+                continue  # one road mapped twice, as two ways in opposite directions
             twins.setdefault(e, set()).add(f)
             twins.setdefault(f, set()).add(e)
     graph.graph["twins"] = {e: tuple(sorted(fs)) for e, fs in sorted(twins.items())}
 
     stats.paired = len(twins)
     stats.pairs = sum(map(len, twins.values())) // 2
+    stats.same_road_pairs = len(same_road)
     major = [i for i, c in enumerate(classes) if c in TWIN_GEOMETRY_ONLY_CLASSES]
     stats.motorway_trunk_m = float(sum(lengths[i] for i in major))
     if stats.motorway_trunk_m > 0:

@@ -3,11 +3,13 @@ from pathlib import Path
 import networkx as nx
 import pytest
 
+from tests.pipeline.chain import poi_table
 from tests.pipeline.invariants import check_twins
 from tests.pipeline.osm import write_osm
 from worst_route.pipeline.build import build_raw_graph
 from worst_route.pipeline.carriageways import TwinStats, find_twins
 from worst_route.pipeline.consolidate import StageBStats, stage_a, stage_b
+from worst_route.pipeline.enrich import run_enrich
 from worst_route.pipeline.simplify import simplify
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "osm"
@@ -408,6 +410,64 @@ def test_a_way_curling_back_beside_itself_is_not_twinned(tmp_path: Path) -> None
     )
     graph, stats, _ = twinned(source)
     assert stats.pairs == 1
+    assert runs(graph) == symmetric([((11, 12), (13, 14))])
+
+
+def mapped_twice(tmp_path: Path) -> Path:
+    """Mill Rd mapped twice, as two one-way ways over the same nodes (1, 2, 3) in opposite
+    directions, between two side streets: one road, not two carriageways."""
+    mill_rd = {"highway": "secondary", "name": "Mill Rd", "oneway": "yes"}
+    return write_osm(
+        tmp_path / "twice.osm",
+        {1: (0, 0), 2: (150, 0), 3: (300, 0), 4: (0, -200), 5: (300, 200)},
+        [
+            (1, [1, 2, 3], mill_rd),
+            (2, [3, 2, 1], mill_rd),
+            (3, [4, 1], {"highway": "residential", "name": "Oak St"}),
+            (4, [3, 5], {"highway": "residential", "name": "Elm St"}),
+        ],
+    )
+
+
+def test_a_road_mapped_twice_is_one_road_not_twins(tmp_path: Path) -> None:
+    graph, stats, _ = twinned(mapped_twice(tmp_path))
+    assert stats == TwinStats(
+        candidates=2, paired=0, pairs=0, same_road_pairs=1, motorway_trunk_m=0.0, coverage=None
+    )
+    assert graph.graph["twins"] == {}
+    # Enrich makes the two edges one road unit, which the engine never drives twice.
+    run_enrich(graph, poi_table([]))
+    mill_rd = sorted(
+        (u, v, k) for u, v, k, name in graph.edges(keys=True, data="name") if name == "Mill Rd"
+    )
+    assert sorted(graph.edges[e]["osm_nodes"] for e in mill_rd) == [(1, 2, 3), (3, 2, 1)]
+    assert {graph.edges[e]["unit"] for e in mill_rd} == {mill_rd[0]}
+
+
+def test_a_road_mapped_twice_beside_a_divided_road(tmp_path: Path) -> None:
+    secondary = {"highway": "secondary", "oneway": "yes"}
+    source = write_osm(
+        tmp_path / "twice_beside.osm",
+        {
+            1: (0, 0),
+            2: (150, 0),
+            3: (300, 0),
+            11: (0, 200),
+            12: (300, 200),
+            13: (300, 225),
+            14: (0, 225),
+        },
+        [
+            # One road mapped twice, over the same nodes in opposite directions.
+            (1, [1, 2, 3], {**secondary, "name": "Mill Rd"}),
+            (2, [3, 2, 1], {**secondary, "name": "Mill Rd"}),
+            # Two ways with one ref: two carriageways.
+            (3, [11, 12], {**secondary, "ref": "OR 10"}),
+            (4, [13, 14], {**secondary, "ref": "OR 10"}),
+        ],
+    )
+    graph, stats, _ = twinned(source)
+    assert (stats.candidates, stats.pairs, stats.same_road_pairs) == (4, 1, 1)
     assert runs(graph) == symmetric([((11, 12), (13, 14))])
 
 

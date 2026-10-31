@@ -16,6 +16,7 @@ import pytest
 from typer.testing import CliRunner
 
 from tests.pipeline.invariants import check_build
+from tests.pipeline.test_carriageways import mapped_twice
 from tests.pipeline.test_cleanup import cut_interchange
 from worst_route.cli import app
 from worst_route.config import REGIONS
@@ -279,6 +280,17 @@ def test_cleanup_counts_the_super_junctions_dropped_with_no_allowed_turn(
     assert lines[4].startswith("stage B: 1 super-junctions (interchange 1, roundabout 0)")
     assert lines[5].startswith("connectivity: kept 2 of ")
     assert lines[5].endswith(" components, 1 super-junctions dropped with no allowed turn")
+
+
+def test_cleanup_counts_the_pairs_of_one_road_mapped_twice(data_dir: Path, tmp_path: Path) -> None:
+    source = str(mapped_twice(tmp_path))
+    assert pipeline("build", "--region", "portland", "--source", source, "--build-id", "b1")[0] == 0
+    code, output = pipeline("cleanup", "--region", "portland")
+    assert code == 0, output
+    assert output.splitlines()[3] == (
+        "twins: 0 of 2 candidate edges paired; motorway and trunk coverage n/a, "
+        "1 pairs of one road mapped twice"
+    )
 
 
 def test_cleanup_skips_unless_forced(data_dir: Path) -> None:

@@ -16,6 +16,7 @@ from tests.pipeline.chain import (
     poi_table,
     pois_of,
 )
+from tests.pipeline.copies import COPIES, mapped_copies
 from tests.pipeline.osm import write_osm
 from worst_route.graph.backend import TURN_CLASS, TURN_LEFT, TURN_STRAIGHT
 from worst_route.graph.data import EdgeFlag
@@ -165,6 +166,25 @@ def test_parallel_roads_are_separate_units(tmp_path: Path) -> None:
     assert sorted(len(names) for names in units.values()) == [1] * 5  # one road per unit
     assert (report.units, report.two_way_pairs) == (5, 4)
     assert graph.number_of_edges() == 9
+
+
+@pytest.mark.parametrize("inner", [False, True], ids=["one segment", "an inner junction"])
+@pytest.mark.parametrize("copies", COPIES.values(), ids=COPIES.keys())
+def test_a_road_mapped_several_times_is_one_unit_per_run(
+    tmp_path: Path, copies: list[tuple[bool, bool]], inner: bool
+) -> None:
+    graph = cleaned(mapped_copies(tmp_path / "copies.osm", copies, inner=inner))
+    report = run_enrich(graph, NO_POIS)
+    runs: dict[tuple[int, ...], list[tuple[int, int, int]]] = {}
+    for key in sorted(graph.edges(keys=True)):
+        nodes = graph.edges[key]["osm_nodes"]
+        runs.setdefault(min(nodes, nodes[::-1]), []).append(key)
+    for keys in runs.values():  # every edge of a run in the run's unit, its smallest key
+        assert {graph.edges[k]["unit"] for k in keys} == {keys[0]}
+    mill_rd = [(1, 2), (2, 3)] if inner else [(1, 3)]
+    directions = sum(1 if oneway else 2 for _, oneway in copies)
+    assert [len(runs[run]) for run in mill_rd] == [directions] * len(mill_rd)
+    assert (report.units, report.two_way_pairs) == (3 + len(mill_rd), 3 + len(mill_rd))
 
 
 def test_flags(tmp_path: Path) -> None:

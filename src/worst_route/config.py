@@ -70,8 +70,8 @@ REGIONS: dict[str, Region] = {
 # exclude stubs, node_roundabouts; 3: brand arrays; 4: stage A places each cluster from its
 # own buffers; 5: stage B joins the clusters a carriageway leaves and comes back to, and its
 # pockets follow a road by its name as well as its refs; 6: the compact format (graph/data.py
-# FORMAT_VERSION 4).
-PIPELINE_VERSION = "6"
+# FORMAT_VERSION 4); 7: one road unit per OSM node run however many ways map it.
+PIPELINE_VERSION = "7"
 # The pipeline's engine (`docs/reference/pipeline.md`, **The arrays engine**): "arrays" (NumPy,
 # scipy, shapely and Numba), the default, or "networkx" (networkx and OSMnx), for `pipeline build`
 # and `pipeline cleanup`. Both make the same build, byte for byte.

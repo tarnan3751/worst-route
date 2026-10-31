@@ -5,8 +5,8 @@ tier_nodes, meta)` turns the enriched graph into `GraphData`:
 
 - **Edge ids** are the positions of the edge keys `(u, v, key)` in sorted order, the format's
   (u, v, original order): each node's out-edges are one run of ascending ids, and its in-edges
-  are listed in ascending id. A unit's id is the id of its key (`enrich`: the smaller of the
-  two directions of a road).
+  are listed in ascending id. A unit's id is the id of its key (`enrich`: the smallest key
+  among the edges over one run of OSM nodes, either way).
 - **Nodes**: position (projected x, y; the build derives lon/lat from them), `kind` as
   `NodeKind`, `pass_through`, `delay_s`, and `members`.
 - **Edges**: the enriched attributes; `edge_highway` as `HighwayClass`; `edge_tier` the first

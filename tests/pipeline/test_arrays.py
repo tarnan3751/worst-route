@@ -4,7 +4,8 @@ Each stage the arrays engine runs is compared with the networkx engine's: the ra
 simplified graph (in networkx's iteration order, keys aside), then the whole of cleanup, and the
 saved build (every array, the strings, the graph_version). Cases beyond the fixtures exercise
 what simplification can meet: rings and loops that close on themselves, parallel chains, a way
-drawn against its neighbours, a chain whose nodes are visited in no particular order.
+drawn against its neighbours, a chain whose nodes are visited in no particular order, a road
+mapped several times over one run of nodes.
 """
 
 import dataclasses
@@ -22,6 +23,7 @@ from tests.pipeline import test_carriageways as carriageway_cases
 from tests.pipeline import test_cleanup as cleanup_cases
 from tests.pipeline import test_consolidate as consolidate_cases
 from tests.pipeline.chain import FIXTURES, UTM_10N, pois_of
+from tests.pipeline.copies import COPIES, mapped_copies
 from tests.pipeline.invariants import check_all
 from tests.pipeline.osm import write_osm
 from tests.pipeline.parity import assert_same_build, assert_same_graph, raw_graph, read_back, same
@@ -280,6 +282,20 @@ def test_an_adjacency_entry_keeps_its_place(tmp_path: Path) -> None:
 def test_small_inputs(tmp_path: Path, ways: list[tuple[int, list[int], dict[str, str]]]) -> None:
     nodes = {1: (0.0, 0.0), 2: (50.0, 0.0), 3: (0.0, 50.0)}
     assert_same_cleanup(write_osm(tmp_path / "small.osm", nodes, ways))
+
+
+@pytest.mark.parametrize("inner", [False, True], ids=["one segment", "an inner junction"])
+@pytest.mark.parametrize("copies", COPIES.values(), ids=COPIES.keys())
+def test_a_road_mapped_several_times(
+    tmp_path: Path, copies: list[tuple[bool, bool]], inner: bool
+) -> None:
+    """Mill Rd mapped two or three times over one run of OSM nodes (`copies.py`): the same
+    cleanup and the same build, its copies one road unit, on both engines."""
+    source = mapped_copies(tmp_path / "copies.osm", copies, inner=inner)
+    assert_same_cleanup(source)
+    assert_same_build(
+        build_of(source, tmp_path, arrays=False), build_of(source, tmp_path, arrays=True)
+    )
 
 
 # Stage A's own cases ------------------------------------------------------------------------

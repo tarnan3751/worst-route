@@ -7,10 +7,11 @@ the cleaned graph, in place, on every edge:
   the US convention; "50 km/h"; a `;` list takes its first value), else the class default
   `config.SPEED_DEFAULT_MPH`; `speed_parsed` says which. `time_s` is `length / (speed_kmh / 3.6)`.
 - `identity`: `names.identity_of` (the highest-class ref, else the normalised name, else None).
-- `unit`: the key of the edge's road unit, the smaller key of the edge and its reverse, the edge
-  whose `osm_nodes` run the other way (the other direction of a two-way road; edges with the
-  same `osm_nodes` pair in key order); a one-way edge's own key. `save` numbers edges in key
-  order, so a unit's id is the smaller of its two edge ids.
+- `unit`: the key of the edge's road unit, one OSM node run in both directions, however many
+  ways map it: the smallest key among the edges whose `osm_nodes` are the edge's or the edge's
+  reversed (the two directions of a two-way road, a road mapped twice or more); a one-way edge
+  mapped once is its own unit. `save` numbers edges in key order, so a unit's id is the
+  smallest of its edge ids.
 - `flags`: the `graph.data.EdgeFlag` bits: bridge and tunnel (the tag present and not `no`),
   toll (`toll=yes`), roundabout (`junction` roundabout or circular), link (a `*_link` class).
 - `bearing_out`, leaving u, over the first `config.BEARING_SAMPLE_M` of the road, and
@@ -99,7 +100,7 @@ class EnrichReport:
     identities: int = 0  # distinct identities
     edges_with_identity: int = 0
     units: int = 0
-    two_way_pairs: int = 0
+    two_way_pairs: int = 0  # units holding edges in both directions
     flags: dict[str, int] = field(default_factory=dict)  # edges with each flag
     # per kind: found (POI nodes), on_edges, at_junctions, off_graph, edges (with a count)
     collectibles: dict[str, dict[str, int]] = field(default_factory=dict)
@@ -240,18 +241,18 @@ def edge_flags(data: dict[str, Any]) -> int:
 
 
 def _units(graph: nx.MultiDiGraph, keys: list[EdgeKey]) -> tuple[int, int]:
-    """Set each edge's `unit`; return the number of units and of two-way pairs."""
-    by_nodes: dict[tuple[int, ...], list[EdgeKey]] = defaultdict(list)
-    for key in keys:  # ascending, so each list is too
-        graph.edges[key]["unit"] = key
-        by_nodes[tuple(graph.edges[key]["osm_nodes"])].append(key)
-    pairs = 0
-    for nodes, forward in by_nodes.items():
-        if nodes < nodes[::-1]:  # each pair of directions once; osm_nodes never repeat an id
-            for a, b in zip(forward, by_nodes.get(nodes[::-1], []), strict=False):
-                graph.edges[a]["unit"] = graph.edges[b]["unit"] = min(a, b)
-                pairs += 1
-    return len(keys) - pairs, pairs
+    """Set each edge's `unit`; return the number of units and of those that run both ways."""
+    runs: dict[tuple[int, ...], list[EdgeKey]] = defaultdict(list)
+    directions: dict[tuple[int, ...], set[bool]] = defaultdict(set)
+    for key in keys:  # ascending, so each run's first key is its smallest
+        nodes = tuple(graph.edges[key]["osm_nodes"])
+        run = min(nodes, nodes[::-1])  # osm_nodes never repeat an id, so the two differ
+        runs[run].append(key)
+        directions[run].add(nodes == run)
+    for members in runs.values():
+        for key in members:
+            graph.edges[key]["unit"] = members[0]
+    return len(runs), sum(len(both) == 2 for both in directions.values())
 
 
 def _place_pois(

@@ -63,7 +63,7 @@ which stay in the stages.
 | adjacency | `out_indptr`, `out_edges` | i64[n+1], i32[m] | each node's out-edges, ascending edge id |
 | | `in_indptr`, `in_edges` | i64[n+1], i32[m] | each node's in-edges, ascending edge id |
 | twins | `twin_indptr`, `twin_edges` | i64[m+1], i32[] | using an edge bans every edge in its row; symmetric, rows strictly ascending, never itself |
-| transitions | `trans_node`, `trans_in`, `trans_out` | i32[k] each | allowed (in, out) pairs at a node, sorted by (node, in, out), no duplicates; a node with no rows allows every pair |
+| transitions | `trans_node`, `trans_in`, `trans_out` | i32[k] each | allowed (in, out) pairs at a node, sorted by (node, in, out), no duplicates; a node with no rows allows every pair. Rows sit at super-junctions (their passages) and, since `PIPELINE_VERSION` 8, at the plain and cluster nodes an OSM turn restriction gave a table (restricted junctions: `docs/reference/pipeline.md`, **Turn restrictions**); the format, the backends and the validator read both alike |
 | tiers | `tier_node_mask`, `tier_edge_mask` | bool[T, n], bool[T, m] | tier membership (the pipeline's after per-tier SCC) |
 | collectibles | `node_roundabouts` | u8[n] | the roundabout rings a super-junction holds (a roundabout's one, sometimes two; an interchange that holds a ring counts it), 0 at every other node; the collect mode's roundabouts (`docs/reference/engine.md`, **Objectives**). Added after the first builds (with `PIPELINE_VERSION` 2): a build saved before it lacks the file and is made again (**The build format**) |
 | brands | `brand_indptr`, `brand_nodes` | i64[b+1], i32[r] | the brand index: brand k's nodes are `brand_nodes[brand_indptr[k]:brand_indptr[k + 1]]` (`nodes_of_brand(k)`), at least one each, strictly ascending; the nodes a route can pass through nearest the brand's POIs (`docs/reference/pipeline.md`, **enrich**); the brand mode's locations (`docs/reference/engine.md`, **Objectives**). A brand's id is its run's index; its name and wikidata id are in `strings` |
@@ -80,9 +80,9 @@ every node. Stored the other way round, x/y derived from lon/lat would move the 
 x/y by up to 2e-9 m, enough to change three of the golden routes on the lattice.
 
 A node with no transition rows allows every pair, so an empty table cannot be written: cleanup
-drops a super-junction left with edges in and out and no pair allowed after connectivity, and
-connectivity drops one without, and `save` refuses a build that has one, as a guard
-(`docs/reference/pipeline.md`, **cleanup**).
+drops a super-junction or restricted junction left with edges in and out and no pair allowed
+after connectivity, and connectivity drops one without, and `save` refuses a build that has one,
+as a guard (`docs/reference/pipeline.md`, **cleanup**).
 
 **Edge ids are sorted by (u, v, original order).** Each node's out-edges are therefore one
 contiguous run of ascending ids (`out_edges` is `0..m-1`), which the backends' tie rule relies

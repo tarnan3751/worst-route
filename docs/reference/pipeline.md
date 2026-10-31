@@ -11,7 +11,8 @@ plan` reads. Portland and the whole of Oregon (**Oregon**) build and pass QA. Ev
 `build` to `save` runs on arrays, the default engine (**The arrays engine**), to the networkx
 engine's build (`--engine networkx`). A region may name several states, whose extracts
 `filter` merges (**Regions of several states**): Oregon and Washington, and the 48 contiguous
-states and DC at T1, build and pass QA too.
+states and DC at T1, build and pass QA too. OSM's turn restrictions are read at `filter` and
+applied at `cleanup` (**Turn restrictions**, pipeline version 8).
 
 ## Commands
 
@@ -77,6 +78,11 @@ report beside it in `qa/`.
   version's build); bump it when a step's output changes for the same input. Every step's
   sidecar records it, so a region built at an earlier version is rebuilt from `filter` (which
   reads the raw extract again, no download) under a new build id, and `latest` moves to it.
+  The POI and restrictions tables are not in it: they are inputs of `enrich` and `cleanup`, their
+  md5s in those steps' sidecars, so a `filter` rerun that changes only them (an extract whose
+  roads are byte-identical) keeps the build id; the step that reads the table runs again on its
+  next invocation, and so do the steps after it, but `save` refuses to overwrite the written
+  build until `--force`, which writes it again under its new `graph_version`.
   What each version changed:
 
   | Version | Change | Portland's build (`graph_version` on the dev machine) |
@@ -88,6 +94,7 @@ report beside it in `qa/`.
   | 5 | M5: stage B joins two clusters a carriageway leaves and comes back to, and its pockets follow a road by its name as well as its refs (**cleanup**, step 4). With them came the drop of a super-junction left with edges in and out and no allowed turn after connectivity (step 5), which needed no version of its own: no build that saved had one (`save` refuses them), so it changes no array of Portland's or Oregon's (Portland's `cleanup.pkl` is byte-identical with and without it) | c60bc0c9cb4a (0d4338234cae), under the connectivity rule of M5.1 |
   | 6 | M5: `save` writes the compact format (format 4: the speed table; no lon/lat, way ids, OSM node runs, states or shapes among the arrays; the shapes simplified into `geometry/`; `docs/reference/graph.md`) | 3a4a3df6269f (04d2e06854dd) |
   | 7 | M5: enrich makes one road unit of every OSM node run, however many ways map it, and simplification keeps the node two one-way ways overlapping in part share (**enrich**; **cleanup**, step 1). The rule changes no cleanup stage: Portland's and Oregon's `cleanup.pkl` are byte-identical with and without it, from either engine. The units change Oregon's build in four rows of `edge_unit`, Ponderosa Lane's, mapped twice as two two-way ways over the same nodes and now one unit a segment (304,337 units to 304,335; Oregon's `graph_version` ec7360404031 to dd86410e515c, build e78224b5cf9a to ea3b18096e8b); Portland's only in its build id | a453e105582b (04d2e06854dd) |
+  | 8 | M6: OSM turn restrictions: `filter` writes the restrictions table, `cleanup` applies it as turn tables at the junctions, stage B honouring them inside the super-junctions (**Turn restrictions**). On Portland 3,357 of 3,643 restrictions apply, the build's transition rows 11,455 at 642 super-junctions to 19,042 at 642 super-junctions and 1,334 restricted junctions, 65,779 nodes to 65,778 (one junction left no turn) and 3,397 twin pairs to 3,344; on Oregon 6,057 of 6,493 (build a7674d56daf4, `graph_version` d6646069fe46); on `us-t3` 174,534 of 230,695 (build 6adae6917be1, `graph_version` 4ea8ccf8f97a with `--allow-fragmented`) | 0b72253e5e8a (56d60fd4dc91) |
 
   Rows 1–4 were measured on Geofabrik's Oregon extract of 2026-10-28, rows from 5 on on that of
   2026-10-29 (md5 3c9bc0db9a4830d004044865fbecd965, data of 2026-10-29T21:21:26Z), which
@@ -103,7 +110,8 @@ report beside it in `qa/`.
   bbox and the pipeline version; build: the region, bbox, CRS and pipeline version; both also
   the class ceiling, `classes`, for a region that has one; cleanup:
   `allow_fragmented`, the config values it depends on, `cleanup.parameters()`, and the pipeline
-  version, its input being `build/manifest.json` or, from the networkx engine, `build.pkl`; build
+  version, its inputs `build/manifest.json` or, from the networkx engine, `build.pkl`, and the
+  restrictions table (`<region>.restrictions.parquet`, since pipeline version 8); build
   and cleanup also record their `engine`, beside `params` rather than in them, so that changing
   the engine reruns the step while the build's params, and its `graph_version`, do not depend on
   it (a sidecar written before the engine was recorded is the networkx engine's, and an arrays
@@ -213,8 +221,9 @@ for some vehicles: `restriction:hgv`, `restriction:bus`, ...), `other_value`
 `motorcar` or `motor_vehicle`, `RESTRICTION_EXCEPT_CARS`), `via_way` (a restriction over a way,
 not a node), `incomplete` (no single `via` node, or no `from` or `to` way), `outside` (a `from` or
 `to` way that is not a kept road: beyond the region, or a road the filter drops), `duplicate` (a
-relation an earlier extract already gave). The roads file holds no relations, so its bytes, and
-the build id, do not depend on them.
+relation an earlier extract already gave; one left out is counted in each extract that holds it,
+as a way is). The roads file holds no relations, so its bytes, and the build id, do not depend on
+them.
 
 **Several sources** (a region of several states, **Regions of several states**) are read in
 order: a way, POI or turn restriction already taken from an earlier source is skipped
@@ -324,10 +333,10 @@ carries `geometry` and `osm_nodes` through simplification itself.
 
 ## `cleanup`
 
-`cleanup.run_cleanup(raw, allow_fragmented=False) -> (nx.MultiDiGraph, CleanupReport)`, then
-`cleanup.save_stage(graph, report, build_dir)`. It reads the raw graph `build` wrote and runs
-five steps in order, each a module with its contract in its header comment; the constants are
-in `config.py`. The result is the graph the no-repeat rule rests on: a route that never repeats
+`cleanup.run_cleanup(raw, allow_fragmented=False, restrictions=None) -> (nx.MultiDiGraph,
+CleanupReport)`, then `cleanup.save_stage(graph, report, build_dir)`. It reads the raw graph
+`build` wrote and the restrictions table `filter` wrote, and runs five steps in order, each a
+module with its contract in its header comment; the constants are in `config.py`. The result is the graph the no-repeat rule rests on: a route that never repeats
 one of its nodes or uses an edge and its twin never passes one junction, or one stretch of road,
 twice.
 
@@ -400,6 +409,9 @@ twice.
    Streets.
 4. **Stage B** (`consolidate.stage_b`, ours): interchanges and roundabouts become one
    super-junction each.
+   - **Turn tables** (`restrictions.turn_tables`, pipeline version 8): first, each OSM turn
+     restriction becomes a turn table at the stage A node holding its via node, which the
+     transitions below honour (**Turn restrictions**).
    - The ramp (`*_link`) and roundabout edges, undirected, form components. A component's
      attachment nodes are those that also touch another road.
    - **Join:** two components whose attachment roads share at least two identities
@@ -475,7 +487,12 @@ twice.
      which a directed path through the internal edges leads from the in-edge's original end to
      the out-edge's original start (the same node counts). A full cloverleaf or diamond allows
      every pair, U-turns included (two loops, or off, across and back on); a half-diamond does
-     not. Route splicing enforces them from M1.
+     not. Route splicing enforces them from M1. Since pipeline version 8, at a super-junction one
+     of whose nodes has a turn table (above) the path is a walk over the edges
+     (`consolidate._passes`, which both engines call), each move from one edge to the next at a
+     node one the node's table allows; with no table the walk is the reachability above, and a
+     super-junction without one is computed as before. A node outside the super-junctions keeps
+     its table, its pairs re-keyed (**Turn restrictions**).
    - **Twins carried across** (`_carry_twins`): an edge that stays maps to itself. An edge
      internal to a super-node maps to the super-node's boundary edges on the same road (equal
      signature) along its own carriageway: the in-edges from which that road leads to it through
@@ -496,7 +513,10 @@ twice.
      super-node, which a route uses only in a passage through it, only the transition that
      drives the stretch and then the twin is banned. This over-bans when a route uses that
      in-edge or out-edge for another transition; the exact form is a per-transition ban table,
-     planned with M3's transition-aware search. The table stays symmetric.
+     planned with M3's transition-aware search. The table stays symmetric. The internal paths are
+     those the turn tables allow (`consolidate._forcing`, the walk above): a restriction that
+     leaves a passage one path carries the twin that path drives, and a passage a restriction
+     forbids bans none.
    - Then nodes are numbered `0..n-1` (`consolidate.relabel`): plain and cluster nodes in
      ascending order of their smallest member, then the super-nodes by theirs; edge keys are
      kept and the tables below remapped.
@@ -512,7 +532,8 @@ twice.
    for a filtering rule that fragments everything. The kept nodes are numbered `0..n-1` again, in
    the same order.
    - **No turn allowed:** connectivity does not read the turn tables, and dropping an edge
-     drops the transitions that name it, so a super-junction can be left with edges in and out
+     drops the transitions that name it, so a super-junction, or a restricted junction (a node
+     outside them with a turn table, pipeline version 8), can be left with edges in and out
      and no allowed pair between them. No route can pass through it, and a build cannot say so
      (a node without transition rows allows every turn), so `run_cleanup` drops it with its
      edges, runs connectivity again on what is left, and repeats until none remains. It happens
@@ -522,16 +543,20 @@ twice.
      line; once connectivity dropped the stubs, eastbound arriving from the west and westbound
      leaving to it had no pair left between them. A super-junction without edges in or out (a
      ramp chain touching no other road) allows no pair either, but connectivity drops it as it
-     is. The report adds the rounds up: nodes, edges, length and components dropped, the largest
-     dropped components, `retained` against the stage B graph, and `dropped_no_turn`, the
-     super-junctions dropped this way; the thresholds apply to the sums. The CLI's connectivity
-     line adds ", N super-junctions dropped with no allowed turn" when there are any. Portland
-     and Oregon have none, so their builds are unchanged.
+     is. A turn restriction can leave a junction no pair from the start: the junction of two
+     one-way roads whose third road the filter drops, whose one turn a restriction bans (on
+     Portland and Oregon one, two one-way access roads at 45.5388, −122.9138, ways 566767462 and
+     566767446, relation 14604969). The report adds the rounds up: nodes, edges, length and
+     components dropped, the largest dropped components, `retained` against the stage B graph,
+     and `dropped_no_turn`, the nodes dropped this way; the thresholds apply to the sums. The
+     CLI's connectivity line adds ", N junctions dropped with no allowed turn" when there are
+     any. Before pipeline version 8 Portland and Oregon had none.
 
 **The stage file.** The networkx engine's `stages/cleanup.pkl` is the cleaned `MultiDiGraph`
 (the arrays engine's `stages/cleanup/` holds the same graph as arrays, **The arrays engine**):
 
-- `G.graph`: `crs`, `pipeline_version`, `superjunctions`, `twins`.
+- `G.graph`: `crs`, `pipeline_version`, `superjunctions`, `restricted` (since pipeline version
+  8, only when a node has one), `twins`.
 - Nodes `0..n-1`: `x, y` (projected), `lon, lat`, `kind` (`plain`, `cluster`, `interchange`,
   `roundabout`) and `members`, the sorted original OSM node ids the node stands for (a plain
   node's own id; a cluster's merged nodes plus the shape points of the edges it absorbed; a
@@ -548,6 +573,11 @@ twice.
   without edges in or out, and step 5 one left with both and no pair). `GraphData` reads a node
   without transition rows as allowing every pair and cannot express an empty table, so `save`
   still refuses a build that has a super-node whose table is empty, as a guard.
+- `G.graph["restricted"][node]`, since pipeline version 8, for every plain or cluster node a turn
+  restriction gave a table (**Turn restrictions**): its allowed pairs, sorted as a super-node's
+  `transitions` are, never empty after cleanup (step 5), and refused by `save` if empty. The table
+  is absent when no node has one, so a graph without turn restrictions is the graph it was before
+  them, byte for byte.
 - `G.graph["twins"]`: edge key → sorted tuple of its twins' keys, for every edge with one.
 
 **Lengths through junctions.** An edge at a cluster or super-node has its geometry extended to
@@ -562,8 +592,12 @@ and its reverse count once), until connectivity drops whole components; (2) an e
 last `osm_nodes` are members of its tail and head; (3) no edge's `osm_nodes` repeat an id;
 (4) twins are symmetric, between existing edges, never an edge and itself; (5) a super-node's
 transitions name its own in- and out-edges; (6) they equal the reachability rebuilt from its
-`parts`, `internal` edges and the boundary edges' OSM ends, and its `roundabouts` count the rings
-among its internal edges. These are what the validator's proof from original ids
+`parts`, `internal` edges and the boundary edges' OSM ends, or, at a super-junction holding the
+via node of a turn restriction, the pairs a brute force of the restrictions over the simplified
+graph gives, apart from the pipeline's code (`invariants.expected_turns`, when the test passes the
+restrictions), and its `roundabouts` count the rings among its internal edges; (7) a restricted
+junction's table is at a plain or cluster node, sorted, and names its own in- and out-edges, and a
+plain or cluster node holding a via node allows the pairs that brute force gives it. These are what the validator's proof from original ids
 (`docs/PLAN.md` §8.1, checks 3–5) rests on.
 
 **The report.** `stages/cleanup.json` is `CleanupReport`: `input` (raw nodes and edges);
@@ -571,16 +605,19 @@ among its internal edges. These are what the validator's proof from original ids
 `nodes_merged`, `edges_absorbed`, `cluster_sizes`: nodes merged → clusters, `nodes`, `edges`);
 `twins`, found on the stage A graph (`candidates`, `paired`, `pairs`, `same_road_pairs`: pairs
 left out as one road mapped twice, `motorway_trunk_m`, `coverage`: the share of one-way motorway
-and trunk length with a twin, the QA metric);
+and trunk length with a twin, the QA metric); `restrictions` (pipeline version 8: `read`,
+`applied`, `unmatched`, `way_through_via`, `via_inside_edge`, `via_not_found`, `junctions`: stage
+A nodes given a table, `pairs_banned`; **Turn restrictions**);
 `stage_b` (`superjunctions` by kind, `sizes`: nodes replaced → super-nodes, `joined`,
 `rejoined`: joins made along a carriageway, `slip_centres`, `pocket_nodes`, `split`,
 `internal_edges`, `twin_pairs` carried across,
 `twin_transitions`: transitions that must drive an internal edge with a twin outside,
-`twin_passages`: passages banned for driving both edges of a twin pair inside, `nodes`,
-`edges`); `connectivity` (nodes and edges before and after, dropped nodes, edges and length, a
-two-way road counted once, the number of dropped components and the 20 largest with their size,
-length and centroid, `retained`, `dropped_no_turn`: the super-junctions dropped for allowing no
-turn, the rounds after them added in); `seconds` per step (with `handover` where
+`twin_passages`: passages banned for driving both edges of a twin pair inside, `restricted`:
+super-junctions with a turn table at one of their nodes, `nodes`, `edges`); `connectivity`
+(nodes and edges before and after, dropped nodes, edges and length, a two-way road counted once,
+the number of dropped components and the 20 largest with their size, length and centroid,
+`retained`, `dropped_no_turn`: the junctions dropped for allowing no turn, the rounds after them
+added in); `seconds` per step (`restrictions` among them; with `handover` where
 `cleanup.run_cleanup` hands the arrays engine's graph to networkx, as the tests do).
 
 **Portland, for scale** (the 2026-10-30 extract; about 30–110 s depending on the machine's load,
@@ -598,7 +635,140 @@ the 2026-10-29 extract, about 50 s), stage B joins 25 pairs of clusters along a 
 makes 647 super-junctions (481 interchanges, of which 123 joined, 144 slip-lane clusters, 14
 split by the guard; 166 roundabouts), takes in 678 pocket nodes and carries 3,433 twin pairs (293
 transitions, 304 passages); connectivity keeps 65,779 of 66,041 nodes, dropping 262 nodes and
-62.8 km in 157 components, and the cleaned graph has 65,779 nodes and 168,120 edges.
+62.8 km in 157 components, and the cleaned graph has 65,779 nodes and 168,120 edges. At pipeline
+version 8 (build 0b72253e5e8a, the same extract, about 4 s), 3,357 of the 3,643 turn
+restrictions apply, with tables at 2,205 stage A nodes (3,433 pairs banned, 1.5 s); stage B
+carries 3,380 twin pairs (294 transitions, 249 passages: restrictions forbid 55 passages that
+drove both carriageways inside, mostly U-turns at a median's end); connectivity keeps 65,778
+nodes, one junction dropped with no allowed turn, and the cleaned graph has 168,118 edges.
+
+## Turn restrictions
+
+Pipeline version 8 (M6, `docs/PLAN.md` §3.13). OSM's turn restrictions, the `type=restriction`
+relations `filter` keeps (**filter**: a `restriction` value that bans the turns from the `from`
+ways to the `to` ways or every other turn from the `from` ways, one `via` node, kept roads; not
+via ways, conditional ones, those for some vehicles only, or those that except cars), become
+turn tables in the transitions the engine, `Route.splice` and the validator already read:
+nothing of theirs changes, and a node's rows hold its allowed (in, out) pairs as a
+super-junction's do (`docs/reference/graph.md`).
+
+**The rule** (`restrictions.py`). A restriction bans moves at its via OSM node: from an edge
+arriving there whose last way is one of its `from` ways to an edge leaving there whose first way
+is one of its `to` ways (`config.RESTRICTION_NO`: `no_left_turn`, `no_right_turn`,
+`no_straight_on`, `no_u_turn`, `no_entry`, `no_exit`), or to any other edge leaving there
+(`RESTRICTION_ONLY`: `only_left_turn`, `only_right_turn`, `only_straight_on`, `only_u_turn`).
+The edges are those of the simplified graph, which keeps every junction a node, so where a
+restriction's `from` way ends at the via node one edge arrives on it, and where its `to` way
+starts there one leaves on it, as OSM's rules ask; the direction of the turn is then the map's,
+and the rule measures no angle. A way that passes through the via node instead (two of its edges
+arrive there, or two leave) is matched by the turn the value names (`Rule.turn`: left, right,
+straight on or a U-turn), by the classes `graph.backend.TURN_CLASS` gives the engine's turns,
+over the bearings of the arriving edge's last segment and the leaving edge's first (whole
+degrees, as `enrich` rounds them; a cluster's stub left out): the restriction then concerns only
+the (arriving, leaving) pairs that make that turn, a `no_*` value banning exactly those pairs and
+an `only_*` value allowing, from each arriving edge that has such a pair, only those, the other
+arriving edges untouched. So at a crossroads of two ways that both pass through it, a
+`no_left_turn` bans the two lefts and an `only_left_turn` from one way leaves each of its
+arriving edges its own left. A value that names no turn (`no_entry`, `no_exit`), or none of
+whose pairs turns so, leaves the restriction out (`way_through_via`), as OSRM does: Oregon's relation 19854802, an `only_right_turn` from
+Generation Road onto Lamb Road, which runs through the via node, matched both of Lamb Road's
+edges and so banned nothing, and 19854803, a `no_left_turn` from Lamb Road, banned the right turn
+from its other side with the left. Cleanup applies the rules between twins and stage B
+(`turn_tables`), at the stage A node holding the via node:
+
+- at a plain node, its (in, out) pairs less those the rules ban;
+- at a cluster, the pairs a walk from the in-edge through the edges the cluster absorbed (both
+  ends among its members, read from the simplified graph) to the out-edge joins making no banned
+  move at the OSM nodes it passes, and the pairs no walk joins at all, which the cluster allows as
+  the point stage A makes of it. A restriction onto the median piece of a divided crossing (a way
+  of its own, which stage A absorbs) bans the turns that go through it.
+
+A node gets a table only when a rule removes a pair. Stage B then honours the tables inside the
+super-junctions: a pair is allowed when a walk over the edges through the super-junction joins it,
+each move from one edge to the next at a node one that node's table allows (`consolidate._passes`;
+**cleanup**, step 4), and the twins it carries along a passage's internal paths follow the same
+walk, so a passage a restriction leaves one internal path carries the twin that path drives, and a
+passage it forbids bans none. A super-junction none of whose nodes has a table is computed as
+before (a table allowing every pair at every node of every fixture makes the same graph, byte for
+byte: `tests/pipeline/test_restrictions.py`). A node outside the super-junctions keeps its table,
+its pairs re-keyed, as a restricted junction (`G.graph["restricted"]`, the arrays engine's
+`restricted_node` and its rows); there a route passes by one in-edge and one out-edge and never
+back over the OSM nodes it came by (it would pass the node before twice), so the table allows
+those U-turns too, and a table that then allows every pair is dropped: a dead end with a
+`no_u_turn` keeps no table, which would leave it no pair, and cleanup's no-turn rule would drop it
+with the road to it. Inside a super-junction a part's table is kept as it is, since a passage may
+turn back at a part. A junction a restriction leaves no pair at all is dropped by the no-turn rule
+(**cleanup**, step 5).
+
+**Skipped** and counted: a restriction whose via node simplification contracted into an edge
+(`via_inside_edge`: the only two roads through it are one road, so it bans a U-turn that cannot be
+made there or mandates the only way on, but for a few that ban that way or mandate a turn onto a
+road the filter drops: on Portland 199 `no_u_turn` and 79 `only_straight_on`, 1
+`no_straight_on`; on Oregon 298, 98, and 2 `no_straight_on`, 1 `no_left_turn` and 1
+`only_left_turn`); one whose via node lies on no road the simplified graph keeps
+(`via_not_found`: a self-loop's, which simplification drops); one where no edge arrives at the
+via node on a `from` way or none leaves on a `to` way (`unmatched`: a one-way road against the
+turn, a mapping error); one whose `from` or `to` way passes through the via node, the turn not
+telling its edges apart (`way_through_via`, above).
+
+**Both engines** make the same tables: `arrays.restrictions.turn_tables` gathers the same edges
+from arrays and calls the same `junction_table`, and stage B's walk is one function both call. The
+fixture `tests/fixtures/osm/restrictions.osm` holds one restriction of each kind (a plain
+crossroads, the meeting of two carriageways, a cluster's absorbed median, a slip-lane
+super-junction, a road passing through the via node with an `only_right_turn` onto it, a
+`no_left_turn` from it and a `no_entry` from it, a crossroads of two such roads with a
+`no_left_turn`, a `no_u_turn` and an `only_left_turn`, a contracted via node, a one-way `from`,
+and each reason the filter leaves one
+out), and the tests assert the exact pairs each bans on both engines, the twin a restriction
+carries, the build's rows, a planned route that never takes a banned turn and a drawn one that
+fails the validator.
+
+**Portland** (the 2026-10-29 extract, build 0b72253e5e8a): the filter keeps 3,643 restrictions
+and leaves out 4,229 outside the kept roads, 255 via ways, 151 incomplete, 15 for some vehicles,
+4 conditional, 3 that except cars and 1 other value; cleanup applies 3,357 (279 via inside an
+edge, 7 unmatched), with tables at 2,205 stage A nodes banning 3,433 pairs, 376 of the 647
+super-junctions honouring one; the build has 19,042 transition rows at 642 super-junctions and
+1,334 restricted junctions (11,455 at the super-junctions before). One junction is dropped with no
+turn (**cleanup**, step 5). Two through movements are lost (**cleanup**, step 4, Pockets): North
+Randolph Avenue's at 40595800, where relation 1621276 allows only the right turn; and eastbound
+I-84's, where a ramp chain from it at 1894362318 back to it at 3429238808 is a super-junction
+whose mainline between them (424 m and 926 m) lies outside it, longer than a pocket, so the pass
+through it was by the ramps, from ramp 1052597840 onto ramp 5512006 at 40403015, which relation
+1706307 (a `no_u_turn`) bans: a defect of stage B's pockets the restriction exposes. The
+restrictions take 1.5 s of cleanup on arrays.
+
+**Oregon** (the same extract, build a7674d56daf4, `graph_version` d6646069fe46): the filter keeps
+6,493 and leaves out 1,379 outside the kept roads, 255 via ways, 151 incomplete, 15 for some
+vehicles, 4 conditional, 3 that except cars and 1 other value; cleanup applies 6,057 (400 via
+inside an edge, 36 unmatched, none left out for a way through the via node: the turn tells
+19854802's and 19854803's Lamb Road apart, each now banning one pair), with tables at 3,922 stage
+A nodes banning 6,400 pairs, 890 of the 2,006 super-junctions honouring one; the build has 40,838
+transition rows at 2,002 super-junctions and 1,810 restricted junctions, and drops the same one
+junction. The whole build takes 50 s, the restrictions 1.1 s of cleanup on arrays (6.4 s on
+networkx), and `tools/parity.py` finds the two engines' builds the same. Every node holding a
+via node allows exactly the pairs the invariants' brute force gives it (3,213 nodes).
+
+**The national T3 build** (`us-t3`, the 49 extracts of 2026-10-29, build 6adae6917be1,
+`graph_version` 4ea8ccf8f97a with `--allow-fragmented`, as **Regions of several states** builds it): the filter
+keeps 230,695 and leaves out 177,074 outside the kept roads (the T3 ceiling drops the residential
+streets most restrictions name), 50,935 via ways, 9,443 conditional, 8,918 incomplete, 579 for
+some vehicles, 482 other values, 394 duplicates across extracts and 77 that except cars; cleanup
+applies 174,534 (54,437 via inside an edge, 1,687 unmatched, 34 via not found, 3 left out for a
+way through the via node, the turn telling the other such restrictions' pairs apart, both of a
+crossroads where the `from` and the `to` way pass through), with tables at 87,153 stage A nodes
+banning 158,460 pairs, 30,081 of the 159,474 super-junctions honouring one
+(35–77 s on arrays). The vias inside an edge are many here because a T3 road's junction with a
+street the ceiling drops is a through point the simplification contracts: 50,489 of them a
+`no_u_turn` on one way and 3,435 an `only_straight_on`, but about 425 ban the one way on or
+mandate a turn onto the dropped street (339 `no_left_turn`, 28 `no_straight_on`, 27
+`no_right_turn`, 20 `only_left_turn`, 6 `only_u_turn`, 5 `only_right_turn`), which the build does
+not honour. Stage B carries 828,258 twin pairs (826,524 at version 7), 92,926 transitions now
+driving a twinned stretch (86,760); the build has 2,154,510 nodes (27 junctions dropped with no
+turn, 12 at version 7), 4,412,843 edges, 825,194 twin pairs and 1,646,078 transition rows at
+159,060 super-junctions and 20,658 restricted junctions (1,539,304 at 159,063 before), 486.5 MB of
+arrays and strings and 101.4 MB of geometry, and passes QA; the whole build takes 36.5 minutes
+(the filter 15.6) at a peak of 14.0 GB (cleanup), measured by `tools/bench_build.py` on a machine
+at a load average of 10–13, and its steps from cleanup on 12–13 minutes.
 
 ## `enrich`
 
@@ -744,7 +914,9 @@ build c60bc0c9cb4a: 1,331, 5,169, 11,663, 20,173 of 20,184 and 65,779).
   `preserve_topology=False`) to `GEOMETRY_SIMPLIFY_M` (2 m) with its ends kept, then encoded as
   whole-metre steps (`graph.geometry.encode`). The lengths and bearings were measured at
   `enrich` on the whole shape, so nothing the engine reads depends on the simplification.
-- **Twins** and **transitions**: the cleaned graph's tables, keys turned into ids, rows sorted.
+- **Twins** and **transitions**: the cleaned graph's tables, keys turned into ids, rows sorted;
+  the transitions those of the super-junctions and, since pipeline version 8, of the restricted
+  junctions (**Turn restrictions**).
 - **Tiers**: `tier_node_mask[t]` what `tiers` kept, `tier_edge_mask[t]` the tier's classes with
   both ends kept.
 - **Collectibles**: `node_roundabouts`, the `roundabouts` count of each super-junction's record
@@ -754,10 +926,10 @@ build c60bc0c9cb4a: 1,331, 5,169, 11,663, 20,173 of 20,184 and 65,779).
   order (the brand ids), each brand's name and wikidata id in `strings.brands` and
   `strings.brand_wikidata`.
 
-A super-node whose transition table is empty allows no turn through it, which the format cannot
-say (a node without rows allows every turn): `graph_data` raises `EmptyTransitionsError`, naming
-the node and its position, and the CLI exits 1. It is a guard: cleanup drops such super-nodes
-(**cleanup**, step 5).
+A super-node or restricted junction whose transition table is empty allows no turn through it,
+which the format cannot say (a node without rows allows every turn): `graph_data` raises
+`EmptyTransitionsError`, naming the node and its position, and the CLI exits 1. It is a guard:
+cleanup drops such nodes (**cleanup**, step 5).
 
 The validator proves a route passes no original OSM node twice from the nodes' members alone
 (`docs/reference/engine.md`, `osm_ids`), which rests on what lies along the edges, kept in the
@@ -783,7 +955,8 @@ tiers sidecars recorded, and save's own `config` (`save.parameters()`: `GEOMETRY
 geometry's tolerance), so
 `graph_version` covers what the build was made with; `pipeline_version` stays out of
 `params`. `graph_data` fills `counts`: nodes, edges, twin
-pairs, transition rows, super-junctions. `save_build` writes the build and its geometry with
+pairs, transition rows, super-junctions, restricted junctions (`restricted`, pipeline version 8);
+the CLI prints the rows with both. `save_build` writes the build and its geometry with
 `write_build` (which validates them), reads them back with `read_build` and `read_geometry`,
 raises `RuntimeError` if any array, the strings or the meta differ, and writes
 `stages/save.json` (`graph_version`, the counts, `megabytes` of the arrays and strings, which
@@ -795,7 +968,9 @@ interchanges (pipeline version 3). At version 5 (build c60bc0c9cb4a, the 2026-10
 65,779 nodes, 168,120 edges, 3,397 twin pairs, 11,455 transition rows at 642 super-junctions (477
 interchanges, 165 roundabouts), the same 170 rings. At version 6 (build 3a4a3df6269f, the same
 extract; about 4 s, the checks and the geometry included), the same nodes, edges and tables in
-15.8 MB of arrays and strings (39.9 MB at format 3) and 1.4 MB of geometry.
+15.8 MB of arrays and strings (39.9 MB at format 3) and 1.4 MB of geometry. At version 8 (build
+0b72253e5e8a, the same extract): 65,778 nodes, 168,118 edges, 3,344 twin pairs, 19,042 transition
+rows at 642 super-junctions and 1,334 restricted junctions, 15.9 MB of arrays and strings.
 
 ## `qa`
 
@@ -1079,7 +1254,11 @@ order of discovery, the split's multi-source search over a small networkx graph 
 The local work runs in Python over the arrays, cluster by cluster: clusters hold a percent or
 two of the nodes. The tests run the networkx engine's own stage B cases through both engines,
 the cleanup tests' interchanges a region cuts, and one of their own, a twin that is a boundary
-edge of its super-junction.
+edge of its super-junction. Since pipeline version 8 it takes the turn tables
+`arrays/restrictions.py` makes (`restrictions.turn_tables` on arrays: the same edges gathered,
+the same `restrictions.junction_table` called) and walks a super-junction with one by
+`consolidate`'s own `_passages` and `_forcing`, so both engines honour them alike; a restricted
+junction's rows join the super-junctions' in `trans_*`, its node in `restricted_node`.
 
 **Connectivity** (`arrays/connectivity.py`). The component `connectivity.largest_component`
 keeps, found by scipy's strongly connected components (the partition is unique; the largest
@@ -1088,8 +1267,9 @@ dropped component's length summed over its nodes ascending and each node's out-e
 keys `(u, v, key)`, its centroid NumPy's mean in that order, the length lost in edge order.
 `keep_only` then numbers the kept nodes as `consolidate.relabel` does, which is stage B's
 numbering compacted (relabel sorts by keys that keep their order on any subset), leaving out the
-edges, twins, super-junctions and transitions that lose an end. `without_no_turn` then drops the
-super-junctions left with edges in and out and no allowed pair, round by round with connectivity
+edges, twins, super-junctions, restricted junctions and transitions that lose an end.
+`without_no_turn` then drops the super-junctions and restricted junctions left with edges in and
+out and no allowed pair, round by round with connectivity
 after each, as cleanup does (step 5), its sums added into the report in the same order; a round
 reruns connectivity over the whole graph, which on arrays costs what the first did (on Portland
 0.03 s a round, where networkx's relabel and search take seconds).
@@ -1168,13 +1348,18 @@ filtered roads, each step in its own process on its own engine's stages, into a 
 directory (nothing under `WORST_ROUTE_DATA` is written), prints each step's seconds and peak
 memory, compares the cleanup, enrich and tiers reports and the builds array by array, the
 geometry's too, and exits 1 when they differ. On Portland (pipeline version 7): the same
-graph_version, the same reports, no array differing. On Oregon (the 2026-10-29 snapshot at
+graph_version, the same reports, no array differing; and at pipeline version 8, the turn
+restrictions applied, the same (cleanup 1.9 s against 51.5 s). On Oregon (the 2026-10-29 snapshot at
 pipeline version 7, every step on arrays, on a loaded machine): the same graph_version, reports,
 strings and arrays, the geometry's included, Ponderosa Lane's copies one unit on both; `build` 7
 s against 12 s, cleanup 5 s against 91 s (stage A 0.8 s of it against 64 s, connectivity 0.05 s
 against 4 s), enrich, tiers and the build 6.5 s against 23 s. No super-junction is left without
 a turn there; a round dropping one (tables emptied by hand) takes 0.08 s on arrays, as long as a
-connectivity pass.
+connectivity pass. At pipeline version 8 (2026-10-31, a load average of 11–13): the same
+graph_version, reports, strings and arrays; cleanup 7.5 s against 352 s (the restrictions 1.1 s
+against 6.4 s; networkx's stage A 172 s, and its connectivity 93 s for the round that drops the
+junction a restriction leaves no turn); and with a way through the via node told apart by the
+turn, the same again (cleanup 9.0 s against 112 s, at a lower load).
 
 ## Regions of several states
 
@@ -1219,7 +1404,8 @@ sitting (`download --force`).
 `build` are unchanged, and on such a build the tiers above the ceiling hold the same roads as it.
 `us-t3` (secondary and tertiary roads too) is the national build the server serves (the owner,
 2026-10-31, with Portland and Oregon as the development regions); `us-t1` stays the measured
-reference. `us` is the all-roads national region, the master graph M5.3's decision weighed, defined
+reference, a pipeline version 7 build that the version 8 code refuses to load until it is rebuilt
+(**Turn restrictions**). `us` is the all-roads national region, the master graph M5.3's decision weighed, defined
 but not built here (**The all-roads national build**), and `west-coast` (about eight times Oregon)
 the scale between a state and the country at which its memory is measured. The regions of one state
 each, generated from `STATES` (Oregon's keeping its own UTM zone and its build), are regions one may
@@ -1478,6 +1664,16 @@ uv run python tools/bench_build.py --region us-t3 --allow-fragmented --max-mem-g
   | New York (40.7128, −74.0060) → Los Angeles (34.0522, −118.2437) | 782.6 km | 4,430.75 km | 26,515.72 km | 5.98× | 7,327 (90 accepted), 60 s | 1.71 GB |
   | Pioneer Courthouse Square (45.5189, −122.6793) → Chicago (41.8781, −87.6298) | 565.2 km | 3,362.50 km | 31,807.84 km | 9.46× | 24,893 (159), 60 s | 1.44 GB |
 
+  At pipeline version 8 (build 6adae6917be1, the turn restrictions applied: **Turn restrictions**;
+  measured before a way through the via node was told apart by the turn, which changes about 70
+  of its 230,695 restrictions), New York → Los Angeles made 3.81× (16,879.10 km on the same baseline) from 1,602 attempts (29
+  accepted) in 60 s, validated, where version 7's build made 5.88× from 6,630 run beside it on the
+  same machine (a load average of about 10): the restrictions make the transition-aware searches'
+  walks pass a junction twice far more often (`docs/reference/engine.md`, **Limitations**,
+  Transitions). A 60 s result swings with the machine's load: the review of the change saw 37 to
+  about 2,000 attempts on the version 8 build in one session, so these figures compare the two
+  builds run back to back, not a rate.
+
 **The state builds** (2026-10-31), a one-off measurement of the array pipeline at state scale
 and an inventory of the regions one may build, not served (the owner's design is the national
 build at T3, `us-t3`; `docs/project_overview.md` §3.2): each of the 48 contiguous states and DC as
@@ -1609,15 +1805,20 @@ file, not across files. Each file's header comment states what the pipeline must
 | `divided.osm` | a dual-carriageway primary (`ref=OR 99W`, written `OR-99W` on one side) 25 m apart with mismatched side junctions and a right-in/right-out on one side, crossed by a divided minor street: the 4-node crossing becomes one cluster, five exact twin pairs |
 | `diamond.osm` | a motorway over a two-way secondary with four diamond ramps: the two sides' ramps join into one interchange, all 16 (in, out) pairs allowed, two twin pairs |
 | `cloverleaf.osm` | two motorways crossing on an overpass with four loops and four outer ramps (gores 120–240 m apart): one interchange of 16 gores, all 16 pairs allowed (U-turns through two loops included), four twin pairs |
+| `restrictions.osm` | OSM turn restrictions (pipeline version 8, **Turn restrictions**) on one strongly connected network: a `no_left_turn` and an `only_straight_on` at plain crossroads, a `no_u_turn` where two carriageways meet, a `no_left_turn` onto a divided crossing's median that stage A absorbs, a `no_right_turn` (the slip lane still makes it) and a `no_left_turn` inside a slip-lane super-junction, a `no_u_turn` at a node simplification contracts, a `no_right_turn` from a one-way road leaving its via node, an `only_right_turn` onto, a `no_left_turn` from and a `no_entry` from a road passing through its via node, a `no_left_turn`, a `no_u_turn` and an `only_left_turn` at a crossroads of two such roads, and one restriction for each reason the filter leaves one out. 14 rows kept, 11 applied (one way through via), tables at 7 stage A nodes, 6 restricted junctions and one super-junction in the build |
 | `border_south.osm`, `border_north.osm` | two states' extracts as Geofabrik cuts them, the line at lat 45.5: both hold a highway crossing it (900) complete with its nodes, a signal on it and a brand node by the line; each holds a street continuing the highway on its side. Alone, each ends the highway in a dead end beyond the line; merged, 3 ways, 6 nodes each once, 2 POI rows, a raw graph of 4 junctions, 3 segments, 6 edges |
 
-The tests are `tests/pipeline/`: `test_exclusions.py`, `test_download.py`, `test_filter.py`,
+The tests are `tests/pipeline/`: `test_exclusions.py`, `test_download.py`, `test_filter.py`
+(the restrictions table, each reason it leaves one out, a relation taken once across extracts),
 `test_build.py`, `test_layout.py`, `test_names.py`, `test_simplify.py`, `test_consolidate.py`
 (stages A and B, with in-memory cases: a half-diamond, a slip lane near and far from its
 crossing, two branches of one road merging, two interchanges on one freeway, a cluster too wide
 and one touching no other road, a diamond whose cross road bridges between its terminals, a
 crossover between carriageways, a roundabout bypassed by a slip lane), `test_carriageways.py`
-(with in-memory cases: ramps on one side only, offset gores), `test_connectivity.py`,
+(with in-memory cases: ramps on one side only, offset gores), `test_restrictions.py` (the turn
+tables of `restrictions.osm` on both engines, the exact pairs each restriction bans, a table
+that bans nothing changing no fixture's stage B, the twin a restriction carries when it leaves a
+passage one internal path, the build's rows and the empty-table refusal), `test_connectivity.py`,
 `test_cleanup.py` (the whole step on every fixture, determinism, the fragmented failure),
 `test_enrich.py` (maxspeed parsing, bearings, at a cluster the road's and not the stub's,
 identities, units (a road mapped several times one unit per run), flags, collectibles inside
@@ -1635,7 +1836,8 @@ plan` and `validate` on a build the pipeline saved, both engines through `save` 
 never reads), `test_arrays.py`, `test_arrays_enrich.py`, `test_arrays_build.py` and
 `test_arrays_property.py` (the arrays engine against networkx's, **The arrays engine**), and,
 marked `data`, `test_arrays_data.py` (both engines on Portland), `test_cleanup_data.py` (the
-invariants and the report on Portland's latest build, either engine's stages) and
+invariants and the report on Portland's latest build, either engine's stages, and its turn
+restrictions' counts) and
 `test_build_data.py` (Portland's saved build: valid, its `graph_version`, `check_build`,
 `check_saved` against the enriched graph, `stages/enrich.pkl` or the arrays engine's cleaned
 graph enriched by networkx, the tier masks, the brands (each on at least 3 pass-through nodes,

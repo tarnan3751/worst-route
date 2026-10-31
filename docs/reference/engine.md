@@ -218,7 +218,10 @@ between consecutive stops, within the request's masks and nothing else, concaten
 may share nodes. It is the denominator of the ratio. Each leg turns only where the tables allow,
 independently of the leg before it (no entry edge at a via), so the baseline is never longer
 than the seed; a leg whose cheapest legal path would pass a node twice is the turn-blind
-shortest path instead, a lower bound, so the baseline exists whenever the seed does. It does not
+shortest path instead, a lower bound, so the baseline exists whenever the seed does (such a
+leg may take a turn a turn restriction bans, as the one at Alder St and Birch Ave in
+`tests/fixtures/osm/restrictions.osm` does, whose cheapest legal way goes on and comes back;
+the route never does). It does not
 search again for a node-simple path (`shortest_path(..., simple_retry=False)`; **Searches**),
 which could be longer than the seed's.
 
@@ -1640,7 +1643,21 @@ from the line, past the 433 km leash; no turn-blind path lies inside it.
 
 ## Limitations
 
-- **Transitions.** The searches see the transition tables (**Searches**), and a part of a
+- **Transitions.** The tables hold the super-junctions' passages and, since pipeline version 8,
+  OSM's turn restrictions at the junctions they apply at (`docs/reference/pipeline.md`, **Turn
+  restrictions**), whose cheapest legal way is often round a block or on and back, a walk that
+  passes a node twice. On the national T3 build, sparse without its residential streets, that is
+  the rule: New York → Los Angeles (seed 1, 30 s, profiled) made 32 attempts on the version 8
+  build, 4.9 transition-aware searches to a `shortest_path` at about 200 ms each, where the
+  version 7 build made 633 attempts, 1.4 searches to a `shortest_path` at about 27 ms; in 60 s,
+  back to back, 3.81× against 5.88× (`docs/reference/pipeline.md`, **The national T3 build**),
+  though a 60 s run there swings with the machine's load (the review saw 37 to about 2,000
+  attempts on the version 8 build in one session). On Portland's
+  denser streets the acceptance run (20 pairs, seed 1, 30 s, 2026-10-31) plans all 20 on the
+  version 8 build 0b72253e5e8a, the validator passing all 20, at a median of 23.93× (6.10–47.72×)
+  and 5,777 attempts/s, where the version 7 build a453e105582b, run after it in the same session,
+  gives 24.30× (6.10–53.27×) at 5,366 attempts/s; no candidate refused for a transition, no pair
+  unplanned. The searches see the tables (**Searches**), and a part of a
   detour whose cheapest legal walk passes a node twice is searched again, up to 8 times, with
   the edge banned by which the walk comes back to the node. That is a heuristic: it misses a
   node-simple legal path that drives a banned edge or needs more rounds (41 of 107 on the small

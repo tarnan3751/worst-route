@@ -136,9 +136,9 @@ is most of it), 300 kB gzipped.
   answered (no stream is opened for it).
 - **The stat line**: the ratio, large (under the slowest time, once the route is stored, the
   ratio of experienced times, "16.9× slower", from the document's `time_ratio`, as in `done`;
-  `progress` carries no delays, so while the run goes it is the lengths' ratio); the length and
-  drive time; under the slowest time, once stored, the drive and the delays ("drive 4 h 8 min +
-  delays 1 h 59 min"); under collect, the items collected ("24 bridges"), live from each
+  while the run goes it is the lengths' ratio); the length and drive time; under the slowest
+  time, the drive and the delays ("drive 4 h 8 min + delays 1 h 59 min"), live from each
+  `progress` event's `delay_s` and then the stored route's; under collect, the items collected ("24 bridges"), live from each
   `progress` event's `items` and then the stored route's; once stored, the turns ("277 left ·
   282 right", "no lefts" or "no rights" when the side avoided has none and the route no U-turn,
   which either constraint counts too); for a ratio or duration
@@ -493,9 +493,10 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
 - **Seeds above 2⁵³ − 1** cannot be typed: the API allows up to 2⁶³ − 1, but a JavaScript number
   is exact only up to 2⁵³. A stored route with a larger seed (from the CLI or a script) shows it
   rounded.
-- **Under the slowest time the large ratio changes kind when the run ends**: `progress` carries
-  the length and the driving time but not the delays, so the experienced time's ratio ("× slower")
-  is known only once the route is stored; while the run goes the line shows the lengths' ratio.
+- **Under the slowest time the large ratio changes kind when the run ends**: the stat line shows
+  the experienced time's ratio ("× slower") only once the route is stored (from the document's
+  `time_ratio`), and the lengths' ratio while the run goes; the drive and delays row below it is
+  live from `progress`'s `delay_s` and settles on the stored route's.
 - **Desktop layout only**; the brand pilgrimage and the alphabet route arrive with their
   milestones. The share image is a link to the server's PNG, not shown in the page.
 - **A step's highlight is placed by distance**, not by its nodes (**Directions**): a few of its

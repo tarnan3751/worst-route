@@ -343,6 +343,23 @@ async def test_the_time_ratio_and_the_arrival_count_the_delays(tmp_path: Path) -
         assert (await client.get(f"/routes/{done['route_id']}")).json()["metrics"] == m
 
 
+async def test_the_route_s_delays_ride_with_it_as_it_grows(tmp_path: Path) -> None:
+    # on the lattice with signals and stop signs: every snapshot and progress event carries the
+    # route's delays so far, the last progress the stored route's, and so does the job status
+    root = tmp_path / "data"
+    save_build(root, SLOW, "slow")
+    async with serving(root) as (client, _):
+        job_id, events = await finished(client, job_body(stops=[stop(22), stop(77)]))
+        growing = [e["data"]["metrics"] for e in events if e["event"] in ("snapshot", "progress")]
+        assert growing and all(m["delay_s"] >= 0 for m in growing)
+        assert len({m["delay_s"] for m in growing}) > 1  # it changes as the route grows
+        done = events[-1]["data"]["metrics"]
+        last = [e["data"]["metrics"] for e in events if e["event"] == "progress"][-1]
+        assert last["delay_s"] == done["delay_s"] > 0 and last["length_m"] == done["length_m"]
+        status = (await client.get(f"/jobs/{job_id}")).json()
+        assert status["metrics"]["delay_s"] == done["delay_s"]
+
+
 async def test_a_departure_gives_an_arrival(data: Path) -> None:
     async with serving(data) as (client, _):
         body = job_body(

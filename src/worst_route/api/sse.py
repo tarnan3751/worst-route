@@ -13,9 +13,10 @@ which keeps both ends of every edge, so every node stays a vertex. The tolerance
 as degrees of latitude, applied to lon/lat as they are, so the kept points are the original
 values exactly (a node lands where a splice puts it, to the last digit); a degree of longitude
 being shorter, the tolerance across a north-south line is less, 0.7 of it at 45°.
-`route_metrics` is a route's numbers with its ratio to the baseline (None for a round trip,
-whose baseline is 0 m); `time_ratio` is its experienced time's, driving and delays, to the
-baseline's (None for a round trip too); `baseline_out` is the `baseline` event's payload.
+`route_metrics` is a route's numbers, its delays included, with its ratio to the baseline (None
+for a round trip, whose baseline is 0 m); `time_ratio` is its experienced time's, driving and
+delays, to the baseline's (None for a round trip too); `baseline_out` is the `baseline` event's
+payload.
 """
 
 from dataclasses import dataclass
@@ -71,7 +72,11 @@ def route_metrics(metrics: Metrics, baseline_length_m: float) -> RouteMetrics:
     """A route's numbers, with its ratio to the baseline."""
     ratio = metrics.length_m / baseline_length_m if baseline_length_m > 0 else None
     return RouteMetrics(
-        length_m=metrics.length_m, time_s=metrics.time_s, ratio=ratio, **metrics.counters
+        length_m=metrics.length_m,
+        time_s=metrics.time_s,
+        delay_s=metrics.delay_s,
+        ratio=ratio,
+        **metrics.counters,
     )
 
 

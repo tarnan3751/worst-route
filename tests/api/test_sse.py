@@ -69,7 +69,7 @@ def test_a_snapshot_simplifies_each_edge_and_keeps_every_node() -> None:
         stop_idx=(0, 2),
         iteration=4,
         elapsed_s=1.5,
-        metrics=RouteMetrics(length_m=200, time_s=18, ratio=1.0),
+        metrics=RouteMetrics(length_m=200, time_s=18, delay_s=0.0, ratio=1.0),
         simplify_m=1.0,
     )
     assert (shot.node_count, shot.stop_idx, shot.node_index) == (3, [0, 2], [0, 2, 3])
@@ -83,9 +83,16 @@ def test_a_splice_carries_its_points_and_node_indices() -> None:
     assert out.coords[3] == pytest.approx([GRID.node_lon[2], GRID.node_lat[2]], abs=F32)
 
 
-def test_metrics_carry_the_ratio_and_the_objective_s_counters() -> None:
-    m = route_metrics(Metrics(3000.0, 300.0, {"items": 2.0}), baseline_length_m=1000.0)
-    assert m.model_dump() == {"length_m": 3000.0, "time_s": 300.0, "ratio": 3.0, "items": 2.0}
+def test_metrics_carry_the_delays_the_ratio_and_the_objective_s_counters() -> None:
+    measured = Metrics(3000.0, 300.0, {"items": 2.0}, delay_s=40.0)
+    m = route_metrics(measured, baseline_length_m=1000.0)
+    assert m.model_dump() == {
+        "length_m": 3000.0,
+        "time_s": 300.0,
+        "delay_s": 40.0,
+        "ratio": 3.0,
+        "items": 2.0,
+    }
     assert route_metrics(Metrics(3000.0, 300.0), baseline_length_m=0.0).ratio is None
 
 

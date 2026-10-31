@@ -136,10 +136,12 @@ const brandVisits = object<BrandVisits>({
   of: "integer",
 });
 // A collecting route's item and counts, a pilgrimage's brand; absent for every other objective.
+// The delays: optional, the recordings predate them.
 const metrics = object<Metrics>(
   {
     length_m: "number",
     time_s: "number",
+    delay_s: optional("number"),
     ratio: nullable("number"),
     item: optional(collectItem),
     items: optional(itemCounts),

@@ -117,11 +117,13 @@ export interface BrandVisits {
   of: number;
 }
 
-/** A route's numbers while it grows; the objective's counters ride along (a collecting route's
- * `item` and `items`, a pilgrimage's `brand`). */
+/** A route's numbers while it grows, its delays so far among them (absent from servers older than
+ * them); the objective's counters ride along (a collecting route's `item` and `items`, a
+ * pilgrimage's `brand`). */
 export interface Metrics {
   length_m: number;
   time_s: number;
+  delay_s?: number;
   ratio: number | null;
   item?: CollectItem;
   items?: ItemCounts;

@@ -17,9 +17,10 @@ collectibles, and `BrandVisits` for a pilgrimage), `ValidationOut`, `BrandsOut` 
 with its `BrandOut`s), and `ErrorBody` (`{code, message}` and the error's own fields) for every
 error. The document's metrics count the route's turns (`Turns`), its delays and its
 collectibles, and with the presentation's numbers (fuel, states and towns, the share of the
-roads) it carries its directions (`DirectionStep`s) and toasts; `Done`'s metrics
-(`DoneMetrics`) carry the target, the turns and the delays too, and the stored route's other
-metrics (its item counts, a collecting route's item, a pilgrimage's brand) as extra fields.
+roads) it carries its directions (`DirectionStep`s) and toasts; the metrics of a route while it
+grows (`RouteMetrics`: `progress`, `snapshot`, the job status) carry its delays, and `Done`'s
+(`DoneMetrics`) the target and the turns too, and the stored route's other metrics (its item
+counts, a collecting route's item, a pilgrimage's brand) as extra fields.
 The SSE events' payloads are `Snapped`, `BaselineOut`, `Progress` (with `SpliceOut`s),
 `Snapshot`, `Done` and `ErrorBody`. Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in
 requests; every number is metric.
@@ -202,12 +203,14 @@ class LineString(_Out):
 
 
 class RouteMetrics(_Out):
-    """A route's numbers while it grows; the objective's counters ride along as extra fields."""
+    """A route's numbers while it grows, the delays at its signals and stop signs among them;
+    the objective's counters ride along as extra fields."""
 
     model_config = ConfigDict(extra="allow")
 
     length_m: float
     time_s: float
+    delay_s: float
     ratio: float | None
 
 
@@ -231,11 +234,10 @@ class Turns(_Out):
 
 class DoneMetrics(RouteMetrics):
     """`done`'s metrics: the stored route's, with its experienced time's ratio to the
-    baseline's, its target (null for max), its delays and its turns."""
+    baseline's, its target (null for max) and its turns."""
 
     time_ratio: float | None
     target: TargetMetrics | None = None
-    delay_s: float
     turns: Turns
 
 

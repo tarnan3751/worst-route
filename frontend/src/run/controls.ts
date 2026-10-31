@@ -398,8 +398,8 @@ type StatLines = [string, string, string, string, string, string, string];
 
 /** The stat line's rows: the ratio (under the slowest time, of experienced times once stored);
  * the length and drive time; the target; the run; and, shown between the second and the third,
- * the drive and the delays (the slowest time, once stored), the items collected (live), and the
- * turns (once stored). */
+ * the drive and the delays (the slowest time, live from each progress event, then the stored
+ * route's), the items collected (live), and the turns (once stored). */
 export function statLines(state: Readonly<AppState>): StatLines {
   const { run, settings } = state;
   const only = (line: string): StatLines => ["", line, "", "", "", "", ""];

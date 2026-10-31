@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from typing import Any
 
 import numpy as np
 from pyproj import Transformer
@@ -26,8 +27,9 @@ def lattice(
     transitions: Sequence[EdgePair] = (),
     rounded_lonlat: bool = False,
     primary_every: int = 0,
-    roads: Mapping[tuple[int, int], Mapping[str, int]] | None = None,
+    roads: Mapping[tuple[int, int], Mapping[str, int | str | None]] | None = None,
     brands: Mapping[str, Sequence[int]] | None = None,
+    named: bool = False,
 ) -> GraphData:
     """`grid_graph`'s two-way lattice (node r * cols + c), with twins and transitions.
 
@@ -36,17 +38,20 @@ def lattice(
     `primary_every` = k, the rows and columns 0, k, 2k, ... are primary roads at 72 km/h (the
     rest residential at 40 km/h), with a 30 s signal where two of them cross and a 10 s stop
     sign at their other nodes. `roads` gives `Edge` fields (`flags`, `toll_booths`,
-    `level_crossings`) to both directions of the road a–b, keyed by (a, b) with a < b.
-    `brands` maps a brand's name to its nodes (`make_graph`'s).
+    `level_crossings`, `name`) to both directions of the road a–b, keyed by (a, b) with a < b.
+    `brands` maps a brand's name to its nodes (`make_graph`'s). `named` names the rows "Row r"
+    and the columns "Col c", which are then their identities (hard mode); unnamed, no edge has
+    one.
     """
     xy = [(X0 + c * spacing_m, Y0 + r * spacing_m) for r in range(rows) for c in range(cols)]
     fields = roads or {}
 
-    def street(a: int, b: int, primary: bool) -> list[Edge]:
+    def street(a: int, b: int, primary: bool, name: str) -> list[Edge]:
         highway, speed = (
             (HighwayClass.PRIMARY, 72.0) if primary else (HighwayClass.RESIDENTIAL, 40.0)
         )
-        extra = fields.get((a, b), {})
+        extra: dict[str, Any] = {"name": name} if named else {}
+        extra.update(fields.get((a, b), {}))
         return [
             Edge(a, b, spacing_m, highway, speed, **extra),
             Edge(b, a, spacing_m, highway, speed, **extra),
@@ -58,10 +63,10 @@ def lattice(
     edges: list[Edge] = []
     for r in range(rows):
         for c in range(cols - 1):
-            edges += street(r * cols + c, r * cols + c + 1, on_primary(r))
+            edges += street(r * cols + c, r * cols + c + 1, on_primary(r), f"Row {r}")
     for c in range(cols):
         for r in range(rows - 1):
-            edges += street(r * cols + c, (r + 1) * cols + c, on_primary(c))
+            edges += street(r * cols + c, (r + 1) * cols + c, on_primary(c), f"Col {c}")
     lonlat = None
     if rounded_lonlat:
         lon, lat = TO_LONLAT.transform([p[0] for p in xy], [p[1] for p in xy])

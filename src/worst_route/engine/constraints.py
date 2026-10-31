@@ -28,15 +28,30 @@ node, edge or global terms (`TurnConstraint`) about two turn classes (`engine/tu
 The baseline is never constrained (a sane GPS turns left). `constrain(objective, constraints,
 data)` is the objective the engine runs: the objective itself without constraints, else a
 `Composite` of it and theirs, the soft ones penalising at `turn_penalty_for(objective)`.
+
+**Hard mode** (`HardMode`): each road, an identity (`edge_identity`: a ref, else the
+normalised name), in one stretch at most, so once the route leaves a road it never comes back
+to it. The rule is over the positions of the whole route's edges: those of each identity form
+one run. An edge without one (−1) is free, but not transparent (a road on both sides of an
+unnamed edge is two stretches); a stop splits nothing; a round trip is read from its start to
+its end, so coming home on the road it left by is a return. It has no terms. Its
+`banned_edges` ban, per window, every edge whose identity is on the route outside it, but those
+of the edges either side of it, which a detour may extend; a window inside one stretch (the
+same identity on both sides) may only be replaced along that road, so every other edge is
+banned. Its `feasible_window` is exact: given a legal route, the splice is legal iff the
+detour with the window's two neighbours has one stretch per identity, and every identity of
+the detour that is on the route outside the window is a neighbour's. `stretches` and
+`returning` read the rule off a route's edges for the seed and the base route.
 """
 
 import numpy as np
+from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from worst_route.config import TURN_PENALTY_M, TURN_PENALTY_S
 from worst_route.engine.objectives.base import BaseObjective, Objective
 from worst_route.engine.objectives.composite import Composite
-from worst_route.engine.route import IntArray, Metrics, Route
+from worst_route.engine.route import BoolArray, IntArray, Metrics, Route
 from worst_route.engine.snap import InfeasibleTurnConstraint, StopUnreachable
 from worst_route.engine.turns import turn_classes
 from worst_route.graph.backend import TURN_CLASS, TURN_LEFT, TURN_RIGHT, TURN_U
@@ -102,6 +117,108 @@ class NoRight(TurnConstraint):
     key = "no_right"
     label = "no-right"
     turns = TURN_RIGHT | TURN_U
+
+
+class HardMode(BaseObjective):
+    """Each road in one stretch at most; no terms, its hooks keep the rule (see the module)."""
+
+    key = "hard"
+
+    def __init__(self, data: GraphData) -> None:
+        super().__init__(data, baseline=Metrics(0.0, 0.0), r_max=0.0)
+        self._ids = np.asarray(data.edge_identity)  # not the memmap: indexed per candidate
+        self._slot = data.edge_identity.astype(np.intp) + 1  # −1 at slot 0
+        count = np.bincount(self._slot, minlength=len(data.strings.identities) + 1)
+        self._by_id = np.argsort(self._slot, kind="stable")  # identity x's edges: _edges(x)
+        self._first = np.concatenate(([0], np.cumsum(count)))
+        self._route: Route | None = None
+        self._count = np.zeros(len(count), dtype=np.intp)  # route edges per identity slot
+        self._on = np.zeros(data.m, dtype=np.bool_)  # edges whose identity the route drives
+
+    def banned_edges(self, G: GraphData, route: Route, i: int, j: int) -> BoolArray | None:  # noqa: N803
+        """The edges of every identity on the route outside the window, but its neighbours';
+        inside one stretch, every edge of another identity."""
+        self._refresh(route)
+        a, b = self._neighbours(route, i, j)
+        if a == b >= 0:
+            only: BoolArray = self._ids != a
+            return only
+        bans = self._on.copy()
+        inside = self._ids[route.edges[i:j]]
+        ids, n = np.unique(inside[inside >= 0], return_counts=True)
+        for x in (*ids[self._count[ids + 1] == n].tolist(), a, b):  # the window's own, freed
+            if x >= 0:
+                bans[self._edges(x)] = False
+        return bans
+
+    def feasible_window(
+        self,
+        G: GraphData,  # noqa: N803
+        route: Route,
+        i: int,
+        j: int,
+        nodes: IntArray,
+        edges: IntArray,
+    ) -> bool:
+        """Whether every road stays one stretch once the window is replaced by the detour."""
+        self._refresh(route)
+        a, b = self._neighbours(route, i, j)
+        chain = np.concatenate((route.edges[max(i - 1, 0) : i], edges, route.edges[j : j + 1]))
+        ids = self._ids[chain]
+        starts = ids[np.concatenate(([True], ids[1:] != ids[:-1])) & (ids >= 0)]
+        if len(np.unique(starts)) < len(starts):  # a road twice along the chain
+            return False
+        new = np.unique(self._ids[edges])
+        new = new[new >= 0]
+        inside = np.sort(self._ids[route.edges[i:j]])
+        there = np.searchsorted(inside, new, side="right") - np.searchsorted(inside, new)
+        outside = self._count[new + 1] - there
+        return not ((outside > 0) & (new != a) & (new != b)).any()
+
+    def _refresh(self, route: Route) -> None:
+        """The route's identities, counted once per route (every splice makes a new one)."""
+        if route is not self._route:
+            count = np.bincount(self._slot[route.edges], minlength=len(self._count))
+            count[0] = 0
+            self._count, self._on, self._route = count, (count > 0)[self._slot], route
+
+    def _neighbours(self, route: Route, i: int, j: int) -> tuple[int, int]:
+        """The identities of the edges either side of the window, −1 where there is none."""
+        a = int(self._ids[route.edges[i - 1]]) if i > 0 else -1
+        b = int(self._ids[route.edges[j]]) if j < len(route.edges) else -1
+        return a, b
+
+    def _edges(self, x: int) -> NDArray[np.intp]:
+        edges: NDArray[np.intp] = self._by_id[self._first[x + 1] : self._first[x + 2]]
+        return edges
+
+
+def stretches(data: GraphData, edges: IntArray) -> tuple[IntArray, IntArray, IntArray]:
+    """Each maximal run of edges of one identity (not −1) along `edges`, in order: its
+    identity, its first position and its end (exclusive); none along no edges."""
+    ids = data.edge_identity[edges]
+    if len(ids) == 0:
+        none = np.zeros(0, dtype=np.int32)
+        return none, none, none
+    start = np.flatnonzero(np.concatenate(([True], ids[1:] != ids[:-1])))
+    end = np.concatenate((start[1:], [len(ids)]))
+    named = ids[start] >= 0
+    return ids[start][named], start[named].astype(np.int32), end[named].astype(np.int32)
+
+
+def returning(data: GraphData, edges: IntArray) -> tuple[tuple[int, int], tuple[int, int]] | None:
+    """The first stretch of a road `edges` came back to, after leaving it, and the stretch of
+    it before, as ((start, end) before, (start, end) again), positions in `edges`, ends
+    exclusive; None when each road is one stretch."""
+    ids, start, end = stretches(data, edges)
+    first = np.zeros(len(ids), dtype=np.bool_)
+    first[np.unique(ids, return_index=True)[1]] = True
+    again = np.flatnonzero(~first)
+    if len(again) == 0:
+        return None
+    k = int(again[0])
+    before = int(np.flatnonzero(ids[:k] == ids[k])[-1])
+    return (int(start[before]), int(end[before])), (int(start[k]), int(end[k]))
 
 
 class Constraints(BaseModel):

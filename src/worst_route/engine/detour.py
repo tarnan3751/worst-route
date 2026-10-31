@@ -3,11 +3,14 @@
 `find_detour(backend, spatial, data, route, i, j, ...)` looks for a path a → b, a = nodes[i] and
 b = nodes[j], inside the masks the worsen loop passes (`forbid`: the nodes the route still
 uses; `banned`: the bans left once the window is released, with the request's and the
-objective's), and returns it only if it differs from the removed run and `route.check_splice`
-accepts it; a refused candidate is tallied in `refused` by its kind when the caller passes a
-counter. The strategy is drawn from `rng` with `STRATEGY_WEIGHTS`, but local exhaustive only
-when a and b lie less than `LOCAL_EXHAUSTIVE_MAX_M` apart (otherwise waypoint 2/3, random
-weight 1/3); `strategy` forces one (tests, the round-trip seed).
+objective's), and returns it only if it differs from the removed run, the objective's
+`feasible_window` allows it (so the local-exhaustive ranking gives the best path a constraint
+such as hard mode allows, not one it refuses; asked first, being the cheaper) and
+`route.check_splice` accepts it; a candidate the splice refuses is tallied in `refused` by its
+kind when the caller passes a counter. The
+strategy is drawn from `rng` with `STRATEGY_WEIGHTS`, but local exhaustive only when a and b lie
+less than `LOCAL_EXHAUSTIVE_MAX_M` apart (otherwise waypoint 2/3, random weight 1/3);
+`strategy` forces one (tests, the round-trip seed).
 
 - `waypoint_path`: a waypoint w drawn from the nodes the search may enter within
   `WAYPOINT_BALL_FACTOR × radius` of the midpoint of a and b (those of the objective's pool when
@@ -110,7 +113,7 @@ def find_detour(
     refused: Counter[type[IllegalSplice]] | None = None,
     shrink: Goal | None = None,
 ) -> Path | None:
-    """A new detour for nodes[i..j] that the splice accepts, or None."""
+    """A new detour for nodes[i..j] that the splice accepts and the objective allows, or None."""
     a, b = int(route.nodes[i]), int(route.nodes[j])
     chosen = strategy or pick_strategy(_distance(data, a, b), rng)
     weights = objective.search_weights(data)
@@ -187,6 +190,8 @@ def find_detour(
     removed = route.edges[i:j]
     for nodes, edges in candidates:
         if np.array_equal(edges, removed):
+            continue
+        if not objective.feasible_window(data, route, i, j, nodes, edges):
             continue
         try:
             route.check_splice(data, i, j, nodes, edges, extra_banned=banned)

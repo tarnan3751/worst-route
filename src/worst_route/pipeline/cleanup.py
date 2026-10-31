@@ -1,32 +1,33 @@
 """`pipeline cleanup`: the raw graph made into the graph the no-repeat rule rests on.
 
 `docs/PLAN.md` §2.4; `docs/reference/pipeline.md`, cleanup. `run_cleanup` takes the raw graph
-`build` wrote (networkx's graph, or the arrays engine's `RawGraph`, which `arrays.simplify`,
-`arrays.stage_a`, `arrays.twins`, `arrays.stage_b` and `arrays.connectivity` take through those
-steps before handing it on as networkx would hold it) and runs, in order: `simplify` (self-loops
-dropped, degree-2 chains collapsed), `consolidate.stage_a` (signal clusters and divided crossings),
+`build` wrote (networkx's graph, or the arrays engine's `RawGraph`, which `run_arrays_cleanup`
+takes through `arrays.simplify`, `arrays.stage_a`, `arrays.twins`, `arrays.stage_b` and
+`arrays.connectivity` to the cleaned graph as arrays, a `StageBGraph`, before `run_cleanup` hands
+it on as networkx would hold it) and runs, in order: `simplify` (self-loops dropped, degree-2
+chains collapsed), `consolidate.stage_a` (signal clusters and divided crossings),
 `carriageways.find_twins` (on the stage A graph, so stretches stage B makes internal keep their
-twins), `consolidate.stage_b`
-(interchanges and roundabouts as super-junctions with their transitions, the twins carried
-across, then nodes numbered 0..n-1) and `connectivity.largest_component`, which keeps the largest
-strongly connected component and numbers the nodes 0..n-1 again. Connectivity does not read the
-turn tables, and dropping an edge drops the transitions that name it, so a super-junction can be
-left with edges in and out and no allowed pair between them: where a region's edge cuts an
-interchange, its pairs ran through the stubs beyond it. No route can pass through such a node,
-and a build cannot say so (a node without transition rows allows every turn), so it is dropped
-with its edges, connectivity runs again on what is left, and so on until none remains; the
-connectivity report adds the rounds up (`dropped_no_turn` counts those super-junctions). It
-raises `FragmentedGraphError`, before writing anything, when the kept share of the stage B
-graph's nodes is below `config.SCC_MIN_RETAINED`, or a component it drops holds more than
-`config.SCC_MAX_DROPPED_NODES`, and `allow_fragmented` is not set. `save_stage` pickles
-the graph, with its `superjunctions` and `twins` tables in `G.graph`, to `stages/cleanup.pkl`
-and writes the report to `stages/cleanup.json`. `parameters` is what the step's sidecar records
-beside the input, so a changed threshold reruns it.
+twins), `consolidate.stage_b` (interchanges and roundabouts as super-junctions with their
+transitions, the twins carried across, then nodes numbered 0..n-1) and
+`connectivity.largest_component`, which keeps the largest strongly connected component and numbers
+the nodes 0..n-1 again. Connectivity does not read the turn tables, and dropping an edge drops the
+transitions that name it, so a super-junction can be left with edges in and out and no allowed pair
+between them: where a region's edge cuts an interchange, its pairs ran through the stubs beyond it.
+No route can pass through such a node, and a build cannot say so (a node without transition rows
+allows every turn), so it is dropped with its edges, connectivity runs again on what is left, and
+so on until none remains; the connectivity report adds the rounds up (`dropped_no_turn` counts
+those super-junctions). It raises `FragmentedGraphError`, before writing anything, when the kept
+share of the stage B graph's nodes is below `config.SCC_MIN_RETAINED`, or a component it drops
+holds more than `config.SCC_MAX_DROPPED_NODES`, and `allow_fragmented` is not set. `save_stage`
+pickles the graph, with its `superjunctions` and `twins` tables in `G.graph`, to
+`stages/cleanup.pkl` and writes the report to `stages/cleanup.json`. `parameters` is what the
+step's sidecar records beside the input, so a changed threshold reruns it.
 """
 
 import json
 import pickle
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,7 @@ from worst_route.pipeline.arrays import stage_a as arrays_stage_a
 from worst_route.pipeline.arrays import stage_b as arrays_stage_b
 from worst_route.pipeline.arrays import twins as arrays_twins
 from worst_route.pipeline.arrays.build import RawGraph
+from worst_route.pipeline.arrays.stage_b import StageBGraph
 from worst_route.pipeline.arrays.to_nx import cleanup_graph
 from worst_route.pipeline.carriageways import TwinStats, find_twins
 from worst_route.pipeline.connectivity import (
@@ -131,37 +133,13 @@ def run_cleanup(
 ) -> tuple[nx.MultiDiGraph, CleanupReport]:
     """The cleaned graph and what each step did."""
     if isinstance(raw, RawGraph):
-        size = {"nodes": len(raw.node_id), "edges": raw.edges}
-    else:
-        size = {"nodes": raw.number_of_nodes(), "edges": raw.number_of_edges()}
-    report = CleanupReport(input=size)
-    clock = time.perf_counter()
-
-    def lap(step: str) -> None:
-        nonlocal clock
-        now = time.perf_counter()
-        report.seconds[step] = round(now - clock, 3)
-        clock = now
-
-    if isinstance(raw, RawGraph):
-        simplified, report.simplify = arrays_simplify.simplify(raw)
-        lap("simplify")
-        merged, report.stage_a = arrays_stage_a.stage_a(simplified)
-        lap("stage_a")
-        twins = arrays_twins.find_twins(merged)
-        report.twins = twins[2]
-        lap("twins")
-        consolidated, report.stage_b = arrays_stage_b.stage_b(merged, twins[:2])
-        lap("stage_b")
-        component, report.connectivity = arrays_connectivity.largest_component(consolidated)
-        consolidated = arrays_connectivity.without_no_turn(
-            arrays_connectivity.keep_only(consolidated, component), report.connectivity
-        )
-        _refuse_fragmented(report.connectivity, allow_fragmented)
-        lap("connectivity")
-        graph = cleanup_graph(consolidated)
-        lap("handover")
+        cleaned, report = run_arrays_cleanup(raw, allow_fragmented=allow_fragmented)
+        clock = time.perf_counter()
+        graph = cleanup_graph(cleaned)
+        report.seconds["handover"] = round(time.perf_counter() - clock, 3)
         return graph, report
+    report = CleanupReport(input={"nodes": raw.number_of_nodes(), "edges": raw.number_of_edges()})
+    lap = _laps(report)
     graph, report.simplify = simplify(raw)
     lap("simplify")
     graph, report.stage_a = stage_a(graph)
@@ -175,6 +153,43 @@ def run_cleanup(
     _refuse_fragmented(report.connectivity, allow_fragmented)
     lap("connectivity")
     return graph, report
+
+
+def run_arrays_cleanup(
+    raw: RawGraph, *, allow_fragmented: bool = False
+) -> tuple[StageBGraph, CleanupReport]:
+    """The arrays engine's cleaned graph, as arrays, and what each step did."""
+    report = CleanupReport(input={"nodes": len(raw.node_id), "edges": raw.edges})
+    lap = _laps(report)
+    simplified, report.simplify = arrays_simplify.simplify(raw)
+    lap("simplify")
+    merged, report.stage_a = arrays_stage_a.stage_a(simplified)
+    lap("stage_a")
+    twins = arrays_twins.find_twins(merged)
+    report.twins = twins[2]
+    lap("twins")
+    consolidated, report.stage_b = arrays_stage_b.stage_b(merged, twins[:2])
+    lap("stage_b")
+    component, report.connectivity = arrays_connectivity.largest_component(consolidated)
+    consolidated = arrays_connectivity.without_no_turn(
+        arrays_connectivity.keep_only(consolidated, component), report.connectivity
+    )
+    _refuse_fragmented(report.connectivity, allow_fragmented)
+    lap("connectivity")
+    return consolidated, report
+
+
+def _laps(report: CleanupReport) -> Callable[[str], None]:
+    """A function that records in `report` the seconds since it last ran, or since now."""
+    clock = time.perf_counter()
+
+    def lap(step: str) -> None:
+        nonlocal clock
+        now = time.perf_counter()
+        report.seconds[step] = round(now - clock, 3)
+        clock = now
+
+    return lap
 
 
 def _refuse_fragmented(scc: ConnectivityReport, allow_fragmented: bool) -> None:

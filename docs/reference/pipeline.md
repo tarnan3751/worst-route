@@ -8,8 +8,8 @@ contract.
 Built: every step, `download`, `filter`, `build`, `cleanup`, `enrich`, `tiers`, `save` and `qa`.
 `save` writes the build in the format `docs/reference/graph.md` describes, which `worst-route
 plan` reads. Portland and the whole of Oregon (**Oregon**) build and pass QA. `build` and
-cleanup's simplification also run on arrays (`--engine arrays`, **The arrays engine**), to the
-same build.
+cleanup's simplification and stage A also run on arrays (`--engine arrays`, **The arrays
+engine**), to the same build.
 
 ## Commands
 
@@ -843,10 +843,10 @@ shapely and Numba instead of networkx and OSMnx (`src/worst_route/pipeline/array
 state and later the whole country fit in memory and take hours rather than days (`docs/PLAN.md`
 §7 M5.2). It makes exactly the networkx engine's build: the same arrays byte for byte, the same
 strings, the same `graph_version`; the parity tests and `tools/parity.py` (below) hold it to
-that. Built so far: `build` and cleanup's simplification. The steps after simplification are
-still networkx's, handed the simplified graph by `arrays/to_nx.py` as networkx itself would hold
-it; stage A, twins and stage B, connectivity, and then enrich, tiers and save's input join in
-later series.
+that. Built so far: `build`, cleanup's simplification and stage A. The steps after stage A are
+still networkx's, handed the stage A graph by `arrays/to_nx.py` as networkx itself would hold
+it; twins and stage B, connectivity, and then enrich, tiers and save's input join in later
+series.
 
 **Stages** (`arrays/stage.py`). A stage is a directory under `stages/`, one `.npy` per array
 (no pickles) and `tables.json` for the rest (the tag sets, the CRS), with `manifest.json`
@@ -885,6 +885,7 @@ tie-breaks and edge keys depend on (Portland has 955 groups of parallel edges af
 This model predicts networkx's iteration order for all 183,654 of Portland's simplified edges;
 the tests compare the arrays' own order with networkx's (a case where two roads to one neighbour
 were drawn before and after a road to another pins the by-neighbour grouping).
+`arrays/order.py` holds the order (`iteration_order`), which stage A sorts by too.
 
 **Handing over** (`arrays/to_nx.py`). The steps after the arrays engine's are handed the graph
 as networkx itself holds it, which the tests check, and the cleanup stage both engines write,
@@ -904,16 +905,37 @@ later steps write. (The networkx engine run on its raw graph in memory, without 
 pickles a few bytes differently, though the graph is the same; the tests compare against it as
 the CLI runs it.)
 
+**Stage A** (`arrays/stage_a.py`). The graph `consolidate.stage_a` makes, by the rules OSMnx
+applies there and no OSMnx: each node's radius by `consolidate`'s tolerances; the groups of
+overlapping buffers (`consolidate.buffer_groups`, GEOS's tests on the same 64-sided polygons, two
+that meet at a point only left apart as OSMnx's union leaves them: on Portland the groups are
+exactly the union's parts); each group split into the nodes that edges of at most 60 m join
+(scipy's connected components, as OSMnx's weakly connected components of the group's subgraph
+without its long edges); each cluster of more than one node at `consolidate.cluster_centre`, its members its nodes and the inner OSM nodes of the
+edges it absorbs; every other edge re-pointed, a merged cluster's position added at each such
+end and its length then GEOS's. The order is the graph OSMnx rebuilds: clusters numbered by the
+first place of their nodes (pandas' `factorize` over the simplified graph's nodes), edges added
+in the simplified graph's order and so iterated by tail, then by the head's entry, then that
+order; the keys of parallel edges follow. `to_nx.stage_a_graph` adds the edges in the order
+OSMnx adds them, so its graph is networkx's up to the integer type of the labels (OSMnx keys
+some by NumPy integers, of the same value). The tests compare the arrays' own edge order with
+networkx's (a cluster whose roads to one neighbour come before and after a road to another pins
+it) and include pairs of junctions a few centimetres inside the sum of their radii, where the
+polygons' corners decide (some merge and some do not), two buffers meeting at one corner, and a
+split group.
+
 **Portland** (2026-10-30 extract, on a loaded machine): `build` 2–5 s against 3–7 s, the raw
 stage 22 MB against `build.pkl`'s 58 MB (45 bytes per OSM way segment: 493,206 consecutive
-node pairs, 604,539 refs); simplification 0.2 s against 3.5 s, then 3 s to hand the graph to
+node pairs, 604,539 refs); simplification 0.2 s against 3.5 s; stage A 0.6 s against 31–37 s
+(OSMnx's union of every buffer alone is about 10 s), then 3 s to hand the stage A graph to
 networkx, which the later series remove.
 
 **Checking it.** `tests/pipeline/test_arrays.py` compares the engines on every fixture and on
 cases of its own (rings and loops closing on themselves, parallel chains, a way drawn against its
-chain, duplicate ways, an adjacency entry's place, small inputs, a node without a location): the
-raw graph, the simplified graph in iteration order, the cleanup graph and report and their
-pickles, and the saved build (`tests/pipeline/parity.py`'s `assert_same_graph`, which compares
+chain, duplicate ways, an adjacency entry's place, small inputs, a node without a location;
+pairs near the sum of their radii, buffers meeting at a corner, a split group, a cluster's edges
+by neighbour): the raw graph, the simplified graph and the stage A graph in iteration order, the
+cleanup graph and report and their pickles, and the saved build (`tests/pipeline/parity.py`'s `assert_same_graph`, which compares
 keys, predecessors and attribute order too, and `assert_same_build`). `test_arrays_property.py` does the same on 40
 random street lattices (`slow`), and `test_arrays_data.py` (`data`) on Portland's filtered roads,
 to the build and, when this pipeline version saved Portland, its `graph_version`.

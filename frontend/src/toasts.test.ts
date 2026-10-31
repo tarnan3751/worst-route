@@ -18,6 +18,7 @@ function store(): Store {
     run: IDLE_RUN,
     route: null,
     error: null,
+    brands: null,
   });
 }
 

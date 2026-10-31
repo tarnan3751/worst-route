@@ -5,7 +5,7 @@
 import { Marker, type Map as MapLibreMap } from "maplibre-gl";
 import { formatDistance } from "../format";
 import type { Stop, Store } from "../state";
-import { busy, erroredStop, roleOf, withStopMoved } from "../stops/stopList";
+import { busy, roleOf, stopErrored, withStopMoved } from "../stops/stopList";
 import { el } from "../util/dom";
 import { round6 } from "../util/geo";
 
@@ -28,7 +28,6 @@ export class StopsLayer {
       this.#shown = key;
       for (const marker of this.#markers) marker.remove();
       this.#markers = [];
-      const errored = erroredStop(state.error);
       const count = state.stops.length;
       for (const { snapped } of state.stops) {
         if (snapped === null) continue;
@@ -41,7 +40,7 @@ export class StopsLayer {
       state.stops.forEach((stop, k) => {
         const role = roleOf(k, count);
         const element = markerElement(`stop-marker role-${role}`, String(k + 1));
-        if (k === errored) element.classList.add("has-error");
+        if (stopErrored(state.error, k, count)) element.classList.add("has-error");
         const marker = new Marker({ element, draggable: !locked })
           .setLngLat([stop.lon, stop.lat])
           .addTo(map);

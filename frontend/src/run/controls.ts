@@ -6,7 +6,8 @@
 // reach).
 //
 // Go posts the stops (each stop along the way labelled as its marker is numbered, "Stop 2") and
-// settings (the target, the objective with its item, the turn constraints, the vehicle and the
+// settings (the target, the objective with its item or brand, the turn constraints and hard
+// mode, the vehicle and the
 // departure, now when none is set, among them), and Reroll the same without a seed,
 // so the server picks one; the 202's seed goes into the settings. Make it worse posts the shown route as `base_route_id`
 // with the seed after the last one tried on it (its own at first), the base route giving the
@@ -19,7 +20,9 @@
 // Cancel sends DELETE, and the stream then ends with `done` (the route so far, stored) or
 // `error`. Every error ends the run with its code in the banner and the controls unlocked: the
 // API's, or CLIENT_ERROR for one of the app's own (a running job is then cancelled). Leaving the
-// page cancels a running job, or a job whose POST is in flight as soon as it is answered.
+// page cancels a running job, or a job whose POST is in flight as soon as it is answered. Under
+// Brand, Go, Reroll and Make it worse wait for the region's brands (`awaitingBrand`); under
+// Alphabet, Make it worse is off (`worseRefused`).
 import {
   cancelJob,
   cancelJobOnLeave,
@@ -114,9 +117,9 @@ function goalOf(target: Target | undefined): Target | null {
   return target === undefined || target.kind === "max" ? null : target;
 }
 
-/** A request's objective, item and turn constraints. */
-function modeOfRequest({ objective, item, constraints }: RouteRequest): RequestMode {
-  return { objective, item, constraints };
+/** A request's objective, item, brand and constraints. */
+function modeOfRequest({ objective, item, brand, constraints }: RouteRequest): RequestMode {
+  return { objective, item, brand, constraints };
 }
 
 /** What is shown with a route: its baseline, a note, the run's target and what it achieved,
@@ -324,6 +327,20 @@ export class JobRunner {
   }
 }
 
+/** Whether a pilgrimage has no brand to send yet: under Brand until GET /brands has answered with
+ * the brand set among the region's (never, when it failed), so no request goes without one. */
+export function awaitingBrand({ settings, brands }: Readonly<AppState>): boolean {
+  return settings.objective === "brand" && !brands?.some(({ id }) => id === settings.brand);
+}
+
+/** Why Make it worse cannot run in the panel's mode, or null: the API continues no route under the
+ * alphabet route (another mode may continue any route, an alphabet route too). */
+export function worseRefused({ settings }: Readonly<AppState>): string | null {
+  return settings.objective === "alphabet"
+    ? "the alphabet route cannot be continued; pick another mode to make it worse"
+    : null;
+}
+
 /** The run section in `root`: the buttons, which drive `runner`, and the stat line. */
 export function mountRunControls(root: HTMLElement, store: Store, runner: JobRunner): void {
   const button = (text: string, className: string, action: () => Promise<void>) => {
@@ -345,12 +362,14 @@ export function mountRunControls(root: HTMLElement, store: Store, runner: JobRun
   const routeRows = routeNames.map((name) => el("div", `stat-${name}`));
   root.append(...routeRows);
 
-  store.watch(["region", "stops", "route", "run", "settings"], (state) => {
-    const locked = busy(store);
+  store.watch(["region", "stops", "route", "run", "settings", "brands"], (state) => {
+    const locked = busy(store) || awaitingBrand(state);
     const ready = state.region !== null && state.stops.length >= 2 && !locked;
     go.disabled = !ready;
     reroll.disabled = !ready;
-    worse.disabled = state.region === null || state.route === null || locked;
+    const refused = worseRefused(state);
+    worse.disabled = state.region === null || state.route === null || locked || refused !== null;
+    worse.title = refused ?? "";
     cancel.disabled = state.run.phase !== "running";
     statLines(state).forEach((text, k) => (rows[k].textContent = text));
     routeLines(state).forEach(({ text, title }, k) => {

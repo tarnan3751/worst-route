@@ -50,6 +50,7 @@ function setup(stops: Stop[] = [], region: Region | null = REGION) {
     run: IDLE_RUN,
     route: null,
     error: null,
+    brands: null,
   });
   const edit = (next: Stop[]): void => store.update({ stops: next });
   const search = new PlaceSearch(store, (lat, lon) => placeStop(store, edit, lat, lon));

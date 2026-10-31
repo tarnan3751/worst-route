@@ -1,16 +1,20 @@
 // The settings (docs/reference/frontend.md, **Settings**): the request's seed (empty: random,
 // picked by the server), time budget, tier and leash (empty: auto, with what auto became once a
-// job has said), the mode (the longest, the slowest, or collecting an item, picked under it),
-// the turns (any, or left or right turns avoided, `strict` for none at all), the inefficiency
-// target (as bad as possible, a ratio to the sensible route, or a drive time typed as `9h`,
-// `90m`, `2h30m` or minutes; typing a number picks its kind; no ratio under collect), the
-// vehicle (its mpg and the gas price, for the route's extra fuel and its cost), the departure
-// (empty: now; for the route's arrival), and the units the panel shows. Locked while a job runs,
-// except the units. The setting an error names (`field`: the target, the item, the constraints,
-// the vehicle or the departure) is highlighted.
-import type { CollectItem, TargetKind, Tier } from "../api/types";
+// job has said), the mode (the longest, the slowest, collecting an item, picked under it, a
+// brand's pilgrimage, the brand picked under it from the region's GET /brands, or the alphabet
+// route), the turns (any, or left or right turns avoided, `strict` for none at all; and hard
+// mode, each road in one stretch), the inefficiency target (as bad as possible, a ratio to the
+// sensible route, or a drive time typed as `9h`, `90m`, `2h30m` or minutes; typing a number
+// picks its kind; no ratio under collect or brand, none under the alphabet route), the vehicle
+// (its mpg and the gas price, for the route's extra fuel and its cost), the departure (empty:
+// now; for the route's arrival), and the units the panel shows. Locked while a job runs, except
+// the units. The setting an error names (`field`: the target, the item, the brand, the
+// constraints, the vehicle or the departure) is highlighted.
+import { errorBody, getBrands } from "../api/client";
+import type { BrandEntry, CollectItem, TargetKind, Tier } from "../api/types";
 import {
   ITEM_NAMES,
+  formatCount,
   formatDurationInput,
   isoWithOffset,
   parseDuration,
@@ -26,6 +30,8 @@ import {
   MPG_MIN,
   TARGET_MAX_DURATION_S,
   TIERS,
+  takesTarget,
+  type AppState,
   type Mode,
   type Settings,
   type Store,
@@ -43,12 +49,21 @@ const MODE_OPTIONS: [Mode, string, boolean][] = [
   ["distance", "Longest", true],
   ["time", "Slowest", true],
   ["collect", "Collect", true],
+  ["brand", "Brand", true],
+  ["alphabet", "Alphabet", true],
 ];
 const TURNS: [TurnSetting, string, boolean][] = [
   ["any", "Any", true],
   ["no_left", "Avoid left turns", true],
   ["no_right", "Avoid right turns", true],
 ];
+// Why a mode refuses a target kind, under the target row.
+const TARGET_NOTES: Partial<Record<Mode, string>> = {
+  collect: "a collect run takes a drive-time target only",
+  brand: "a brand run counts visits: a drive-time target only",
+  alphabet: "the alphabet route takes no target",
+};
+const HARD = "each road in one stretch, never driven again once left";
 const UNITS: [Units, string][] = [
   ["mi", "Miles"],
   ["km", "Kilometres"],
@@ -100,6 +115,26 @@ function radios<T extends string>(name: string, options: [T, string, boolean][])
   return { group, inputs };
 }
 
+/** The brand picker's options: each brand by its name and how many locations it has,
+ * "Starbucks (126)", in the API's order (the most located first). */
+export function brandOptions(brands: BrandEntry[]): [string, string, boolean][] {
+  return brands.map(({ id, name, locations }) => [
+    String(id),
+    `${name} (${formatCount(locations)})`,
+    true,
+  ]);
+}
+
+/** The brands of `region` (GET /brands), into the store; the settings' brand becomes the first
+ * of them when it is none the region has (none yet, or one a link named that the build lacks). */
+export async function loadBrands(store: Store, region: string): Promise<BrandEntry[]> {
+  const { brands } = await getBrands(region);
+  const { settings } = store.state;
+  const kept = brands.length === 0 || brands.some(({ id }) => id === settings.brand);
+  store.update({ brands, settings: kept ? settings : { ...settings, brand: brands[0].id } });
+  return brands;
+}
+
 export function mountSettings(root: HTMLElement, store: Store): void {
   const seed = numberInput("random", 0, Number.MAX_SAFE_INTEGER, "1");
   const budget = numberInput("", 1, BUDGET_MAX_S, "1");
@@ -113,12 +148,15 @@ export function mountSettings(root: HTMLElement, store: Store): void {
   Object.assign(duration, { type: "text", placeholder: "9h" });
   target.inputs[1].parentElement?.append(" ", ratio, " ×");
   target.inputs[2].parentElement?.append(" ", duration);
-  const targetNote = el("span", "resolved", "a collect run takes a drive-time target only");
+  const targetNote = el("span", "resolved");
   const mode = radios("mode", MODE_OPTIONS);
   const item = select(
     ITEMS.map((i): [CollectItem, string, boolean] => [i, ITEM_NAMES[i][1], true]),
   );
   mode.inputs[2].parentElement?.append(" ", item);
+  const brand = select<string>([["", "loading…", true]]); // the region's brands, once known
+  brand.ariaLabel = "brand";
+  mode.inputs[3].parentElement?.append(" ", brand);
   const turns = radios("turns", TURNS);
   const strict = el("input");
   strict.type = "checkbox";
@@ -130,6 +168,13 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     "resolved",
     "strict rarely finds a route on a street grid: the route may not exist",
   );
+  const hard = el("input");
+  hard.type = "checkbox";
+  const hardLabel = el("label");
+  hardLabel.append(hard, " Hard mode");
+  hardLabel.title = HARD;
+  turns.group.append(hardLabel);
+  const hardNote = el("span", "resolved", HARD);
   const mpg = numberInput("", MPG_MIN, MPG_MAX, "any");
   mpg.ariaLabel = "miles per gallon";
   const gasPrice = numberInput("", GAS_PRICE_MIN, GAS_PRICE_MAX, "0.01");
@@ -150,6 +195,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
 
   const modeRow = field("Mode", mode.group);
   const turnsRow = field("Turns", turns.group, strictNote);
+  turnsRow.append(hardNote);
   const targetRow = field("How bad", target.group, targetNote);
   const vehicleRow = field("Vehicle", vehicle);
   const departureRow = field("Departure", departure, departureNote);
@@ -170,7 +216,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
 
   const set = (patch: Partial<Settings>) => store.updateSettings(patch);
   const render = () => {
-    const { settings } = store.state;
+    const { settings, brands } = store.state;
     seed.value = settings.seed === null ? "" : String(settings.seed);
     budget.value = String(settings.budgetS);
     tier.value = settings.tier;
@@ -181,8 +227,11 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     for (const input of mode.inputs) input.checked = input.value === settings.objective;
     item.value = settings.item;
     item.hidden = settings.objective !== "collect";
+    brand.value = brands?.some(({ id }) => id === settings.brand) ? String(settings.brand) : "";
+    brand.hidden = settings.objective !== "brand";
     for (const input of turns.inputs) input.checked = input.value === settings.turns;
     strict.checked = settings.strict;
+    hard.checked = settings.hard;
     mpg.value = String(settings.mpg);
     gasPrice.value = String(settings.gasPriceUsd);
     departure.value = settings.departure?.slice(0, 16) ?? ""; // its clock, at its own offset
@@ -218,15 +267,17 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     if (seconds === null || seconds <= 0 || seconds > TARGET_MAX_DURATION_S) render();
     else set({ target: "duration", durationS: seconds });
   });
-  // Collect takes no ratio: picking it from a ratio target makes the target as bad as possible.
+  // A mode that refuses the target chosen (collect and brand a ratio, the alphabet route any)
+  // makes it as bad as possible.
   for (const input of mode.inputs) {
     input.addEventListener("change", () => {
       const objective = input.value as Mode;
-      const ratioOut = objective === "collect" && store.state.settings.target === "ratio";
-      set(ratioOut ? { objective, target: "max" } : { objective });
+      const fits = takesTarget(objective, store.state.settings.target);
+      set(fits ? { objective } : { objective, target: "max" });
     });
   }
   item.addEventListener("change", () => set({ item: item.value as CollectItem }));
+  brand.addEventListener("change", () => set({ brand: Number(brand.value) }));
   for (const input of turns.inputs) {
     input.addEventListener("change", () => {
       const side = input.value as TurnSetting;
@@ -234,6 +285,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     });
   }
   strict.addEventListener("change", () => set({ strict: strict.checked }));
+  hard.addEventListener("change", () => set({ hard: hard.checked }));
   mpg.addEventListener("change", () => {
     const value = typed(mpg, MPG_MIN, MPG_MAX, false);
     if (value === undefined || value === null) render();
@@ -260,6 +312,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
   // The row an error's `field` names, highlighted while the error is shown.
   const fieldRows = new Map<unknown, HTMLElement>([
     ["item", modeRow],
+    ["brand", modeRow],
     ["constraints", turnsRow],
     ["target", targetRow],
     ["vehicle", vehicleRow],
@@ -269,32 +322,67 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     const errored = fieldRows.get(error?.field);
     for (const row of fieldRows.values()) row.classList.toggle("has-error", row === errored);
   });
+  // The region's brands, asked for once the region is known: the picker's options once GET /brands
+  // has answered ("loading…" until then, the picker disabled); a region without any has no Brand
+  // mode.
+  let asked = false;
   let shown: unknown[] = [];
-  store.watch(["run", "settings"], (state) => {
+  const lock = (state: Readonly<AppState>) => {
     const locked = busy(store);
     const { resolved } = state.run;
-    const { objective, turns: side } = state.settings;
-    const key = [locked, resolved, state.settings.tier, state.settings.leashKm, objective, side];
+    const { brands } = state;
+    const { objective, turns: side, hard: hardMode } = state.settings;
+    const key = [
+      locked,
+      resolved,
+      state.settings.tier,
+      state.settings.leashKm,
+      objective,
+      side,
+      hardMode,
+      brands,
+    ];
     if (key.every((value, k) => value === shown[k])) return;
     shown = key;
-    for (const control of [seed, budget, tier, leash, duration, item, mpg, gasPrice, departure]) {
+    for (const control of [seed, budget, tier, leash, item, mpg, gasPrice, departure]) {
       control.disabled = locked;
     }
-    for (const input of [...target.inputs, ...mode.inputs, ...turns.inputs]) {
-      input.disabled = locked;
-    }
-    const collecting = objective === "collect";
-    ratio.disabled = target.inputs[1].disabled = locked || collecting;
-    target.inputs[1].parentElement?.classList.toggle("disabled", collecting);
-    targetNote.hidden = !collecting;
+    brand.disabled = locked || brands === null;
+    for (const input of [...mode.inputs, ...turns.inputs]) input.disabled = locked;
+    mode.inputs[3].disabled = locked || brands?.length === 0;
+    mode.inputs[3].parentElement?.classList.toggle("disabled", brands?.length === 0);
+    target.inputs.forEach((input) => {
+      const refused = !takesTarget(objective, input.value as TargetKind);
+      input.disabled = locked || refused;
+      input.parentElement?.classList.toggle("disabled", refused);
+    });
+    ratio.disabled = target.inputs[1].disabled;
+    duration.disabled = target.inputs[2].disabled;
+    targetNote.textContent = TARGET_NOTES[objective] ?? "";
+    targetNote.hidden = TARGET_NOTES[objective] === undefined;
     strict.disabled = locked || side === "any";
     strictLabel.classList.toggle("disabled", side === "any");
     strictNote.hidden = side === "any";
+    hard.disabled = locked;
+    hardNote.hidden = !hardMode;
     tierNote.textContent =
       resolved && state.settings.tier === "auto" ? `auto was ${resolved.tier}` : "";
     leashNote.textContent =
       resolved && state.settings.leashKm === "auto"
         ? `auto was ${resolved.leashKm.toFixed(1)} km`
         : "";
+  };
+  store.watch(["run", "settings", "brands"], lock);
+  store.watch(["brands"], ({ brands }) => {
+    if (brands !== null) brand.replaceChildren(...select(brandOptions(brands)).options);
+    render();
+  });
+  store.watch(["region"], ({ region }) => {
+    if (region === null || asked) return;
+    asked = true;
+    loadBrands(store, region.region).catch((error: unknown) => {
+      brand.replaceChildren(...select<string>([["", "brands unavailable", true]]).options);
+      store.update({ error: errorBody(error) });
+    });
   });
 }

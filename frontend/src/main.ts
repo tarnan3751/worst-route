@@ -29,6 +29,7 @@ const store = new Store({
   run: IDLE_RUN,
   route: null,
   error: null,
+  brands: null,
 });
 
 const map = createMap(byId("map"));

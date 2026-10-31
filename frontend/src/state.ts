@@ -3,6 +3,7 @@
 // which tells the watchers of the keys the patch touches. The route's geometry is not here: it
 // changes ten times a second and lives in the route layer (map/routeLayer.ts).
 import type {
+  BrandEntry,
   CollectItem,
   ErrorBody,
   Metrics,
@@ -41,7 +42,7 @@ export const BUDGET_MAX_S = 120; // BUDGET_TOO_LARGE above
 export const LEASH_MAX_KM = 150;
 export const TARGET_TOLERANCE = 0.02; // a target is reached within ±2 %
 export const TARGET_MAX_DURATION_S = 7 * 24 * 3600;
-export const MODES = ["distance", "time", "collect"] as const; // the objectives built
+export const MODES = ["distance", "time", "collect", "brand", "alphabet"] as const; // the objectives built
 export const ITEMS: readonly CollectItem[] = [
   "toll_booth",
   "level_crossing",
@@ -54,7 +55,8 @@ export const MPG_MAX = 100;
 export const GAS_PRICE_MIN = 0.5;
 export const GAS_PRICE_MAX = 20;
 
-/** The objective: the longest, the slowest, or the most of an item. */
+/** The objective: the longest, the slowest, the most of an item, the most locations of a brand,
+ * or the most letters of the alphabet. */
 export type Mode = (typeof MODES)[number];
 /** The turn constraint: none, or left (right) turns avoided, at a kilometre each (about half as
  * many a km as without, but about as many as the other side's: a route that never repeats a node
@@ -65,7 +67,9 @@ export type TurnSetting = "any" | "no_left" | "no_right";
 /** The request's settings; null seed is a random one, picked by the server. The target is
  * `target`, with `ratio` (×, more than 1) or `durationS` as its number; each keeps its value
  * while another kind is chosen. `item` is what `collect` collects, kept while another objective
- * is chosen; `strict` counts only with a side to avoid. `mpg` and `gasPriceUsd` are the
+ * is chosen, and `brand` (a brand's id from GET /brands, null until the region's brands are known)
+ * what `brand` visits, kept the same way; `strict` counts only with a side to avoid, and `hard`
+ * (hard mode: each road in one stretch) with or without one. `mpg` and `gasPriceUsd` are the
  * vehicle, for the route's extra fuel and its cost; `departure` an ISO 8601 time with its
  * offset, null for now. */
 export interface Settings {
@@ -78,8 +82,10 @@ export interface Settings {
   durationS: number;
   objective: Mode;
   item: CollectItem;
+  brand: number | null;
   turns: TurnSetting;
   strict: boolean;
+  hard: boolean;
   mpg: number;
   gasPriceUsd: number;
   departure: string | null;
@@ -96,13 +102,22 @@ export const DEFAULT_SETTINGS: Settings = {
   durationS: 9 * 3600,
   objective: "distance",
   item: "bridge",
+  brand: null,
   turns: "any",
   strict: false,
+  hard: false,
   mpg: 24,
   gasPriceUsd: 3.89,
   departure: null,
   units: "mi",
 };
+
+/** Whether `objective` takes a target of `kind`: the alphabet route none but as bad as possible,
+ * a collect or brand run no ratio (it counts items or visits, not metres), as the API refuses. */
+export function takesTarget(objective: Mode, kind: TargetKind): boolean {
+  if (objective === "alphabet") return kind === "max";
+  return kind !== "ratio" || (objective !== "collect" && objective !== "brand");
+}
 
 /** The request's target for `settings`. */
 export function targetOf(settings: Settings): Target {
@@ -121,20 +136,23 @@ export function departureOf(settings: Settings): string {
   return settings.departure ?? isoWithOffset(new Date());
 }
 
-/** A request's objective, item and turn constraints. */
-export type RequestMode = Pick<RouteRequest, "objective" | "item" | "constraints">;
+/** A request's objective, item, brand and constraints. */
+export type RequestMode = Pick<RouteRequest, "objective" | "item" | "brand" | "constraints">;
 
-/** The request's mode for `settings`: the item only under collect, the constraints only when a
- * side is avoided (the API's own request leaves them out then). */
+/** The request's mode for `settings`: the item only under collect, the brand only under brand,
+ * the constraints only when a side is avoided or hard mode is on, and `hard` in them only when
+ * on (the API's own request leaves them out then). */
 export function modeOf(settings: Settings): RequestMode {
   const mode: RequestMode = { objective: settings.objective };
   if (settings.objective === "collect") mode.item = settings.item;
-  if (settings.turns !== "any") {
+  if (settings.objective === "brand") mode.brand = settings.brand;
+  if (settings.turns !== "any" || settings.hard) {
     mode.constraints = {
       no_left: settings.turns === "no_left",
       no_right: settings.turns === "no_right",
-      strict: settings.strict,
+      strict: settings.turns !== "any" && settings.strict,
     };
+    if (settings.hard) mode.constraints.hard = true;
   }
   return mode;
 }
@@ -161,7 +179,7 @@ export interface RunView {
   resolved: { tier: string; leashKm: number } | null; // what `auto` became, from `snapped`
   goal: Target | null; // the run's target, null for max
   outcome: TargetMetrics | null; // what it achieved, once done
-  mode: RequestMode; // the run's objective, item and turn constraints
+  mode: RequestMode; // the run's objective, item, brand and constraints
   connection: "open" | "reconnecting" | "lost";
   note: string | null;
 }
@@ -189,6 +207,7 @@ export interface AppState {
   run: RunView;
   route: RouteDocument | null; // the route shown, once stored
   error: ErrorBody | null; // the banner's
+  brands: BrandEntry[] | null; // the region's, once GET /brands has answered
 }
 
 export type StateKey = keyof AppState;

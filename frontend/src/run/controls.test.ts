@@ -12,7 +12,7 @@ import type { RouteDocument, RouteRequest } from "../api/types";
 import { isoWithOffset } from "../format";
 import { DEFAULT_SETTINGS, IDLE_RUN, Store, type Settings } from "../state";
 import { busy } from "../stops/stopList";
-import { JobRunner, routeLines, statLines } from "./controls";
+import { JobRunner, awaitingBrand, routeLines, statLines, worseRefused } from "./controls";
 
 const fixture = loadStream();
 
@@ -27,6 +27,7 @@ function store(route: RouteDocument | null = null): Store {
     run: IDLE_RUN,
     route,
     error: null,
+    brands: null,
   });
 }
 
@@ -211,6 +212,7 @@ describe("modes and turn constraints", () => {
     const plain = await sent({});
     expect(plain.objective).toBe("distance");
     expect(plain).not.toHaveProperty("item");
+    expect(plain).not.toHaveProperty("brand");
     expect(plain).not.toHaveProperty("constraints");
     const slowest = await sent({ objective: "time", item: "roundabout" });
     expect(slowest.objective).toBe("time");
@@ -225,6 +227,95 @@ describe("modes and turn constraints", () => {
     expect(rights).not.toHaveProperty("item");
     const any = await sent({ turns: "any" }); // strict left ticked: it needs a side
     expect(any).not.toHaveProperty("constraints");
+  });
+
+  it("sends a pilgrimage's brand, the alphabet route and hard mode as set, no more", async () => {
+    const calls = stubFetch((call) => created(call, "j"));
+    const s = store();
+    const runner = new JobRunner(s, fakeView(), () => {});
+    const sent = async (patch: Partial<Settings>): Promise<RouteRequest> => {
+      s.update({ run: IDLE_RUN });
+      s.updateSettings(patch);
+      await runner.go();
+      return calls.at(-1)!.body as RouteRequest;
+    };
+    const pilgrimage = await sent({ objective: "brand", brand: 229, item: "roundabout" });
+    expect(pilgrimage).toMatchObject({ objective: "brand", brand: 229 });
+    expect(pilgrimage).not.toHaveProperty("item");
+    expect(pilgrimage).not.toHaveProperty("constraints");
+    const alphabet = await sent({ objective: "alphabet" });
+    expect(alphabet).toMatchObject({ objective: "alphabet", target: { kind: "max" } });
+    expect(alphabet).not.toHaveProperty("brand"); // only brand takes one
+    expect(alphabet).not.toHaveProperty("item");
+    const collecting = await sent({ objective: "collect", item: "bridge" });
+    expect(collecting).not.toHaveProperty("brand");
+    const hard = await sent({ objective: "distance", hard: true });
+    expect(hard.constraints).toEqual({
+      no_left: false,
+      no_right: false,
+      strict: false,
+      hard: true,
+    });
+    const strict = await sent({ turns: "no_right", strict: true });
+    expect(strict.constraints).toEqual({
+      no_left: false,
+      no_right: true,
+      strict: true,
+      hard: true,
+    });
+    const soft = await sent({ turns: "no_left", strict: false, hard: false });
+    expect(soft.constraints).toEqual({ no_left: true, no_right: false, strict: false }); // no hard
+    const any = await sent({ turns: "any", strict: true, hard: true }); // strict needs a side
+    expect(any.constraints).toEqual({ no_left: false, no_right: false, strict: false, hard: true });
+  });
+
+  it("waits under Brand for the region's brands, with the brand set among them", () => {
+    const s = store();
+    const brands = [{ id: 229, name: "Starbucks", wikidata: "Q37158", locations: 126 }];
+    s.updateSettings({ objective: "brand", brand: null });
+    expect(awaitingBrand(s.state)).toBe(true); // GET /brands has not answered (or failed)
+    s.updateSettings({ brand: 229 }); // a link's, before the brands are known
+    expect(awaitingBrand(s.state)).toBe(true);
+    s.update({ brands });
+    expect(awaitingBrand(s.state)).toBe(false);
+    s.updateSettings({ brand: 9999 });
+    expect(awaitingBrand(s.state)).toBe(true);
+    s.update({ brands: [] }); // a region without brands
+    expect(awaitingBrand(s.state)).toBe(true);
+    s.update({ brands: null });
+    s.updateSettings({ objective: "distance" });
+    expect(awaitingBrand(s.state)).toBe(false); // only Brand waits
+  });
+
+  it("makes nothing worse under Alphabet, which continues no route, and says why", () => {
+    const s = store(collect.route);
+    s.updateSettings({ objective: "alphabet" });
+    expect(worseRefused(s.state)).toBe(
+      "the alphabet route cannot be continued; pick another mode to make it worse",
+    );
+    for (const objective of ["distance", "time", "collect", "brand"] as const) {
+      s.updateSettings({ objective }); // another mode may continue any route
+      expect(worseRefused(s.state)).toBeNull();
+    }
+  });
+
+  it("makes a route worse on a brand's pilgrimage under hard mode", async () => {
+    const calls = stubFetch((call) => created(call, "jb"));
+    const s = store(collect.route);
+    s.updateSettings({ objective: "brand", brand: 229, hard: true });
+    await new JobRunner(s, fakeView(), () => {}).worse();
+    expect(calls[0].body).toEqual({
+      region: "portland",
+      base_route_id: collect.route.route_id,
+      seed: 2,
+      objective: "brand",
+      brand: 229,
+      constraints: { no_left: false, no_right: false, strict: false, hard: true },
+      budget_s: 20,
+      target: { kind: "max" },
+      vehicle: { mpg: 24, gas_price_usd: 3.89 },
+      departure: expect.any(String),
+    });
   });
 
   it("makes a route worse in the mode set", async () => {

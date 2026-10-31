@@ -14,6 +14,7 @@
 // reconnect when the server ends it.
 import type {
   Baseline,
+  BrandList,
   Done,
   ErrorBody,
   GeocodeResult,
@@ -107,6 +108,11 @@ export function getRoute(routeId: string): Promise<RouteDocument> {
 
 export function getRouteGeojson(routeId: string): Promise<RouteFeatureCollection> {
   return call(`/routes/${encodeURIComponent(routeId)}/geojson`);
+}
+
+/** The brands of `region`'s build, the most located first. */
+export function getBrands(region: string): Promise<BrandList> {
+  return call(`/brands?${new URLSearchParams({ region })}`);
 }
 
 /** The places `q` may mean in `region`, from the server's geocoding proxy. */

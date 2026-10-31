@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeView, json, stubFetch } from "../__fixtures__/http";
 import { loadStream } from "../__fixtures__/stream";
-import type { RouteDocument } from "../api/types";
+import type { RouteDocument, RouteRequest } from "../api/types";
 import { JobRunner, statLines } from "../run/controls";
 import { DEFAULT_SETTINGS, IDLE_RUN, ITEMS, Store, type AppState, type Settings } from "../state";
 import { round6 } from "../util/geo";
@@ -28,6 +28,7 @@ const full: UrlState = {
   mode: null,
   turns: null,
   strict: null,
+  hard: null,
   vehicle: null,
   departure: null,
   stops: [
@@ -47,6 +48,7 @@ const nothing: UrlState = {
   mode: null,
   turns: null,
   strict: null,
+  hard: null,
   vehicle: null,
   departure: null,
   stops: null,
@@ -122,6 +124,7 @@ describe("the URL state", () => {
       run: IDLE_RUN,
       route: null,
       error: null,
+      brands: null,
     };
     const url = decodeUrlState(encodeUrlState(urlStateOf(state)));
     expect(url).toEqual({ ...full, route: null });
@@ -147,6 +150,7 @@ describe("opening a ?route= link at startup", () => {
       run: IDLE_RUN,
       route: null,
       error: null,
+      brands: null,
     });
     const writes: string[] = [];
     const sync = new UrlSync(store, (q) => writes.push(q));
@@ -211,6 +215,7 @@ describe("a ratio-target route opened by its link", () => {
       run: IDLE_RUN,
       route: null,
       error: null,
+      brands: null,
     });
     expect(await openRoute(route.route_id, store, new JobRunner(store, fakeView(), () => {}))).toBe(
       true,
@@ -232,17 +237,26 @@ describe("the mode and the turns in the URL", () => {
     { objective: "distance" },
     { objective: "time" },
     ...ITEMS.map((item): UrlMode => ({ objective: "collect", item })),
+    { objective: "brand", brand: 229 },
+    { objective: "brand", brand: 0 },
+    { objective: "alphabet" },
   ];
 
   it("round-trips every mode and turn setting", () => {
     for (const mode of modes) {
       for (const turns of [null, "no_left", "no_right"] as const) {
         for (const strict of turns === null ? [null] : [null, true as const]) {
-          const state = { ...nothing, mode, turns, strict };
-          expect(decodeUrlState(encodeUrlState(state))).toEqual(state);
+          for (const hard of [null, true as const]) {
+            const state = { ...nothing, mode, turns, strict, hard };
+            expect(decodeUrlState(encodeUrlState(state))).toEqual(state);
+          }
         }
       }
     }
+    expect(
+      encodeUrlState({ ...nothing, mode: { objective: "brand", brand: 229 }, hard: true }),
+    ).toBe("?mode=brand:229&hard=1");
+    expect(encodeUrlState({ ...nothing, mode: { objective: "alphabet" } })).toBe("?mode=alphabet");
     const collecting = { objective: "collect", item: "toll_booth" } as const;
     expect(encodeUrlState({ ...nothing, mode: collecting, turns: "no_right", strict: true })).toBe(
       "?mode=collect:toll_booth&turns=right&strict=1",
@@ -261,11 +275,23 @@ describe("the mode and the turns in the URL", () => {
       "time:bridge",
       "distance:",
       "brand",
-      "alphabet",
+      "brand:",
+      "brand:starbucks",
+      "brand:-1",
+      "brand:1.5",
+      "brand:1e3",
+      "brand: 229",
+      "brand:229:1",
+      "brand:9007199254740993",
+      "alphabet:1",
+      "Alphabet",
       "slowest",
       "",
     ]) {
       expect(decodeUrlState(`?mode=${mode}`).mode).toBeNull();
+    }
+    for (const hard of ["true", "0", "yes", ""]) {
+      expect(decodeUrlState(`?hard=${hard}`).hard).toBeNull();
     }
     for (const turns of ["no_left", "Left", "both", "", "1"]) {
       expect(decodeUrlState(`?turns=${turns}`).turns).toBeNull();
@@ -292,6 +318,25 @@ describe("the mode and the turns in the URL", () => {
     });
   });
 
+  it("reads a ratio beside a brand, and any target beside the alphabet route, as max", () => {
+    const max = { kind: "max" };
+    expect(decodeUrlState("?target=ratio:20&mode=brand:229").target).toEqual(max);
+    expect(decodeUrlState("?target=duration:3600&mode=brand:229").target).toEqual({
+      kind: "duration",
+      seconds: 3600,
+    });
+    for (const target of ["ratio:20", "duration:3600", "max"]) {
+      expect(decodeUrlState(`?target=${target}&mode=alphabet`).target).toEqual(max);
+    }
+    expect(decodeUrlState("?mode=alphabet").target).toBeNull();
+    const url = decodeUrlState("?target=ratio:20&mode=alphabet");
+    expect(settingsFrom(url, DEFAULT_SETTINGS)).toMatchObject({
+      objective: "alphabet",
+      target: "max",
+      ratio: 20, // kept for another mode, as the panel keeps it
+    });
+  });
+
   it("is what the app shows, without the defaults, and gives the settings back", () => {
     const shown = (patch: Partial<Settings>): AppState => ({
       region: null,
@@ -300,6 +345,7 @@ describe("the mode and the turns in the URL", () => {
       run: IDLE_RUN,
       route: null,
       error: null,
+      brands: null,
     });
     const settings: Settings = {
       ...DEFAULT_SETTINGS,
@@ -317,8 +363,43 @@ describe("the mode and the turns in the URL", () => {
       item: "toll_booth", // the URL leaves the item alone under another mode
     });
     expect(back).toEqual({ ...slowest, item: "toll_booth" });
-    expect(urlStateOf(shown({}))).toMatchObject({ mode: null, turns: null, strict: null });
+    expect(urlStateOf(shown({}))).toMatchObject({
+      mode: null,
+      turns: null,
+      strict: null,
+      hard: null,
+    });
     expect(urlStateOf(shown({ strict: true })).strict).toBeNull(); // no side, no strict
+  });
+
+  it("carries a brand's pilgrimage, the alphabet route and hard mode, and gives them back", () => {
+    const shown = (patch: Partial<Settings>): AppState => ({
+      ...emptyApp(),
+      settings: { ...DEFAULT_SETTINGS, ...patch },
+    });
+    const pilgrimage: Settings = {
+      ...DEFAULT_SETTINGS,
+      objective: "brand",
+      brand: 229,
+      hard: true,
+    };
+    const query = encodeUrlState(urlStateOf(shown(pilgrimage)));
+    expect(query).toMatch(/&target=max&mode=brand:229&hard=1$/);
+    expect(settingsFrom(decodeUrlState(query), DEFAULT_SETTINGS)).toEqual(pilgrimage);
+    const alphabet: Settings = { ...DEFAULT_SETTINGS, objective: "alphabet", brand: 229 };
+    const letters = encodeUrlState(urlStateOf(shown(alphabet)));
+    expect(letters).toMatch(/&target=max&mode=alphabet$/);
+    expect(letters).not.toContain("hard=");
+    // The URL leaves the brand alone under another mode, as it does the item.
+    const back = settingsFrom(decodeUrlState(letters), { ...DEFAULT_SETTINGS, brand: 7 });
+    expect(back).toEqual({ ...alphabet, brand: 7 });
+    // A pilgrimage whose brand is not known yet (the brands not fetched) writes no mode.
+    expect(urlStateOf(shown({ objective: "brand", brand: null })).mode).toBeNull();
+    expect(urlStateOf(shown({ hard: true, turns: "no_left" }))).toMatchObject({
+      turns: "no_left",
+      strict: null,
+      hard: true,
+    });
   });
 });
 
@@ -341,6 +422,7 @@ describe("a route of another mode opened by its link", () => {
       run: IDLE_RUN,
       route: null,
       error: null,
+      brands: null,
     });
     const runner = new JobRunner(store, fakeView(), () => {});
     expect(await openRoute(route.route_id, store, runner)).toBe(true);
@@ -378,6 +460,61 @@ describe("a route of another mode opened by its link", () => {
   });
 });
 
+describe("a pilgrimage, an alphabet route and a hard-mode route opened by their links", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const { route } = loadStream("portland-collect-stream");
+
+  /** Open `route` with `request` patched in, from a panel with `settings`; the store. */
+  async function open(request: Partial<RouteRequest>, settings: Partial<Settings> = {}) {
+    const patched = { ...route, request: { ...route.request, item: null, ...request } };
+    stubFetch((call) =>
+      call.url.endsWith("/geojson")
+        ? json({ type: "FeatureCollection", features: [] })
+        : json(patched),
+    );
+    const store = new Store({ ...emptyApp(), settings: { ...DEFAULT_SETTINGS, ...settings } });
+    expect(await openRoute(route.route_id, store, new JobRunner(store, fakeView(), () => {}))).toBe(
+      true,
+    );
+    return store;
+  }
+
+  it("takes a pilgrimage's brand into the settings and the URL", async () => {
+    const store = await open(
+      { objective: "brand", brand: 229 },
+      { brand: 261, item: "roundabout" },
+    );
+    expect(store.state.settings).toMatchObject({
+      objective: "brand",
+      brand: 229,
+      item: "roundabout",
+    });
+    expect(encodeUrlState(urlStateOf(store.state))).toContain("&mode=brand:229&stops=");
+    expect(store.state.run.mode).toMatchObject({ objective: "brand", brand: 229 });
+  });
+
+  it("takes an alphabet route's mode, and keeps the panel's brand", async () => {
+    const store = await open({ objective: "alphabet", brand: null }, { brand: 261, hard: true });
+    expect(store.state.settings).toMatchObject({ objective: "alphabet", brand: 261, hard: false });
+    expect(encodeUrlState(urlStateOf(store.state))).toContain("&target=max&mode=alphabet&stops=");
+  });
+
+  it("takes hard mode from the request's constraints, alone or with a side", async () => {
+    const hard = { no_left: false, no_right: false, strict: false, hard: true };
+    const alone = await open({ objective: "distance", constraints: hard });
+    expect(alone.state.settings).toMatchObject({ turns: "any", strict: false, hard: true });
+    expect(encodeUrlState(urlStateOf(alone.state))).toContain("&hard=1&stops=");
+    const sided = await open({ objective: "distance", constraints: { ...hard, no_right: true } });
+    expect(sided.state.settings).toMatchObject({ turns: "no_right", hard: true });
+    expect(encodeUrlState(urlStateOf(sided.state))).toContain("&turns=right&hard=1&");
+    const without = await open({ objective: "distance" }, { hard: true });
+    expect(without.state.settings.hard).toBe(false);
+  });
+});
+
 describe("the vehicle in the URL", () => {
   const shown = (patch: Partial<Settings>): AppState => ({
     region: null,
@@ -386,6 +523,7 @@ describe("the vehicle in the URL", () => {
     run: IDLE_RUN,
     route: null,
     error: null,
+    brands: null,
   });
 
   it("round-trips a vehicle, and leaves the default out", () => {
@@ -441,6 +579,7 @@ describe("a route's vehicle opened by its link", () => {
       run: IDLE_RUN,
       route: null,
       error: null,
+      brands: null,
     });
     expect(await openRoute(route.route_id, store, new JobRunner(store, fakeView(), () => {}))).toBe(
       true,
@@ -539,5 +678,6 @@ function emptyApp(): AppState {
     run: IDLE_RUN,
     route: null,
     error: null,
+    brands: null,
   };
 }

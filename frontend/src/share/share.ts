@@ -1,10 +1,11 @@
 // Links (docs/reference/frontend.md, **Links**).
 //
 // The request's settings and stops live in the URL
-// (`?seed=&budget=&tier=&leash=&target=&mode=&turns=&strict=&vehicle=&departure=&stops=`, the
-// target as `max`, `ratio:<x>` or `duration:<seconds>`, the mode as `distance`, `time` or
-// `collect:<item>` and the turns as `left` or `right`, with `strict=1` (both written only when
-// not the default), the vehicle as `<mpg>,<gas price>` (only when not the default), the departure
+// (`?seed=&budget=&tier=&leash=&target=&mode=&turns=&strict=&hard=&vehicle=&departure=&stops=`,
+// the target as `max`, `ratio:<x>` or `duration:<seconds>`, the mode as `distance`, `time`,
+// `collect:<item>`, `brand:<id>` or `alphabet` and the turns as `left` or `right`, with `strict=1`
+// (both written only when not the default), hard mode as `hard=1` (only when on), the vehicle as
+// `<mpg>,<gas price>` (only when not the default), the departure
 // as an ISO 8601 time with its offset (only when set), the stops as `lat,lon;lat,lon;...` at 6
 // decimals, as they were clicked), so a link reproduces a request;
 // `?route=<id>` opens a stored route without running anything, its own request then giving the
@@ -28,6 +29,7 @@ import {
   MPG_MIN,
   TARGET_MAX_DURATION_S,
   TIERS,
+  takesTarget,
   targetOf,
   vehicleOf,
   type AppState,
@@ -40,12 +42,15 @@ import { parseIsoTime } from "../format";
 import { el } from "../util/dom";
 import { round6 } from "../util/geo";
 
-/** The objective a URL names, with the item under collect. */
+/** The objective a URL names, with the item under collect and the brand under brand. */
 export type UrlMode =
-  { objective: Exclude<Mode, "collect"> } | { objective: "collect"; item: CollectItem };
+  | { objective: Exclude<Mode, "collect" | "brand"> }
+  | { objective: "collect"; item: CollectItem }
+  | { objective: "brand"; brand: number };
 
 /** What a URL can carry; null where it says nothing (or nothing valid). `strict` only with a
- * side to avoid; no ratio target under collect; the vehicle only within the panel's limits. */
+ * side to avoid; no ratio target under collect or brand, none but max under the alphabet route;
+ * the vehicle only within the panel's limits. */
 export interface UrlState {
   route: string | null;
   seed: number | null;
@@ -56,6 +61,7 @@ export interface UrlState {
   mode: UrlMode | null;
   turns: Exclude<TurnSetting, "any"> | null;
   strict: true | null;
+  hard: true | null;
   vehicle: Vehicle | null;
   departure: string | null;
   stops: { lat: number; lon: number }[] | null;
@@ -102,12 +108,13 @@ function parseVehicle(text: string | null): Vehicle | null {
 }
 
 function parseMode(text: string | null): UrlMode | null {
-  if (text === "distance" || text === "time") return { objective: text };
-  const [kind, item, ...rest] = (text ?? "").split(":");
-  const collected = ITEMS.find((known) => known === item);
-  return kind === "collect" && collected && rest.length === 0
-    ? { objective: kind, item: collected }
-    : null;
+  if (text === "distance" || text === "time" || text === "alphabet") return { objective: text };
+  const [kind, value, ...rest] = (text ?? "").split(":");
+  if (rest.length > 0) return null;
+  const collected = ITEMS.find((known) => known === value);
+  if (kind === "collect" && collected) return { objective: kind, item: collected };
+  const brand = /^\d+$/.test(value ?? "") ? Number(value) : NaN; // a brand's id
+  return kind === "brand" && Number.isSafeInteger(brand) ? { objective: kind, brand } : null;
 }
 
 /** The state a query string (`location.search`) carries. */
@@ -133,11 +140,13 @@ export function decodeUrlState(search: string): UrlState {
     tier: TIERS.find((tier) => tier === params.get("tier")) ?? null,
     leashKm:
       params.get("leash") === "auto" ? "auto" : inRange(leash, 0, LEASH_MAX_KM) ? leash : null,
-    // Collect takes no ratio: one in a link reads as as bad as possible.
-    target: mode?.objective === "collect" && target?.kind === "ratio" ? { kind: "max" } : target,
+    // A target the mode refuses (collect's and brand's ratio, any under the alphabet route) reads
+    // as as bad as possible.
+    target: mode && target && !takesTarget(mode.objective, target.kind) ? { kind: "max" } : target,
     mode,
     turns,
     strict: turns !== null && params.get("strict") === "1" ? true : null,
+    hard: params.get("hard") === "1" ? true : null,
     vehicle: parseVehicle(params.get("vehicle")),
     departure: parseIsoTime(params.get("departure") ?? ""),
     stops: stops ? parseStops(stops) : null,
@@ -158,10 +167,17 @@ export function encodeUrlState(state: UrlState): string {
   }
   if (state.mode !== null) {
     const { mode } = state;
-    params.push(`mode=${mode.objective}${mode.objective === "collect" ? `:${mode.item}` : ""}`);
+    const value =
+      mode.objective === "collect"
+        ? `:${mode.item}`
+        : mode.objective === "brand"
+          ? `:${mode.brand}`
+          : "";
+    params.push(`mode=${mode.objective}${value}`);
   }
   if (state.turns !== null) params.push(`turns=${state.turns === "no_left" ? "left" : "right"}`);
   if (state.strict !== null) params.push("strict=1");
+  if (state.hard !== null) params.push("hard=1");
   if (state.vehicle !== null) {
     params.push(`vehicle=${state.vehicle.mpg},${state.vehicle.gas_price_usd}`);
   }
@@ -172,11 +188,20 @@ export function encodeUrlState(state: UrlState): string {
   return params.length ? `?${params.join("&")}` : "";
 }
 
+/** The mode a URL carries for `settings`: none for the longest, the default, and a brand's
+ * pilgrimage only once its brand is known. */
+function urlModeOf({ objective, item, brand }: Settings): UrlMode | null {
+  if (objective === "distance") return null;
+  if (objective === "collect") return { objective, item };
+  if (objective === "brand") return brand === null ? null : { objective, brand };
+  return { objective };
+}
+
 /** What the app shows, as a URL carries it: the mode, the turns and the vehicle only when not
- * the default. */
+ * the default, hard mode only when on. */
 export function urlStateOf(state: Readonly<AppState>): UrlState {
   const { settings } = state;
-  const { objective, item, turns, mpg, gasPriceUsd } = settings;
+  const { turns, mpg, gasPriceUsd } = settings;
   const usual = mpg === DEFAULT_SETTINGS.mpg && gasPriceUsd === DEFAULT_SETTINGS.gasPriceUsd;
   return {
     route: state.route?.route_id ?? null,
@@ -185,14 +210,10 @@ export function urlStateOf(state: Readonly<AppState>): UrlState {
     tier: settings.tier,
     leashKm: settings.leashKm,
     target: targetOf(settings),
-    mode:
-      objective === "distance"
-        ? null
-        : objective === "collect"
-          ? { objective, item }
-          : { objective },
+    mode: urlModeOf(settings),
     turns: turns === "any" ? null : turns,
     strict: turns !== "any" && settings.strict ? true : null,
+    hard: settings.hard ? true : null,
     vehicle: usual ? null : vehicleOf(settings),
     departure: settings.departure,
     stops: state.stops.map(({ lat, lon }) => ({ lat, lon })),
@@ -221,18 +242,20 @@ export function settingsFrom(url: UrlState, defaults: Settings): Settings {
     ...(url.target ? targetSettings(url.target) : {}),
     objective: url.mode?.objective ?? defaults.objective,
     item: url.mode?.objective === "collect" ? url.mode.item : defaults.item,
+    brand: url.mode?.objective === "brand" ? url.mode.brand : defaults.brand,
     turns: url.turns ?? defaults.turns,
     strict: url.strict ?? defaults.strict,
+    hard: url.hard ?? defaults.hard,
     mpg: url.vehicle?.mpg ?? defaults.mpg,
     gasPriceUsd: url.vehicle?.gas_price_usd ?? defaults.gasPriceUsd,
     departure: url.departure ?? defaults.departure,
   };
 }
 
-/** Open stored route `routeId`: its stops and settings (its mode, turns, vehicle and departure
- * among them; the panel's vehicle stays when it has none, or one outside the panel's limits, and
- * its departure when it has none), the route and its baseline. Whether it opened; when not, the
- * banner says why. */
+/** Open stored route `routeId`: its stops and settings (its mode, turns, hard mode, vehicle and
+ * departure among them; the panel's item and brand stay under another objective, its vehicle
+ * when it has none, or one outside the panel's limits, and its departure when it has none), the
+ * route and its baseline. Whether it opened; when not, the banner says why. */
 export async function openRoute(
   routeId: string,
   store: Store,
@@ -241,7 +264,7 @@ export async function openRoute(
   try {
     const [route, geojson] = await Promise.all([getRoute(routeId), getRouteGeojson(routeId)]);
     const { request } = route;
-    const { objective, item, constraints, departure } = request;
+    const { objective, item, brand, constraints, departure } = request;
     const vehicle = withinLimits(request.vehicle);
     store.update({
       stops: (request.stops ?? []).map(({ lat, lon }, k) => {
@@ -256,8 +279,10 @@ export async function openRoute(
       ...targetSettings(request.target ?? { kind: "max" }),
       objective: MODES.find((mode) => mode === objective) ?? "distance",
       item: item ?? store.state.settings.item,
+      brand: brand ?? store.state.settings.brand,
       turns: constraints?.no_left ? "no_left" : constraints?.no_right ? "no_right" : "any",
       strict: constraints?.strict ?? false,
+      hard: constraints?.hard ?? false,
       ...(vehicle ? { mpg: vehicle.mpg, gasPriceUsd: vehicle.gas_price_usd } : {}),
       ...(departure ? { departure } : {}),
     });

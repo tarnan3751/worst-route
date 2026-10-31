@@ -15,10 +15,18 @@ stored route has passed the validator. A row holds what `route.json` holds
            metrics_json    route.json's metrics
            run_json        route.json's run)
 
+The daily route's rows (`api/daily_api.py`) are a second table:
+
+    daily(date, region, build_id, graph_version, route_id, status, job_id)
+
+one row per UTC date (YYYY-MM-DD), region and `graph_version` (a build replaced under its id by
+`pipeline save --force` has another, and so its own row), `status` planning (`job_id` names its
+job), done (`route_id` its route) or failed; `put_daily` replaces the day's row.
+
 `route_id(graph_version, nodes, edges, stop_idx)` is the first 12 hex digits of a sha256 over
 the graph_version, the node and edge ids as int32 little-endian bytes and the stop positions as
 JSON, so the same route on the same build has one id whichever run found it; `put` keeps the
-row stored first. `RouteStore(path)` creates the file and its table when missing, and opens a
+row stored first. `RouteStore(path)` creates the file and its tables when missing, and opens a
 connection per call, so it may be used from any thread. `get` returns a `StoredRoute`, which the
 validator reads like a `Route` (its metrics' counters an alphabet route's `alphabet`, which the
 validator's alphabet check needs).
@@ -29,10 +37,10 @@ import json
 import sqlite3
 from collections.abc import Sequence
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import astuple, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -60,6 +68,13 @@ _COLUMNS = (
     "run_json",
 )
 _SCHEMA = f"CREATE TABLE IF NOT EXISTS routes ({', '.join(_COLUMNS)}, PRIMARY KEY (id))"
+_DAILY_COLUMNS = ("date", "region", "build_id", "graph_version", "route_id", "status", "job_id")
+_DAILY_SCHEMA = (
+    f"CREATE TABLE IF NOT EXISTS daily ({', '.join(_DAILY_COLUMNS)}, "
+    "PRIMARY KEY (date, region, graph_version))"
+)
+
+DailyStatus = Literal["planning", "done", "failed"]
 
 
 @dataclass(frozen=True, eq=False)
@@ -85,6 +100,20 @@ class StoredRoute:
     run: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class DailyRow:
+    """A day's route on one build, at its graph_version: planning (by its job), done (its route)
+    or failed."""
+
+    date: str  # the UTC date, YYYY-MM-DD
+    region: str
+    build_id: str
+    graph_version: str
+    route_id: str | None
+    status: DailyStatus
+    job_id: str | None
+
+
 def route_id(
     graph_version: str, nodes: ArrayLike, edges: ArrayLike, stop_idx: Sequence[int]
 ) -> str:
@@ -105,6 +134,7 @@ class RouteStore:
         with closing(sqlite3.connect(path)) as con, con:
             con.execute("PRAGMA journal_mode=WAL")
             con.execute(_SCHEMA)
+            con.execute(_DAILY_SCHEMA)
 
     def put(
         self, document: dict[str, Any], *, input: dict[str, Any], baseline_edges: ArrayLike
@@ -169,6 +199,23 @@ class RouteStore:
             metrics_json=metrics,
             run=json.loads(values["run_json"]),
         )
+
+    def daily(self, date: str, region: str, graph_version: str) -> DailyRow | None:
+        """The daily route's row for `date` on `region`'s build at `graph_version`, or None."""
+        with closing(sqlite3.connect(self.path, timeout=10)) as con:
+            row = con.execute(
+                f"SELECT {', '.join(_DAILY_COLUMNS)} FROM daily "
+                "WHERE date = ? AND region = ? AND graph_version = ?",
+                (date, region, graph_version),
+            ).fetchone()
+        return None if row is None else DailyRow(*row)
+
+    def put_daily(self, row: DailyRow) -> None:
+        """Record `row`, in place of the day's row on its build."""
+        values = astuple(row)
+        marks = ", ".join("?" for _ in _DAILY_COLUMNS)
+        with closing(sqlite3.connect(self.path, timeout=10)) as con, con:
+            con.execute(f"INSERT OR REPLACE INTO daily VALUES ({marks})", values)
 
 
 def _blob(ids: ArrayLike) -> bytes:

@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from worst_route.api.store import RouteStore, route_id
+from worst_route.api.store import DailyRow, RouteStore, route_id
 from worst_route.engine.io import route_document
 from worst_route.engine.plan import PlanResult, plan_route
 from worst_route.engine.request import RouteRequest, request_masks
@@ -88,3 +88,19 @@ def test_the_id_covers_the_build_the_edges_and_the_stops() -> None:
     assert base != route_id("v2", [0, 1, 2], [5, 6], [0, 2])
     assert base != route_id("v1", [0, 1, 2], [5, 7], [0, 2])  # a parallel edge
     assert base != route_id("v1", [0, 1, 2], [5, 6], [0, 1, 2])
+
+
+def test_a_day_s_row_is_its_graph_version_s_and_replaced_in_place(tmp_path: Path) -> None:
+    store = RouteStore(tmp_path / "routes.sqlite")
+    assert store.daily("2026-10-31", "us-t3", "v1") is None
+    planning = DailyRow("2026-10-31", "us-t3", "b1", "v1", None, "planning", "a1b2c3")
+    store.put_daily(planning)
+    assert store.daily("2026-10-31", "us-t3", "v1") == planning
+    done = DailyRow("2026-10-31", "us-t3", "b1", "v1", "5ea844bffd40", "done", "a1b2c3")
+    store.put_daily(done)
+    assert RouteStore(tmp_path / "routes.sqlite").daily("2026-10-31", "us-t3", "v1") == done
+    # the same build id at another graph_version (`save --force`): another row
+    assert store.daily("2026-10-31", "us-t3", "v2") is None
+    assert store.daily("2026-11-01", "us-t3", "v1") is None
+    with sqlite3.connect(tmp_path / "routes.sqlite") as con:
+        assert con.execute("SELECT COUNT(*) FROM daily").fetchone() == (1,)

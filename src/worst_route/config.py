@@ -457,6 +457,23 @@ API_SNAPSHOT_EVERY = 50
 API_SIMPLIFY_M = 1.0
 API_DEFAULT_MAX_ITERATIONS = 1_000_000
 
+# The daily route (`docs/reference/api.md`, **The daily route**): two incorporated places
+# (DAILY_LSAD: a city, a town or a village) of the server's main build's places index, each
+# inside the build's bbox with a node within DAILY_NEAR_KM that can play its stop's role, whose
+# straight-line distance lies within DAILY_BAND of the build's bbox diagonal (fractions; at most
+# DAILY_DRAWS pairs are drawn), the first such pair the request's pre-flight accepts (at most
+# DAILY_TRIES tried); planned as bad as possible with DAILY_MAX_ITERATIONS attempts, so that the
+# iterations, not the clock, end the run and every server with the same build gets the same route,
+# with the frontend's default vehicle (DAILY_MPG, DAILY_GAS_PRICE_USD) for its fuel numbers.
+DAILY_LSAD = ("25", "43", "47")
+DAILY_NEAR_KM = 5.0
+DAILY_BAND = (0.15, 0.45)
+DAILY_DRAWS = 10_000
+DAILY_TRIES = 10
+DAILY_MAX_ITERATIONS = 5_000
+DAILY_MPG = 24.0
+DAILY_GAS_PRICE_USD = 3.89
+
 
 # Geocoding (`docs/reference/api.md`, **Geocoding**; `docs/PLAN.md` §4.4). The proxy sends its
 # requests upstream one at a time, each at least 1 / GEOCODE_RPS seconds after the previous one's

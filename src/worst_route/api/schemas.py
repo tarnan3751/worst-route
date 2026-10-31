@@ -28,7 +28,8 @@ requests; every number is metric.
 
 `GeocodeOut`, with its `GeocodeCandidateOut`s, answers `GET /geocode`, and `DirectionsOut`
 `GET /routes/{id}/directions`; `RegionPickIn` is the body of `POST /regions/pick`, which
-`RegionPickOut` answers (at the end of the module).
+`RegionPickOut` answers, and `DailyOut`, with its `DailyStop`s, answers `GET /daily` (at the end of
+the module).
 """
 
 from datetime import datetime
@@ -36,6 +37,7 @@ from typing import Annotated, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from worst_route.api.store import DailyStatus
 from worst_route.config import API_DEFAULT_MAX_ITERATIONS, DEFAULT_BUDGET_S, LEASH_MAX_KM
 from worst_route.engine.constraints import NO_CONSTRAINTS, Constraints
 from worst_route.engine.objectives.collect import CollectItem
@@ -581,3 +583,34 @@ class RegionPickOut(_Out):
     region: str
     build_id: str
     reason: str
+
+
+# --- The daily route (`GET /daily`) ------------------------------------------------------------
+
+
+class DailyStop(_Out):
+    """One of the day's two towns: where the trip starts or ends, and its name ("Bend, OR")."""
+
+    lat: float
+    lon: float
+    label: str
+
+
+class DailyOut(_Out):
+    """`GET /daily`: the day's trip (the UTC date, the region and build it runs on, its towns, its
+    seed and attempts), and how its plan stands: planning (its job's events), done (its route,
+    ratio, and what ended the run after how many attempts) or failed (the next call plans it
+    again)."""
+
+    date: str  # YYYY-MM-DD
+    region: str
+    build_id: str
+    stops: list[DailyStop]
+    seed: int
+    max_iterations: int
+    status: DailyStatus
+    route_id: str | None = None
+    events_url: str | None = None
+    ratio: float | None = None
+    stopped_because: StopReason | None = None
+    attempts: int | None = None

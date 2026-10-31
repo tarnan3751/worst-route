@@ -8,8 +8,9 @@ is `none`; a test passes its own), loads each region's places index (`presentati
 for a region `worst-route aux places` has not written one for, whose routes then use a served
 region's that covers its states, `routes_api.places_of`) and mounts the endpoints (`routes_api`,
 `pick_api`, which picks the build a trip runs on, `geocode_api`, `share_api`, whose images are
-cached in `share/` beside the route store, `directions_api` and `ready_api`). Its lifespan starts
-and stops the job manager, and closes the geocoder's client. `ApiSettings` says which builds (each
+cached in `share/` beside the route store, `directions_api`, `ready_api` and `daily_api`, the
+daily route). Its lifespan starts and stops the job manager, stops following the daily route's
+jobs, and closes the geocoder's client. `ApiSettings` says which builds (each
 region with its build id, the first region the default), which backend, where the store is, the job
 limits, and the geocoder: which, at what URL, with what contact in its User-Agent
 (`geocoder_user_agent`); whether a reverse proxy in front of it is trusted (`trust_proxy`: its
@@ -48,6 +49,7 @@ from starlette.exceptions import HTTPException
 from worst_route import __version__, config
 from worst_route.api import (
     basemap_api,
+    daily_api,
     directions_api,
     geocode_api,
     pick_api,
@@ -115,6 +117,13 @@ class Api:
     limits: Limits = LOCAL
     quota: GeocodeQuota | None = None  # each client's place searches, on a public server
     pick_quota: GeocodeQuota | None = None  # each client's picks of a build, on a public server
+    # the daily route's (`daily_api`): a lock per (date, region) while its plan is started, the
+    # tasks that follow its jobs to their end, the jobs running, which no client may cancel, and
+    # the day's request and its pre-flight, by (date, region, graph_version), drawn once
+    daily_locks: dict[tuple[str, str], asyncio.Lock] = field(default_factory=dict)
+    daily_tasks: "set[asyncio.Task[None]]" = field(default_factory=set)
+    daily_jobs: set[str] = field(default_factory=set)
+    daily_plans: dict[tuple[str, str, str], daily_api.DailyPlan] = field(default_factory=dict)
 
 
 def geocoder_user_agent(settings: ApiSettings) -> str:
@@ -157,6 +166,10 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
         try:
             yield
         finally:
+            following = list(app.state.api.daily_tasks)
+            for task in following:
+                task.cancel()
+            await asyncio.gather(*following, return_exceptions=True)
             await jobs.stop()
             if service is not None:
                 await service.aclose()
@@ -184,6 +197,7 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
     app.include_router(share_api.router)
     app.include_router(directions_api.router)
     app.include_router(ready_api.router)
+    app.include_router(daily_api.router)
     app.include_router(basemap_api.router)
     basemap_api.mount_basemap(app, settings.data_dir)
     app.add_middleware(RequestLog, trust_proxy=settings.trust_proxy)

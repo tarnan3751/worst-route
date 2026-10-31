@@ -14,6 +14,7 @@ else: every route it returns has passed the validator.
 | `pick_api.py` | `POST /regions/pick`, `pick_region` (**Picking a build**) |
 | `geocode_api.py` | `GET /geocode` (**Geocoding**) |
 | `share_api.py` | `GET` and `HEAD /routes/{id}/share.png`, `SHARE_IMAGE_VERSION` (**Share image**) |
+| `daily_api.py` | `GET /daily`, `today`, `daily_seed`, `daily_region`, `draw_trips`, `plannable` (**The daily route**) |
 | `directions_api.py` | `GET /routes/{id}/directions` |
 | `ready_api.py` | `GET /ready` (**Endpoints**) |
 | `basemap_api.py` | `GET /config`, the basemap's files under `/basemap/` (`BasemapFiles`), `basemap_of` (**Basemap**) |
@@ -24,7 +25,7 @@ else: every route it returns has passed the validator.
 | `jobs.py` | `JobManager`, `JobSettings`, `Job`, `Subscription`, `prepare`, `TooManyJobs` |
 | `worker.py` | `run_job` (what a worker process runs), `JobSpec`, `RouteArrays`, the worker's messages |
 | `sse.py` | `Event`, `path_points`, the payload builders, `server_sent` |
-| `store.py` | `RouteStore`, `StoredRoute`, `route_id` |
+| `store.py` | `RouteStore`, `StoredRoute`, `route_id`; the daily route's rows, `DailyRow` |
 
 The geocoding proxy's backend is the `geocode/` package (**Geocoding**); the share image's, the
 directions' and the document's presentation fields are the `presentation/` package
@@ -203,12 +204,13 @@ FastAPI's `detail`), but for the basemap's files' range errors: `/basemap/` answ
 | 422 | `UNKNOWN_ROUTE` (+ `base_route_id`) | a base route that is not stored |
 | 422 | `BUILD_MISMATCH` | a base route planned on another region, `graph_version` or engine version; `/validate` on a route another engine version made (its stops could be re-derived differently: re-plan it), as `worst-route validate` refuses one |
 | 422 | `BASE_ROUTE_MISMATCH` (+ `field`) | stops, tier or leash given that differ from the base route's; or a base route `plan.check_base` refuses under its request's resolved stops and masks (`field` `stops`: its stops are not where they resolve now; `route`: a node outside the area, an edge the request bans, a turn its strict constraint refuses, or under hard mode a road it comes back to) |
-| 429 | `TOO_MANY_JOBS` (+ `running`, `queued` when the client's own jobs are why) | every worker busy and the queue full; on a public server also a client whose own jobs fill its share, one running and three waiting (**Public limits**): `running` and `queued` are its counts |
+| 429 | `TOO_MANY_JOBS` (+ `running`, `queued` when the client's own jobs are why) | every worker busy and the queue full (for `GET /daily` too, when the day's job is still to submit: **The daily route**); on a public server also a client whose own jobs fill its share, one running and three waiting (**Public limits**): `running` and `queued` are its counts |
 | 429 | `RATE_LIMITED` (+ `retry_after_s`) | a place search that finds the geocoder's queue full: five already queued for a turn (**Geocoding**); the message is "the geocoder is busy, try again in a few seconds"; on a public server also a client's eleventh search within a minute, or its sixty-first pick of a build (`POST /regions/pick`) within a minute (**Public limits**) |
 | 502 | `GEOCODER_ERROR` | Nominatim failed: an error status, a timeout, no connection, an answer that does not parse; or refused (429, 403), which pauses the geocoder 60 s, during which a search the cache cannot answer gets this at once ("the geocoder refused; paused for N s") |
 | 503 | `GEOCODER_DISABLED` | a place search on a server whose geocoder is `none` |
-| 404 | `NOT_FOUND` | an unknown (or expired) job, an unknown route (for a share image, also an id that is not 12 lowercase hex digits), an unknown path |
+| 404 | `NOT_FOUND` | an unknown (or expired) job, an unknown route (for a share image, also an id that is not 12 lowercase hex digits), an unknown path; no daily route on this server (its region has no places index, or no two of its towns fit a trip: **The daily route**) |
 | 405 | `METHOD_NOT_ALLOWED` | a method a path does not take |
+| 409 | `DAILY_JOB` | `DELETE /jobs/{id}` on the daily route's job while it runs: the server's own, planning today's route for everyone (**The daily route**) |
 | 409 | `BUILD_UNAVAILABLE` | a stored route whose build is no longer on disk at its `graph_version`, or has lost its geometry (`geometry/`, which drawing it needs) |
 | any other | `HTTP_<status>` | any other HTTP error Starlette raises, its status in the code |
 | 500 | `INTERNAL_ERROR` | an exception nothing else answered (a bug): the message is only "internal error", the traceback goes to the log with the request's id, and the answer carries `X-Request-ID` (**Logs**) |
@@ -245,13 +247,14 @@ state build, since every failing seed search looks again for a node-simple path
 | POST | `/jobs` | 202 `{job_id, events_url, seed}` |
 | GET | `/jobs/{id}/events` | the job's events (**Events**); `Last-Event-ID` resumes |
 | GET | `/jobs/{id}` | the job's status with its route's current snapshot (polling) |
-| DELETE | `/jobs/{id}` | cancels it (**Jobs**); answers its status, without the snapshot |
+| DELETE | `/jobs/{id}` | cancels it (**Jobs**); answers its status, without the snapshot; the daily route's job is refused (409 `DAILY_JOB`) |
 | GET | `/routes/{id}` | the route document, with its directions and toasts |
 | GET | `/routes/{id}/directions` | `{route_id, directions: [{step, text, distance_m, time_s, edge_range, kind}]}`: the document's directions alone |
 | GET | `/routes/{id}/geojson` | the FeatureCollection `presentation.geojson.feature_collection` makes: the route, the baseline (null for a round trip) and the stops |
 | POST | `/routes/{id}/validate` | `{route_id, graph_version, ok, checks: [{name, ok, index, detail}]}`, the stops re-derived from the stored request (by this engine version only); an alphabet route's checks end with `alphabet` |
 | GET | `/geocode` | `{query, region, candidates: [{label, lat, lon, category}], cached}`, for `?q=&region=` (**Geocoding**) |
 | GET, HEAD | `/routes/{id}/share.png` | the route's share image, a 1200 × 630 PNG (`image/png`), cached; HEAD the same headers without it (**Share image**) |
+| GET | `/daily` | `{date, region, build_id, stops: [{lat, lon, label}], seed, max_iterations, status, route_id, events_url, ratio, stopped_because, attempts}`: today's route, planned on the day's first call (**The daily route**) |
 
 **`/ready`** says whether the deployment is whole, where `/health` says only that the process
 lives: `build`, each served build still on disk at the `graph_version` it loaded (a build
@@ -574,6 +577,129 @@ lands on it, a rerun, a "make it worse" that accepts no splice) gets the existin
 `done`, and that id's document is the first record's: its request, labels, departure, seed and
 run. `get` returns a `StoredRoute`, which the validator reads like a `Route`.
 
+The daily route's rows are a second table of the same file, one a day, region and
+`graph_version` (**The daily route**):
+
+```
+daily(date (UTC, YYYY-MM-DD), region, build_id, graph_version, route_id, status, job_id)
+```
+
+`status` is `planning` (`job_id` its job), `done` (`route_id` its route) or `failed`;
+`RouteStore.daily(date, region, graph_version)` reads a row (a `DailyRow`) and `put_daily(row)`
+replaces the day's. A store opened by an older server gains the table when it opens.
+
+## The daily route
+
+**`GET /daily`** answers today's route: one trip a day, the same for everyone on a server, planned
+once on the server's main build (`api/daily_api.py`):
+
+```
+{"date": "2026-10-31", "region": "us-t3", "build_id": "281a455e3d15",
+ "stops": [{"lat": 42.567243, "lon": -90.717431, "label": "Sageville, IA"},
+           {"lat": 34.053245, "lon": -84.663677, "label": "Acworth, GA"}],
+ "seed": 20261031, "max_iterations": 5000, "status": "done",
+ "route_id": "a076702bbc25", "events_url": null, "ratio": 6.581601563148372,
+ "stopped_because": "budget", "attempts": 5000}
+```
+
+- **The day** is the UTC date (`date`), its seed the date as a number, YYYYMMDD (`seed`).
+- **The region** is the served one with the most states (`config.Region.states`: the national
+  build when it is served), else the first served, a tie going to the first served.
+- **The towns** come from that region's places index (its own, else a served one covering it, as
+  a route's do: **Running it**; `PlaceIndex.town_points`, each town at a point inside it,
+  `docs/reference/presentation.md`, **Places**): the incorporated places (`DAILY_LSAD`: LSAD 25,
+  a city, 43, a town, or 47, a village; not a CDP or a borough), their points at 6 decimals, inside
+  the build's bbox (the bbox `POST /jobs` checks a stop against), each with a node within 5 km
+  (`DAILY_NEAR_KM`) that can play its stop's role (`SpatialIndex.snap` with no mask: a node the
+  start can leave by, one the end can arrive by), labelled with the name and the state's code
+  ("Handley, WV"). One `numpy.random.Generator(PCG64(seed))` draws a pair of them (two uniformly,
+  start first) again and again, at most `DAILY_DRAWS` (10,000) times, and keeps each pair whose
+  straight-line distance in the build's CRS lies within `DAILY_BAND` (15 % to 45 %) of the
+  diagonal of the build's bbox; the trip is the first pair kept that the request's pre-flight
+  accepts (`jobs.prepare`, as `POST /jobs` runs it), at most `DAILY_TRIES` (10) tried, so the
+  day's route is the one a user planning that trip at the automatic tier would get. On `us-t3`
+  the diagonal is 5,661 km (EPSG:5070), so a trip is 849 to 2,547 km in a straight line (the band
+  reached 60 % at first, 3,397 km, whose longest trips could not make their attempts within the
+  public budget: **Measured**). The pre-flight is what makes a pair plannable: beyond 800 km the
+  automatic tier is the primary roads and every road within 3 km of a stop
+  (`docs/reference/engine.md`, **Requests**), and a small town whose roads meet no primary road
+  within that is refused (`STOP_UNREACHABLE_WITHOUT_REPEAT`; a pre-flight takes 0.0–1.3 s).
+  Of the first pairs of the 30 days from 2026-10-31 the pre-flight accepted 17, and every one of
+  the 30 days had a pair it accepted among its first ten (1,008–2,267 km in a straight line); on
+  2026-10-31, Handley, WV → Falls City, NE was refused and Sageville, IA → Acworth, GA, the next
+  pair, planned.
+- **The request** is the longest route as bad as possible: `{region, stops, objective:
+  "distance", target: {kind: "max"}, tier: "auto", leash_km: "auto", seed, max_iterations:
+  DAILY_MAX_ITERATIONS, budget_s, vehicle, departure}`, the budget the server's largest
+  (`Limits.budget_max_s`: 120 s, 60 s on a public server), the vehicle the frontend's default
+  (`DAILY_MPG`, 24 mpg, and `DAILY_GAS_PRICE_USD`, $3.89 a gallon), the departure the moment the
+  day's job is submitted, UTC to the second, as the frontend's empty departure is the moment Go is
+  pressed: so the route's document has its extra fuel and cost and its arrival. Neither enters
+  the engine's request, so neither changes the route; a second server's row has its own
+  departure.
+- **Determinism.** The same date, build (`graph_version`), places index and `DAILY_*` settings
+  draw the same towns on any server, and the engine's rule (`docs/reference/engine.md`, **The
+  loop**, **Determinism**) makes the route the same when the iterations end the run (or it
+  converges, or reaches a target) within the budget: the same route id on every such server. The
+  budget is a safety net: a run the clock ends is a prefix of that sequence, which differs from
+  one machine to another. The answer says which ended it: `stopped_because` from the route's run,
+  `budget` with `attempts` equal to `max_iterations` for the iterations, fewer for the clock.
+- **Planning.** The day's first call draws the trip and submits its job through the job manager with
+  no client, so it takes one of the server's slots (`API_MAX_JOBS` running, `API_MAX_QUEUED`
+  waiting) and never a client's share on a public server. A server whose slots and queue are full
+  answers 429 `TOO_MANY_JOBS` before anything is drawn ("every worker is busy and the queue is full;
+  today's route is planned once one frees"), and records nothing. The trip is drawn, and its
+  pre-flights run, once a date, region and `graph_version` (`Api.daily_plans`, the request and the
+  pre-flight's result kept in the process, another date's dropped): planning the day again only
+  submits its job again. The calls of a day take a lock per date and region (`Api.daily_locks`)
+  while they read and change its row, so concurrent first calls plan once. The server subscribes to
+  the job itself and follows it to its end (`Api.daily_tasks`), so the job is never an orphan
+  (**Jobs**) however the clients watching it come and go, and no client cancels it: while it runs
+  its id is in `Api.daily_jobs`, and `DELETE /jobs/{id}` answers 409 `DAILY_JOB` (once it has ended,
+  the `DELETE` only reports it, as for any ended job). It records how the job ended: `done` with its
+  route, or `failed` for a job that ends without the day's route (an error, the time limit, a cancel
+  from within the server). It records nothing over a row that has moved on, and a call that finds
+  the job ended first records it itself.
+- **The answer** by the row: `planning`, with the job's `events_url` (the stream of
+  **Events**, which the panel follows: `docs/reference/frontend.md`, **Today's route**) and the
+  stops of its request; `done`, with the stored route's `route_id`, `ratio`, `stopped_because` and
+  `attempts` (`GET /routes/{id}` and its share image are the route's own); `failed`, with no
+  route and no stream: for a job that failed (a worker that failed, the time limit), the next call
+  submits it again; a day whose first ten trips the pre-flight refuses stays failed, answered
+  from its drawn plan. A planning row whose job the server does not know (it has restarted
+  since) is planned again. The other fields are null where the status has none. A row is its
+  build's at its `graph_version`: a new build, or one `pipeline save --force` replaced under the
+  same id (another `graph_version`, on which the old row's route would be `BUILD_UNAVAILABLE`),
+  makes a new row for the same date, and the old one stays.
+- **No daily route** (404 `NOT_FOUND`): the region has no places index, or no two of its towns
+  fit a trip.
+
+After the day's first call, `GET /daily` reads its row, and a done one's stored route, from
+sqlite under the lock; a failed job's day submits its drawn request again, and a full server
+answers 429 at once: no call draws or runs a pre-flight but the day's first on a build (0.4–0.7 s
+on `us-t3`; up to about 13 s if the pre-flight refused all ten trips). There is no quota of its
+own.
+
+`DAILY_MAX_ITERATIONS` is 5,000 (**Measured**): on `us-t3` the plans of the seven days from
+2026-10-31, at the automatic tier on the dev machine at load averages of 6–14, made their 5,000
+attempts in 8.6–38.9 s at 4.29–10.05× (baselines of 1,273–2,245 km), well under the public budget
+of 60 s. 20,000 attempts took 70–83 s on long trips (9.53–10.99×), over it. The band's longest
+trips come close to the public budget on a busy machine: of the 30 days from 2026-10-31, the four
+longest, planned with the public budget at load averages of 10–14, made their 5,000 attempts in
+23.2 s (Wheatland, IA → Hansen, ID, 7.32×), 35.9 s (Cleveland, NY → Clayton, LA, 11.00×) and
+58.1 s (Vista, MO → Franklin, NH, 8.90×, which took 27.3 s at load 6–8), and the longest, Jasper,
+TX → Hagerman, ID (2,267 km in a straight line, a 2,794 km baseline), made 4,613 when the clock
+ended it at 60 s (4.85×): that day, on a server as busy, is the server's own. Under the first
+band, 60 %, Goldendale, WA → Brandonville, WV (3,394 km in a straight line) took 73 s for its
+first 2,500 attempts.
+
+**A later option: all roads.** Planned at T4 (all of the build's roads within the leash) instead
+of the automatic tier, the pre-flight accepted all 30 first pairs and the routes were 17.2–31.3×
+where the automatic tier's were 4–11× on the same trips (20,000 attempts or 120 s), but each
+attempt took 1.7–3.4 times as long (the first 2,500 attempts in 13.8–61.5 s), so a day would need
+about 1,000–2,000 attempts to end within the public budget, and the day's route would no longer be
+the one a user planning the trip at the automatic tier gets.
+
 ## Geocoding
 
 The place search's backend (`docs/PLAN.md` §4.4): a place name to at most `GEOCODE_LIMIT` (5)
@@ -802,6 +928,20 @@ machine, with curl:
   `budget`), `["Oregon"]` and 120 towns; Portland → Chicago on T1 (a 565.1 km leash), `done`
   after 31.6 s at 9.69× (32,801.3 km, 20 states, 1,770 towns); each `/validate` ok and each
   share image drawn. The API process held 249 MB afterwards.
+- **The daily route** (`serve --region us-t3 --region oregon --region portland --geocoder none` on a
+  port of the lane's own, csr, 2026-10-31, builds 281a455e3d15, ea3b18096e8b and a453e105582b with
+  their places indexes, a store of the lane's own, load average 6–14): the day's first `GET /daily`
+  answered `planning` in 0.74 s (the towns' points, the draw, a pre-flight refusing Handley, WV →
+  Falls City, NE and one accepting Sageville, IA → Acworth, GA, the job submitted), the next calls
+  in 3–45 ms. The job ended on its 5,000 attempts after 15.3–32.0 s (`budget`, 39 splices accepted):
+  `a076702bbc25`, 8,600 km against a 1,307 km baseline, 6.58×, through 8 states and 564 towns, its
+  `/validate` ok. Three servers on three fresh stores, two local (a 120 s budget) and one `--public`
+  (60 s), planned the same route, `a076702bbc25`, byte for byte. Once the band was 15–45 % and the
+  request carried the default vehicle and its departure, a fourth server on a fresh store planned
+  the same day to the same route, `a076702bbc25`, in 13.7 s: its document 188.8 gallons ($734.56)
+  beyond the sensible route's and an arrival on 2026-11-05, from a departure of
+  2026-10-31T22:12:35Z; a `DELETE` of its job answered 409 `DAILY_JOB`; its share image drew in
+  1.1 s (357 kB).
 
 ## Basemap
 
@@ -889,6 +1029,9 @@ and a local server have always had them. Off by default.
   message "at most 60 picks a minute; try again in N s", checked after the body. The frontend
   asks once a change of the stops, 300 ms after the last.
 
+The daily route's job (**The daily route**) has no client: it takes one of the server's slots,
+never a client's share, and `GET /daily` has no quota of its own.
+
 The CLI has none of these limits; `worst-route plan` plans any budget the engine takes.
 
 ## Logs
@@ -947,7 +1090,8 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 | `test_pick_data.py` (`data`) | the pick with Portland's, Oregon's and the national T1 build served from `WORST_ROUTE_DATA` with their places indexes: Powell's → Reed on `portland`, Portland → Bend on `oregon` ("all stops in Oregon"), Portland → Chicago, Portland → Bend → Vancouver (WA) and Portland → Vancouver (both in Portland's bbox) on `us-t1`, Honolulu refused |
 | `test_ready_api.py` | `/ready`: 200 with the build, the store and the places index; 503 without the index, and once the build is replaced or gone (while `/health` answers), its details without a path on the server |
 | `test_static.py` | the site: the build at `/` and its caching, a module's media type, `/health` not at the root, the API under `/api` with its errors, a job run to its end through it (the lifespan ran), the access lines' whole paths |
-| `test_store.py` | the round trip (the stored route validates), unknown ids, the first record kept, what the id covers |
+| `test_store.py` | the round trip (the stored route validates), unknown ids, the first record kept, what the id covers; a day's row, its graph_version's (the same build id at another one has another), replaced in place |
+| `test_daily_api.py` | the daily route on the 20 × 20 lattice with a places index of towns placed on it, the day fixed: the draw (every trip within the band, two towns closer than its lower bound never drawn, between incorporated places of the kinds drawn, inside the build's bbox, never a town without a node within 5 km; the same seed the same trips; none when nothing fits), the region with the most states; `GET /daily` planning, then done with the stored route's ratio, stop and attempts, the same answer call after call, the route's labels, seed, attempts, budget, default vehicle and departure (UTC, to the second), with its fuel and arrival, its `/validate` ok; two servers on two stores answering alike, the iterations having ended the run; concurrent first calls planning once; a failed job recorded and submitted again, the day drawn once; a trip the pre-flight refuses giving way to the next, and a day whose ten trips it refuses failed and answered so again without a pre-flight; a full server answering 429 `TOO_MANY_JOBS` with nothing drawn or recorded until a slot frees; a client's `DELETE` refused with `DAILY_JOB` while the job runs, and only reporting it once ended; a job the server cancels failing the day, then planned again; the job outliving a viewer that leaves (no orphan); a call after the job's end recording it before its follower, and a follower never overwriting a later plan; a planning row of a restarted server planned again; a build replaced under its id (`save --force`) planned again on its own row, its route served, the old row kept; a public server's job without a client, at its budget; an index without incorporated places, and no places index, 404 |
 | `test_sse.py` | path points and node indices along a bent geometry, the per-edge simplification keeping nodes and original values, splices, metrics, the event encoding |
 | `test_jobs.py` | the manager with inline workers: event order and ids, a client replay equal to the stored route, late subscribers (after a worker that died with splices waiting too: they come before its `error`, ids rising strictly), `Last-Event-ID` resync, cancel (validated, stored, reproduced by its attempts), the queue and its limit, cancel before the route exists, continuations, the time limit, orphans running and queued, a worker that raises, a worker refusing a brand its request's area does not hold (`INVALID_REQUEST`), a store failure while cancelling (by hand and by the sweep, which goes on), a worker that does not start (the queue moves on), the TTL; a target run whose best is not its last route (an overshoot on a 5 × 5 lattice): a snapshot of the stored route before `done`, for live and late clients, and a cancel after the overshoot storing the closest route, reproduced by its attempts |
 | `test_worker_process.py` (`slow`) | real spawned workers: a run to `done`, a cancel mid-run, a worker killed from outside (`WORKER_FAILED`), a fake worker that dies 60 kB into a 2 MB message (`WORKER_FAILED`, then a clean `stop()`), a worker whose API process (a probe) is killed exiting within 3 s, and a worker run alone in a fresh interpreter on a build without its geometry, planning and never importing the geometry's or the GeoJSON's module; about 5 s |
@@ -1004,6 +1148,9 @@ limits**: ten searches a minute a client). Nominatim
   which the frontend shows "Searching…".
 - **Spawn cost**: a job's first events after `snapped` wait for a fresh process (0.26–1.4 s
   measured).
+- **The daily route is the same everywhere only when the iterations end it**: a run the clock
+  ends (a slower or busier machine, one of the band's longest trips on a public server) is that
+  server's own, and `attempts` below `max_iterations` says so (**The daily route**, **Measured**).
 - **Share images are kept forever** in `share/`, one per route and drawing version; nothing
   removes them, and an image drawn before the places index was written keeps no outlines until
   `share/` is cleared.

@@ -32,7 +32,8 @@ errors are
 made), `BASE_ROUTE_MISMATCH`; 429 `TOO_MANY_JOBS` (+ `running`, `queued`: the client's own jobs,
 when they are why); 404
 `NOT_FOUND`; 409 `BUILD_UNAVAILABLE` (a stored route whose build is no longer on disk at its
-graph_version).
+graph_version), and `DAILY_JOB` for `DELETE /jobs/{id}` on the daily route's job while it runs
+(`daily_api`: the server's own).
 
 A route's document adds what the presentation says about it (`presentation.document.present`:
 its directions, its toasts, and its fuel, states, towns and share of the roads), worked out
@@ -479,9 +480,13 @@ async def job_status(job_id: str, request: Request) -> JobStatus:
 
 @router.delete("/jobs/{job_id}")
 async def cancel_job(job_id: str, request: Request) -> JobStatus:
-    """Cancel the job; its route so far is stored and reported in `done`."""
+    """Cancel the job; its route so far is stored and reported in `done`. Not the daily
+    route's, which is the server's."""
     api = api_of(request)
     job = _job(api, job_id)
+    if job.id in api.daily_jobs:
+        message = f"job {job.id} plans today's route for everyone (GET /daily); it is not cancelled"
+        raise ApiError(409, "DAILY_JOB", message)
     await api.jobs.cancel(job)
     return api.jobs.status(job, with_snapshot=False)
 

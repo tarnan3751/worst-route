@@ -638,4 +638,29 @@ describe("what the recordings say", () => {
     expect(route.request).toMatchObject({ objective: "collect", item: "bridge" });
     expect(refused.body).toMatchObject({ code: "INVALID_REQUEST", field: "target" });
   });
+
+  it("carries the vehicle's fuel, the directions and the toasts in the document", () => {
+    const { route, refused } = loadStream("portland-directions-stream");
+    const { metrics, legs } = route;
+    expect(route.request.vehicle).toEqual({ mpg: 24, gas_price_usd: 3.89 });
+    expect(metrics.extra_cost_usd).toBeCloseTo(metrics.extra_fuel_gal! * 3.89, 9);
+    expect(metrics).toMatchObject({ states: ["Oregon"], towns: ["Portland"], towns_n: 1 });
+    const steps = route.directions!;
+    expect(steps.map((step) => step.step)).toEqual(steps.map((_, k) => k + 1));
+    // The driving steps cover the route's edges in order; the others drive nothing.
+    let next = 0;
+    for (const {
+      edge_range: [a, b],
+      kind,
+    } of steps) {
+      expect(a).toBe(next);
+      expect(b > a).toBe(!["stop", "arrive", "joke"].includes(kind));
+      next = b;
+    }
+    expect(next).toBe(legs.at(-1)!.node_range[1]); // the route's edges
+    const length = steps.reduce((sum, step) => sum + step.distance_m, 0);
+    expect(length).toBeCloseTo(metrics.length_m, 3);
+    expect(route.toasts![0]).toBe("14.5× less efficient than the sensible route.");
+    expect(refused.body).toMatchObject({ code: "INVALID_REQUEST", field: "vehicle" });
+  });
 });

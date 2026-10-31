@@ -41,7 +41,9 @@ behind a cache and a one-request-a-second limit. So are more of the presentation
 `worst-route aux places`) naming the states and towns a route passes through, the comparison
 lines, the share image (`GET /routes/{id}/share.png`, matplotlib, cached per route), and the
 directions with deadpan jokes, the stats and the toasts in the route documents
-(`GET /routes/{id}`, `GET /routes/{id}/directions`, route.json, `worst-route directions`).
+(`GET /routes/{id}`, `GET /routes/{id}/directions`, route.json, `worst-route directions`),
+which the frontend shows: a directions panel whose steps highlight on the map, rotating toasts,
+the extra stats and a vehicle setting.
 The plan (`docs/PLAN.md`,
 2026-10-30) is written and its open questions answered as far as `docs/project_overview.md` §3
 records. **M1 is built**: in the acceptance run on the

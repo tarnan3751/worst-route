@@ -374,3 +374,99 @@ describe("a route of another mode opened by its link", () => {
     expect(encodeUrlState(urlStateOf(strict.state))).toContain("&turns=right&strict=1&");
   });
 });
+
+describe("the vehicle in the URL", () => {
+  const shown = (patch: Partial<Settings>): AppState => ({
+    region: null,
+    stops: [],
+    settings: { ...DEFAULT_SETTINGS, ...patch },
+    run: IDLE_RUN,
+    route: null,
+    error: null,
+  });
+
+  it("round-trips a vehicle, and leaves the default out", () => {
+    const state = { ...nothing, vehicle: { mpg: 31, gas_price_usd: 4.25 } };
+    expect(encodeUrlState(state)).toBe("?vehicle=31,4.25");
+    expect(decodeUrlState(encodeUrlState(state))).toEqual(state);
+    for (const limits of ["5,0.5", "100,20"]) {
+      expect(decodeUrlState(`?vehicle=${limits}`).vehicle).not.toBeNull();
+    }
+    expect(urlStateOf(shown({})).vehicle).toBeNull();
+    const priced = shown({ gasPriceUsd: 4.25 });
+    expect(encodeUrlState(urlStateOf(priced))).toContain("&vehicle=24,4.25");
+    expect(
+      settingsFrom(decodeUrlState(encodeUrlState(urlStateOf(priced))), DEFAULT_SETTINGS),
+    ).toEqual(priced.settings);
+  });
+
+  it("ignores what it cannot use", () => {
+    for (const vehicle of [
+      "4,3",
+      "101,3",
+      "24,0.4",
+      "24,21",
+      "24",
+      "24,3.89,1",
+      "abc,3",
+      ",3.89",
+      "",
+    ]) {
+      expect(decodeUrlState(`?vehicle=${vehicle}`).vehicle).toBeNull();
+    }
+    expect(settingsFrom(decodeUrlState("?vehicle=4,3"), DEFAULT_SETTINGS)).toEqual(
+      DEFAULT_SETTINGS,
+    );
+  });
+});
+
+describe("a route's vehicle opened by its link", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function open(route: RouteDocument): Promise<Store> {
+    stubFetch((call) =>
+      call.url.endsWith("/geojson")
+        ? json({ type: "FeatureCollection", features: [] })
+        : json(route),
+    );
+    const store = new Store({
+      region: null,
+      stops: [],
+      settings: { ...DEFAULT_SETTINGS, mpg: 40, gasPriceUsd: 5 },
+      run: IDLE_RUN,
+      route: null,
+      error: null,
+    });
+    expect(await openRoute(route.route_id, store, new JobRunner(store, fakeView(), () => {}))).toBe(
+      true,
+    );
+    return store;
+  }
+
+  it("takes the stored request's vehicle into the settings and the URL", async () => {
+    const { route } = loadStream("portland-directions-stream");
+    const vehicle = { mpg: 31, gas_price_usd: 4.25 };
+    const store = await open({ ...route, request: { ...route.request, vehicle } });
+    expect(store.state.settings).toMatchObject({ mpg: 31, gasPriceUsd: 4.25 });
+    expect(encodeUrlState(urlStateOf(store.state))).toContain("&vehicle=31,4.25&");
+    const recorded = await open(route); // 24 mpg at $3.89, the default: left out of the URL
+    expect(recorded.state.settings).toMatchObject({ mpg: 24, gasPriceUsd: 3.89 });
+    expect(encodeUrlState(urlStateOf(recorded.state))).not.toContain("vehicle=");
+  });
+
+  it("keeps the panel's vehicle for a route whose request has none, or one it does not take", async () => {
+    const store = await open(loadStream("portland-time-stream").route);
+    expect(store.state.settings).toMatchObject({ mpg: 40, gasPriceUsd: 5 });
+    const { route } = loadStream("portland-directions-stream");
+    for (const vehicle of [
+      { mpg: 3, gas_price_usd: 3.89 },
+      { mpg: 24, gas_price_usd: 0.1 },
+    ]) {
+      const scripted = await open({ ...route, request: { ...route.request, vehicle } });
+      expect(scripted.state.settings).toMatchObject({ mpg: 40, gasPriceUsd: 5 });
+      expect(encodeUrlState(urlStateOf(scripted.state))).toContain("&vehicle=40,5&");
+    }
+  });
+});

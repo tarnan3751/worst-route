@@ -11,7 +11,7 @@ import { loadStream } from "../__fixtures__/stream";
 import type { RouteDocument, RouteRequest } from "../api/types";
 import { DEFAULT_SETTINGS, IDLE_RUN, Store, type Settings } from "../state";
 import { busy } from "../stops/stopList";
-import { JobRunner, statLines } from "./controls";
+import { JobRunner, routeLines, statLines } from "./controls";
 
 const fixture = loadStream();
 
@@ -390,6 +390,111 @@ describe("modes and turn constraints", () => {
     expect(calls[1].body).toEqual({ ...(calls[0].body as RouteRequest), constraints: soft });
     expect(calls[1].body).not.toHaveProperty("seed"); // the server picks one, not seed 41
     expect(s.state.settings.seed).toBe(77);
+  });
+});
+
+describe("the vehicle and the stored route's rows", () => {
+  const directions = loadStream("portland-directions-stream");
+  const none = { text: "", title: "" };
+
+  it("labels each stop along the way as its marker is numbered, and not the ends", async () => {
+    const calls = stubFetch((call) => created(call, "jl"));
+    const s = store();
+    const runner = new JobRunner(s, fakeView(), () => {});
+    await runner.go();
+    const labels = () => (calls.at(-1)!.body as RouteRequest).stops!.map((stop) => stop.label);
+    expect(labels()).toEqual([undefined, undefined]); // the API's own words for the ends
+    s.update({
+      run: IDLE_RUN,
+      stops: [
+        { lat: 45.5231, lon: -122.6765, snapped: null },
+        { lat: 45.5195, lon: -122.6625, snapped: null },
+        { lat: 45.5317, lon: -122.654, snapped: null },
+        { lat: 45.4817, lon: -122.6263, snapped: null },
+      ],
+    });
+    await runner.reroll();
+    expect(labels()).toEqual([undefined, "Stop 2", "Stop 3", undefined]);
+    const via = (calls.at(-1)!.body as RouteRequest).stops![1];
+    expect(via).toEqual({ lat: 45.5195, lon: -122.6625, label: "Stop 2" });
+    expect((calls.at(-1)!.body as RouteRequest).stops![0]).toEqual({
+      lat: 45.5231,
+      lon: -122.6765,
+    });
+  });
+
+  it("sends the vehicle set with Make it worse, Go and Reroll", async () => {
+    const calls = stubFetch((call) => created(call, "jv"));
+    const s = store(directions.route);
+    s.updateSettings({ mpg: 31, gasPriceUsd: 4.5 });
+    const runner = new JobRunner(s, fakeView(), () => {});
+    await runner.worse();
+    s.updateRun({ phase: "idle" });
+    await runner.go();
+    s.updateRun({ phase: "idle" });
+    await runner.reroll();
+    const vehicle = { mpg: 31, gas_price_usd: 4.5 };
+    expect(calls.map((call) => (call.body as RouteRequest).vehicle)).toEqual([
+      vehicle,
+      vehicle,
+      vehicle,
+    ]);
+  });
+
+  it("shows the recorded route's rows once stored, none while it runs", async () => {
+    stubFetch((call) => (call.method === "POST" ? created(call, "jd") : json(directions.route)));
+    const s = store();
+    await new JobRunner(s, fakeView(), () => {}).go();
+    for (const event of directions.events.slice(0, -1)) sources[0].send(event.event, event.data);
+    expect(routeLines(s.state)).toEqual([none, none, none, none]);
+    sources[0].send("done", directions.events.at(-1)!.data);
+    await settle();
+    expect(statLines(s.state)[0]).toBe("14.5×");
+    expect(routeLines(s.state)).toEqual([
+      { text: "towns: Portland", title: "Portland" },
+      { text: "states: OR", title: "Oregon" },
+      { text: "fuel: +2.7 gal · $10.50", title: "" },
+      { text: "roads used: 10 % of those within reach", title: "" },
+    ]);
+  });
+
+  it("names the first two towns and how many more, all of them in the tooltip", () => {
+    const shown = (metrics: Partial<RouteDocument["metrics"]>): Store => {
+      const route = { ...directions.route, metrics: { ...directions.route.metrics, ...metrics } };
+      const s = store(route);
+      s.updateRun({ phase: "done" });
+      return s;
+    };
+    const towns = ["Portland", "Beaverton", "Tigard", "Lake Oswego", "Milwaukie"];
+    const many = shown({
+      towns,
+      states: ["Oregon", "Washington"],
+      extra_fuel_gal: null,
+      extra_cost_usd: null,
+      network_fraction: 0.004,
+    });
+    expect(routeLines(many.state)).toEqual([
+      { text: "towns: Portland, Beaverton +3", title: towns.join(", ") },
+      { text: "states: OR, WA", title: "Oregon, Washington" },
+      none, // no vehicle
+      { text: "roads used: under 1 % of those within reach", title: "" },
+    ]);
+    const two = shown({ towns: towns.slice(0, 2) });
+    expect(routeLines(two.state)[0].text).toBe("towns: Portland, Beaverton");
+    const nowhere = shown({ towns: [], states: null });
+    expect(routeLines(nowhere.state).slice(0, 2)).toEqual([none, none]);
+    const {
+      extra_fuel_gal,
+      extra_cost_usd,
+      states,
+      towns: _,
+      towns_n,
+      network_fraction,
+      ...old
+    } = directions.route.metrics; // a server older than them
+    const s = store({ ...directions.route, metrics: old });
+    s.updateRun({ phase: "done" });
+    expect(routeLines(s.state)).toEqual([none, none, none, none]);
   });
 });
 

@@ -5,9 +5,12 @@ import {
   formatDuration,
   formatDurationInput,
   formatElapsed,
+  formatFuel,
   formatItems,
   formatLatLon,
+  formatPercent,
   formatRatio,
+  formatStates,
   parseDuration,
 } from "./format";
 
@@ -88,5 +91,26 @@ describe("drive times typed as a target", () => {
     expect(formatDurationInput(32400)).toBe("9h");
     expect(formatDurationInput(9000)).toBe("2h30m");
     expect(formatDurationInput(3630)).toBe("1h0m30s");
+  });
+});
+
+describe("a stored route's numbers", () => {
+  it("gives the extra fuel in gallons and its cost in dollars", () => {
+    expect(formatFuel(6.6178, 25.8037)).toBe("+6.6 gal · $25.80");
+    expect(formatFuel(312.04, 1213.83)).toBe("+312.0 gal · $1,213.83");
+    expect(formatFuel(0, 0)).toBe("+0.0 gal · $0.00");
+  });
+
+  it("gives a share in whole percent, as the toasts do", () => {
+    expect(formatPercent(0.2305)).toBe("23 %");
+    expect(formatPercent(0.11965)).toBe("12 %");
+    expect(formatPercent(0.004)).toBe("under 1 %");
+    expect(formatPercent(1)).toBe("100 %");
+  });
+
+  it("gives the states by their codes, a name it does not know as it is", () => {
+    expect(formatStates(["Oregon", "Washington"])).toBe("OR, WA");
+    expect(formatStates(["District of Columbia", "Puerto Rico"])).toBe("DC, PR");
+    expect(formatStates(["Atlantis"])).toBe("Atlantis");
   });
 });

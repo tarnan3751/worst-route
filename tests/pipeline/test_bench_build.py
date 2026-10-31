@@ -2,8 +2,10 @@
 peak memory, the files it wrote), a skipped step reported as such, the run ended by the first
 step that fails, with its output kept, and an unknown step refused before anything runs."""
 
+import argparse
 import importlib.util
 import json
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -71,6 +73,71 @@ def test_save_counts_every_part_of_the_build(data_dir: Path) -> None:
     assert sizes == {
         str(build / n): 10 for n in ("arrays", "geometry", "strings.json", "meta.json")
     }
+
+
+def test_the_watchdog_stops_a_step_past_its_memory(
+    data_dir: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tool, out = bench(), tmp_path / "bench.json"
+    tool.WATCH_INTERVAL_S = 0.01  # sample often: a fixture's step lasts a fraction of a second
+    source = str(FIXTURES / "divided.osm")
+    argv = ["--region", "portland", "--source", source, "--steps", "filter,build,cleanup"]
+    assert tool.main([*argv, "--max-rss-gb", "0.001", "--out", str(out)]) != 0
+    # The first step the watchdog samples past 1 MB is stopped, and the run with it.
+    *done, stopped = json.loads(out.read_text())["steps"]
+    assert all(step["exit_code"] == 0 and "killed_rss_mb" not in step for step in done)
+    assert stopped["exit_code"] < 0  # by a signal
+    assert stopped["killed_rss_mb"] > 1 and stopped["killed_after_s"] >= 0
+    assert f"| {stopped['step']} |" in capsys.readouterr().out
+
+
+def test_the_watchdog_never_reaps_a_step(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Steps that end at once, sampled every half millisecond: the watchdog must leave the
+    # reaping to run_step's os.wait4, or that raises ChildProcessError now and then.
+    tool = bench()
+    monkeypatch.setattr(tool, "command", lambda: [sys.executable, "-c", "print('done')"])
+    monkeypatch.setattr(tool, "outputs", lambda step, region: {})
+    monkeypatch.setattr(tool, "WATCH_INTERVAL_S", 0.0005)
+    args = argparse.Namespace(
+        region="portland", source=None, force=False, allow_fragmented=False, max_rss_gb=100.0
+    )
+    rows = [tool.run_step("filter", args) for _ in range(200)]
+    assert all(row["exit_code"] == 0 and "killed_rss_mb" not in row for row in rows)
+
+
+def test_a_stopped_step_unwinds_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Past the limit the step gets SIGTERM, on which a pipeline step exits as on an exception
+    # (`cli.exit_on_sigterm`), so its temporary files go. This holds, as do the other watchdog
+    # tests, when the test runs with SIGINT ignored, as a shell's background job starts (checked
+    # by running `( uv run pytest tests/pipeline/test_bench_build.py ) &` from a script).
+    tool = bench()
+    script = (
+        "import sys, tempfile, time\nfrom worst_route.cli import exit_on_sigterm\n"
+        "exit_on_sigterm()\nd = tempfile.TemporaryDirectory(dir=sys.argv[1])\n"
+        "b = bytearray(80_000_000)\nwith d:\n print('up', flush=True); time.sleep(30)"
+    )
+    monkeypatch.setattr(tool, "command", lambda: [sys.executable, "-c", script, str(tmp_path)])
+    monkeypatch.setattr(tool, "step_argv", lambda step, args: [])
+    monkeypatch.setattr(tool, "outputs", lambda step, region: {})
+    monkeypatch.setattr(tool, "WATCH_INTERVAL_S", 0.01)
+    args = argparse.Namespace(
+        region="portland", source=None, force=False, allow_fragmented=False, max_rss_gb=0.05
+    )
+    row = tool.run_step("filter", args)
+    assert row["killed_rss_mb"] > 50 and row["exit_code"] != 0
+    assert list(tmp_path.iterdir()) == []  # the step removed its temporary directory
+
+
+def test_a_step_is_not_started_without_the_disk_it_asks_for(data_dir: Path, tmp_path: Path) -> None:
+    tool, out = bench(), tmp_path / "bench.json"
+    source = str(FIXTURES / "divided.osm")
+    argv = ["--region", "portland", "--source", source, "--steps", "filter"]
+    assert tool.main([*argv, "--out", str(out)]) == 0
+    (step,) = json.loads(out.read_text())["steps"]
+    assert step["free_gb"] > 0  # recorded before every step
+    assert tool.main([*argv, "--min-free-gb", "1e9", "--out", str(out)]) == tool.DISK_STOP_CODE
+    (step,) = json.loads(out.read_text())["steps"]
+    assert step["not_started"] and step["outputs"] == {} and step["wall_s"] == 0.0
 
 
 def test_the_first_failing_step_ends_the_run(data_dir: Path, tmp_path: Path) -> None:

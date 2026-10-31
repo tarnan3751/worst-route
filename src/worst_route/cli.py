@@ -16,7 +16,9 @@ cannot write its build prints one line and exits 1. The steps from `cleanup` on 
 named by `--build-id`, else the region's latest. `save` writes the build beside the stages and
 never overwrites one without `--force`; `qa` prints its thresholds, also when it skips, and exits
 1 when one fails. Each imports its step module when it runs, so `version` and the other commands
-do not load the geo stack.
+do not load the geo stack. A pipeline step exits on SIGTERM as on an exception
+(`exit_on_sigterm`: its `with` blocks unwind, so its temporary files go), whatever the shell
+that started it ignores, which is how `tools/bench_build.py`'s watchdog stops one.
 
 `plan` plans a route on a saved build (`docs/reference/engine.md`, **The CLI**), on the
 `--objective` (distance, time, collect with an `--item`, brand with a `--brand`, an id or a
@@ -78,6 +80,7 @@ at another graph_version, is one line and exit 1.
 import json
 import re
 import secrets
+import signal
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, NoReturn, cast, get_args
@@ -113,6 +116,22 @@ pipeline_app = typer.Typer(
     help="Offline pipeline steps, one region at a time.", no_args_is_help=True
 )
 app.add_typer(pipeline_app, name="pipeline")
+
+
+def exit_on_sigterm() -> None:
+    """Make SIGTERM raise SystemExit, so that the process unwinds (its `with` blocks close and
+    its temporary files go) before it exits. SIGTERM, since a shell's background job starts with
+    SIGINT ignored and never SIGTERM."""
+
+    def stop(signum: int, frame: object) -> NoReturn:
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, stop)
+
+
+@pipeline_app.callback()
+def _pipeline() -> None:
+    exit_on_sigterm()
 
 
 def _check_region(value: str) -> str:

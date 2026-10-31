@@ -4,6 +4,7 @@ import hashlib
 import json
 import pickle
 import shutil
+import signal
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -257,6 +258,21 @@ def test_filter_and_build_keep_the_classes_under_a_ceiling(
     build_id = layout.latest_file("border").read_text().strip()
     built = layout.sidecar(layout.build_stage(layout.build_dir("border", build_id)))
     assert json.loads(built.read_text())["params"]["classes"] == "T1"
+
+
+def test_a_pipeline_step_exits_on_sigterm(data_dir: Path) -> None:
+    # So that a step stopped by the bench's watchdog unwinds and removes its temporary files.
+    before = signal.getsignal(signal.SIGTERM)
+    try:
+        grid = str(FIXTURES / "grid.osm")
+        assert pipeline("filter", "--region", "portland", "--source", grid)[0] == 0
+        handler = signal.getsignal(signal.SIGTERM)
+        assert callable(handler)
+        with pytest.raises(SystemExit) as stop:
+            handler(signal.SIGTERM, None)
+        assert stop.value.code == 128 + signal.SIGTERM
+    finally:
+        signal.signal(signal.SIGTERM, before)
 
 
 def test_filter_needs_its_input(data_dir: Path) -> None:

@@ -72,7 +72,8 @@ leftover scan alone.
 
 ```
 uv run python tools/bench_build.py --region oregon [--source PATH] [--steps filter,build,...]
-    [--force] [--allow-fragmented] [--out tools/out/bench_build-<region>.json]
+    [--force] [--allow-fragmented] [--max-rss-gb GB] [--min-free-gb GB]
+    [--out tools/out/bench_build-<region>.json]
 ```
 
 Runs a region's pipeline steps, `filter` to `qa` (all seven by default, in order; never
@@ -83,8 +84,18 @@ the peak resident set size of the step's process (`os.wait4`'s `ru_maxrss`, whic
 `/usr/bin/time -l` reports on macOS), the exit code, the output, and the sizes of the files the
 step wrote (the filtered roads and POIs, the stage pickles and reports, the build's `arrays/`,
 `geometry/` (the edges' shapes in the compact format), `strings.json` and `meta.json`, the `qa/`
-layers). A step the CLI skips as up to date is
-reported as skipped. The first step that fails ends the run. It prints a Markdown table, writes
+layers), and the free space on the data directory's volume before it. A step the CLI skips as
+up to date is reported as skipped. Two guards keep a heavy run from swapping the machine or
+filling its disk: `--max-rss-gb` starts a watchdog that samples the resident set size of the
+step's processes (`ps`) every `WATCH_INTERVAL_S` (0.5 s) and, past the limit, stops the step
+(SIGTERM, on which a pipeline step exits as on an exception and removes its temporary files,
+`cli.exit_on_sigterm`; SIGINT would not do, since a shell's background job starts with it
+ignored; then SIGKILL after `KILL_GRACE_S`, 5 s; it counts the step's descendants but signals
+the step's own process, which serves while no step starts processes of its own, and leaves the
+reaping to the run), the row saying "killed at
+X GB" with the size and the time in the report; `--min-free-gb` starts no step while the volume has less free, the
+row saying "not started" and the run exiting 3. The first step that fails, is stopped or is not
+started ends the run. It prints a Markdown table, writes
 the JSON report to `--out` (under `tools/out/`, which git ignores) and exits with the failed
 step's code, else 0. It needs real extracts under `WORST_ROUTE_DATA`, so the gate never runs it;
 it is a heavy job when the region is a state (`docs/reference/pipeline.md`, **Oregon**).

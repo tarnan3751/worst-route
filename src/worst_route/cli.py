@@ -794,10 +794,18 @@ def plan(
         ),
     ] = None,
     no_left: Annotated[
-        bool, typer.Option("--no-left", help="Left turns cost a kilometre (none, --strict).")
+        bool,
+        typer.Option(
+            "--no-left",
+            help="Left turns cost a kilometre, or ninety seconds under time (none, --strict).",
+        ),
     ] = False,
     no_right: Annotated[
-        bool, typer.Option("--no-right", help="Right turns cost a kilometre (none, --strict).")
+        bool,
+        typer.Option(
+            "--no-right",
+            help="Right turns cost a kilometre, or ninety seconds under time (none, --strict).",
+        ),
     ] = False,
     strict: Annotated[
         bool, typer.Option("--strict", help="No such turn at all, or no route.")

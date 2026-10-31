@@ -1132,6 +1132,26 @@ does both, so it stays 90 s:
 | 180 | 11.66× (70.44 km), 60 left turns, 0.85 a km |
 | 300 | 4.67× (29.43 km), 16 left turns, 0.54 a km |
 
+Under `collect` and `brand` a turn costs the same kilometre (`TURN_PENALTY_M`), against an
+item's or a visit's 10⁶: a detour that gains an item takes its turns with it, one that gains only
+length takes a turn only for more than a kilometre. It still bites, on the turns a kilometre of
+route rather than on the side they turn to. Powell's → Reed under `--no-right`, seed 1, 20,000
+attempts (`CsrBackend`, build ffe2e7c881ca, 2026-10-30):
+
+| Request | No constraint | Soft no-right, a kilometre a turn |
+|---|---|---|
+| `--objective collect --item roundabout` | 53.11×, 44 rings; 2.96 right and 2.93 left turns a km | 16.08×, 43 rings; 1.33 right and 1.43 left turns a km |
+| `--objective brand --brand Starbucks` | 54.72×, 17 of the 19 Starbucks in reach; 3.05 right, 3.06 left a km | 18.49×, 18 of 19; 1.12 right, 1.17 left a km |
+
+The constraint about halves the density of the turns it avoids and keeps the items, but it does
+not make them rarer than the other side's. A route that never repeats a node tends to turn left
+about as often as right: its turns add up to its net change of heading, which stays small unless
+the route spirals (a tendency, not a law). So no penalty makes one side's turns scarce while the
+route stays long. Charging a turn a fraction of an item instead was tried at the review and
+bought nothing: at a tenth of an item the densities were the same (1.26 and 1.30 right turns a
+km) with the same items on shorter routes, and at a quarter or half an item the routes lost
+items (42 or 28 of 44 rings, 13 or 9 of 17 Starbucks).
+
 ## Limitations
 
 - **Transitions.** The searches see the transition tables (**Searches**), but a leg or a part

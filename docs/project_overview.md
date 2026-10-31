@@ -260,22 +260,29 @@ The risks the plan anticipates are `docs/PLAN.md` §8.3. Found on the Portland b
   bearings are refined (pipeline version 2): they describe the road less the stub, and a turn
   at a merged node classes as the road's in all but 0.2–0.5% of cases, the coordinates'
   rounding, as at plain nodes (`docs/reference/pipeline.md`, enrich).
-- **Strict turn constraints are rarely satisfiable** on a street grid together with the rule
-  that no junction repeats: a net left turn without left turns is three rights round a block,
-  which comes back through its junction. On Portland strict no-left plans 4 of the 20
-  acceptance pairs and strict no-right 3 (Powell's → Reed refuses). **Soft ones make routes
-  less bad**, since nearly every detour adds such a turn: medians of 5.33× (no-left) and 6.47×
-  (no-right) on the same pairs at a kilometre a turn (`TURN_PENALTY_M`), against 21.5× without
-  (1.12× and 1.10× at 10⁶). Under the slowest time a left turn costs 90 s (`TURN_PENALTY_S`),
-  and soft no-left gives Powell's → Reed 28.48× the experienced time with 1.09 left turns a km,
-  more than the distance mode's 0.62, since a detour's time gain counts its delays too; 180 s
-  and 300 s keep them rarer but at 11.66× and 4.67×. **A soft route barely shrinks** toward a
-  smaller target, since shrinking may not add a net avoided turn and a shorter way round mostly
-  needs one: Powell's → Reed's 16.77× soft no-left route, sent toward 3×, converges at 11.04×
-  (`stopped_because: "converged"`, outside the band). That is the price of the rule, accepted
-  by the coordinator at M3's review; letting a shrinking splice add an avoided turn when the
-  route's density of them does not rise is a later option (`docs/reference/engine.md`,
-  **Constraints**, **Limitations**, **On Portland**).
+- **Strict turn constraints are rarely satisfiable** on a street grid together with the rule that no
+  junction repeats: a net left turn without left turns is three rights round a block, which comes
+  back through its junction. On Portland strict no-left plans 4 of the 20 acceptance pairs and
+  strict no-right 3 (Powell's → Reed refuses). **Soft ones make routes less bad**, since nearly
+  every detour adds such a turn: medians of 5.33× (no-left) and 6.47× (no-right) on the same pairs
+  at a kilometre a turn (`TURN_PENALTY_M`), against 21.5× without (1.12× and 1.10× at 10⁶). Under
+  `collect` and `brand` a turn costs the same kilometre, against an item's 10⁶, and still about
+  halves the avoided side's turns a km (Powell's → Reed collecting roundabouts under no-right: 1.33
+  right turns a km against 2.96 without, 43 of 44 rings kept; a Starbucks pilgrimage 1.12 against
+  3.05, 18 Starbucks against 17), but leaves them about as common as the other side's (1.43 and 1.17
+  left a km): a route that never repeats a node tends to turn left about as often as right, its
+  turns adding up to a small net change of heading unless it spirals; charging a fraction of an item
+  instead bought nothing (at the review: a tenth gave the same densities on shorter routes, more
+  lost items). Under the slowest time a left turn costs 90 s (`TURN_PENALTY_S`), and soft no-left
+  gives Powell's → Reed 28.48× the experienced time with 1.09 left turns a km, more than the
+  distance mode's 0.62, since a detour's time gain counts its delays too; 180 s and 300 s keep them
+  rarer but at 11.66× and 4.67×. **A soft route barely shrinks** toward a smaller target, since
+  shrinking may not add a net avoided turn and a shorter way round mostly needs one: Powell's →
+  Reed's 16.77× soft no-left route, sent toward 3×, converges at 11.04× (`stopped_because:
+  "converged"`, outside the band). That is the price of the rule, accepted by the coordinator at
+  M3's review; letting a shrinking splice add an avoided turn when the route's density of them does
+  not rise is a later option (`docs/reference/engine.md`, **Constraints**, **Limitations**, **On
+  Portland**).
 - **Collecting is bounded by the area and by the no-repeat rule**: a collect run draws its
   waypoints from the item's places in the request's area, so a route collects nothing it cannot
   reach within the leash (Powell's → Reed's leash of 3.6 km holds 45 rings, 144 bridge roads and

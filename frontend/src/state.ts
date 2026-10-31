@@ -56,8 +56,10 @@ export const GAS_PRICE_MAX = 20;
 
 /** The objective: the longest, the slowest, or the most of an item. */
 export type Mode = (typeof MODES)[number];
-/** The turn constraint: none, or left (right) turns avoided, at a kilometre each or, `strict`,
- * none at all. */
+/** The turn constraint: none, or left (right) turns avoided, at a kilometre each (about half as
+ * many a km as without, but about as many as the other side's: a route that never repeats a node
+ * tends to turn both ways alike, a tendency rather than a law, since a route can spiral), or,
+ * `strict`, none at all. */
 export type TurnSetting = "any" | "no_left" | "no_right";
 
 /** The request's settings; null seed is a random one, picked by the server. The target is

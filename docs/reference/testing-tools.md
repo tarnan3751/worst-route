@@ -99,6 +99,24 @@ the CLI runs it
 (`docs/reference/pipeline.md`, **The arrays engine**). It reads `WORST_ROUTE_DATA` and writes
 under `tools/out/`. A state's run is a heavy job, arranged by the brief.
 
+## Counting cut-off roads: `tools/border_ends.py`
+
+```
+uv run python tools/border_ends.py --region oregon [--compare oregon-washington] [--states PATH]
+    [--out tools/out/border_ends-<region>.json]
+```
+
+Finds the dead ends of a region's filtered roads (a node that ends a way and that nothing else
+references: one neighbour in the raw graph), places each in the Census 5m state polygon it lies
+in (`--states`, default `<WORST_ROUTE_DATA>/aux/census/cb_2025_us_state_5m.zip`; a point on a
+shared line lies in the region if either state is its own), and prints how many lie outside the
+region's states, by state ("none" outside every state). Those are where a Geofabrik extract cut a
+road off beyond the line (`docs/reference/pipeline.md`, **Regions of several states**). With
+`--compare R2` it looks each up in R2's filtered roads: the road continues, still ends, or the
+node is absent. It writes the JSON report (every such dead end with its position, state and
+status) to `--out` under `tools/out/`. It reads filtered roads already on disk, so the gate does
+not run it; `tests/pipeline/test_border_ends.py` runs it on the two border fixtures.
+
 ## Lanes
 
 The main working tree is the coordinator's. A developer or reviewer works in a `git clone` under

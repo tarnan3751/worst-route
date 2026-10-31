@@ -1128,7 +1128,9 @@ the first extract, in the region's order) and every node once (its newest versio
 continuation meets it at
 the shared node and the road is one road with one node sequence. Oregon's extract alone has 395
 dead ends beyond Oregon's polygon (Idaho 125, Washington 118, California 95, Nevada 17, 39
-outside every state, in the water or Canada), out of 61,249.
+outside every state, in the water or Canada), out of 61,249; `tools/border_ends.py` counts them
+for a region's filtered roads and says which a merge of more states joins up
+(`docs/reference/testing-tools.md`).
 
 The merge holds every per-extract roads file in memory while it sorts them (`MergeInputReader`),
 which suits a region's chosen roads but not every road of the country: an all-roads national

@@ -8,9 +8,9 @@ stops (`resolve_stops`: snapping and its fallback, which may move stops), builds
 and the baseline on them, makes the request's objective with the baseline's metrics and
 the radius bound r_max = min(leash, the active area's extent), a collecting one also with the
 request's item and active nodes, a pilgrimage with its brand and active nodes, with the
-request's turn constraints (`constraints.constrain`;
-a strict one constrains the seed too), and its goal (`target.Goal`, the request's target
-against that baseline), and runs the worsen loop toward that goal within the request's budget,
+request's constraints (`constraints.constrain`; a strict turn constraint and hard mode
+constrain the seed too), and its goal (`target.Goal`, the request's target against that
+baseline), and runs the worsen loop toward that goal within the request's budget,
 handing each accepted splice and the baseline to `on_progress`. It searches with the backend it
 is given, else `make_backend`'s default (`config.DEFAULT_BACKEND`); every backend gives the same
 route, and the result records which one searched. The best
@@ -28,10 +28,11 @@ instead of the seed ("make it worse"; with a target, a base past it shrinks towa
 `check_base` refuses it with `BaseRouteMismatch` (a
 `ValueError` naming the field at fault) unless its stop nodes are the ones `resolve_stops`
 gives, every node lies in the request's active mask, none of its edges is one the request
-bans and, under a strict turn constraint, none of its turns is one the constraint refuses (a
-soft one takes any base); `Route.new` then checks it as it checks any route (repeats, twins,
-transitions). Nothing is drawn from the rng before the loop then, so the run is fixed by the
-base, the request and its seed. Without them, planning is exactly as above.
+bans, under a strict turn constraint none of its turns is one the constraint refuses (a soft
+one takes any base), and under hard mode no road it leaves comes back; `Route.new` then checks
+it as it checks any route (repeats, twins, transitions). Nothing is drawn from the rng before
+the loop then, so the run is fixed by the base, the request and its seed. Without them,
+planning is exactly as above.
 """
 
 from bisect import bisect_right
@@ -40,7 +41,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from worst_route.engine.constraints import Constraints, constrain
+from worst_route.engine.constraints import Constraints, constrain, returning
 from worst_route.engine.objectives import make_objective
 from worst_route.engine.objectives.brand import BrandRefused, brand_problem
 from worst_route.engine.request import RequestMasks, RouteRequest, request_masks
@@ -224,6 +225,12 @@ def check_base(
     if len(refused):
         node, label = nodes[refused[0] + 1], constraints.kinds[0].label
         message = f"the base route turns at node {node} as the strict {label} constraint refuses"
+        raise BaseRouteMismatch("route", message)
+    found = returning(data, edges) if constraints.hard else None
+    if found is not None:
+        again = found[1][0]
+        road = data.strings.identities[data.edge_identity[edges[again]]]
+        message = f"the base route comes back to {road} at edge {again}, which hard mode refuses"
         raise BaseRouteMismatch("route", message)
 
 

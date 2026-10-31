@@ -1,21 +1,38 @@
 """Hard mode: each road (an identity) in one stretch at most. Its window check against a full
-check of the spliced route, the bans it gives the searches per window, its terms (none), and
-`find_detour` keeping only the paths it allows."""
+check of the spliced route, the bans it gives the searches per window, its terms (none), the
+window it widens, `find_detour` keeping only the paths it allows; the request's flag, the seed
+re-solving legs that come back to a road, what an unreachable leg blames, a base route that
+breaks it, and the loop under it on both backends."""
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
-from worst_route.engine.constraints import HardMode, returning, stretches
+from worst_route.engine.constraints import (
+    NO_CONSTRAINTS,
+    Constraints,
+    HardMode,
+    NoLeft,
+    constrain,
+    returning,
+    stretches,
+)
 from worst_route.engine.detour import find_detour, local_exhaustive_paths
 from worst_route.engine.objectives.composite import Composite
 from worst_route.engine.objectives.distance import Distance
+from worst_route.engine.plan import BaseRouteMismatch, check_base, plan_route
+from worst_route.engine.request import RouteRequest, request_masks
 from worst_route.engine.route import Metrics, Route, splice_arrays
+from worst_route.engine.seed_route import resolve_stops, seed_route
+from worst_route.engine.snap import InfeasibleHardMode, InfeasibleTurnConstraint, StopUnreachable
+from worst_route.graph.csr_backend import CsrBackend
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
 from worst_route.graph.spatial import SpatialIndex
-from worst_route.graph.testing import edge_id
+from worst_route.graph.testing import Edge, edge_id, make_graph
 
-from .graphs import edges_of, lattice, route_on
+from .graphs import X0, Y0, at_node, edges_of, lattice, left_only, route_on, two_rings
+from .test_constraints import seeded
 
 # node r * 6 + c, row 0 the southmost; rows "Row r", columns "Col c"; the road 8–9 has no name
 GRID = lattice(6, 6, named=True, roads={(8, 9): {"name": None}})
@@ -220,3 +237,204 @@ def test_a_window_inside_a_stretch_is_widened_to_its_ends_never_past_a_stop() ->
     distance = Distance(GRID, baseline=Metrics(1000.0, 90.0), r_max=5000.0)
     assert distance.window(route, 2, 3) == (2, 3)
     assert Composite(distance, [HardMode(GRID)]).window(route, 2, 3) == (0, 5)
+
+
+HARD = Constraints(hard=True)
+# Row 0 of a 3 × 5 lattice with its middle road named Bridge St: the shortest way along it
+# leaves Row 0 for the bridge and comes back
+BRIDGED = lattice(3, 5, named=True, roads={(2, 3): {"name": "Bridge St"}})
+
+
+def main_street() -> GraphData:
+    """One way east along Main St, Bridge St in its middle and Main St again, nothing else."""
+    xy = [(X0 + 100 * k, Y0) for k in range(5)]
+    names = ["Main St", "Main St", "Bridge St", "Main St"]
+    return make_graph(xy, [Edge(k, k + 1, 100.0, name=n) for k, n in enumerate(names)])
+
+
+def test_the_request_asks_for_hard_mode_on_its_own() -> None:
+    assert HARD.hard and HARD.kinds == [] and HARD.banned_turn_classes == 0
+    assert HARD.note == "under hard mode"
+    both = Constraints(no_left=True, strict=True, hard=True)
+    assert both.note == "under hard mode and the strict no-left constraint"
+    assert Constraints.model_validate(HARD.model_dump(mode="json")) == HARD
+    assert HARD.model_dump(mode="json") == {
+        "no_left": False,
+        "no_right": False,
+        "strict": False,
+        "hard": True,
+    }
+    # without it, a request's JSON reads as it did before hard mode existed
+    assert Constraints(no_left=True).model_dump(mode="json") == {
+        "no_left": True,
+        "no_right": False,
+        "strict": False,
+    }
+    request = RouteRequest(stops=[(45.5, -122.6), (45.6, -122.7)], seed=1)
+    assert "constraints" not in request.model_dump(mode="json")
+    with pytest.raises(ValidationError, match="strict needs no_left or no_right"):
+        Constraints(hard=True, strict=True)
+    parts = HARD.objectives(GRID, 1000.0)
+    assert [type(p) for p in parts] == [HardMode]
+    soft = Constraints(no_left=True, hard=True).objectives(GRID, 1000.0)
+    assert [type(p) for p in soft] == [NoLeft, HardMode]
+    distance = Distance(GRID, baseline=Metrics(1000.0, 90.0), r_max=5000.0)
+    made = constrain(distance, HARD, GRID)
+    assert isinstance(made, Composite) and isinstance(made.constraints[0], HardMode)
+
+
+def test_a_seed_leg_that_comes_back_to_its_road_is_searched_again() -> None:
+    plain = seeded(BRIDGED, [0, 4], NO_CONSTRAINTS)
+    assert plain.nodes.tolist() == [0, 1, 2, 3, 4]
+    assert returning(BRIDGED, plain.edges) == ((0, 2), (3, 4))
+    # Row 0 banned but for its stretch before the bridge: over the bridge, then Col 3 and Row 1
+    hard = seeded(BRIDGED, [0, 4], HARD)
+    assert hard.nodes.tolist() == [0, 1, 2, 3, 8, 9, 4]
+    assert one_stretch_each(BRIDGED, hard.edges)
+
+
+def test_a_road_coming_back_after_a_via_moves_the_earlier_leg_when_the_later_cannot() -> None:
+    # 0 → 3 → 2 on a 5 × 5 lattice: the plain seed leaves on Row 0, comes back to the via at 3
+    # and on along Row 0; the leg 3 → 2 has no other way, so the leg 0 → 3 drops Row 0
+    g = lattice(5, 5, named=True)
+    plain = seeded(g, [0, 3, 2], NO_CONSTRAINTS)
+    assert plain.nodes.tolist() == [0, 1, 6, 7, 8, 3, 2]
+    assert returning(g, plain.edges) == ((0, 1), (5, 6))
+    hard = seeded(g, [0, 3, 2], HARD)
+    assert hard.nodes.tolist() == [0, 5, 6, 7, 8, 3, 2] and hard.stop_idx == (0, 5, 6)
+    assert one_stretch_each(g, hard.edges)
+
+
+def test_the_seed_tries_once_more_with_only_the_last_return_s_ban() -> None:
+    # a 5 × 5 lattice whose rows are Row 0 and Row 1 by turns, its columns Col 0 and Col 1, two
+    # roads unnamed: from 24 to 1 the rounds pile up bans (Col 0, Row 0 but for 14 → 13, Col 1)
+    # until no way is left, though [24, 19, 14, 13, 12, 11, 6, 1] is legal; the retry, with only
+    # the last return's ban, finds a legal seed and the end stays on node 1
+    roads: dict[tuple[int, int], dict[str, str | None]] = {}
+    for r in range(5):
+        for c in range(4):
+            roads[(r * 5 + c, r * 5 + c + 1)] = {"name": f"Row {r % 2}"}
+    for c in range(5):
+        for r in range(4):
+            roads[(r * 5 + c, (r + 1) * 5 + c)] = {"name": f"Col {c % 2}"}
+    roads[(14, 19)] = roads[(21, 22)] = {"name": None}
+    g = lattice(5, 5, named=True, roads=roads)
+    found = seeded(g, [24, 1], HARD)
+    assert found.nodes.tolist() == [24, 19, 18, 13, 8, 3, 2, 1]
+    assert one_stretch_each(g, found.edges)
+    request = RouteRequest(
+        stops=[at_node(g, 24), at_node(g, 1)], seed=1, max_iterations=0, constraints=HARD
+    )
+    planned = plan_route(g, request)
+    assert [(s.node, s.note) for s in planned.snaps] == [(24, None), (1, None)]
+
+
+def test_a_round_trip_s_loop_never_comes_back_to_a_road() -> None:
+    g = lattice(8, 8, named=True)
+    for seed in range(5):
+        found = seeded(g, [27, 27], HARD, seed=seed)
+        assert found.nodes[0] == found.nodes[-1] == 27
+        assert one_stretch_each(g, found.edges)
+
+
+def test_what_an_unreachable_leg_blames() -> None:
+    # Main St, Bridge St, Main St: no way without coming back to Main St, a way without hard
+    # mode; straight on, so the strict no-left constraint alone plans it
+    main = main_street()
+    assert seeded(main, [0, 4], NO_CONSTRAINTS).nodes.tolist() == [0, 1, 2, 3, 4]
+    for constraints in (HARD, Constraints(no_left=True, strict=True, hard=True)):
+        with pytest.raises(InfeasibleHardMode) as refused:
+            seeded(main, [0, 4], constraints)
+        assert str(refused.value) == "the seed found no way from stop 0 to stop 1 under hard mode"
+    # a left turn the only way, no names: hard mode alone plans, the strict constraint is why
+    with pytest.raises(InfeasibleTurnConstraint) as turned:
+        seeded(left_only(), [0, 14], Constraints(no_left=True, strict=True, hard=True))
+    assert str(turned.value).endswith(", under the strict no-left constraint")
+    # no route at all: nothing to blame
+    for constraints in (HARD, Constraints(no_left=True, strict=True, hard=True)):
+        with pytest.raises(StopUnreachable) as plain:
+            seeded(two_rings(), [0, 12], constraints)
+        assert type(plain.value) is StopUnreachable
+
+
+def test_a_stop_moved_for_hard_mode_says_so() -> None:
+    # the end on Main St's last node is out of reach; the fallback moves it back along the
+    # street, to the bridge's far end, which the route reaches without coming back
+    main = main_street()
+    request = RouteRequest(stops=[at_node(main, 0), at_node(main, 4)], seed=1, constraints=HARD)
+    spatial = SpatialIndex(main)
+    snaps = resolve_stops(
+        main, spatial, PythonBackend(main), request, request_masks(spatial, main, request)
+    )
+    assert snaps[1].node == 3
+    assert snaps[1].note == "moved 100 m: the seed found no way to nearer nodes under hard mode"
+
+
+def test_a_base_route_that_comes_back_to_a_road_is_refused_under_hard_mode() -> None:
+    plan = plan_route(
+        BRIDGED,
+        RouteRequest(stops=[at_node(BRIDGED, 0), at_node(BRIDGED, 4)], seed=1, max_iterations=0),
+    )
+    base = plan.route
+    assert returning(BRIDGED, base.edges) is not None  # the seed itself, along Row 0
+    stops = [int(base.nodes[0]), int(base.nodes[-1])]
+    check_base(base, plan.masks, stops, data=BRIDGED, constraints=NO_CONSTRAINTS)
+    with pytest.raises(BaseRouteMismatch, match="comes back to Row 0 at edge 3") as refused:
+        check_base(base, plan.masks, stops, data=BRIDGED, constraints=HARD)
+    assert refused.value.field == "route"
+    hard = plan_route(
+        BRIDGED,
+        RouteRequest(
+            stops=[at_node(BRIDGED, 0), at_node(BRIDGED, 4)],
+            seed=1,
+            max_iterations=0,
+            constraints=HARD,
+        ),
+    )
+    check_base(hard.route, hard.masks, stops, data=BRIDGED, constraints=HARD)
+
+
+@pytest.mark.parametrize("constraints", [HARD, Constraints(no_left=True, hard=True)])
+def test_the_loop_under_hard_mode_keeps_every_road_one_stretch_on_both_backends(
+    constraints: Constraints,
+) -> None:
+    g = lattice(10, 10, named=True)
+    request = RouteRequest(
+        stops=[at_node(g, 22), at_node(g, 45), at_node(g, 77)],
+        seed=3,
+        max_iterations=1500,
+        budget_s=120,
+        constraints=constraints,
+    )
+    one, two = (
+        plan_route(g, request, backend=b(g), check_delta=True) for b in (PythonBackend, CsrBackend)
+    )
+    assert one.route.edges.tobytes() == two.route.edges.tobytes()
+    assert (one.run.attempts, one.run.accepted) == (two.run.attempts, two.run.accepted)
+    assert one.run.accepted > 5
+    assert one.route.metrics.length_m > 2 * one.baseline.length_m
+    route = Route.new(
+        g, *_seed_of(g, request), score=0.0, metrics=Metrics(0.0, 0.0), seed=request.seed
+    )
+    assert one_stretch_each(g, route.edges)
+    for event in one.run.events:  # every route along the way, not only the last
+        s = event.splice
+        route = route.splice(
+            g, s.i, s.j, s.nodes, s.edges, score=event.score, metrics=event.metrics
+        )
+        assert one_stretch_each(g, route.edges)
+    assert route.edges.tobytes() == one.route.edges.tobytes()  # max: the best is the last
+
+
+def _seed_of(g: GraphData, request: RouteRequest) -> tuple[np.ndarray, np.ndarray, tuple[int, ...]]:
+    spatial = SpatialIndex(g)
+    masks = request_masks(spatial, g, request)
+    backend = PythonBackend(g)
+    snaps = resolve_stops(g, spatial, backend, request, masks)
+    rng = np.random.Generator(np.random.PCG64(request.seed))
+    r_max = min(masks.leash_m, masks.extent_m)
+    found = seed_route(
+        backend, spatial, g, snaps, masks.active, masks.banned, rng, r_max=r_max,
+        constraints=request.constraints,
+    )  # fmt: skip
+    return found.nodes, found.edges, found.stop_idx

@@ -1,8 +1,10 @@
-"""The turn constraints: few left turns, or right turns, or none at all (`docs/PLAN.md` §3.7;
-`docs/reference/engine.md`, **Constraints**).
+"""The constraints: few left turns, or right turns, or none at all, and hard mode
+(`docs/PLAN.md` §3.7; `docs/reference/engine.md`, **Constraints**).
 
-`Constraints(no_left, no_right, strict)` is what a request adds to its objective; `no_left` and
-`no_right` at once is refused ("straight only is not a route"). Each is an objective with no
+`Constraints(no_left, no_right, strict, hard)` is what a request adds to its objective (`hard`
+in its JSON only when asked, so a request without it reads as before it existed); `no_left` and
+`no_right` at once is refused ("straight only is not a route"). Each turn constraint is an
+objective with no
 node, edge or global terms (`TurnConstraint`) about two turn classes (`engine/turns.py`):
 `NoLeft` about left turns and U-turns, `NoRight` about right turns and U-turns.
 
@@ -27,7 +29,8 @@ node, edge or global terms (`TurnConstraint`) about two turn classes (`engine/tu
 
 The baseline is never constrained (a sane GPS turns left). `constrain(objective, constraints,
 data)` is the objective the engine runs: the objective itself without constraints, else a
-`Composite` of it and theirs, the soft ones penalising at `turn_penalty_for(objective)`.
+`Composite` of it and theirs, the soft ones penalising at `turn_penalty_for(objective)`, and
+`HardMode` under hard mode.
 
 **Hard mode** (`HardMode`): each road, an identity (`edge_identity`: a ref, else the
 normalised name), in one stretch at most, so once the route leaves a road it never comes back
@@ -44,20 +47,30 @@ the detour that is on the route outside the window is a neighbour's. Its `window
 window drawn inside one stretch out to the stretch's ends, no farther than the stops either
 side, so the loop tries a window a detour can leave the road from rather than one only that
 road could replace. `stretches` and `returning` read the rule off a route's edges for the seed
-and the base route.
+and the base route. The seed keeps the rule itself (`seed_route`, a heuristic), refusing a leg
+it found no way to build under it, but can build without it, with `InfeasibleHardMode` ("the seed
+found no way from stop 0 to stop 1 under hard mode": a legal route may exist); a base route that
+breaks it is refused (`plan.check_base`).
 """
 
 from bisect import bisect_left, bisect_right
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from worst_route.config import TURN_PENALTY_M, TURN_PENALTY_S
 from worst_route.engine.objectives.base import BaseObjective, Objective
 from worst_route.engine.objectives.composite import Composite
 from worst_route.engine.route import BoolArray, IntArray, Metrics, Route
-from worst_route.engine.snap import InfeasibleTurnConstraint, StopUnreachable
+from worst_route.engine.snap import InfeasibleHardMode, InfeasibleTurnConstraint, StopUnreachable
 from worst_route.engine.turns import turn_classes
 from worst_route.graph.backend import TURN_CLASS, TURN_LEFT, TURN_RIGHT, TURN_U
 from worst_route.graph.data import GraphData
@@ -241,13 +254,14 @@ def returning(data: GraphData, edges: IntArray) -> tuple[tuple[int, int], tuple[
 
 
 class Constraints(BaseModel):
-    """The turn constraints a request adds to its objective."""
+    """The turn constraints and hard mode a request adds to its objective."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     no_left: bool = False
     no_right: bool = False
     strict: bool = False
+    hard: bool = False
 
     @model_validator(mode="after")
     def _a_route(self) -> "Constraints":
@@ -256,6 +270,13 @@ class Constraints(BaseModel):
         if self.strict and not (self.no_left or self.no_right):
             raise ValueError("strict needs no_left or no_right")
         return self
+
+    @model_serializer(mode="wrap")
+    def _hard_only_when_asked(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        fields: dict[str, Any] = handler(self)
+        if not self.hard:
+            del fields["hard"]
+        return fields
 
     @property
     def kinds(self) -> list[type[TurnConstraint]]:
@@ -272,23 +293,34 @@ class Constraints(BaseModel):
 
     @property
     def note(self) -> str:
-        """What an unreachable leg's error adds: "under the strict no-left constraint" when
-        strict, else nothing."""
+        """What an unreachable leg's error, or a stop moved for it, adds: "under hard mode",
+        "under the strict no-left constraint", both ("under hard mode and the strict no-left
+        constraint"), or nothing."""
         kinds = self.kinds
-        return f"under the strict {kinds[0].label} constraint" if kinds and self.strict else ""
+        parts = ["hard mode"] if self.hard else []
+        parts += [f"the strict {kinds[0].label} constraint"] if kinds and self.strict else []
+        return f"under {' and '.join(parts)}" if parts else ""
 
     def unreachable(self, leg: tuple[int, int], detail: str = "") -> StopUnreachable:
         """The error for a leg no route covers under these constraints: `InfeasibleTurnConstraint`
-        under a strict one (its message ending with `note`), else `StopUnreachable`. The seed asks
-        it only once the leg is known to be buildable without them (`seed_route`)."""
-        if not self.note:
-            return StopUnreachable(leg, detail)
-        message = ", ".join(filter(None, [detail, self.note]))
-        return InfeasibleTurnConstraint(leg, message, self.kinds[0].key)
+        under a strict one (its message ending with `note`), else `InfeasibleHardMode` under
+        hard mode ("the seed found no way from stop 0 to stop 1 under hard mode"), else
+        `StopUnreachable`. The seed asks it of the constraints to blame, once the leg is known
+        to be buildable without them (`seed_route`)."""
+        if self.strict:
+            message = ", ".join(filter(None, [detail, self.note]))
+            return InfeasibleTurnConstraint(leg, message, self.kinds[0].key)
+        if self.hard:
+            return InfeasibleHardMode(leg, detail)
+        return StopUnreachable(leg, detail)
 
-    def objectives(self, data: GraphData, penalty: float) -> list[TurnConstraint]:
-        """The constraints, as objectives on this build, penalising a turn at `penalty`."""
-        return [kind(data, strict=self.strict, penalty=penalty) for kind in self.kinds]
+    def objectives(self, data: GraphData, penalty: float) -> list[BaseObjective]:
+        """The constraints, as objectives on this build, penalising a turn at `penalty`, and
+        hard mode."""
+        turns: list[BaseObjective] = [
+            kind(data, strict=self.strict, penalty=penalty) for kind in self.kinds
+        ]
+        return [*turns, HardMode(data)] if self.hard else turns
 
 
 NO_CONSTRAINTS = Constraints()

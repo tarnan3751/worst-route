@@ -8,7 +8,7 @@ contract.
 Built: every step, `download`, `filter`, `build`, `cleanup`, `enrich`, `tiers`, `save` and `qa`.
 `save` writes the build in the format `docs/reference/graph.md` describes, which `worst-route
 plan` reads. Portland and the whole of Oregon (**Oregon**) build and pass QA. `build` and
-cleanup's simplification and stage A also run on arrays (`--engine arrays`, **The arrays
+cleanup's simplification, stage A and twins also run on arrays (`--engine arrays`, **The arrays
 engine**), to the same build.
 
 ## Commands
@@ -851,10 +851,10 @@ shapely and Numba instead of networkx and OSMnx (`src/worst_route/pipeline/array
 state and later the whole country fit in memory and take hours rather than days (`docs/PLAN.md`
 §7 M5.2). It makes exactly the networkx engine's build: the same arrays byte for byte, the same
 strings, the same `graph_version`; the parity tests and `tools/parity.py` (below) hold it to
-that. Built so far: `build`, cleanup's simplification and stage A. The steps after stage A are
-still networkx's, handed the stage A graph by `arrays/to_nx.py` as networkx itself would hold
-it; twins and stage B, connectivity, and then enrich, tiers and save's input join in later
-series.
+that. Built so far: `build`, cleanup's simplification, stage A and twins. The steps after them
+are still networkx's, handed the stage A graph and its twins by `arrays/to_nx.py` as networkx
+itself would hold them; stage B, connectivity, and then enrich, tiers and save's input join in
+later series.
 
 **Stages** (`arrays/stage.py`). A stage is a directory under `stages/`, one `.npy` per array
 (no pickles) and `tables.json` for the rest (the tag sets, the CRS), with `manifest.json`
@@ -932,19 +932,38 @@ it) and include pairs of junctions a few centimetres inside the sum of their rad
 polygons' corners decide (some merge and some do not), two buffers meeting at one corner, and a
 split group.
 
+**Twins** (`arrays/twins.py`). The pairs `carriageways.find_twins` finds on the same stage A
+graph, by its rules and its arithmetic (`carriageways._perpendicular` itself): the same
+candidates, taken in the order of their networkx keys `(u, v, key)` so that the STRtree is built
+from the same segments in the same order; each candidate's segments its coordinates less a
+merged cluster's position at either end (which `stage_a.StageAGraph` marks by the node's kind);
+the tree queried `QUERY_CHUNK` segments at a time, which finds the same pairs; edges that share
+an OSM way left out, then a road mapped twice (two edges over the same OSM nodes in opposite
+directions) left out and counted in `same_road_pairs`, as `find_twins` does (step 3). The table
+comes out as arrays, each edge's twins ascending, and `to_nx.stage_a_graph` writes it as
+`G.graph["twins"]`, keyed as networkx keys the edges (OSMnx labels some nodes as NumPy integers
+there; the values are the same). Python's `sum`, which compensates since 3.12, makes the
+report's lengths independent of the order in practice; the order is kept anyway. The tests
+include a stub that alone would run beside the other carriageway, a way that runs back beside
+itself, a road mapped twice beside a divided road, and the random road graphs of the review that
+map a road twice (`tests/pipeline/random_roads.py`, seeds 13, 26 and 48).
+
 **Portland** (2026-10-30 extract, on a loaded machine): `build` 2–5 s against 3–7 s, the raw
 stage 22 MB against `build.pkl`'s 58 MB (45 bytes per OSM way segment: 493,206 consecutive
 node pairs, 604,539 refs); simplification 0.2 s against 3.5 s; stage A 0.6 s against 31–37 s
-(OSMnx's union of every buffer alone is about 10 s), then 3 s to hand the stage A graph to
-networkx, which the later series remove.
+(OSMnx's union of every buffer alone is about 10 s); twins 0.5–0.9 s against 0.8–1.6 s, the
+STRtree's work on both sides; then 3 s to hand the graph to networkx, which the later series
+remove.
 
 **Checking it.** `tests/pipeline/test_arrays.py` compares the engines on every fixture and on
 cases of its own (rings and loops closing on themselves, parallel chains, a way drawn against its
 chain, duplicate ways, an adjacency entry's place, small inputs, a node without a location;
 pairs near the sum of their radii, buffers meeting at a corner, a split group, a cluster's edges
-by neighbour): the raw graph, the simplified graph and the stage A graph in iteration order, the
-cleanup graph and report and their pickles, and the saved build (`tests/pipeline/parity.py`'s `assert_same_graph`, which compares
-keys, predecessors and attribute order too, and `assert_same_build`). `test_arrays_property.py` does the same on 40
+by neighbour; a stub beside a carriageway, a way beside itself): the raw graph, the simplified
+graph and the stage A graph in iteration order, the twins, the cleanup graph and report and
+their pickles, and the saved build (`tests/pipeline/parity.py`'s `assert_same_graph`, which
+compares keys, predecessors and attribute order too, and `assert_same_build`).
+`test_arrays_property.py` does the same on 40
 random street lattices (`slow`), and `test_arrays_data.py` (`data`) on Portland's filtered roads,
 to the build and, when this pipeline version saved Portland, its `graph_version`.
 

@@ -61,8 +61,8 @@ The compact build format (format 4, pipeline version 6) is built too: a build's 
 hold only what the engine and the validator read, and the roads' shapes, simplified to 2 m,
 sit apart in `geometry/`, which only the drawing of a route reads (`docs/reference/graph.md`,
 **Geometry**).
-M5.2's array pipeline has begun: `build`, cleanup's simplification and
-stage A run on arrays under `--engine arrays` (`docs/reference/pipeline.md`, **The arrays engine**), to
+M5.2's array pipeline has begun: `build`, cleanup's simplification,
+stage A and twins run on arrays under `--engine arrays` (`docs/reference/pipeline.md`, **The arrays engine**), to
 the networkx engine's build byte for byte.
 The plan (`docs/PLAN.md`,
 2026-10-30) is written and its open questions answered as far as `docs/project_overview.md` §3

@@ -84,6 +84,7 @@ report beside it in `qa/`.
   | 4 | M5: stage A places each cluster from its own buffers, not from OSMnx's union of every buffer (**cleanup**, step 2) | 4b8998deee9f (57e5deb43289) |
   | 5 | M5: stage B joins two clusters a carriageway leaves and comes back to, and its pockets follow a road by its name as well as its refs (**cleanup**, step 4). With them came the drop of a super-junction left with edges in and out and no allowed turn after connectivity (step 5), which needed no version of its own: no build that saved had one (`save` refuses them), so it changes no array of Portland's or Oregon's (Portland's `cleanup.pkl` is byte-identical with and without it) | c60bc0c9cb4a (0d4338234cae), under the connectivity rule of M5.1 |
   | 6 | M5: `save` writes the compact format (format 4: the speed table; no lon/lat, way ids, OSM node runs, states or shapes among the arrays; the shapes simplified into `geometry/`; `docs/reference/graph.md`) | 3a4a3df6269f (04d2e06854dd) |
+  | 7 | M5: enrich makes one road unit of every OSM node run, however many ways map it, and simplification keeps the node two one-way ways overlapping in part share (**enrich**; **cleanup**, step 1). The rule changes no cleanup stage: Portland's and Oregon's `cleanup.pkl` are byte-identical with and without it, from either engine. The units change Oregon's build in four rows of `edge_unit`, Ponderosa Lane's, mapped twice as two two-way ways over the same nodes and now one unit a segment (304,337 units to 304,335; Oregon's `graph_version` ec7360404031 to dd86410e515c, build e78224b5cf9a to ea3b18096e8b); Portland's only in its build id | a453e105582b (04d2e06854dd) |
 
   Rows 1–4 were measured on Geofabrik's Oregon extract of 2026-10-28, rows from 5 on on that of
   2026-10-29 (md5 3c9bc0db9a4830d004044865fbecd965, data of 2026-10-29T21:21:26Z), which
@@ -275,11 +276,16 @@ twice.
    geometry from its nodes and lose the shape points). Every self-loop is dropped first: no
    vertex-simple route can use one. A node is contracted when its edges form exactly one
    through path per allowed direction (one in and one out from two different neighbours, or
-   two in and two out pairing into the two directions of one road) and the two edges of each
+   two in and two out that are the two directions of one road: for each neighbour, the edge
+   back to it runs over the OSM nodes of the edge from it, reversed) and the two edges of each
    pair have the same `highway`, `oneway`, `reversed` and every `EDGE_TAGS` value. In the raw
    graph such a node always ends a way, so a node stays wherever a way's tags change (ref, name,
    speed limit, lanes, bridge, ...) and every edge stays homogeneous. A merge that would repeat
-   an OSM node id (a chain closing on itself) is not made. The merged edge concatenates
+   an OSM node id (a chain closing on itself) is not made. Two one-way ways over some of the
+   same nodes in opposite directions, one with a node of its own between two they share (1, 2,
+   3 and 3, 2, 6, 1), are not one road: the node they share stays a junction, since contracting
+   it would put it inside two roads, which `save` refuses. So a contracted node lies inside one
+   edge, or inside the two directions of one road. The merged edge concatenates
    `geometry` and `osm_nodes`, sums `length`, and lists its ways in `osmids` (every edge's
    `osmid` becomes the tuple `osmids`). Mappers split streets end to end often, so this removes
    many nodes: 15% of Portland's.
@@ -553,10 +559,13 @@ constants are in `config.py`.
   then US, then a state's postal code or `SR`, then any other, such as a county's `CR`;
   alphabetical within a class), each ref keeping its `BUSINESS`, `SPUR` or `ALT` suffix so such a
   route never takes its mainline's identity; else the normalised name; else none.
-- **Road unit.** The two directions of a two-way road are the edges whose `osm_nodes` run
-  opposite ways; both get the smaller key of the two as `unit`, which `save` turns into the
-  smaller edge id. A one-way edge is its own unit. Parallel roads between the same junctions
-  differ in their shape points and stay separate units.
+- **Road unit.** One OSM node run in both directions, however many ways map it: the edges
+  whose `osm_nodes` are one run or that run reversed (the two directions of a two-way road, and
+  every copy of a road mapped more than once: two one-way ways over the same nodes in opposite
+  directions, two two-way ways, a one-way and a two-way way, three of them) all get the smallest
+  key among them as `unit`, which `save` turns into the smallest edge id. A one-way edge mapped
+  once is its own unit. Parallel roads between the same junctions differ in their shape points
+  and stay separate units.
 - **Flags** (`EdgeFlag`): bridge and tunnel when the tag is present and not `no` (`viaduct`,
   `building_passage` count), toll for `toll=yes`, roundabout for `junction` `roundabout` or
   `circular`, link for a `*_link` class. Almost every ring and ramp edge is inside a
@@ -606,7 +615,8 @@ constants are in `config.py`.
   each, are `graph.graph["brands"]`, which `save` writes as arrays.
 
 `stages/enrich.json` is `EnrichReport`: edges whose speed was parsed and defaulted, by class;
-distinct identities and the edges with one; units and two-way pairs; edges per flag; per
+distinct identities and the edges with one; units and the two-way pairs among them (units
+holding edges in both directions); edges per flag; per
 collectible kind the POI nodes found, placed inside edges, at junctions and off the graph, and
 the edges with a count; per delay kind the same, shape points counted apart; nodes with a delay;
 pass-through nodes; per brand POI the found, snapped, skipped at a dead end and too far, the
@@ -692,7 +702,8 @@ stages only. `graph_data` checks it on every build and raises `ShapePointError` 
 1): every edge starts and ends at OSM nodes merged into its tail and head, and every OSM node
 inside an edge lies inside it once, is no node's member and lies inside one road unit only (the
 edge, or the two directions of its road). Simplification removes only a node with one through
-path per direction, so it holds by construction; on Portland its 366,196 inner OSM nodes do.
+path per direction, and at a node with two edges in and two out only the two directions of one
+road, so it holds by construction; on Portland its 366,196 inner OSM nodes do.
 
 `save.build_meta` assembles `meta`: `region`, `build_id`, `crs_epsg`, `created` (UTC),
 `pipeline_version`, `format` (4), `sources` and `params`. `save.build_sources` gives the extract `filter`
@@ -877,12 +888,17 @@ way, tag set, directions and length; per ref (each segment's OSM nodes) the id a
 stage `stages/build/` and `stages/build.json` (the same `BuildStats` as networkx's).
 
 **Simplification** (`arrays/simplify.py`). networkx's algorithm itself, in Numba: nodes visited
-in ascending OSM id, each contracted when its edges form one through path per direction with
-equal class, tags, `oneway` and `reversed` and far ends that differ (which is networkx's "would
-repeat an OSM node" test: segments share only junctions and a contracted node lies inside one
-chain). A merge adds an edge to a pool, its length the sum of its two in networkx's order (so
-the float sums agree), and the survivors are expanded from their merge trees into OSM nodes,
-coordinates and ways at the end. The result's order is networkx's, which every later step's
+in ascending OSM id, each contracted when its edges form one through path per direction (two
+edges in and two out the two directions of one road) with equal class, tags, `oneway` and
+`reversed` and far ends that differ (which is networkx's "would repeat an OSM node" test:
+segments share only junctions and a contracted node lies inside one edge or the two directions
+of one road). Two raw edges are the two directions of one road when their refs are one sequence
+reversed. A merged edge holds the junction its contraction removed, which no raw edge does and
+only one other edge can, the one made beside it, its reverse when that contraction was of the
+two directions of a road (`partner`); the two stay reverses as they grow, since a contraction at
+either of their shared ends takes both. A merge adds an edge to a pool, its length the sum of
+its two in networkx's order (so the float sums agree), and the survivors are expanded from
+their merge trees into OSM nodes, coordinates and ways at the end. The result's order is networkx's, which every later step's
 tie-breaks and edge keys depend on (Portland has 955 groups of parallel edges after stage B):
 
 - the nodes in the raw graph's order;
@@ -994,7 +1010,10 @@ of cleanup about 5–8 s against 45–67 s (`tools/parity.py`).
 
 **Checking it.** `tests/pipeline/test_arrays.py` compares the engines on every fixture and on
 cases of its own (rings and loops closing on themselves, parallel chains, a way drawn against
-its chain, duplicate ways, an adjacency entry's place, small inputs, a node without a location;
+its chain, duplicate ways, two one-way ways overlapping in part, two carriageways meeting at one
+node (US 322's, which the national build's save refused), merged edges at a node with two in and
+two out, a road mapped several times over one run, an adjacency entry's place, small inputs, a
+node without a location;
 pairs near the sum of their radii, buffers meeting at a corner, a split group, a cluster's edges
 by neighbour; a stub beside a carriageway, a way beside itself, a road mapped twice, the
 review's random roads; the networkx engine's stage B cases (a carriageway that would come back
@@ -1052,13 +1071,14 @@ crossover between carriageways, a roundabout bypassed by a slip lane),
 `test_carriageways.py` (with in-memory cases: ramps on one side only, offset gores),
 `test_connectivity.py`, `test_cleanup.py` (the whole step on every fixture, determinism, the
 fragmented failure), `test_enrich.py` (maxspeed parsing, bearings, at a cluster the road's and not the stub's,
-identities, units, flags,
+identities, units (a road mapped several times one unit per run), flags,
 collectibles inside edges and at junctions, delays, pass-through, determinism; the brand index:
 grouping by wikidata id or name, the display name, the cut on distinct nodes, the 100 m limit, a
 POI with only a dead end near), `test_tiers.py`
 (each fixture's tiers, the tie rule, the fragmented failure), `test_save.py` (every fixture saved,
 read back and checked with `check_build` and `check_saved`, the brand index saved and read back,
-the speed table, the empty-transitions, too-many-speeds and shape-point refusals, a stable
+the speed table, the empty-transitions, too-many-speeds and shape-point refusals, two one-way
+ways overlapping in part saved, a stable
 `graph_version`, and hypothesis: a shape drawn within the tolerance and the rounding, its ends
 exact), `test_qa.py` (a passing and a failing build, the layers),
 `test_cli_steps.py` (the steps through the CLI under a temporary `WORST_ROUTE_DATA`, including
@@ -1071,4 +1091,6 @@ Portland's latest build) and `test_build_data.py` (Portland's saved build: valid
 brands (each on at least 3 pass-through nodes, ids in name order), QA passed). `invariants.py` holds the invariant checks the tests share (`check_build` on a saved build's
 arrays; `check_saved` of a build and its geometry against the enriched graph, the OSM nodes
 along the edges that the validator's proof assumes included), `chain.py` runs the steps in memory on a fixture,
-`parity.py` compares the two engines' graphs and builds exactly, and `osm.py` writes the in-memory cases' OSM files from positions in metres.
+`parity.py` compares the two engines' graphs and builds exactly, `osm.py` writes the in-memory cases' OSM files from positions in metres,
+and `copies.py` the cases of a road mapped more than once (copies over one run, two one-way ways overlapping in part, US 322's two carriageways meeting at one node), which
+`tests/engine/test_road_copies.py` builds too.

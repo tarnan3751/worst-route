@@ -56,7 +56,7 @@ which stay in the stages.
 | | `edge_highway` | u8[m] | `HighwayClass` |
 | | `edge_tier` | u8[m] | the first tier whose classes contain the edge's class |
 | | `edge_name`, `edge_ref`, `edge_identity` | i32[m] | index into `strings.names`, `.refs`, `.identities`; −1 none |
-| | `edge_unit` | i32[m] | road unit (the two directions of a two-way road), in [0, m) |
+| | `edge_unit` | i32[m] | road unit (one OSM node run in both directions, however many ways map it), in [0, m) |
 | | `edge_flags` | u8[m] | `EdgeFlag` bits: 1 bridge, 2 tunnel, 4 toll, 8 roundabout, 16 link |
 | | `edge_toll_booths`, `edge_level_crossings` | u8[m] | counts on the edge |
 | | `edge_bearing_in`, `edge_bearing_out` | i16[m] | degrees clockwise from north, 0–359: arriving at v, leaving u, over the road's last and first 20 m (the road, not the stub cleanup added to reach a merged node: `docs/reference/pipeline.md`, enrich) |

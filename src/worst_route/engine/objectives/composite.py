@@ -6,7 +6,8 @@ constraints (`engine/constraints.py`) to its objective. Its score is the sum of 
 objective's terms, plus a soft constraint's pair terms, its penalties), and so is `delta`; its
 metrics are the objective's. A turn (`feasible_pair`) or a window (`feasible_window`) is
 feasible only when the objective and every constraint agree; the bans of a window are the
-union of theirs, and so are the turn classes the searches refuse (`banned_turn_classes`) or try
+union of theirs, the window the loop tries is the drawn one as each part in turn widens it
+(`window`), and so are the turn classes the searches refuse (`banned_turn_classes`) or try
 without first (`avoided_turn_classes`); the search weights, the waypoint pool, the radii, the
 target value, `describe` and the primary quantity are the objective's; `constraint_delta` is
 the constraints' part of `delta`, which a run shrinking toward a target reads (`Goal.accepts`).
@@ -81,6 +82,12 @@ class Composite:
             if bans is not None:
                 union = bans.copy() if union is None else union | bans
         return union
+
+    def window(self, route: Route, i: int, j: int) -> tuple[int, int]:
+        """The drawn window as the objective, then each constraint, widens it."""
+        for part in self._all:
+            i, j = part.window(route, i, j)
+        return i, j
 
     def search_weights(self, G: GraphData) -> FloatArray:  # noqa: N803
         """The objective's."""

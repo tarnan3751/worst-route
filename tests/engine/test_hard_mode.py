@@ -208,3 +208,15 @@ def test_local_exhaustive_gives_the_best_path_hard_mode_allows(i: int, j: int) -
     assert gain == distance.delta(route, i, j, *allowed[0]) > 0
     assert gain < distance.delta(route, i, j, *ranked[0])
     assert objective.feasible_window(g, route, i, j, *found)
+
+
+def test_a_window_inside_a_stretch_is_widened_to_its_ends_never_past_a_stop() -> None:
+    hard, route = HardMode(GRID), route_on(GRID, SNAKE)
+    assert hard.window(route, 2, 3) == hard.window(route, 1, 2) == (0, 5)  # all of Row 0
+    for drawn in ((4, 6), (6, 7), (7, 8), (11, 13)):  # different roads either side
+        assert hard.window(route, *drawn) == drawn
+    via = route_on(GRID, SNAKE, stop_idx=(0, 3, 13))  # a via at node 3, on Row 0
+    assert hard.window(via, 1, 2) == (0, 3) and hard.window(via, 3, 4) == (3, 5)
+    distance = Distance(GRID, baseline=Metrics(1000.0, 90.0), r_max=5000.0)
+    assert distance.window(route, 2, 3) == (2, 3)
+    assert Composite(distance, [HardMode(GRID)]).window(route, 2, 3) == (0, 5)

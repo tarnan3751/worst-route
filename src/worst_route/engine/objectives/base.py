@@ -9,8 +9,9 @@ node terms over the route's nodes (a round trip's start once), edge terms over i
 terms over each two consecutive edges and the first-edge term over its first edge (its pair
 term after an edge that is not there; `closing` is a round trip's last edge, which comes back
 to its start, else -1; both only when `has_pair`), the global term over the whole route (only
-when `has_global`). Feasibility hooks (`feasible_pair`, `feasible_window`) and per-window bans
-(`banned_edges`) constrain it, and `banned_turn_classes` names the turn classes its
+when `has_global`). Feasibility hooks (`feasible_pair`, `feasible_window`), per-window bans
+(`banned_edges`) and the window the loop tries for the one it drew (`window`: as drawn, unless a
+constraint widens it) constrain it, and `banned_turn_classes` names the turn classes its
 `feasible_pair` refuses, so the searches never propose them (`graph/backend.py`);
 `avoided_turn_classes` names those its pair terms penalise, which the searches try without
 first (`engine/search.py`); search guidance (`search_weights`,
@@ -101,6 +102,11 @@ class Objective(Protocol):
 
     def banned_edges(self, G: GraphData, route: Route, i: int, j: int) -> BoolArray | None:  # noqa: N803
         """Edges this mode bans for a detour of nodes[i..j], beyond the route's own."""
+        ...
+
+    def window(self, route: Route, i: int, j: int) -> tuple[int, int]:
+        """The window the loop tries for the nodes[i..j] it drew: the same, or one widened to
+        where a detour this mode allows can start and end (never past a stop)."""
         ...
 
     def search_weights(self, G: GraphData) -> FloatArray:  # noqa: N803
@@ -207,6 +213,10 @@ class BaseObjective:
     def banned_edges(self, G: GraphData, route: Route, i: int, j: int) -> BoolArray | None:  # noqa: N803
         """No bans of its own."""
         return None
+
+    def window(self, route: Route, i: int, j: int) -> tuple[int, int]:
+        """The window as drawn."""
+        return i, j
 
     def search_weights(self, G: GraphData) -> FloatArray:  # noqa: N803
         """Length."""

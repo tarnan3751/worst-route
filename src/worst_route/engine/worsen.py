@@ -26,7 +26,8 @@ nothing, it is spliced in as one more attempt, and the run goes on shrinking.
   starts at one of the `SEGMENT_BIAS_TOP` route edges with the most unused active nodes near
   their midpoint (`UnusedNodes`: a grid of counts, its summed-area table rebuilt on every
   accepted splice, read in a square of half-side `WAYPOINT_BALL_FACTOR` × the radius), else
-  at a uniform edge.
+  at a uniform edge. The objective's `window` may then widen it (hard mode: a window inside
+  one road's stretch, out to the stretch's ends), drawing nothing.
 - The search masks are the route's own once the window is released (`Route.release`), with
   the request's `banned_edges` and the objective's bans for the window; those two are also
   what the splice is told to refuse.
@@ -275,7 +276,7 @@ def worsen(
         else:
             if anchors_for != (accepted, radius):
                 anchors, anchors_for = unused.anchors(route, table, radius), (accepted, radius)
-            i, j = pick_segment(route, rng, anchors, shrinking=shrinking)
+            i, j = objective.window(route, *pick_segment(route, rng, anchors, shrinking=shrinking))
             forbid, banned = route.release(data, i, j)
             extra = _either(banned_edges, objective.banned_edges(data, route, i, j))
             if extra is not None:

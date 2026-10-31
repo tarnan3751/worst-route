@@ -40,9 +40,14 @@ of the edges either side of it, which a detour may extend; a window inside one s
 same identity on both sides) may only be replaced along that road, so every other edge is
 banned. Its `feasible_window` is exact: given a legal route, the splice is legal iff the
 detour with the window's two neighbours has one stretch per identity, and every identity of
-the detour that is on the route outside the window is a neighbour's. `stretches` and
-`returning` read the rule off a route's edges for the seed and the base route.
+the detour that is on the route outside the window is a neighbour's. Its `window` widens a
+window drawn inside one stretch out to the stretch's ends, no farther than the stops either
+side, so the loop tries a window a detour can leave the road from rather than one only that
+road could replace. `stretches` and `returning` read the rule off a route's edges for the seed
+and the base route.
 """
+
+from bisect import bisect_left, bisect_right
 
 import numpy as np
 from numpy.typing import NDArray
@@ -174,6 +179,20 @@ class HardMode(BaseObjective):
         there = np.searchsorted(inside, new, side="right") - np.searchsorted(inside, new)
         outside = self._count[new + 1] - there
         return not ((outside > 0) & (new != a) & (new != b)).any()
+
+    def window(self, route: Route, i: int, j: int) -> tuple[int, int]:
+        """A window inside one road's stretch (the same identity either side), out to the
+        stretch's ends, no farther than the stops either side; any other as drawn."""
+        a, b = self._neighbours(route, i, j)
+        if a != b or a < 0:
+            return i, j
+        stops = route.stop_idx
+        first, last = stops[bisect_right(stops, i) - 1], stops[bisect_left(stops, j)]
+        while i > first and self._ids[route.edges[i - 1]] == a:
+            i -= 1
+        while j < last and self._ids[route.edges[j]] == a:
+            j += 1
+        return i, j
 
     def _refresh(self, route: Route) -> None:
         """The route's identities, counted once per route (every splice makes a new one)."""

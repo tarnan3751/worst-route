@@ -1,6 +1,7 @@
 """The app as public hosting runs it, for the hosting tests (logs, limits, readiness, basemap,
 the site): `hosted` serves `create_app` in process over httpx, its requests from `client` (an
-address and a port, as uvicorn gives the peer), with inline workers."""
+address and a port, as uvicorn gives the peer), with inline workers and, given one, a geocoding
+service of the test's own (with `geocoder="nominatim"`)."""
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -12,6 +13,7 @@ from fastapi import FastAPI
 
 from worst_route.api.app import ApiSettings, create_app
 from worst_route.api.jobs import JobSettings
+from worst_route.geocode.service import GeocodeService
 
 from ..engine.graphs import at_node
 from .support import GRID
@@ -33,11 +35,13 @@ async def hosted(
     *,
     client: tuple[str, int] = ("203.0.113.7", 50000),
     jobs: dict[str, Any] | None = None,
+    geocode: GeocodeService | None = None,
     **settings: Any,
 ) -> AsyncIterator[tuple[httpx.AsyncClient, FastAPI]]:
     job_settings = JobSettings(**{"inline_workers": True, "coalesce_s": 0.0, **(jobs or {})})
     values: dict[str, Any] = {"backend": "python", "geocoder": "none", **settings}
-    app = create_app(ApiSettings(data_dir=data, region="portland", jobs=job_settings, **values))
+    config = ApiSettings(data_dir=data, region="portland", jobs=job_settings, **values)
+    app = create_app(config, geocode=geocode)
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app, client=client)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:

@@ -9,9 +9,12 @@ mounts the endpoints (`routes_api`, `geocode_api`, `share_api`, whose images are
 `share/` beside the route store, `directions_api` and `ready_api`). Its lifespan starts and
 stops the job manager, and closes the geocoder's client. `ApiSettings` says which build, which
 backend, where the store is, the job limits, and the geocoder: which, at what URL, with what
-contact in its User-Agent (`geocoder_user_agent`); and whether a reverse proxy in front of it is
-trusted (`trust_proxy`: its `X-Forwarded-For` names the client, its `X-Request-ID` the request).
-Every request gets an id and an access line (`logs.RequestLog`).
+contact in its User-Agent (`geocoder_user_agent`); whether a reverse proxy in front of it is
+trusted (`trust_proxy`: its `X-Forwarded-For` names the client, its `X-Request-ID` the request);
+and whether it is public (`public`: the limits `limits.PUBLIC`, a budget up to 60 s and each
+client's share of the jobs and the place searches, held as `Api.limits`, the job manager's
+settings and `Api.quota`; else `limits.LOCAL`). Every request gets an id and an access line
+(`logs.RequestLog`).
 
 Every error answers an `ErrorBody` (`{code, message, ...}`): an endpoint refuses with
 `routes_api.ApiError(status, code, message, **fields)`, a malformed request is 422
@@ -26,7 +29,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +43,7 @@ from starlette.exceptions import HTTPException
 from worst_route import __version__, config
 from worst_route.api import directions_api, geocode_api, ready_api, routes_api, share_api
 from worst_route.api.jobs import JobManager, JobSettings
+from worst_route.api.limits import LOCAL, PUBLIC, GeocodeQuota, Limits
 from worst_route.api.logs import RequestLog, request_id_of
 from worst_route.api.routes_api import ApiError
 from worst_route.api.schemas import ErrorBody
@@ -69,6 +73,7 @@ class ApiSettings:
     nominatim_url: str = NOMINATIM_URL
     contact: str | None = None  # in the geocoder's User-Agent (WORST_ROUTE_CONTACT)
     trust_proxy: bool = False  # a reverse proxy's X-Forwarded-For and X-Request-ID believed
+    public: bool = False  # the public limits (`limits.PUBLIC`)
 
 
 @dataclass(frozen=True, eq=False)
@@ -86,6 +91,8 @@ class Api:
     # each build's edge letters (`alphabet_search.edge_letters`), by graph_version, worked out
     # once for the alphabet routes' documents
     letters: dict[str, np.ndarray] = field(default_factory=dict)
+    limits: Limits = LOCAL
+    quota: GeocodeQuota | None = None  # each client's place searches, on a public server
 
 
 def geocoder_user_agent(settings: ApiSettings) -> str:
@@ -102,7 +109,13 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
     )
     store_path = settings.store_path or settings.data_dir / "routes.sqlite"
     store = RouteStore(store_path)
-    jobs = JobManager(settings.jobs, store, data_dir=settings.data_dir, backend=settings.backend)
+    limits = PUBLIC if settings.public else LOCAL
+    job_settings = replace(
+        settings.jobs,
+        running_per_client=limits.running_per_client,
+        queued_per_client=limits.queued_per_client,
+    )
+    jobs = JobManager(job_settings, store, data_dir=settings.data_dir, backend=settings.backend)
     service = None
     if settings.geocoder == "nominatim":
         service = geocode or GeocodeService(
@@ -125,7 +138,10 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
     places = PlaceIndex.load(settings.region, settings.data_dir)
     share_dir = store_path.parent / "share"
     builds = {settings.region: loaded}
-    app.state.api = Api(settings, builds, store, jobs, service, places, share_dir)
+    quota = GeocodeQuota(limits.geocode_per_minute) if limits.geocode_per_minute else None
+    app.state.api = Api(
+        settings, builds, store, jobs, service, places, share_dir, limits=limits, quota=quota
+    )
     app.include_router(routes_api.router)
     app.include_router(geocode_api.router)
     app.include_router(share_api.router)

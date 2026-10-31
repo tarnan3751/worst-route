@@ -257,7 +257,7 @@ async def test_jobs_wait_in_the_queue_and_too_many_are_refused(
         running = submit(m, build, long)
         waiting = submit(m, build, request(BIG, [0, 399], seed=5))
         assert (running.status, waiting.status) == ("running", "queued")
-        assert not m.has_room()
+        assert m.refusal() is not None
         with pytest.raises(TooManyJobs):
             submit(m, build, request(BIG, [0, 399], seed=6))
         await m.cancel(waiting)

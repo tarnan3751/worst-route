@@ -15,10 +15,11 @@
 `POST /jobs` refuses before a job exists: a ratio target for a round trip first, then the
 objective (an unknown one; the alphabet route to continue from a base route; one whose item,
 brand, target or stops do not fit it: `request.objective_problem`; a brand the build does not
-have) and the budget (the target's
-bounds are the body's), then the job
-limit, then for "make it worse" (`base_route_id`) the base route (its build, engine and stops,
-tier and leash, which the request may leave out; a ratio target for a base round trip too),
+have) and the budget (at most `Limits.budget_max_s`: 120 s, or 60 s on a public server; the
+target's bounds are the body's), then the job limit (on a public server the client's own too,
+`limits.client_of`), then for "make it worse" (`base_route_id`) the base route (its build,
+engine and stops, tier and leash, which the request may leave out; a ratio target for a base
+round trip too),
 then each stop against the region's bbox (`meta.params.bbox`, else the nodes' extent), then the
 pre-flight (`jobs.prepare`: a pilgrimage's brand within the request's area, snapping and the
 re-snap fallback, in a worker thread), and for a
@@ -28,7 +29,8 @@ errors are
 `STOP_OUTSIDE_REGION`, `NO_NODE_NEAR`, `STOP_UNREACHABLE_WITHOUT_REPEAT`,
 `INFEASIBLE_TURN_CONSTRAINT`, `BUDGET_TOO_LARGE`,
 `UNKNOWN_ROUTE`, `BUILD_MISMATCH` (also `/validate` on a route another engine version
-made), `BASE_ROUTE_MISMATCH`; 429 `TOO_MANY_JOBS`; 404
+made), `BASE_ROUTE_MISMATCH`; 429 `TOO_MANY_JOBS` (+ `running`, `queued`: the client's own jobs,
+when they are why); 404
 `NOT_FOUND`; 409 `BUILD_UNAVAILABLE` (a stored route whose build is no longer on disk at its
 graph_version).
 
@@ -57,6 +59,7 @@ from pydantic import ValidationError
 from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from worst_route.api.jobs import Job, Prepared, TooManyJobs, prepare
+from worst_route.api.limits import client_of
 from worst_route.api.schemas import (
     BrandOut,
     BrandsOut,
@@ -84,7 +87,7 @@ from worst_route.api.schemas import (
 from worst_route.api.sse import server_sent, time_ratio
 from worst_route.api.store import StoredRoute
 from worst_route.api.worker import RouteArrays, unreachable
-from worst_route.config import BUBBLE_KM, BUDGET_MAX_S
+from worst_route.config import BUBBLE_KM
 from worst_route.engine import ENGINE_VERSION
 from worst_route.engine.alphabet_search import alphabet_counts, edge_letters
 from worst_route.engine.io import feature_collection, line_coordinates
@@ -272,11 +275,14 @@ async def create_job(body: RouteRequestIn, request: Request) -> JobCreated:
     if body.brand is not None and (unknown := brand_problem(loaded.data, body.brand)) is not None:
         message = f"{unknown}; GET /brands?region={body.region} lists the brands"
         raise ApiError(422, "INVALID_REQUEST", message, field="brand")
-    if body.budget_s > BUDGET_MAX_S:
-        message = f"a budget of {body.budget_s:g} s is over the {BUDGET_MAX_S:g} s allowed"
-        raise ApiError(422, "BUDGET_TOO_LARGE", message, max_s=BUDGET_MAX_S)
-    if not api.jobs.has_room():
-        raise ApiError(429, "TOO_MANY_JOBS", "every worker is busy and the queue is full")
+    budget_max_s = api.limits.budget_max_s
+    if body.budget_s > budget_max_s:
+        message = f"a budget of {body.budget_s:g} s is over the {budget_max_s:g} s allowed"
+        raise ApiError(422, "BUDGET_TOO_LARGE", message, max_s=budget_max_s)
+    client = client_of(request.scope, api.settings.trust_proxy)
+    refused = api.jobs.refusal(client)
+    if refused is not None:
+        raise _too_many(refused)
     seed = body.seed if body.seed is not None else secrets.randbelow(2**31)
     base: StoredRoute | None = None
     planned = body.model_copy(update={"seed": seed})
@@ -307,11 +313,23 @@ async def create_job(body: RouteRequestIn, request: Request) -> JobCreated:
         except BaseRouteMismatch as error:
             raise ApiError(422, "BASE_ROUTE_MISMATCH", str(error), field=error.field) from None
         arrays = RouteArrays(base.nodes, base.edges, base.stop_idx, base.metrics)
+    asked = planned.model_dump(mode="json")
     try:
-        job = api.jobs.submit(loaded, prepared, input=planned.model_dump(mode="json"), base=arrays)
-    except TooManyJobs:
-        raise ApiError(429, "TOO_MANY_JOBS", "every worker is busy and the queue is full") from None
+        job = api.jobs.submit(loaded, prepared, input=asked, base=arrays, client=client)
+    except TooManyJobs as full:
+        raise _too_many(full) from None
     return JobCreated(job_id=job.id, events_url=f"/jobs/{job.id}/events", seed=seed)
+
+
+def _too_many(refused: TooManyJobs) -> ApiError:
+    """TOO_MANY_JOBS: the server's, or the client's own, with its counts."""
+    if refused.running is None:
+        return ApiError(429, "TOO_MANY_JOBS", "every worker is busy and the queue is full")
+    message = (
+        f"your jobs fill your share: {refused.running} running and {refused.queued} waiting; "
+        "wait for one to end"
+    )
+    return ApiError(429, "TOO_MANY_JOBS", message, running=refused.running, queued=refused.queued)
 
 
 def _continuing(

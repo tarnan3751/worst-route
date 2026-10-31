@@ -16,7 +16,7 @@ else: every route it returns has passed the validator.
 | `directions_api.py` | `GET /routes/{id}/directions` |
 | `ready_api.py` | `GET /ready` (**Endpoints**) |
 | `logs.py` | `RequestLog` (request ids, access lines), `JsonFormatter`, `ContextFilter`, `json_log_config` (**Logs**) |
-| `limits.py` | `client_of` (who a client is), `client_hash` (**Logs**) |
+| `limits.py` | `Limits` (`LOCAL`, `PUBLIC`), `GeocodeQuota`, `client_of` (who a client is), `client_hash` (**Public limits**, **Logs**) |
 | `schemas.py` | the request and response models (pydantic), the SSE payloads |
 | `jobs.py` | `JobManager`, `JobSettings`, `Job`, `Subscription`, `prepare`, `TooManyJobs` |
 | `worker.py` | `run_job` (what a worker process runs), `JobSpec`, `RouteArrays`, the worker's messages |
@@ -36,7 +36,7 @@ Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in requests; every numb
 worst-route serve --region R [--build-id ID] [--host 127.0.0.1] [--port 8000] [--workers N]
                   [--backend auto|csr|python] [--store PATH]
                   [--geocoder nominatim|none] [--nominatim-url URL]
-                  [--trust-proxy] [--log-format text|json]
+                  [--trust-proxy] [--log-format text|json] [--public]
 ```
 
 It loads the region's build (`--build-id`, else the region's `latest`) before it listens, so a
@@ -73,11 +73,13 @@ the proxy's `X-Request-ID` (**Logs**); without it both headers are ignored, and 
 own handling of them (`proxy_headers` off), so the client is always the peer. It prints
 `trusting the proxy's X-Forwarded-For and X-Request-ID` after the geocoder's line.
 `--log-format json` logs one JSON object a line on stdout (**Logs**); `text`, the default, is
-uvicorn's format, as before.
+uvicorn's format, as before. `--public` applies the public limits (**Public limits**) and prints
+them last: `public: a client runs 1 job at once with 3 waiting, budgets up to 60 s, 10 place
+searches a minute`.
 
 `create_app(ApiSettings(data_dir, region, build_id="latest", backend, store_path, jobs,
-geocoder="nominatim", nominatim_url, contact, trust_proxy=False))` builds the same application
-in-process, and
+geocoder="nominatim", nominatim_url, contact, trust_proxy=False, public=False))` builds the
+same application in-process, and
 `create_app(settings, geocode=service)` with a geocoding service of the caller's own (a
 `FakeGeocoder` behind it, in the tests); the tests drive it over `httpx` (**Tests**).
 
@@ -140,7 +142,8 @@ what the API and the presentation need:
   `STOP_UNREACHABLE_WITHOUT_REPEAT` with the message "the seed found no way from stop 0 to stop 1
   under hard mode, …; try without hard" (the seed is a heuristic: a legal route may exist).
 - `tier`: `auto` or `T0`..`T4`. `leash_km`: `auto` or in (0, 150].
-- `budget_s`: in (0, 120] (over 120 is `BUDGET_TOO_LARGE`), default 20.
+- `budget_s`: in (0, 120] (over 120 is `BUDGET_TOO_LARGE`; on a public server in (0, 60],
+  **Public limits**), default 20.
 - `max_iterations`: default 1,000,000, so the seconds budget ends a run. The CLI keeps the
   engine's 5,000.
 - `seed`: in [0, 2⁶³ − 1]; left out, a random one below 2³¹, returned in the 202.
@@ -167,12 +170,12 @@ FastAPI's `detail`):
 | 422 | `NO_NODE_NEAR` (+ `stop_index`, null when no single stop is to blame) | no node within 5 km can play the stop's role |
 | 422 | `STOP_UNREACHABLE_WITHOUT_REPEAT` (+ `leg`, `stop_index`) | no route covers the leg without repeating a road, after the re-snap fallback (`stop_index` is the leg's later stop), with or without a strict turn constraint: under one, when the seed's legs cannot be built without it either; under hard mode, also when they can be built without hard mode (alone, or with the strict constraint alone), the message then "the seed found no way from stop 0 to stop 1 under hard mode, …; try without hard" |
 | 422 | `INFEASIBLE_TURN_CONSTRAINT` (+ `leg`, `stop_index`, `constraint`) | under a strict turn constraint (`constraint`: `no_left` or `no_right`), no route covers the leg without repeating a road or turning that way, after the re-snap fallback, while the seed's legs can be built without the constraint (one more build, on failure only; under hard mode too, when they can be built under hard mode alone); the message ends "under the strict no-left constraint; try without strict" |
-| 422 | `BUDGET_TOO_LARGE` (+ `max_s`) | `budget_s` over 120 |
+| 422 | `BUDGET_TOO_LARGE` (+ `max_s`) | `budget_s` over 120, or over 60 on a public server |
 | 422 | `UNKNOWN_ROUTE` (+ `base_route_id`) | a base route that is not stored |
 | 422 | `BUILD_MISMATCH` | a base route planned on another region, `graph_version` or engine version; `/validate` on a route another engine version made (its stops could be re-derived differently: re-plan it), as `worst-route validate` refuses one |
 | 422 | `BASE_ROUTE_MISMATCH` (+ `field`) | stops, tier or leash given that differ from the base route's; or a base route `plan.check_base` refuses under its request's resolved stops and masks (`field` `stops`: its stops are not where they resolve now; `route`: a node outside the area, an edge the request bans, a turn its strict constraint refuses, or under hard mode a road it comes back to) |
-| 429 | `TOO_MANY_JOBS` | every worker busy and the queue full |
-| 429 | `RATE_LIMITED` (+ `retry_after_s`) | a place search that finds the geocoder's queue full: five already queued for a turn (**Geocoding**); the message is "the geocoder is busy, try again in a few seconds" |
+| 429 | `TOO_MANY_JOBS` (+ `running`, `queued` when the client's own jobs are why) | every worker busy and the queue full; on a public server also a client whose own jobs fill its share, one running and three waiting (**Public limits**): `running` and `queued` are its counts |
+| 429 | `RATE_LIMITED` (+ `retry_after_s`) | a place search that finds the geocoder's queue full: five already queued for a turn (**Geocoding**); the message is "the geocoder is busy, try again in a few seconds"; on a public server also a client's eleventh search within a minute (**Public limits**) |
 | 502 | `GEOCODER_ERROR` | Nominatim failed: an error status, a timeout, no connection, an answer that does not parse; or refused (429, 403), which pauses the geocoder 60 s, during which a search the cache cannot answer gets this at once ("the geocoder refused; paused for N s") |
 | 503 | `GEOCODER_DISABLED` | a place search on a server whose geocoder is `none` |
 | 404 | `NOT_FOUND` | an unknown (or expired) job, an unknown route (for a share image, also an id that is not 12 lowercase hex digits), an unknown path |
@@ -702,6 +705,39 @@ machine, with curl:
   2.73× (700.5 km, `target`); the document 0.6 MB in 0.08–0.15 s with 723 steps and 33 towns,
   `/directions` 11 ms, `/share.png` 0.54 s (115,836 road units, thinned to 17,050).
 
+## Public limits
+
+`serve --public` (`ApiSettings.public`) applies `limits.PUBLIC`, the `config.PUBLIC_*` numbers,
+for a server open to anyone (`docs/reference/hosting.md`); without it, `limits.LOCAL`, as the CLI
+and a local server have always had them. Off by default.
+
+- **A budget of at most 60 s** (`PUBLIC_BUDGET_MAX_S`, against `BUDGET_MAX_S`'s 120): more is
+  `BUDGET_TOO_LARGE` with `max_s: 60`, in the same place among the checks.
+- **The leash stays at most 150 km** (`LEASH_MAX_KM`), the request's schema's limit for every
+  server, auto leashes included; a public server adds nothing to it (the plan's "≤ 300 km" is
+  more than any request can ask).
+- **Each client's share of the jobs**: a client (`limits.client_of`: the peer, or behind a
+  trusted proxy the last address of `X-Forwarded-For`, an IPv6 one by its /64; **Logs**) runs at
+  most one job at once (`PUBLIC_RUNNING_PER_CLIENT`) and has at most three more waiting
+  (`PUBLIC_QUEUED_PER_CLIENT`). Its next job waits in the queue even while workers are free, and
+  starts once its running one ends; when a worker frees, the first job in the queue whose client
+  may run one starts, so a job waiting on its own client's never holds up another client's. A
+  fifth is `TOO_MANY_JOBS` with the client's counts, `{code: "TOO_MANY_JOBS", message: "your jobs
+  fill your share: 1 running and 3 waiting; wait for one to end", running: 1, queued: 3}`. The
+  server's own limits stay (`API_MAX_JOBS` running, `API_MAX_QUEUED` waiting): a job refused for
+  them is `TOO_MANY_JOBS` without counts. The job manager counts each client's jobs
+  (`JobSettings.running_per_client`, `queued_per_client`); a job's client is in its log lines,
+  hashed.
+- **Each client's share of the place searches**: at most ten in any minute
+  (`PUBLIC_GEOCODE_PER_MINUTE`, `limits.GeocodeQuota`, a sliding minute), a search the cache
+  answers counted too; the eleventh is `RATE_LIMITED` with `retry_after_s`, the whole seconds
+  until its first search leaves the minute (at least 1), and the message "at most 10 searches a
+  minute; try again in N s". It is checked after the query, the region and `GEOCODER_DISABLED`,
+  before the cache, and a refused search counts nothing. Nominatim's own rate limit (one request
+  a second for the whole server) stays as it is (**Geocoding**).
+
+The CLI has none of these limits; `worst-route plan` plans any budget the engine takes.
+
 ## Logs
 
 Every HTTP request gets an id (`logs.RequestLog`, the app's middleware): 16 hex digits, or with
@@ -751,6 +787,7 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 |---|---|
 | `test_schemas.py` | the request mirrors the engine's (a pilgrimage's brand included), its defaults, the seed's bounds, stops left out only with a base, malformed requests refused (both turn constraints at once, an unknown one); the target as the engine's, each kind with its own number and within its bounds; `done`'s time ratio, target, delays and turns typed |
 | `test_logs.py` | who a client is (the peer; the last `X-Forwarded-For` address only when trusted, without a port; IPv6 by its /64), its hash; a request id and one access line per request, without the address or the query; a proxy's request id kept only when trusted and well formed; a job's end line with its id, outcome and route and the id of the request that started it; a queued job's lines with its own request's id, not the one that freed its slot; an unhandled error's 500 `INTERNAL_ERROR` with the request's id, logged with it; a JSON line's fields and traceback |
+| `test_limits.py` | each client's searches on a fake clock (ten in any minute, `retry_after_s`, other clients apart, idle ones forgotten); the manager's per-client jobs (one running and three waiting while workers are free, the fifth refused with its counts, another client and a job without a client unaffected, the next of a client starting in order when its running one ends, a waiting job whose client is busy letting the next one start, a full server's refusal without counts); over HTTP the public budget (and 120 s otherwise), a client's share of the jobs from one peer and behind a trusted proxy (the last forwarded address counting, an untrusted header ignored), a client's eleventh search refused, cached answers counted, none of it when not public |
 | `test_ready_api.py` | `/ready`: 200 with the build, the store and the places index; 503 without the index, and once the build is replaced or gone (while `/health` answers), its details without a path on the server |
 | `test_store.py` | the round trip (the stored route validates), unknown ids, the first record kept, what the id covers |
 | `test_sse.py` | path points and node indices, the per-edge simplification keeping nodes and original values, splices, metrics, the event encoding |
@@ -763,7 +800,7 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 
 `tests/engine/test_plan.py` covers `plan_route`'s hooks, `tests/graph/test_loader.py` the loader,
 and `tests/unit/test_cli.py` `serve`'s errors, options (the geocoder's included, with the line
-it prints; `--trust-proxy` and `--log-format`, uvicorn's proxy headers off) and its taking `csr` on a build with transition tables. `tests/geocode/` covers the
+it prints; `--trust-proxy`, `--log-format` and `--public`, uvicorn's proxy headers off) and its taking `csr` on a build with transition tables. `tests/geocode/` covers the
 geocoding package: `normalise`; the cache and its TTL on a fake clock; the rate limit on a fake
 clock (a burst of ten serving six and refusing four, requests the interval plus a 300 ms
 latency apart, the interval from the answer, a failure spacing the next request too, a turn
@@ -781,14 +818,15 @@ over a real socket by hand (**Measured**).
 
 - **One process.** Jobs live in the API process's memory, so uvicorn runs one process; a restart
   loses running jobs (their routes so far are not stored) and ended jobs' records.
-- **No public limits** beyond the job cap and queue: no per-client limits, no authentication,
-  no CORS (the frontend's dev server proxies). `docs/PLAN.md` §4.5 lists what public hosting
-  adds.
+- **The public limits are per process and per address** (**Public limits**): a restart forgets
+  them, and a client with many addresses has many shares. There is no authentication and no
+  CORS (the frontend's dev server proxies).
 - **The geocoder's rate limit is per process**: one request at a time from this server, a
   second from each answer to the next request, which is the application's only while uvicorn
   runs one process and one server asks Nominatim (two servers, as the coordinator's and a lane's
   pointed at the real service, would share the policy's second). The pause after a refusal is
-  per process too. One client can take every slot: there is no per-client share. Nominatim
+  per process too. One client can take every slot, unless the server is public (**Public
+limits**: ten searches a minute a client). Nominatim
   itself is for light use; public hosting moves to Photon or a paid geocoder (`docs/PLAN.md`
   §4.4).
 - **An abandoned search holds its place in the geocoder's queue**: a search whose client has

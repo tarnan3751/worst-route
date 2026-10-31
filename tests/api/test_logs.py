@@ -109,7 +109,11 @@ async def test_a_job_s_lines_carry_its_id_and_the_request_that_started_it(
     assert end.request_id == created.headers["x-request-id"]  # type: ignore[attr-defined]
 
 
-@pytest.mark.parametrize("settings", [{"jobs": {"max_jobs": 1}}], ids=["one worker"])
+@pytest.mark.parametrize(
+    "settings",
+    [{"jobs": {"max_jobs": 1}}, {"public": True}],
+    ids=["one worker", "one job a client"],
+)
 async def test_a_queued_job_s_lines_carry_the_request_that_submitted_it(
     data: Path,
     caplog: pytest.LogCaptureFixture,

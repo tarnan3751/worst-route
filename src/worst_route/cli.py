@@ -51,7 +51,7 @@ cache is `geocode.sqlite` beside the store; it prints the geocoder and the User-
 the contact from `WORST_ROUTE_CONTACT` included. `--trust-proxy` believes a reverse proxy's
 `X-Forwarded-For` and `X-Request-ID` (uvicorn's own proxy headers are off), and `--log-format
 json` logs a JSON object a line on stdout, with request ids and without uvicorn's access lines
-(`api/logs.py`).
+(`api/logs.py`); `--public` applies the public limits (`api/limits.py`) and prints them.
 
 `aux places` writes the places index (`docs/reference/presentation.md`, **Places**) under
 `<WORST_ROUTE_DATA>/aux/places/` from the Census files `tools/fetch_census.sh` fetched into
@@ -1197,6 +1197,14 @@ def serve(
             callback=_check_log_format,
         ),
     ] = "text",
+    public: Annotated[
+        bool,
+        typer.Option(
+            "--public",
+            help="The public limits: budgets up to 60 s, each client's share of the jobs and "
+            "the place searches.",
+        ),
+    ] = False,
 ) -> None:
     """Serve the API."""
     import copy
@@ -1219,6 +1227,7 @@ def serve(
         nominatim_url=nominatim_url,
         contact=settings().contact,
         trust_proxy=trust_proxy,
+        public=public,
     )
     try:
         application = create_app(config)
@@ -1234,6 +1243,13 @@ def serve(
         typer.echo(f'geocoder: nominatim {nominatim_url} as "{geocoder_user_agent(config)}"')
     if trust_proxy:
         typer.echo("trusting the proxy's X-Forwarded-For and X-Request-ID")
+    if public:
+        limits = application.state.api.limits
+        typer.echo(
+            f"public: a client runs {limits.running_per_client} job at once with "
+            f"{limits.queued_per_client} waiting, budgets up to {limits.budget_max_s:g} s, "
+            f"{limits.geocode_per_minute} place searches a minute"
+        )
     if log_format == "json":
         log_config = json_log_config()
     else:

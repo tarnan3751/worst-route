@@ -172,7 +172,7 @@ def test_serve_takes_the_geocoder_s_options(
     settings.cache_clear()
 
 
-def test_serve_takes_the_proxy_and_log_options(
+def test_serve_takes_the_proxy_log_and_public_options(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import uvicorn
@@ -205,4 +205,14 @@ def test_serve_takes_the_proxy_and_log_options(
     assert config["loggers"]["worst_route"]["handlers"] == ["json"]
     assert config["handlers"]["json"]["stream"] == "ext://sys.stdout"
     assert runner.invoke(app, [*base, "--log-format", "yaml"]).exit_code == 2
+    public = runner.invoke(app, [*base, "--public"])
+    assert public.exit_code == 0, public.output
+    assert public.stdout.splitlines()[-1] == (
+        "public: a client runs 1 job at once with 3 waiting, budgets up to 60 s, "
+        "10 place searches a minute"
+    )
+    api = ran["app"].state.api
+    assert api.settings.public is True and api.limits.budget_max_s == 60
+    assert (api.jobs.settings.running_per_client, api.jobs.settings.queued_per_client) == (1, 3)
+    assert api.quota is not None and api.quota.per_minute == 10
     settings.cache_clear()

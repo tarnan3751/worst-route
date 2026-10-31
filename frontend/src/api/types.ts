@@ -19,7 +19,7 @@ export type StopReason = "budget" | "converged" | "target" | "cancelled" | "time
 export type JobState = "queued" | "running" | "done" | "error";
 
 /** `{code, message}` and the error's own fields (`stop_index`, `leg`, `field`, `constraint`,
- * ...). */
+ * `max_s`, `retry_after_s`, `running` and `queued` (a public server's TOO_MANY_JOBS), ...). */
 export interface ErrorBody {
   code: string;
   message: string;

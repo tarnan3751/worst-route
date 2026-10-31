@@ -15,7 +15,7 @@ tier definitions, class allowlists and defaults join this module as their steps 
 `TIERS` lists each tier's classes (`docs/PLAN.md` §2.6). `DEFAULT_BACKEND` names the graph
 backend the engine searches with unless told otherwise. The `API_*` numbers are the API's job
 limits and streaming cadence (`docs/reference/api.md`); the `GEOCODE_*` numbers its geocoding
-proxy's rate, cache and limits.
+proxy's rate, cache and limits; the `PUBLIC_*` numbers the limits of a public server.
 """
 
 import os
@@ -394,6 +394,16 @@ GEOCODE_CACHE_TTL_S = 30 * 86400.0
 GEOCODE_LIMIT = 5
 GEOCODE_TIMEOUT_S = 10.0
 GEOCODE_MAX_QUERY_CHARS = 200
+
+# Public hosting (`docs/reference/api.md`, **Public limits**; `docs/reference/hosting.md`), only
+# with `serve --public`: a client (`api/limits.py`) runs at most PUBLIC_RUNNING_PER_CLIENT jobs at
+# once and has at most PUBLIC_QUEUED_PER_CLIENT more waiting, a budget is at most
+# PUBLIC_BUDGET_MAX_S (BUDGET_MAX_S otherwise), and a client searches places at most
+# PUBLIC_GEOCODE_PER_MINUTE times in any minute. The leash stays at most LEASH_MAX_KM.
+PUBLIC_RUNNING_PER_CLIENT = 1
+PUBLIC_QUEUED_PER_CLIENT = 3
+PUBLIC_BUDGET_MAX_S = 60.0
+PUBLIC_GEOCODE_PER_MINUTE = 10
 
 
 # Census boundaries (`docs/reference/presentation.md`, **Places**). CENSUS_VINTAGE is the year of

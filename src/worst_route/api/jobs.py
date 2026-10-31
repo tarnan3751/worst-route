@@ -6,7 +6,11 @@ brand out of reach or a stop that cannot be snapped or reached is a 422, not a j
 repeats it, deterministically. `JobManager.submit` makes the job,
 emits its `snapped` event from the pre-flight, and starts its worker (`api/worker.py`) in a
 spawned process, or queues it when `max_jobs` are running; with `max_queued` waiting too it
-raises `TooManyJobs` (the endpoint's 429).
+raises `TooManyJobs` (the endpoint's 429). On a public server each job has a client
+(`api/limits.py`), who runs at most `running_per_client` jobs at once: its next waits in the
+queue even while workers are free, and starts when its running one ends, before later jobs of
+other clients only if theirs cannot start; with `queued_per_client` of its own waiting too, its
+next is `TooManyJobs` with its counts.
 
 While a job runs, its follower task reads the worker's queue (in a thread, so the event loop
 never blocks) and keeps the job's own copy of the route: the route the loop started from
@@ -74,6 +78,7 @@ import numpy as np
 from pydantic import BaseModel
 
 from worst_route.api import logs, sse
+from worst_route.api.limits import client_hash
 from worst_route.api.schemas import (
     Done,
     DoneMetrics,
@@ -137,7 +142,13 @@ ROUTE_EVENTS = ("baseline", "snapshot", "progress")
 
 
 class TooManyJobs(Exception):  # noqa: N818 (the condition, as the 429 names it)
-    """Every worker is busy and the queue is full."""
+    """Every worker is busy and the queue is full; or the client's own jobs fill its share, its
+    counts given."""
+
+    def __init__(self, running: int | None = None, queued: int | None = None) -> None:
+        super().__init__()
+        self.running = running
+        self.queued = queued
 
 
 @dataclass(frozen=True)
@@ -155,6 +166,8 @@ class JobSettings:
     ttl_s: float = API_JOB_TTL_S
     sweep_s: float = API_SWEEP_S
     read_grace_s: float = API_READ_GRACE_S
+    running_per_client: int | None = None  # None: no limit (`limits.Limits`)
+    queued_per_client: int | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -252,6 +265,7 @@ class Job:
     base: RouteArrays | None
     created: datetime
     request_id: str | None = None  # the request that submitted it (`logs.request_id`)
+    client: str | None = None  # who asked for it (`limits.client_of`), on a public server
     status: JobState = "queued"
     started: datetime | None = None
     finished: datetime | None = None
@@ -346,10 +360,21 @@ class JobManager:
             return_exceptions=True,
         )
 
-    def has_room(self) -> bool:
-        """Whether a job submitted now would run or wait rather than be refused."""
-        s = self.settings
-        return len(self._running) < s.max_jobs or len(self._queued) < s.max_queued
+    def refusal(self, client: str | None = None) -> TooManyJobs | None:
+        """Why a job submitted now by `client` would be refused, if it would."""
+        if self._may_start(client) or self._may_queue(client):
+            return None
+        limit = self.settings.queued_per_client
+        if client is not None and limit is not None:
+            running, queued = self.client_jobs(client)
+            if queued >= limit:
+                return TooManyJobs(running, queued)
+        return TooManyJobs()
+
+    def client_jobs(self, client: str) -> tuple[int, int]:
+        """How many of `client`'s jobs are running, and how many waiting."""
+        running = sum(self.jobs[j].client == client for j in self._running)
+        return running, sum(j.client == client for j in self._queued)
 
     def submit(
         self,
@@ -358,10 +383,13 @@ class JobManager:
         *,
         input: dict[str, Any],
         base: RouteArrays | None = None,
+        client: str | None = None,
     ) -> Job:
-        """Make a job for a prepared request, emit `snapped`, and start or queue it."""
-        if not self.has_room():
-            raise TooManyJobs
+        """Make a job for a prepared request (by `client`), emit `snapped`, and start or queue
+        it."""
+        refused = self.refusal(client)
+        if refused is not None:
+            raise refused
         job = Job(
             id=secrets.token_hex(6),
             loaded=loaded,
@@ -372,14 +400,31 @@ class JobManager:
             base=base,
             created=datetime.now(UTC),
             request_id=logs.request_id.get(),
+            client=client,
         )
         self.jobs[job.id] = job
         self._emit(job, "snapped", self._snapped(job, prepared.masks))
-        if len(self._running) < self.settings.max_jobs:
+        if self._may_start(client):
             self._start(job)
         else:
             self._queued.append(job)
         return job
+
+    def _may_start(self, client: str | None) -> bool:
+        """Whether a worker is free and `client` runs fewer jobs than it may."""
+        s = self.settings
+        if len(self._running) >= s.max_jobs:
+            return False
+        limit = s.running_per_client
+        return client is None or limit is None or self.client_jobs(client)[0] < limit
+
+    def _may_queue(self, client: str | None) -> bool:
+        """Whether the queue has room, for `client` too."""
+        s = self.settings
+        if len(self._queued) >= s.max_queued:
+            return False
+        limit = s.queued_per_client
+        return client is None or limit is None or self.client_jobs(client)[1] < limit
 
     def subscribe(self, job: Job, last_event_id: int | None = None) -> Subscription:
         """A new SSE client of `job`, which had seen events up to `last_event_id`."""
@@ -662,8 +707,12 @@ class JobManager:
 
     async def _end(self, job: Job, status: JobState) -> None:
         self._record_end(job, status)
-        while self._queued and len(self._running) < self.settings.max_jobs:
-            self._start(self._queued.popleft())  # a start that fails ends that job alone
+        for waiting in list(self._queued):  # in order, each that may start now
+            if len(self._running) >= self.settings.max_jobs:
+                break
+            if self._may_start(waiting.client):
+                self._queued.remove(waiting)
+                self._start(waiting)  # a start that fails ends that job alone
         if job.worker is not None:
             await asyncio.to_thread(job.worker.close)
 
@@ -808,11 +857,15 @@ class JobManager:
 
 
 def _fields(job: Job) -> dict[str, Any]:
-    """What a job's log lines carry besides their message (`api/logs.py`): its id, and the id
-    of the request that submitted it, whichever task logs them."""
-    if job.request_id is None:
-        return {"job_id": job.id}
-    return {"job_id": job.id, "request_id": job.request_id}
+    """What a job's log lines carry besides their message (`api/logs.py`): its id, the id of
+    the request that submitted it, whichever task logs them, and its client's hash when it has
+    one."""
+    fields: dict[str, Any] = {"job_id": job.id}
+    if job.request_id is not None:
+        fields["request_id"] = job.request_id
+    if job.client is not None:
+        fields["client"] = client_hash(job.client)
+    return fields
 
 
 def _done_metrics(document: dict[str, Any]) -> DoneMetrics:

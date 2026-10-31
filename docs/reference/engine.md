@@ -685,8 +685,16 @@ check reports `ok`, the first offending index and a detail. `report.ok` is their
 - `run`: `{attempts, accepted, stopped_because, elapsed_s, backend}` (`backend` is `"csr"` or
   `"python"`; every backend gives the same route).
 
-`read_route(path)` returns a `SavedRoute`, which the validator reads like a `Route`. A file
-that is not one raises `KeyError`, `TypeError`, `ValueError`, `OverflowError` (an id beyond
+`worst-route plan --out` writes it with the presentation's fields
+(`docs/reference/presentation.md`, **The document**): `directions` (the turn-by-turn steps,
+jokes included) and `toasts` beside the keys above, and in `metrics` `extra_fuel_gal` and
+`extra_cost_usd` (null: the CLI has no vehicle), `states`, `towns` and `towns_n` (null without a
+places index under `WORST_ROUTE_DATA`) and `network_fraction`. `route_document` itself, which
+the API's worker stores, leaves them out; nothing reads them back.
+
+`read_route(path)` returns a `SavedRoute`, which the validator reads like a `Route` (the keys it
+does not read, the presentation's among them, are kept in its `document`). A file that is not
+one raises `KeyError`, `TypeError`, `ValueError`, `OverflowError` (an id beyond
 int32) or pydantic's `ValidationError`.
 
 **GeoJSON** (`route_geojson`; `plan --geojson`) is a FeatureCollection:
@@ -711,7 +719,11 @@ worst-route plan --region R [--build-id ID] --from LAT,LON --to LAT,LON [--via L
 worst-route plan --region R --base route.json [--build-id ID] [--seed N] [--budget SECONDS]
                  [--max-iterations N] [--target ...] [--out ...] [--geojson ...] [--backend ...]
 worst-route validate route.json [--region R] [--build-id ID] [--backend auto|csr|python]
+worst-route directions route.json [--region R] [--build-id ID] [--jokes/--no-jokes]
 ```
+
+**`directions`** prints a saved route's turn-by-turn directions, one numbered line a step
+(`docs/reference/presentation.md`, **Directions**).
 
 `--backend` picks the graph backend (`docs/reference/graph.md`, **Choosing a backend**). The
 default is `auto`, which is `csr` when numba imports. The two give the same routes, so the

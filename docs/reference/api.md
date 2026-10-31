@@ -10,17 +10,19 @@ else: every route it returns has passed the validator.
 | Module | What it holds |
 |---|---|
 | `app.py` | `create_app`, `ApiSettings`, `Api` (the app's state), `geocoder_user_agent`, the error handlers |
-| `routes_api.py` | the endpoints, the checks `POST /jobs` makes before a job exists, `ApiError`, `api_of`, `region_of`, `bbox_of`, `stored_route`, `build_of`, `stored_delays` |
+| `routes_api.py` | the endpoints, the checks `POST /jobs` makes before a job exists, `ApiError`, `api_of`, `region_of`, `bbox_of`, `stored_route`, `build_of`, `stored_delays`, `presentation_of`, `directions_of` |
 | `geocode_api.py` | `GET /geocode` (**Geocoding**) |
 | `share_api.py` | `GET` and `HEAD /routes/{id}/share.png`, `SHARE_IMAGE_VERSION` (**Share image**) |
+| `directions_api.py` | `GET /routes/{id}/directions` |
 | `schemas.py` | the request and response models (pydantic), the SSE payloads |
 | `jobs.py` | `JobManager`, `JobSettings`, `Job`, `Subscription`, `prepare`, `TooManyJobs` |
 | `worker.py` | `run_job` (what a worker process runs), `JobSpec`, `RouteArrays`, the worker's messages |
 | `sse.py` | `Event`, `path_points`, the payload builders, `server_sent` |
 | `store.py` | `RouteStore`, `StoredRoute`, `route_id` |
 
-The geocoding proxy's backend is the `geocode/` package (**Geocoding**); the share image's is
-the `presentation/` package (`docs/reference/presentation.md`).
+The geocoding proxy's backend is the `geocode/` package (**Geocoding**); the share image's, the
+directions' and the document's presentation fields are the `presentation/` package
+(`docs/reference/presentation.md`).
 
 Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in requests; every number is metric
 (metres, seconds). There is no `/api` prefix: the frontend's dev server proxies to the root.
@@ -240,7 +242,7 @@ none of them stored, so a route stored before they existed has them too:
   edges', its time with the delays of the nodes it arrives at, so the steps add up to `length_m`
   and to `time_s` plus `delay_s`. The stops' labels name them ("Arrive at work"). The jokes are
   drawn from the route's seed: the same every time.
-- `toasts`, at most ten one-line facts about the route, the most striking first.
+- `toasts`, at most twelve one-line facts about the route, the most striking first.
 - `extra_fuel_gal` and `extra_cost_usd`, the length beyond the baseline's at the request's
   `vehicle`'s `mpg` and `gas_price_usd`, null without a vehicle; `states` and `towns`, the
   Census names of the states and towns the route passes through in the order it enters them,
@@ -598,6 +600,18 @@ machine, with curl:
   file `share/5ea844bffd40-v1.png`, and `HEAD` the same headers with no body; Powell's → Hayden
   Island, seed 3 (52.40×), next, 1.4 s; an unknown id and `nope` 404 `NOT_FOUND`. A job's worker
   process had loaded neither matplotlib nor geopandas (nor FastAPI nor pandas).
+- **Directions and toasts** (`serve --port 0`, csr, 2026-10-30, build 506f747d7458 with the
+  Portland places index; other lanes' tests running, load average 13–19): Powell's → Reed with
+  labels and a vehicle (24 mpg, $3.89), seed 1, 5,000 attempts (`e7ee723315fa`, 34.21×, 2,819
+  edges): `GET /routes/{id}` answers in 28–70 ms once warm (0.11 s for the first), with 1,532
+  steps from "Head east on West Burnside Street" to "Arrive at Reed College", ten toasts
+  ("34.2× less efficient than the sensible route.", "Never leaves Portland. Sees all of it
+  instead.", "An extra 6.6 gallons, or $25.80, for nothing.", ..., "Passes 12 level crossings,
+  28 roundabouts and 10 bridges on the way."), `states` `["Oregon"]`, `towns` `["Portland"]`
+  and `network_fraction` 0.23; `/directions` the same steps in 13–45 ms; an unknown id 404.
+  Before the places index's polygons were prepared (`docs/reference/presentation.md`,
+  **Places**) the document took 0.26–0.38 s on a quiet machine (build e4b3b4ad90db) and
+  1.8–2.6 s at load average 30, nine tenths of it the places lookups.
 
 ## Tests
 
@@ -612,6 +626,7 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 | `test_jobs.py` | the manager with inline workers: event order and ids, a client replay equal to the stored route, late subscribers (after a worker that died with splices waiting too: they come before its `error`, ids rising strictly), `Last-Event-ID` resync, cancel (validated, stored, reproduced by its attempts), the queue and its limit, cancel before the route exists, continuations, the time limit, orphans running and queued, a worker that raises, a store failure while cancelling (by hand and by the sweep, which goes on), a worker that does not start (the queue moves on), the TTL; a target run whose best is not its last route (an overshoot on a 5 × 5 lattice): a snapshot of the stored route before `done`, for live and late clients, and a cancel after the overshoot storing the closest route, reproduced by its attempts |
 | `test_worker_process.py` (`slow`) | real spawned workers: a run to `done`, a cancel mid-run, a worker killed from outside (`WORKER_FAILED`), a fake worker that dies 60 kB into a 2 MB message (`WORKER_FAILED`, then a clean `stop()`), and a worker whose API process (a probe) is killed exiting within 3 s; about 4 s |
 | `test_geocode_api.py` | `GET /geocode` with a `FakeGeocoder`: the answer's shape, at most five candidates, the cache across casing and spacing (one upstream call), each refusal (an empty, blank, missing or too long query; a missing or unknown region; `RATE_LIMITED` from a full queue with its `retry_after_s`, a cached query still answered; `GEOCODER_ERROR`; a 429 upstream, on an `httpx.MockTransport`, pausing the geocoder, the next search refused without a request; `GEOCODER_DISABLED`, with no cache file); the default service, its client on a `MockTransport` (`offline_clients`): Nominatim at its URL with the User-Agent and contact, the cache beside the store, the limits and the pause, its client closed by the lifespan. The other API tests serve with `geocoder="none"`, so they build no geocoder |
+| `test_directions_api.py` | the document's directions (numbered, the stops' labels, the arrival's empty range at the end, the distances adding up), toasts (the ratio first, six to twelve), the fuel from the request's vehicle and the states and towns from the census fixture's index, all null without them, and the network fraction; `/directions` the document's directions, twice the same, jokes included; a route stored before them (its stored metrics without them, and one without its delays and turns) getting them; unknown routes 404 and a route whose build is gone 409 on both |
 | `test_share_api.py` | `GET /routes/{id}/share.png` with and without a places index: a 1200 × 630 `image/png` with its Cache-Control, two concurrent first requests rendering once (a counted render) and getting the same bytes, one file, no lock left, a later request served from the file; `HEAD` first (it renders), its headers a GET's with no body; unknown and malformed ids (404, no file); a route whose build is gone (409, no lock left); a render that fails (no file, no lock, the next request draws it); two servers on one store rendering the same route at once, each part written before either rename (a barrier in `os.replace`), leaving one file and no part; on a lattice with signals, a slowest-time route's image headed by its document's `time_ratio`, "slower than the sensible route", and a distance route's by its `ratio`; `import worst_route.api.app` in a fresh interpreter leaving matplotlib out of `sys.modules` |
 | `test_routes_api.py` | every endpoint over `httpx.AsyncClient` in-process, every refusal code, cancel over HTTP, a closed stream cancelling its job, a stream that subscribes only once it runs, make it worse and its mismatches (a base outside its request's masks included), a continuation that changes nothing reporting the stored route; ratio and duration jobs ending `target` with the target in `done` and the document (none for max), a target out of bounds or a ratio for a round trip refused, make it worse with a smaller target shrinking; a stored route differing from the drawn one by a parallel edge sent as a snapshot before `done`, with `GET /jobs/{id}` agreeing; a ratio target for a round trip refused before anything else, for a base route too; `Infinity` and `NaN` in a body refused; a slowest-time job under a soft no-left constraint, its turns and delays in `done` and the document; a strict constraint refusing a base route that turns left, a soft one taking it; a leg a strict constraint cannot drive answered `INFEASIBLE_TURN_CONSTRAINT` with its leg and constraint, one no route covers without it either (two one-way rings) `STOP_UNREACHABLE_WITHOUT_REPEAT` with strict set too; a body cut short refused without a `field`; `strict` alone and both constraints refused on `field: "constraints"`; on a lattice with signals, the document's `time_ratio`, `done`'s, and `arrival` counting the delays, the route's and the baseline's, for a route stored before the documents carried `baseline_delay_s` too; a collect job counting its bridges in every `progress` and in `done`, the document's `items` agreeing (a distance job's too), and the item and target refusals naming their field |
 

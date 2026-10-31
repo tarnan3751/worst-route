@@ -1,11 +1,12 @@
 # Worst Route — project overview
 
-Last updated: 2026-10-30. Snapshot taken after the frontend's controls for the modes landed,
-on the share image: the plan is written; the project scaffolding, every pipeline step, the graph
-package, the engine, the API and the frontend are built, and of the presentation the
-geocoding proxy, the places index, the comparison lines and the share image; Portland has
-a saved build, and the M1 acceptance run on it passes (§2.2): M1 is built, and M3's first
-three modes are.
+Last updated: 2026-10-30. Snapshot taken after the directions and toasts landed, on the
+frontend's controls for the modes: the plan is written; the project scaffolding, every pipeline
+step, the graph package, the engine, the API and the frontend are built, and of the
+presentation the geocoding proxy, the places index, the comparison lines, the share image, the
+directions with their jokes, and the stats and toasts in the route documents; Portland has a
+saved build, and the M1 acceptance run on it passes (§2.2): M1 is built, and M3's first three
+modes are.
 
 This file answers three questions: what the project is meant to become, how far along it is, and
 what has been decided. It is written for a human reader and for an AI agent picking up the
@@ -56,7 +57,9 @@ Claude: Python for the pipeline, engine, API and rendering; TypeScript + MapLibr
   frontend offers each of them (its Mode and Turns rows).
 - **Presentation** (In progress): directions, stat toasts, comparisons, states and towns, share
   image. Built: the states and towns a route passes through (the Census places index), the
-  comparison lines and the share image (`docs/reference/presentation.md`).
+  comparison lines, the share image, and the directions with deadpan jokes, the stats and the
+  toasts in the route documents (`docs/reference/presentation.md`); the frontend does not show
+  the directions or toasts yet.
 - **Scale** (Planned): Portland → Oregon → national at a tier to be decided at M5.
 
 Out of scope for now: social features, accounts, mobile apps.
@@ -166,8 +169,21 @@ which answer the states and towns a route passes through in route order, CDPs in
 route's length picks one of fifteen deadpan comparisons; and `GET /routes/{id}/share.png` draws
 the route as a 1200 × 630 PNG (the ratio, the comparison, the route and its baseline over the
 build's roads and the state outlines, no basemap), once, then from a cache, with a link to it in
-the share section. Directions, the stats and toasts that will name the states and towns, and
-the document's presentation fields are still to come.
+the share section.
+The directions, the stats and the toasts are built (M4; `docs/reference/presentation.md`,
+**Directions**, **Jokes**, **Stats and toasts**, **The document**): a route reads as GPS-style
+steps ("Head east on West Burnside Street", "Turn left onto ...", "Slight right to stay on
+North Multnomah Street", "Take the ramp toward I 5", "At the roundabout, take the exit onto
+..."), each with its distance and time and its
+range of edges, with forty deadpan jokes about every eighth step, drawn from the route's seed;
+its extra fuel and cost (from the request's vehicle), the states and towns it passes through,
+its share of the roads within reach, and up to twelve toasts, the most striking first ("34.2× less
+efficient than the sensible route."). `GET /routes/{id}` carries them, worked out again on every
+request and never stored, `GET /routes/{id}/directions` the directions alone, `worst-route plan
+--out` writes them into route.json, and `worst-route directions route.json` prints the steps.
+On Portland, Powell's → Reed (34.21×, 2,819 edges) reads as 1,532 steps, and its document
+answers in under 0.1 s once the places index's polygons were prepared (0.26–0.38 s before).
+The frontend's panel is next.
 The workflow scaffolding exists: `CLAUDE.md`, the four agents,
 `tools/gates.sh`, `tools/land_series.sh`, this overview, `docs/PLAN.md`. The M1 bootstrap is
 built: the uv project (Python 3.12, `src` layout, the M1 dependencies), the gate running ruff,
@@ -183,7 +199,7 @@ Milestones as `docs/PLAN.md` §7 lays them out; each ends with something runnabl
 | M1 — Portland, distance mode, CLI | Built | bootstrap, every pipeline step (download to qa; Portland's build passes QA), the graph package and the engine (snapping, seed route, transition-aware searches, splice loop, distance objective, validator, `worst-route plan` / `validate`). The acceptance run (`docs/PLAN.md` §7 M1 step 9; `uv run python tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30` on build e4b3b4ad90db, `graph_version` 45f650e868fa, the reference backend: 20 random Portland pairs 3–15 km apart): all 20 plan and the validator passes all 20; the median ratio is 21.5× (3.3–45.2×); seeds 1 and 2 share 10–16% of their edges (Jaccard on 5 pairs, all < 0.3); the cul-de-sac via moves 86 m to the nearest through street with its note. Powell's → Reed gives 58–62×, PDX → Beaverton 7.3× (`docs/reference/engine.md`, **On Portland**) |
 | M2 — API + map, live growth | In progress | CSR + Numba backend built, its transition-aware kernels included (the default on every build; byte-identical to the reference: on Portland the acceptance's 20 routes and Powell's → Reed reproduce exactly, at 7,200–8,200 attempts/s); the API built (jobs in worker processes, SSE progress, the route store, make it worse, `worst-route serve`); targets by ratio and duration built (engine, CLI `--target`/`--base`, API), a 13-minute Portland drive to 9 h within ±2 % in 1.8 s over the API; the MapLibre frontend built (stops by click, the route growing live, run controls, settings with the targets, links); remaining: the acceptance |
 | M3 — Modes and constraints | In progress | built: the turn classes, never turn left / right (soft by default, `strict` for none; engine, CLI, API), the kernels refusing banned turn classes, slowest time (engine, CLI, API), collectibles (the collect objective for toll booths, level crossings, roundabouts and bridges in the engine, `plan --objective collect --item` and the API; `node_roundabouts` in the build; on Portland 24–30 bridges where the distance route passes 16–17); the frontend's controls for them (the Mode and Turns rows, the request, the URL, the stat line's time ratio, delays, items and turns, the strict refusal's retry); on Portland strict no-left plans 4 of the 20 acceptance pairs and soft no-left 20 at a median of 5.33× (§2.3; on a build re-enriched at pipeline version 2, whose bearings describe the roads, not cleanup's stubs); the search honouring stage B transitions was built at M1. Remaining: brands; hard mode; alphabet search; the acceptance |
-| M4 — Presentation | In progress | directions, stats, toasts, comparisons, share image, geocoding proxy, share links; built: the geocoding proxy (`GET /geocode`, Nominatim behind a cache and 1 request/s) and the place search in the stop list; the Census places index (`tools/fetch_census.sh`, `worst-route aux places`: the states and towns a route passes through), the comparison lines, and the share image (`GET /routes/{id}/share.png`, linked from the share section) |
+| M4 — Presentation | In progress | directions, stats, toasts, comparisons, share image, geocoding proxy, share links; built: the geocoding proxy (`GET /geocode`, Nominatim behind a cache and 1 request/s) and the place search in the stop list; the Census places index (`tools/fetch_census.sh`, `worst-route aux places`: the states and towns a route passes through), the comparison lines, and the share image (`GET /routes/{id}/share.png`, linked from the share section); the directions with deadpan jokes and the stats and toasts in the route documents (`GET /routes/{id}`, `GET /routes/{id}/directions`, route.json, `worst-route directions`). Remaining: the frontend's directions panel and toasts |
 | M5 — Scaling up | Planned | Oregon; array-based simplify/consolidate; US at T1; the national decision gate; public-hosting prep |
 | M6 — Stretch | Planned | certified worst (CP-SAT), turn restrictions, stop reordering, portfolio runs |
 
@@ -451,6 +467,24 @@ brief):
   `tools/fetch_census.sh` (2025 vintage, sha256-pinned), never by the gate or an agent.
 - **Comparison lines** chosen deterministically by length: the longest of fifteen things the
   route exceeds, "N×" from twice its length, the thing's length in miles with kilometres.
+- **Directions, jokes, stats and toasts as built** (2026-10-30, at their brief and plan): no
+  change to the build format, so super-junctions are described from the edges entering and
+  leaving them (a ramp "toward" the road it leads to, a roundabout's exit uncounted);
+  same-identity runs merged straight on, every turn a step ("to stay on" a road named alike),
+  a ramp step only where the route leaves a road for a link (an interchange otherwise a
+  junction like another; at the review); "Slight" within 45° and "Sharp" beyond 120°;
+  OSM's names unabbreviated; a step's time counts the delays of the nodes it arrives at, so the
+  steps add up to the experienced time; `edge_range` half-open. Jokes are their own step,
+  forty, about every eighth step, never twice in a route, from `PCG64(seed)` on the route's
+  seed; the API always tells them (the `joke` kind lets a client hide them), the CLI's
+  `directions` has `--no-jokes`; a joke's distance in miles with kilometres, as the comparisons
+  write it. Toasts in a fixed order, the most striking first, the ratio first whenever a route has one (a
+  round trip through a via too), at most twelve, so none is dropped. The presentation is
+  added by `presentation.document.present` from the CLI's `plan --out` and `GET /routes/{id}`
+  only, never stored, so the stored document (`engine/io.py`'s `route_document`, the job
+  manager's) is unchanged and every stored route gets it; worked out on every request, not
+  cached: the places index's polygons are prepared instead, which brings a long Portland
+  route's document from about a quarter of a second to under 0.1 s.
 - **Workflow conventions**: tiers A/B/C, lanes as clones, patch-series delivery, no commit
   trailers, the gate on every change (`CLAUDE.md`, **Agent workflow**).
 

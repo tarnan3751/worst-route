@@ -550,7 +550,7 @@ FastAPI, JSON bodies validated by pydantic. All coordinates are `[lon, lat]` in 
 | GET | `/jobs/{id}` | status + latest snapshot (polling fallback) |
 | DELETE | `/jobs/{id}` | cancel; the best-so-far route is still stored |
 | GET | `/routes/{route_id}` | full route document |
-| GET | `/routes/{route_id}/directions` | turn-by-turn only *(M4)* |
+| GET | `/routes/{route_id}/directions` | turn-by-turn only (M4, built) |
 | GET | `/routes/{route_id}/geojson` | geometry only (for "open in …") |
 | GET | `/routes/{route_id}/share.png` | server-rendered share image, 1200 × 630, cached (built, M4) |
 | POST | `/routes/{route_id}/validate` | runs the validator, returns the report (debug/CI) |
@@ -637,7 +637,9 @@ As built for M2:
 }
 ```
 
-The share image is built (M4; `docs/reference/api.md`, **Share image**): `GET /routes/{route_id}/share.png` renders the route once (its ratio, `comparison_line` of its length, the route and baseline over the build's roads and the Census state outlines, no basemap) and serves it from `share/` beside the route store afterwards. The places index and the comparison lines it uses (`docs/reference/presentation.md`) are what the document's `states`, `towns` and `comparisons` will come from.
+The share image is built (M4; `docs/reference/api.md`, **Share image**): `GET /routes/{route_id}/share.png` renders the route once (its ratio, `comparison_line` of its length, the route and baseline over the build's roads and the Census state outlines, no basemap) and serves it from `share/` beside the route store afterwards. The places index and the comparison lines it uses (`docs/reference/presentation.md`) are what the document's `states` and `towns` come from, and its `comparisons` will.
+
+The directions, toasts and presentation metrics are built (M4; `docs/reference/api.md`, **The route document**; `docs/reference/presentation.md`): the document gains `directions` (`kind` ∈ `depart | continue | turn | ramp | roundabout | stop | arrive | joke`, `edge_range` half-open), `toasts`, and in `metrics` `extra_fuel_gal`, `extra_cost_usd`, `states`, `towns`, `towns_n` and `network_fraction`, all worked out again on every request and never stored; `GET /routes/{route_id}/directions` answers the directions alone, and `worst-route plan --out` writes the same into route.json. As built the names are OSM's unabbreviated ones ("Head east on West Burnside Street"). `items` came with the collect objective (M3); `comparisons`, `alphabet` and `letters` are still to come.
 
 M4 adds to `metrics` `extra_fuel_gal`, `extra_cost_usd`, `states`, `towns`, `towns_n`, `network_fraction`, `turns`, `items`, `alphabet` and `letters`, and to the document `directions` (`[{"step":1,"text":"Head northeast on W Burnside St","distance_m":412,"time_s":55,"edge_range":[0,3],"kind":"depart"}, …]`), `toasts` (`["42.9× less efficient than the sensible route.", …]`) and `comparisons` (`["Longer than driving the entire length of I-5 once.", …]`).
 
@@ -802,8 +804,8 @@ Deliverable: `worst-route plan --region portland --from 45.5231,-122.6765 --to 4
 
 ### M4 — Presentation
 
-1. Directions generator (merge same-identity runs, turn words, ramps via super-junction internal paths, roundabout exits), deadpan jokes injected deterministically from the seed.
-2. Stats: ratio, arrival time, extra fuel/cost, states and towns (Census boundaries), network fraction, turn counts; rotating toasts in the UI during and after the run. Built: the places index the states and towns come from (`worst-route aux places`, the Census polygons, CDPs included; `tools/fetch_census.sh` for the files; `docs/reference/presentation.md`, **Places**).
+1. Directions generator (merge same-identity runs, turn words, ramps via super-junction internal paths, roundabout exits), deadpan jokes injected deterministically from the seed. Built: the build keeps no internal paths, so ramps and roundabouts are described from the edges entering and leaving them ("Take the ramp toward X", "At the roundabout, take the exit onto X", no exit count); forty jokes about every eighth step, never one twice in a route, from the route's seed; in the document, at `GET /routes/{id}/directions` and by `worst-route directions route.json` (`docs/reference/presentation.md`, **Directions**, **Jokes**).
+2. Stats: ratio, arrival time, extra fuel/cost, states and towns (Census boundaries), network fraction, turn counts; rotating toasts in the UI during and after the run. Built: the places index the states and towns come from (`worst-route aux places`, the Census polygons, CDPs included; `tools/fetch_census.sh` for the files; `docs/reference/presentation.md`, **Places**); the extra fuel and cost from the request's vehicle, the states and towns a route passes through, its share of the roads within reach, and up to twelve toasts in a fixed order, the most striking first, in the document (`docs/reference/presentation.md`, **Stats and toasts**). The frontend's panel and toasts are still to come.
 3. Curated comparison list (NYC–LA 2,790 mi; Route 66 2,448 mi; I-90 end to end 3,020 mi; Earth's circumference 24,901 mi; Earth–Moon 238,900 mi; …) with the funniest-fitting line chosen by length. Built: fifteen things from the Golden Gate Bridge to the Moon, the longest one the route exceeds, "N×" from twice its length (`docs/reference/presentation.md`, **Comparisons**).
 4. Share image: matplotlib Agg, our own data only (route over faint active-network lines and Census outlines, big ratio, one comparison line), cached per route. Built: `GET /routes/{id}/share.png`, 1200 × 630, in DejaVu Sans as matplotlib ships it (no bundled font), no basemap, a link in the share section (`docs/reference/presentation.md`, **Share image**).
 5. Geocoding proxy with cache and rate limit; search box in the UI.

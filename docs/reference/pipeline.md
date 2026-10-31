@@ -7,9 +7,9 @@ contract.
 
 Built: every step, `download`, `filter`, `build`, `cleanup`, `enrich`, `tiers`, `save` and `qa`.
 `save` writes the build in the format `docs/reference/graph.md` describes, which `worst-route
-plan` reads. Portland and the whole of Oregon (**Oregon**) build and pass QA. `build` and
-cleanup's simplification, stage A, twins and stage B also run on arrays (`--engine arrays`, **The
-arrays engine**), to the same build.
+plan` reads. Portland and the whole of Oregon (**Oregon**) build and pass QA. `build` and the
+whole of cleanup (simplification, stage A, twins, stage B, connectivity) also run on arrays
+(`--engine arrays`, **The arrays engine**), to the same build.
 
 ## Commands
 
@@ -514,7 +514,8 @@ and trunk length with a twin, the QA metric);
 `edges`); `connectivity` (nodes and edges before and after, dropped nodes, edges and length, a
 two-way road counted once, the number of dropped components and the 20 largest with their size,
 length and centroid, `retained`, `dropped_no_turn`: the super-junctions dropped for allowing no
-turn, the rounds after them added in); `seconds` per step.
+turn, the rounds after them added in); `seconds` per step (the arrays engine's with `handover`,
+the graph handed to the networkx steps after cleanup).
 
 **Portland, for scale** (the 2026-10-30 extract; about 30–110 s depending on the machine's load,
 most of it stage A): simplify drops 267 self-loops and removes 12,833 nodes; stage A merges 9,771
@@ -851,10 +852,10 @@ shapely and Numba instead of networkx and OSMnx (`src/worst_route/pipeline/array
 state and later the whole country fit in memory and take hours rather than days (`docs/PLAN.md`
 §7 M5.2). It makes exactly the networkx engine's build: the same arrays byte for byte, the same
 strings, the same `graph_version`; the parity tests and `tools/parity.py` (below) hold it to
-that. Built so far: `build` and cleanup's simplification, stage A, twins and stage B. The steps
-after them are still networkx's, handed the stage B graph by `arrays/to_nx.py` as networkx
-itself would hold it; connectivity, and then enrich, tiers and save's input join in later
-series.
+that. Built so far: `build` and the whole of cleanup (simplification, stage A, twins, stage B,
+connectivity). The steps after it are still networkx's, handed the cleaned graph by
+`arrays/to_nx.py` as networkx itself would hold it; enrich, tiers and save's input join in a
+later series.
 
 **Stages** (`arrays/stage.py`). A stage is a directory under `stages/`, one `.npy` per array
 (no pickles) and `tables.json` for the rest (the tag sets, the CRS), with `manifest.json`
@@ -898,20 +899,20 @@ were drawn before and after a road to another pins the by-neighbour grouping).
 **Handing over** (`arrays/to_nx.py`). The steps after the arrays engine's are handed the graph
 as networkx itself holds it, which the tests check, and the cleanup stage both engines write,
 `cleanup.pkl`, is the same to the byte, so switching engines in place reruns nothing after
-cleanup (a pickle of the graph handed over, taken in memory, can differ: networkx caches in a
-graph the views asked of it, and the two engines ask for different ones). What makes it so:
-the edges added in the order networkx added them (simplification copies the raw graph, adding
-its edges in the raw graph's iteration order, which sets each node's predecessors in the order
-of their places, then merges), so successors, predecessors and keys come out as networkx's (0,
-1, ... per pair of nodes: an edge between two nodes that both stay is never removed); each
-edge's attributes in networkx's order (a raw edge's build order with `osmids` last, a merged
-edge's as `simplify._merged` writes it); and the strings shared as they are once `cleanup` has
-read its raw graph back from `build.pkl`, since a pickle writes a string several dicts share
-once: each way's tag values objects of its own, shared by the edges along the way, as osmium
-hands them out, and the keys the raw graph holds one object each, apart from the same names the
-later steps write. (The networkx engine run on its raw graph in memory, without the read back,
-pickles a few bytes differently, though the graph is the same; the tests compare against it as
-the CLI runs it.)
+cleanup but `qa`, which reads the cleanup report, its seconds new (a pickle of the graph handed
+over, taken in memory, can differ: networkx caches in a graph the views asked of it, and the two
+engines ask for different ones). What makes it so: the edges added in the order networkx added
+them (simplification copies the raw graph, adding its edges in the raw graph's iteration order,
+which sets each node's predecessors in the order of their places, then merges), so successors,
+predecessors and keys come out as networkx's (0, 1, ... per pair of nodes: an edge between two
+nodes that both stay is never removed); each edge's attributes in networkx's order (a raw edge's
+build order with `osmids` last, a merged edge's as `simplify._merged` writes it); and the
+strings shared as they are once `cleanup` has read its raw graph back from `build.pkl`, since a
+pickle writes a string several dicts share once: each way's tag values objects of its own,
+shared by the edges along the way, as osmium hands them out, and the keys the raw graph holds
+one object each, apart from the same names the later steps write. (The networkx engine run on
+its raw graph in memory, without the read back, pickles a few bytes differently, though the
+graph is the same; the tests compare against it as the CLI runs it.)
 
 **Stage A** (`arrays/stage_a.py`). The graph `consolidate.stage_a` makes, by the rules OSMnx
 applies there and no OSMnx: each node's radius by `consolidate`'s tolerances; the groups of
@@ -958,18 +959,36 @@ out-edges in its iteration order, its nodes by their labels, the pocket search's
 order of discovery, the split's multi-source search over a small networkx graph built as
 `consolidate._split` builds it, a super-node's position as the mean of its nodes in label order.
 The local work runs in Python over the arrays, cluster by cluster: clusters hold a percent or
-two of the nodes. `to_nx.stage_b_graph` hands the result to connectivity as networkx holds it.
-The tests run the networkx engine's own stage B cases through both engines, the cleanup tests'
-interchanges a region cuts, and one of their own, a twin that is a boundary edge of its
-super-junction.
+two of the nodes. The tests run the networkx engine's own stage B cases through both engines,
+the cleanup tests' interchanges a region cuts, and one of their own, a twin that is a boundary
+edge of its super-junction.
+
+**Connectivity** (`arrays/connectivity.py`). The component `connectivity.largest_component`
+keeps, found by scipy's strongly connected components (the partition is unique; the largest
+kept, ties to the one holding the smallest node, as there), and its report to the bit: each
+dropped component's length summed over its nodes ascending and each node's out-edges by their
+keys `(u, v, key)`, its centroid NumPy's mean in that order, the length lost in edge order.
+`keep_only` then numbers the kept nodes as `consolidate.relabel` does, which is stage B's
+numbering compacted (relabel sorts by keys that keep their order on any subset), leaving out the
+edges, twins, super-junctions and transitions that lose an end. `without_no_turn` then drops the
+super-junctions left with edges in and out and no allowed pair, round by round with connectivity
+after each, as cleanup does (step 5), its sums added into the report in the same order; a round
+reruns connectivity over the whole graph, which on arrays costs what the first did (on Portland
+0.03 s a round, where networkx's relabel and search take seconds).
+`to_nx.cleanup_graph` hands the result on as networkx holds it: each edge named in its tables by
+a tuple of its own, as relabel writes them, and the view of the in-degrees that cleanup's last
+look for a super-junction without a turn caches in the graph when it finds one (a single
+super-node without edges), since a pickle holds it. The cleanup report's `seconds` give that
+hand-over as `handover`. The tests include components of one size, a twin whose pair is dropped,
+the interchanges a region cuts, and a detached super-junction.
 
 **Portland** (2026-10-30 extract, on a loaded machine): `build` 2–5 s against 3–7 s, the raw
 stage 22 MB against `build.pkl`'s 58 MB (45 bytes per OSM way segment: 493,206 consecutive
 node pairs, 604,539 refs); simplification 0.2 s against 3.5 s; stage A 0.6 s against 31–37 s
 (OSMnx's union of every buffer alone is about 10 s); twins 0.5–0.9 s against 0.8–1.6 s, the
-STRtree's work on both sides; stage B about 0.5 s against 3–4 s, then 2 s to hand the graph to
-networkx, which the later series remove; the whole of cleanup about 8 s against about 67 s
-(`tools/parity.py`).
+STRtree's work on both sides; stage B about 0.5–0.8 s against 3–8 s; connectivity 0.03 s
+against 2.7 s, then 1.7 s to hand the graph to networkx, which a later series removes; the whole
+of cleanup about 5–8 s against 45–67 s (`tools/parity.py`).
 
 **Checking it.** `tests/pipeline/test_arrays.py` compares the engines on every fixture and on
 cases of its own (rings and loops closing on themselves, parallel chains, a way drawn against
@@ -977,13 +996,14 @@ its chain, duplicate ways, an adjacency entry's place, small inputs, a node with
 pairs near the sum of their radii, buffers meeting at a corner, a split group, a cluster's edges
 by neighbour; a stub beside a carriageway, a way beside itself, a road mapped twice, the
 review's random roads; the networkx engine's stage B cases (a carriageway that would come back
-by turning back among them), the interchanges a region cuts and a twin that is a boundary edge):
-the raw graph, the simplified graph and the stage A graph in iteration order, the twins, the
-stage B graph, the cleanup graph and report and their pickles, and the saved build
-(`tests/pipeline/parity.py`'s `assert_same_graph`, which compares keys, predecessors and
-attribute order too, and `assert_same_build`). `test_arrays_property.py` does the same on 40
-random street lattices (`slow`), and `test_arrays_data.py` (`data`) on Portland's filtered
-roads, to the build and, when this pipeline version saved Portland, its `graph_version`.
+by turning back among them), the interchanges a region cuts and a twin that is a boundary edge;
+components of one size, a twin left without its pair): the raw graph, the simplified graph and
+the stage A graph in iteration order, the twins, the stage B graph, the cleanup graph and report
+and their pickles, and the saved build (`tests/pipeline/parity.py`'s `assert_same_graph`, which
+compares keys, predecessors and attribute order too, and `assert_same_build`).
+`test_arrays_property.py` does the same on 40 random street lattices (`slow`), and
+`test_arrays_data.py` (`data`) on Portland's filtered roads, to the build and, when this
+pipeline version saved Portland, its `graph_version`.
 
 ```
 uv run python tools/parity.py --region portland [--engines networkx,arrays] [--allow-fragmented]

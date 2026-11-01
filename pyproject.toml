@@ -1,6 +1,8 @@
 [project]
 name = "worst-route"
 version = "0.1.0"
+license = "MIT"
+license-files = ["LICENSE"]
 description = "The least efficient way to get anywhere in the US: routes that never repeat an intersection or a road."
 requires-python = ">=3.12,<3.13"
 dependencies = [

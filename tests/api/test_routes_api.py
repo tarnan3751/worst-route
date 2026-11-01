@@ -1089,7 +1089,7 @@ async def test_too_many_stops_to_reorder_names_the_build_s_cap(
 async def test_a_portfolio_job_stores_the_best_of_its_seeds_which_the_winner_s_reproduces(
     data: Path,
 ) -> None:
-    async with serving(data, leader_hold_s=0.0) as (client, _):
+    async with serving(data, max_jobs=4, leader_hold_s=0.0) as (client, _):  # three seeds
         job_id, events = await finished(client, job_body(portfolio=3))
         progress = [e["data"] for e in events if e["event"] == "progress"]
         assert progress and all(p["portfolio"]["k"] == 3 for p in progress)

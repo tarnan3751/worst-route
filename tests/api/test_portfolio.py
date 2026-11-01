@@ -394,7 +394,7 @@ async def test_a_portfolio_stores_the_best_of_its_seeds_runs_which_its_seed_repr
         for seed in (3, 4, 5)
     ]
     best = max(plans, key=lambda p: p.route.score)
-    async with manager(data, leader_hold_s=0.0) as m:
+    async with manager(data, max_jobs=4, leader_hold_s=0.0) as m:  # three seeds and one more
         job = submit(m, build, req, portfolio=3)
         events = await collect(m.subscribe(job))
         alone = submit(m, build, req)  # one search: no portfolio in its events or its run

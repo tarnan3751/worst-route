@@ -3,8 +3,8 @@
 How a route is planned, made worse and proven legal: the route model and its one mutation, the
 request and its masks, snapping, the seed route and the baseline, the objective interface, the
 distance, slowest-time, collect and brand modes, turns, the turn constraints and hard mode, the
-detour strategies, the worsen loop and its targets, the alphabet route's search, the validator,
-route files and the `plan` / `validate` commands.
+detour strategies, the worsen loop and its targets, the alphabet route's search, the certified
+worst's driver, the validator, route files and the `plan` / `validate` commands.
 Code: `src/worst_route/engine/`. The design it implements is `docs/PLAN.md` §3.1–3.9, §3.11
 and §8.1; the conventions are `CLAUDE.md`.
 Everything runs on a build's `GraphData` through `GraphBackend` and `SpatialIndex`
@@ -26,6 +26,7 @@ routes either way, on every build, transition tables included (**Searches**).
 | `detour.py` | `find_detour`, `pick_strategy`, `waypoint_path`, `random_weight_path`, `local_exhaustive_paths` |
 | `worsen.py` | `worsen`, `run_worsen`, `pick_segment`, `detour_ends`, `widened`, `UnusedNodes`, `temperature`, `Budget`, `ProgressEvent`, `WorsenResult` |
 | `alphabet_search.py` | `alphabet_route`, `edge_letters`, `alphabet_counts`, `alphabet_scored` (**Alphabet**) |
+| `exact.py` | `certified_route`, `certified_area`, `certified_request`, `Area`, `AreaTooLarge`, `too_large`, `Certificate`, `Incumbent` (**Certified worst**) |
 | `plan.py` | `plan_route`, `PlanResult`, `check_base`, `BaseRouteMismatch`, `anneal_temperature` |
 | `io.py` | `route_document`, `document`, `read_route` / `SavedRoute` |
 | `draw.py` | `DrawRules`, `Drawing`, `check_drawing`, `next_moves`, `finish_drawing`, `DrawRefused`, `DrawingUnfinished`, `drawing_problem` (**Drawing**) |
@@ -157,7 +158,11 @@ JSON, so a request reads as it did before brands existed); `constraints` (**Cons
 so a request reads as it did before constraints existed, and `hard` in it only when set, so a
 request without hard mode reads as it did before hard mode existed); `reorder`, whether the
 stops may be visited in the worst order (**Seed and baseline**, **The worst order**; off by
-default, and then left out of the JSON, so a request reads as it did before it existed); `tier` (`"auto"` or
+default, and then left out of the JSON, so a request reads as it did before it existed);
+`certified`, whether it asks for the certified worst (**Certified worst**; off by default, and then
+left out of the JSON; on, `certified_problem` refuses another objective, a target, the worst
+order, a turn constraint, hard mode and a round trip, field `certified`, which the CLI and the API
+ask first); `tier` (`"auto"` or
 `"T0"`..`"T4"`); `leash_km` (`"auto"` or in
 (0, 150]); `budget_s` (in (0, 120], default 20) and `max_iterations` (default 5000); `seed`
 (≥ 0); and `target` (**Targets**: `max`, the default, `ratio` or `duration`; a ratio target is
@@ -1053,15 +1058,174 @@ but `max`, and no base route (**Requests**, **Planning**). The seed is the plain
 distance. Every random draw is the request's rng, in a fixed order over candidate lists in settle
 order, so a seed gives the same route on either backend.
 
+## Certified worst
+
+The certified worst (`certified`; `docs/PLAN.md` §3.12; `exact.py`): the provably longest legal
+route for a request's stops within its area, found by OR-Tools' CP-SAT. It is the second driver
+beside the alphabet route's that is not the worsen loop: it shares the request's masks, `Route`
+and the validator with planning, never the loop, the kernels or the splice. OR-Tools is imported
+inside `exact.py`'s functions only, so a worker that plans any other route never loads it: in a
+worker that has planned a Portland route, `cp_model`'s import (pandas with it) costs 0.3 s and
+about 55 MB of resident memory (193 MB to 248 MB at its peak).
+
+**Requests.** `certified` (**Requests**) takes the distance objective only, no target but `max`,
+no worst order, no turn constraint, no hard mode and no round trip (`certified_problem`; the
+dummy arc below would be a self-loop: splitting the start in two is a later step); stops between
+the ends are taken. A base route is a `ValueError` ("a certified route is planned from its stops:
+no base route"), which the CLI and the API refuse first; the API refuses a portfolio and a
+drawing too. `max_iterations` does not apply.
+
+**The area** (`certified_area(data, masks, stop_nodes)`): the edges every search may use (both
+ends in `active`, not in `banned`, no self-loop) that lie on some walk from a stop to the next
+inside the masks, the other stops blocked, the walk never leaving its end nor coming back to its
+start, legality otherwise ignored, and the nodes those walks pass; the edges into the start and
+out of the end are left out. Its counts are what a certificate allows: at most
+`CERTIFIED_MAX_NODES` (300) nodes and `CERTIFIED_MAX_EDGES` (1,000) edges, else `AreaTooLarge`
+(a `ValueError`, `field` `"leash"`: "the area within a 1.5 km leash holds 1,132 nodes and 3,865
+edges, over the 300 and 1,000 a certificate allows: tighten the leash or bring the stops
+closer"). The reach is two breadth-first searches a leg (scipy's), over the area's candidate
+edges only.
+
+**The leash** (`certified_request(data, spatial, request)`). A request's own leash is used as
+given. With the automatic one (0.6 × the trip, at least 3 km, which on a city build holds
+thousands of nodes) the leash is the widest, in `CERTIFIED_LEASH_STEP_M` (10 m) steps from
+`CERTIFIED_LEASH_MIN_M` (50 m) up to the automatic leash, whose area holds at most 300 nodes and
+`CERTIFIED_AUTO_MAX_EDGES` (600) edges, found by bisection over request copies with that leash
+(their masks and their stops snapped, without the re-snap fallback, a leash that does not join
+the stops counting as narrow enough); about ten mask builds, 20–80 ms on Portland's build. When that
+leash does not join the stops, the narrowest that does is taken if its area is within the hard
+caps, else `AreaTooLarge` ("the narrowest leash that joins the stops, 640 m, makes an area of
+... : bring the stops closer"); when not even the automatic leash joins them, it is kept and
+resolving the stops says why. The request comes back with the leash as a number
+(`leash_km: 0.42`): planning goes on with it, so `PlanResult.request`, route.json's request and
+the API's stored request record it, and `validate` rebuilds the same masks with no search. The
+two caps differ because the automatic area should be proven within the default budget, while an
+explicit leash and a longer budget may certify more: on Portland, at 300 nodes and 600 edges 10
+of 14 short trips were proven within 19 s (the other four 0.75–4.7 % short of a proof), at 300
+and 800 only the downtown ones (**Measured**).
+
+**The model** (CP-SAT, `add_circuit`, not MTZ): a Boolean per area edge (parallel edges each
+their own: the circuit takes several arcs between two nodes, one of them at most true), a
+self-loop literal ("skipped") on every area node but the stops, which must be visited, and the
+arc from the end back to the start, its literal fixed true, so the one circuit through the nodes
+not skipped is a simple path from the start to the end through every stop. Legality as
+constraints: each twin pair within the area at most one (`twin_indptr`/`twin_edges`: carriageway
+pairs and super-junction edges; the two directions of a road are node-simplicity's), and at a
+node with transition rows each pair of an area edge in and an area edge out that the rows do not
+list at most one (a visited node has one edge in and one out, so no line graph is needed). With
+stops between the ends, each area node has an integer position, the start's 0, each edge taken
+giving its head its tail's plus one, and each stop's position below the next stop's: the
+positions keep the stops in order (one circuit a leg over shared node-use literals was slower:
+0.9 s against 33.6 s, and 2.0 s against a 1.2 % gap at 60 s). The objective is the length in
+decimetres, each edge's rounded to the nearest, so "longest" is to the decimetre on each road.
+The hint is the seed route, complete (every literal and position), so the solve starts from a
+legal route and ends with one at least as long. These are the validator's rules: chain and area
+by the arcs, a node once by the circuit (and with it an OSM junction once, each id belonging to
+one node), an edge once and a road unit once by the circuit and node-simplicity, twins and turns
+by their constraints, the stops by the circuit and the positions.
+
+**The solve** (`certified_route`): `CERTIFIED_WORKERS` (4) threads with `CERTIFIED_SUBSOLVERS`
+(`max_lp`) added to CP-SAT's own (its portfolio of four lacks `max_lp`, whose linear relaxation
+with the circuit's cuts is what proves the residential grids: Sellwood at 400 m, 134 nodes and
+435 edges, in 2.6–3.8 s with it and 18–35 s without; eight default threads, which include it,
+proved fewer of the larger areas than four with it), the request's seed (mod 2³¹) as CP-SAT's,
+and the time left of the request's budget less `CERTIFIED_MARGIN_S` (0.5 s), at least a tenth of
+the budget: `plan_route` counts from its own start, so the leash search counts against it. Each
+better solution, in a solver thread, is read, chained from the start, scored by the distance
+objective and made a route by `Route.new` under the request's bans (`check_route` on the whole
+route: a solution it refused would be a bug, which stops the search and is raised), and handed to
+`on_progress` as an `Incumbent`, a `ProgressEvent` whose splice replaces the whole route before
+it, with the stops' positions, the solver's bound and the gap; between better solutions the
+bound goes to `plan_route`'s `on_bound(elapsed_s, bound_m, gap)` at most every
+`CERTIFIED_BOUND_EVERY_S` (1 s). An exception from either hook (a cancelled job, a closed pipe)
+stops the search and is raised once the solve returns. The run's `attempts` are the solutions
+CP-SAT reported (the first is the hint itself), its `accepted` the better routes handed on, and
+it stops `"optimal"` when proven, else `"budget"` (`StopReason` gained `"optimal"`, which the
+loop never returns). `PlanResult.certified` is the `Certificate`: `status` (`optimal` or
+`feasible`), `bound_m` (the longest any legal route in the area can be: the route's length when
+proven, else its length plus the bound's excess over it, in the model's decimetres), `gap`
+(`(bound − found) / found` in the model's decimetres, 0 when proven), `nodes`, `edges`,
+`leash_m`, `solve_s` (the solver's wall time) and `workers`; route.json's `run.certified`
+(**Route files**). The certificate follows CP-SAT's status: `OPTIMAL` is proven (and its value
+must be the last route's, else a bug, raised); `FEASIBLE` takes the solver's bound only when it is
+at least the last route's value, else `bound_m` and `gap` are null (never the route's own length
+passed off as a bound); `UNKNOWN`, the time limit come before CP-SAT took in the hint (a budget
+of 0.1 s on Ladd's Addition at 500 m, 200 nodes and 599 edges, ends so), keeps the seed with
+`bound_m` and `gap` null, `feasible`, stopped on its `budget`; `INFEASIBLE` and `MODEL_INVALID`
+cannot happen with a legal hint, so either is a bug, raised. The validator then proves the route
+as any other.
+
+**Reproducibility.** The loop's rule is unchanged, and the certified mode does not touch it. A
+proven route's length is fixed by the build and the request; the route among equally long ones,
+and the best found under a time limit, are not, as a budgeted loop run's is not: the solver's
+threads race, and a seed does not pin them. Tests assert lengths and legality, never a route's
+bytes, on models the solver proves at once.
+
+**Measured** (Portland's build 0b72253e5e8a, the dev machine at load averages of 8–21 from other
+lanes, so every time is long and noisy: one Sellwood solve took 18, 29 and 35 s three times
+running; the spike's probes under the lane's `cert-probes/`). The first solution, the seed, comes
+in 5–90 ms; building the model takes 5–8 ms and the area 9–18 ms.
+
+| Trip (two stops) | Leash | Nodes / edges | 4 threads | 4 + `max_lp` | Certified | Loop, 30 s | × the loop |
+|---|---|---|---|---|---|---|---|
+| Powell's → Pioneer Sq | 300 m | 94 / 179 | 0.03 s | | 4.88 km | 4.31 km | 1.13 |
+| Powell's → Pioneer Sq | 600 m | 276 / 578 | 0.48 s | | 18.22 km | 16.96 km | 1.07 |
+| Pioneer Sq → PSU | 600 m | 289 / 554 | 0.13 s | | 17.53 km | 14.78 km | 1.19 |
+| Union Station → Lan Su | 600 m | 176 / 395 | 0.06 s | | 12.22 km | 8.72 km | 1.40 |
+| Providence Park → Powell's | 600 m | 331 / 763 | 10.1 s | 7.6 s | 21.31 km | 16.56 km | 1.29 |
+| Ladd's → Division | 400 m | 133 / 396 | 5.9–10.5 s | | 10.77 km | 10.01 km | 1.08 |
+| Ladd's → Division | 600 m | 260 / 811 | gap 12.1 % at 60 s | gap 1.07 % at 60 s | 22.11 km | 17.72 km | 1.25 |
+| Sellwood | 600 m | 230 / 773 | gap 8.2 % | 22.8 s | 25.68 km | 21.16 km | 1.21 |
+| Alberta | 600 m | 273 / 914 | gap 8.5 % | 6.9 s | 26.45 km | 20.47 km | 1.29 |
+| Hawthorne → Laurelhurst | 600 m | 258 / 803 | gap 9.4 % | gap 0.37 % | 25.47 km | 22.23 km | 1.15 |
+| Irvington | 600 m | 171 / 569 | gap 8.0 % | 30.3 s | 22.07 km | 18.63 km | 1.18 |
+
+One-way downtown grids (about two edges a node) are proven in a second or less; the two-way
+residential grids (about three) are the hard ones. With one stop between the ends (4 + `max_lp`,
+positions): 133–290 nodes and 304–754 edges proven in 0.3–27 s (Sellwood 429 edges 1.9 s,
+591 9.9 s; Ladd's 397 11 s, 552 27 s; Alberta 754 10.4 s; downtown 588 2.0 s).
+
+With the automatic leash and the default budget (19 s of solve, 4 + `max_lp`), at the caps as
+built (300 nodes, 600 edges): Powell's → Pioneer Sq 610 m (283 / 591) proven in 0.3 s, 18.85 km
+against the seed's 0.58 km and the loop's 18.07 km; Pioneer Sq → PSU 600 m in 0.1 s; Union
+Station → Lan Su 760 m in 6.9 s; Providence Park → Powell's 500 m in 0.6 s; Alberta 420 m (182 /
+578) in 3.1 s, 16.43 km against the loop's 12.49 km; Hawthorne → Laurelhurst 500 m in 5.3 s;
+Irvington 620 m in 17.3 s; Ladd's → Division 500 m (200 / 599) and Sellwood 500 m (176 / 595)
+within 4.66 % and 1.74 % at 19 s; with a stop between the ends, Powell's → Pioneer Sq → PSU
+500 m in 3.6 s, Union Station → Lan Su → Pioneer Sq 530 m in 1.0 s, the Sellwood via 510 m in
+9.3 s, the Ladd's and Alberta vias (420 m) within 0.96 % and 0.75 %. Every certified route was
+1.04–1.32× the loop's converged route on the same request and leash. At 800 edges the automatic
+areas grow to 530–820 m, and only the downtown trips are proven within 19 s (the residential
+ones within 0.16–7.9 %).
+
+`plan --certified` on the landed code (seed 1, the default 20 s budget; the loop at `--budget
+30` on the same leash, converged in 0.6–4.5 s):
+
+| Trip | Leash | Nodes / edges | Status, solve | Certified | Loop |
+|---|---|---|---|---|---|
+| Powell's → Pioneer Sq | auto, 610 m | 283 / 591 | optimal, 0.5 s | 18.85 km, 32.40× | |
+| Pioneer Sq → PSU | 400 m | 170 / 305 | optimal, 0.03 s | 11.22 km, 11.79× | 9.54 km, 10.02× |
+| Union Station → Lan Su | 500 m | 135 / 297 | optimal, 0.1 s | 7.24 km, 11.72× | 6.07 km, 9.82× |
+| Sellwood | 400 m | 134 / 435 | optimal, 2.3 s | 14.68 km, 10.55× | 13.01 km, 9.36× |
+| Alberta | auto, 420 m | 182 / 578 | optimal, 2.8 s | 16.43 km, 21.52× | 12.49 km, 16.36× |
+| Sellwood, via SE 15th | auto, 510 m | 177 / 599 | optimal, 4.0 s | 20.56 km, 12.49× | 17.43 km, 10.59× |
+| Ladd's → Division | 500 m | 200 / 599 | feasible at 19.5 s, within 1.32 % (16.77 km) | 16.56 km, 32.41× | 12.63 km, 24.72× |
+
+The same request at seeds 1 and 2 (Alberta, proven): 16.43 km at both, proven in 2.4 s and 1.3 s. Alberta at a 1.5 km leash is
+refused: "cannot certify: the area within a 1.5 km leash holds 1,132 nodes and 3,865 edges, over
+the 300 and 1,000 a certificate allows: tighten the leash or bring the stops closer", exit 1.
+Every route above passed the validator, its file `validate` too.
+
 ## Planning
 
 `plan_route(data, request, *, backend=None, spatial=None, base=None, on_start=None,
-on_progress=None, check_delta=False) -> PlanResult(request, masks, snaps, baseline, route, run,
-report, backend, goal, order)` runs a request end to end. It searches with `backend`, else
+on_progress=None, on_bound=None, check_delta=False) -> PlanResult(request, masks, snaps,
+baseline, route, run, report, backend, goal, order, certified)` runs a request end to end. It searches with `backend`, else
 `make_backend(data)` (`config.DEFAULT_BACKEND`, `auto`: `CsrBackend` when numba imports);
 `PlanResult.backend` is the name of the one that searched. The steps run in this order:
 
-1. the masks, and for a pilgrimage its brand: one the build does not have, or none of whose
+1. for a certified request, its leash (`certified_request`, **Certified worst**); then the
+   masks, and for a pilgrimage its brand: one the build does not have, or none of whose
    nodes the active mask holds, raises `BrandRefused` (**Objectives**);
 2. with `reorder`: more stops than the build's cap is a `ValueError` (`reorder_problem`), and
    so is a `base`; then the worst order (`choose_order`, **Seed and baseline**), whose request
@@ -1069,7 +1233,7 @@ report, backend, goal, order)` runs a request end to end. It searches with `back
    masks; `order` is each stop's position among those given (the identity without `reorder`);
 3. one `Generator(PCG64(request.seed))`;
 4. `resolve_stops` (snapping and its fallback, which may move stops; `snaps` are the final
-   ones);
+   ones), and for a certified request its area, `AreaTooLarge` over the caps;
 5. `seed_route` on them, or, given `base`, that route instead;
 6. `baseline_route` on those stops;
 7. `make_objective` with the baseline length and `r_max` (for `collect`, the request's item and
@@ -1081,12 +1245,16 @@ report, backend, goal, order)` runs a request end to end. It searches with `back
 9. `run_worsen` toward the goal within the request's budget, calling
    `on_progress(event, baseline)` on every accepted splice, with `anneal_t0` the reheats'
    temperature (`anneal_temperature`, **Annealing**) for a max goal and none for a target; for
-   `alphabet`, `alphabet_route` instead (**Alphabet**), calling it on every better route;
+   `alphabet`, `alphabet_route` instead (**Alphabet**), calling it on every better route; for a
+   certified request, `certified_route` instead (**Certified worst**), calling it on every better
+   route and `on_bound(elapsed_s, bound_m, gap)` on the bound between them;
 10. `validate_route` on the best route, against the request's masks and the resolved stops (and
     for `alphabet`, with its `alphabet` check).
 
 `PlanResult.request` is the request as planned: with `reorder`, its stops in the order the route
-visits them, which is what the route file records and `validate` re-derives the stops from.
+visits them, and for a certified request its leash as a number, which is what the route file
+records and `validate` re-derives the stops from. `PlanResult.certified` is a certified route's
+`Certificate`, None for any other.
 
 Only the loop depends on the seed: the masks, the worst order (`choose_order` draws nothing), the
 resolved stops, the baseline and the seed route (but a round trip's without legs, whose waypoint
@@ -1206,7 +1374,9 @@ check reports `ok`, the first offending index and a detail. `report.ok` is their
   `target: {kind, value, achieved, within_tolerance}` (`Goal.describe`: the target, the route's
   ratio or its experienced time in seconds, and whether that is within ±2 %);
 - `run`: `{attempts, accepted, stopped_because, elapsed_s, backend}` (`backend` is `"csr"` or
-  `"python"`; every backend gives the same route).
+  `"python"`; every backend gives the same route), and for a certified route `certified:
+  {status, bound_m, gap, nodes, edges, leash_m, solve_s, workers}`, its `Certificate`
+  (**Certified worst**), `stopped_because` then `"optimal"` when proven.
 
 `route_document(data, result)` builds it from a plan's result through `document(data, request,
 snaps, route, baseline, *, run, target=None)`, which takes the run's numbers as they are and a
@@ -1239,7 +1409,7 @@ worst-route plan --region R [--build-id ID] --from LAT,LON --to LAT,LON [--via L
                  [--objective distance|time|collect|brand|alphabet] [--item ITEM]
                  [--brand ID|NAME]
                  [--no-left | --no-right]
-                 [--strict] [--hard] [--reorder]
+                 [--strict] [--hard] [--reorder] [--certified]
                  [--out route.json] [--geojson route.geojson] [--backend auto|csr|python]
 worst-route plan --region R --base route.json [--build-id ID] [--seed N] [--budget SECONDS]
                  [--max-iterations N] [--target ...] [--out ...] [--geojson ...] [--backend ...]
@@ -1268,10 +1438,13 @@ index, a build without its geometry is one line too, before the search ("... lac
 (geom_indptr): rebuild it with `worst-route pipeline save --force --region R`"). Without `--seed` it draws a random seed, which it
 prints and records. While it searches it writes `iteration N: ratio Rx, L km`
 to stderr on an accepted splice (`restart N: K letters, ratio Rx, L km` on an alphabet route's
-better route), at most one line every 2 s. On stdout it prints:
+better route; `solution N: ratio Rx, L km, the worst possible at most G % longer` on a certified
+route's, and `T s: the worst possible at most G % longer (B km)` on its bound between them), at
+most one line every 2 s. On stdout it prints:
 
 - the build;
-- the tier, leash, seed and budget;
+- the tier, leash (to two decimals under 1 km: `leash 0.42 km`), seed and budget (a certified
+  run's in seconds only: `max_iterations` does not apply to it);
 - the objective and the constraints, when not the default: `objective: time, few left turns`
   (`no left turns` with `--strict`; `, hard mode` with `--hard`);
 - with `--reorder`, the order the stops are visited in, each stop's place among those given:
@@ -1298,6 +1471,10 @@ better route), at most one line every 2 s. On stdout it prints:
   Everett Street, …` (`letters: 0` without one; past Z, each lap: `A–Z, A–D`);
 - the node and edge counts;
 - the attempts, accepted splices, elapsed time and why the search stopped;
+- for a certified route, its certificate: `certified: optimal: no legal route in this area is
+  longer (283 nodes, 591 edges, leash 610 m, 0.5 s, 4 threads)`, or `certified: feasible: the
+  longest found; the worst possible is at most 4.66 % longer (16.79 km) (...)`, or `certified:
+  feasible: the longest found; no bound yet (...)` when the solver ended without one;
 - the backend it searched with (`backend: csr`);
 - the validator's checks.
 
@@ -1326,6 +1503,13 @@ takes is one line and exit 2 (`invalid --reorder: the worst order takes at most 
 8`, or on a build of more than 100,000 nodes `... at most 5 stops on us-t3, not 6`), and so is
 `--reorder` with `--objective alphabet` (`invalid --reorder: the alphabet route takes no worst
 order: it has no stop to reorder`).
+
+**`--certified`** plans the certified worst (**Certified worst**), the leash the widest a
+certificate allows unless `--leash-km` gives one. What it does not take is one line and exit 2
+(`invalid --certified: a certified route is the longest: the distance objective only`; a target,
+a turn constraint, hard mode, `--reorder`, a round trip, `--base`), and an area over the caps one
+line and exit 1 (`cannot certify: the area within a 1 km leash holds ...`). route.json records the
+leash used and `run.certified`.
 
 **`--target`** is `max` (the default), `ratio:<x>` (× the baseline, more than 1) or
 `duration:<time>`, where a time is `9h`, `90m`, `2h30m`, `45s` or a number of seconds (at most
@@ -2004,6 +2188,17 @@ from the line, past the 433 km leash; no turn-blind path lies inside it.
   connectors further, such as letting a short stretch of any road connect, is a later option.
   The lookahead counts roads near a ride's end by straight-line distance, not by what the next
   search can reach.
+- **The certified worst.** An area is small: 300 nodes and 1,000 edges at most, a few blocks
+  around a short trip in town, and the automatic leash aims at 600 edges, which proves most of
+  Portland's short trips within the default budget but not every residential grid (Ladd's
+  Addition at 500 m ended within 1.32 % at 19.5 s). How long a proof takes depends on the streets
+  more than on the counts (one-way grids prove at once, two-way grids are hard) and on the
+  machine's load. "Longest" is to the decimetre on each road. A round trip is refused: its start
+  would have to be split into a node out and a node in. The solver's 4 threads run in the job's
+  one worker, which a server counts as one: a public server busy with certified jobs may run more
+  threads than it has cores, and a public value of the threads (2 proved some areas as fast as 4,
+  others not) is a follow-up. The route among equally long ones is the solver's choice, and a
+  best found under the time limit varies with the run.
 
 ## Tests
 
@@ -2020,7 +2215,7 @@ two-way street, which the drawing's tests and the API's draw on).
 | `test_road_copies.py` | a road mapped several times over one run (three two-way copies, two one-way copies and a two-way copy, a one-way and a two-way copy; one segment or an inner junction), built from OSM through the pipeline's test helpers: every round trip out on one copy and back on another refused by `Route.new` and `Route.splice` and failing `edge_simple` alone |
 | `test_validator.py` | each violation caught by the right check, including one OSM junction a cluster and its stub both hold, passed at each (failing at the edge into the second), a cluster's members met once, non-finite metrics and reported item counts that differ from the recount; a strict turn constraint proven from the bearings (a left turn failing strict no-left, a right turn strict no-right, nothing under a soft one); an alphabet route passing with any roads on its free first and last legs (the `alphabet` check only in an alphabet request's report, its detail saying so), one out of order failing `alphabet` at the road at fault, each edited field of its letters failing `metrics`, a `free_from` outside the route (or not an int) failing both, an alphabet request whose route reports no letters |
 | `test_alphabet.py` | the letters (unnamed edges, links and numbered streets free), the counts (the free first leg up to the first A, equal letters in a row once, a road of the same letter after another, letters out of order counted as they come, the wrap from Z to A, an empty part); the search on named lattices: an ordered town driven A to J, every better route legal (`check_route`) and replaying from the seed, each better than the last and in order, the same bytes twice and on both backends (another seed another route), a connector driving a road of the letter just completed, the free first leg, a town without an A road keeping the seed and converging after its first restart, a run converging after its patience, the build's letters passed in, no restart, a round trip, a strict constraint on every route, a soft one, hard mode on every route (no road come back to), turn tables kept; `plan_route` the same on both backends with the `alphabet` check, its route.json read back and validated (an edited sequence failing `metrics`), no continuation |
-| `test_request.py` | the request model and its bounds (its target's too, and no ratio target for a round trip; the item only and always with `collect`, which takes no ratio; the brand only and always with `brand`, which takes none either, and left out of the JSON when there is none; the alphabet route with two stops only, a round trip among them, and no target; `reorder` left out of the JSON when off, at most 7 stops, not under the alphabet route, and 5 on a large build), tier and leash auto, the masks and the tier's edge bans; the objective's keys, the constraints left out of the JSON when there are none, both at once refused |
+| `test_request.py` | the request model and its bounds (its target's too, and no ratio target for a round trip; the item only and always with `collect`, which takes no ratio; the brand only and always with `brand`, which takes none either, and left out of the JSON when there is none; the alphabet route with two stops only, a round trip among them, and no target; `reorder` left out of the JSON when off, at most 7 stops, not under the alphabet route, and 5 on a large build; `certified` left out of the JSON when off, round-tripping when on with a stop between the ends, and refused with another objective, a target, the worst order, a turn constraint, hard mode or a round trip), tier and leash auto, the masks and the tier's edge bans; the objective's keys, the constraints left out of the JSON when there are none, both at once refused |
 | `test_target.py` | the target's bounds; the goal's rules on values (the band's edges, phases, the closer route better and a tie to the later, growing and shrinking acceptance at the band, a duration moving one way, a candidate's value equal to the re-scored route's, a ratio and a duration under the slowest time and a duration under the distance on the experienced time, delays included); and on lattices with `check_delta`: ratio and duration targets reached while only growing, a base past a target shrinking into it, a route already within it stopping before an attempt, an unreachable target converging with the closest route, the overshoot after an empty cycle (the closest route returned, and a run cut at its attempt the prefix ending with it), the same bytes on both backends and twice; the slowest time reaching ratio and duration targets on its experienced time |
 | `test_snap.py` | roles, cul-de-sacs, stops kept apart, round trips only for identical points, an end near the start moved on, re-snapping |
 | `test_search.py` | the turn edges counting only on a build with rows, a path driving both carriageways searched again, and the rounds' limit; a cheapest legal walk entering a node twice searched again, to a bypass or to no path (and none at once for the baseline's search), the rounds' limit (as many loops as rounds, not one more), on both backends; on every pair of two small towns with tables, the answer a legal simple path by brute force (or None, always when none exists), costing at least the walk; the searches made again on a 30 × 30 town the same bytes on both backends; a seed leg's tree (`leg_path`): the walk's first entry banned where banning its way back leaves nothing, the searches growing with the distance between the ends (as many loops as searches, not one more, unless the ends lie 100 km farther apart), the later twin banned, on the small towns the walk where it is simple and else a legal simple path costing at least it, all 107 with 17 searches, the same bytes on both backends there and on the 30 × 30 town |
@@ -2035,9 +2230,10 @@ two-way street, which the drawing's tests and the API's draw on).
 | `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, a splice after two empty cycles and the run stopping only after three, the segment bias's rate and its anchors (the edges with the most unused nodes near), the unused-node grid's cap, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, and so do those with turn tables (no turn refused), a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable`; the same-seed test on both backends, and both backends planning the same route, splice for splice, on the grid and on one-way towns with and without turn tables; shrinking toward a target, runs of 6 edges on average and up to 24; the nodes a detour can leave or join (three distinct neighbours over the usable edges, the mask and bans of both directions taking one away), a window widened to them on a lattice whose streets are split in two, never past a stop, and every splice of a run there starting and ending at one or a stop; annealing (on a lattice of uneven streets and a town with turn tables): the temperature's cooling and freeze, greedy an exact prefix of an annealed run (its first reheat where greedy stopped), shorter splices taken and the highest-scoring route returned and validated, a run capped below convergence and a target run unchanged, both backends and a second run alike, and `plan_route` reheating a max run 3 times |
 | `test_draw.py` | a drawing on a 5 × 5 lattice with one-ways, twins, a straight-only junction and named roads: an empty path at the start with its legal ways out, the stops reached in order and the end; every refusal at its first illegal edge (a one-way taken from its head, an id outside the graph, a path not from the start among them); of two refusals the earlier, the path before it legal, where the route check finds the later first; a round trip closing at its start only once its stops are reached and not out and back along one road (a road of its own back allowed); on 150 random walks under random stops, round trips, areas, bans, strict turns and hard mode, the next moves exactly the out-edges the check takes, each other refused at the path's end, every code met; on 300 walks that break the rules anywhere, the refusal at an edge whose path before passes and whose path with it is refused alike; a finished drawing's route.json (its run drawn by a human, its ratio), a round trip's without a ratio, an unfinished one refused; the objective and target a drawing takes, and no worst order |
 | `test_io.py` | the route files, the target in the request and, for a target run, in the metrics; the delays and the turns in the metrics, and a saved route's metrics carrying its file's item counts; the order and the reordered request in the file, a file without an order read as the identity |
+| `test_exact.py` | the certified worst: its length the longest legal route networkx's simple paths give (each checked by `check_route`) on the board at eight pairs, two with a stop between the ends, the rules refusing some paths of each; on a lattice whose longest path a twin and a turn table forbid, the certificate shorter than the path without them and equal to the longest legal one; on the pipeline's fixtures, restrictions (where the rules forbid the longest path of most pairs), a divided road and three super-junctions (a diamond, a cloverleaf, a roundabout); every route the solver hands on legal (`Route.new`, the validator) and longer than the last; the area without a dead end, a node behind the end, one that reaches only the start or the edges back into the start; an explicit leash over a monkeypatched cap refused with its counts and message; the automatic leash the widest within the cap (10 m more is over it), recorded in the request and the certificate; the narrowest joining leash taken when no small one joins the stops, refused over the hard cap; the same length at four seeds; a short budget's route legal and at least the seed, its bound, when it has one, never below the longest legal route (3.5 km, 0 → 5 on a 6 × 6 lattice); a solve ended before any solution (`UNKNOWN`) keeping the seed with a null bound and gap, `feasible`, stopped on its budget; a model the solver finds infeasible raised as a bug; route.json's request and `run.certified`, none for another route; no base route; a process that plans without `certified` never importing OR-Tools |
 | `test_plan.py` | `plan_route`'s hooks: `on_start` once before the loop with the route it starts from (every splice replays from it to the result), the same route without the hooks, a continuation from `base` that never scores less, is fixed by its seed on both backends, and refuses a base for other stops, one leaving the request's area (before the loop) and, in `check_base`, a node outside the mask or an edge the request bans; a soft constraint starting from the plain seed and keeping left turns rarer than the plain run's, a strict one no route keeps as `InfeasibleTurnConstraint` with its note, one no route keeps without it either (two one-way rings) refused as without it, a stop the strict fallback moves noting why, a base refused for a turn a strict constraint refuses (taken by a soft one); a strict route validated against its constraint; the worst order planned and validated in the order it visits the stops (`on_start` given it), the identity and the same route without it, the same order and route twice, on both backends and with another seed's order, the reordered request planned again the same, refused with a base and past a large build's cap; the temperature a max run anneals from (a hundredth of the baseline's length, of its experienced time under the slowest time, of the start route's length for a round trip; none for a target) |
-| `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32, `--backend` on both commands (the same route.json on both backends but the backend and the time), and the same on a build with turn tables, where `auto` is `csr` too, a file from another engine version refused; `--target` (its line, its parsing, its refusals) and `--base` (a continuation to a smaller target, the options it refuses, a file from another engine version, region or `graph_version`, a truncated or broken route, stops that do not resolve); a ratio target for a round trip, from the stops or the base, refused; an illegal route reported as the base file's fault only with `--base`; `--objective`, `--no-left`, `--no-right` and `--strict` (their lines, the time ratio with its drive and delays, the route.json, `validate`, their refusals, `--strict` alone in one line, a strict refusal in one line ending "try without --strict", `--base` taking them from its file); `validate` failing a soft route's file edited to claim a strict constraint; `--reorder` (its order line, the stops printed in the order visited, the order and the reordered request in route.json, `validate` passing it, `--base` continuing it in that order without `--reorder` and refusing it, no order line without it) and its refusals (`--objective alphabet`, eight stops, six on a large build), each one plain line; `--objective collect --item` (the collected line, the items and item in route.json, `--base` keeping them, a distance run's items) and its refusals, each one plain line (an unknown objective before its item); `--objective brand --brand` by name in any case and by id (the visited line, the brand in route.json, `--base` keeping it and refusing `--brand`, `validate` passing it and failing an edited count) and its refusals (the misfits, a name no brand has, one two brands share, an unknown id, a brand out of reach); a brand named "76" in a build whose brand 76 is another (the bare number refused, `"76"` the name, `#76` the id, `77` an id), `#` without a number, `²`; a build missing an array, one line for `plan` and `validate`; `validate` refusing a route.json whose item counts were edited; `--objective alphabet` (its objective and letters lines, the letters line for one letter and past Z, the `alphabet` check in the validator's line, the letters in route.json, `validate` passing it and failing a road edited in it) and its refusals (`--via`, a target, a `--base` file of an alphabet route), each one plain line |
-| `test_portland_data.py` | (`data`: Portland's latest build through `WORST_ROUTE_DATA`, skipped without one) Powell's → Reed, seed 1, 4,000 attempts: the same bytes on both backends, splice for splice, no turn refused; the slowest time reaching 9 h within ±2 %; soft no-left with fewer left turns a kilometre than its seed, at more than 5×; strict no-left planning Powell's → Reed with no left turn or U-turn, strict no-right refusing it in one line; hard mode over 4,000 attempts, the same on both backends, every road one stretch, at more than 3×; collecting each item over 4,000 attempts, more of it than the distance route passes (none of the toll booths, which lie outside the area), and a duration target under `collect` reached within ±2 %; a pilgrimage to the brand with the most locations visiting more of it than the distance route over the same 4,000 attempts, its counts the recount's; an alphabet route over 100 restarts, the same bytes and letters on both backends, no turn refused, its `alphabet` check passing, at least 5 letters (A to I on build ffe2e7c881ca) |
+| `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32, `--backend` on both commands (the same route.json on both backends but the backend and the time), and the same on a build with turn tables, where `auto` is `csr` too, a file from another engine version refused; `--target` (its line, its parsing, its refusals) and `--base` (a continuation to a smaller target, the options it refuses, a file from another engine version, region or `graph_version`, a truncated or broken route, stops that do not resolve); a ratio target for a round trip, from the stops or the base, refused; an illegal route reported as the base file's fault only with `--base`; `--objective`, `--no-left`, `--no-right` and `--strict` (their lines, the time ratio with its drive and delays, the route.json, `validate`, their refusals, `--strict` alone in one line, a strict refusal in one line ending "try without --strict", `--base` taking them from its file); `validate` failing a soft route's file edited to claim a strict constraint; `--reorder` (its order line, the stops printed in the order visited, the order and the reordered request in route.json, `validate` passing it, `--base` continuing it in that order without `--reorder` and refusing it, no order line without it) and its refusals (`--objective alphabet`, eight stops, six on a large build), each one plain line; `--objective collect --item` (the collected line, the items and item in route.json, `--base` keeping them, a distance run's items) and its refusals, each one plain line (an unknown objective before its item); `--objective brand --brand` by name in any case and by id (the visited line, the brand in route.json, `--base` keeping it and refusing `--brand`, `validate` passing it and failing an edited count) and its refusals (the misfits, a name no brand has, one two brands share, an unknown id, a brand out of reach); a brand named "76" in a build whose brand 76 is another (the bare number refused, `"76"` the name, `#76` the id, `77` an id), `#` without a number, `²`; a build missing an array, one line for `plan` and `validate`; `validate` refusing a route.json whose item counts were edited; `--objective alphabet` (its objective and letters lines, the letters line for one letter and past Z, the `alphabet` check in the validator's line, the letters in route.json, `validate` passing it and failing a road edited in it) and its refusals (`--via`, a target, a `--base` file of an alphabet route), each one plain line; `--certified` (the request line with the leash to two decimals and no attempts, its certificate line after the search, route.json's request and `run.certified`, `validate` passing it; the certificate's line proven, with a bound, and with none) and its refusals (another objective, a turn constraint, a target and `--base`, exit 2; an area over a monkeypatched cap, exit 1) |
+| `test_portland_data.py` | (`data`: Portland's latest build through `WORST_ROUTE_DATA`, skipped without one) Powell's → Reed, seed 1, 4,000 attempts: the same bytes on both backends, splice for splice, no turn refused; the slowest time reaching 9 h within ±2 %; soft no-left with fewer left turns a kilometre than its seed, at more than 5×; strict no-left planning Powell's → Reed with no left turn or U-turn, strict no-right refusing it in one line; hard mode over 4,000 attempts, the same on both backends, every road one stretch, at more than 3×; collecting each item over 4,000 attempts, more of it than the distance route passes (none of the toll booths, which lie outside the area), and a duration target under `collect` reached within ±2 %; a pilgrimage to the brand with the most locations visiting more of it than the distance route over the same 4,000 attempts, its counts the recount's; an alphabet route over 100 restarts, the same bytes and letters on both backends, no turn refused, its `alphabet` check passing, at least 5 letters (A to I on build ffe2e7c881ca); the certified worst from Powell's to Pioneer Courthouse Square at a 400 m leash, proven at two seeds with one length, longer than the loop's converged route |
 
 **The acceptance run**, `tools/acceptance.py`, plans random stop pairs on a saved build, so it
 needs `WORST_ROUTE_DATA` and is not part of the gate:

@@ -8,7 +8,8 @@ seed gives the same route on the same build forever. The pipeline turns an OpenS
 extract into a cleaned, memory-mapped road graph (one-way streets, divided highways, interchanges
 and turn restrictions included); the engine is a splice loop under a time budget, with modes for
 the longest route, the slowest, no left (or right) turns, collecting bridges or roundabouts, brand
-pilgrimages, alphabet routes, hard mode and the worst order of the stops; the API streams the
+pilgrimages, alphabet routes, hard mode and the worst order of the stops, and the certified worst:
+in a small area, the provably worst route, proven by a solver; the API streams the
 route as it grows over Server-Sent Events; the MapLibre frontend draws it with deadpan directions,
 a share image, a route of the day, a draw-it-yourself mode played against the engine, and
 challenges. Builds exist for Portland, Oregon and the contiguous US at primary roads and above,

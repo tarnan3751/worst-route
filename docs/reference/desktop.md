@@ -213,10 +213,20 @@ each platform builds on its own. The spec:
   pyarrow and uvicorn; pywebview's own), without the pipeline's packages (geopandas, OSMnx,
   osmium, networkx), the test and type tools, pywebview's other platforms, and on Linux pywebview;
 - `worst_route.graph.kernels` as its source too (**The first start**);
+- OR-Tools whole (`collect_all("ortools")`: hooks-contrib 2026.9 has no hook for it, and the
+  analysis alone would miss its native libraries), for the certified worst
+  (`docs/reference/engine.md`, **Certified worst**): its modules (protobuf's `_pb2` ones and
+  `ortools.sat.python.cp_model_helper` among its 151 hidden imports), its data and the 99 native
+  libraries in `ortools/.libs`, 52.8 MB on macOS arm64 (`libortools` and what it links:
+  COIN-OR's Cbc, Clp, Cgl, Osi and CoinUtils, SCIP, HiGHS, Abseil, Protocol Buffers and RE2 for
+  C++, utf8_range, zlib and bzip2), measured with `collect_all` on the dev machine; the frozen app
+  with it is built and checked (**Measured**);
 - the data, the frontend's build, and `THIRD-PARTY-LICENSES.txt`: the licence of every
   distribution the app ships (those whose top-level packages PyInstaller's analysis collected, by
-  `importlib.metadata.packages_distributions`, and PyInstaller, whose bootloader it runs) and
-  Python's;
+  `importlib.metadata.packages_distributions`, and PyInstaller, whose bootloader it runs; OR-Tools,
+  absl-py, protobuf and immutabledict among them), the notice of the libraries OR-Tools' wheel
+  bundles (`BUNDLED`: each by its licence, COIN-OR's under the EPL-2.0, and where their sources
+  are, which no distribution's metadata names; the notices page carries the same) and Python's;
 - on macOS `Worst Route.app` (bundle identifier `io.github.tarnan3751.worst-route`, macOS 12 at
   least), signed ad hoc by PyInstaller, or by `MACOS_SIGNING_IDENTITY` with the hardened runtime's
   exceptions Numba needs (`entitlements.plist`: JIT, unsigned executable memory, library
@@ -325,6 +335,13 @@ other lanes kept the load average at 5–25:
   (Starlette's static files): cut off at 10 MB, resumed with `Range: bytes=10485760-`, checked and
   renamed into place; a wrong sha256 refused, the part dropped; the app's User-Agent on every
   request.
+- **With OR-Tools** (the coordinator, 2026-11-01, from the certified worst's series): the app
+  1.1 GB, the package 329 MB, the disk image 344,530,110 bytes (up from 320,397,600); the smoke
+  test passed (the app's process 185 MB and a worker 797 MB resident, nothing left behind); a
+  certified route planned in the frozen app proved optimal in 0.65 s (289 nodes, 593 edges, a
+  620 m automatic leash, 28.07×); `THIRD-PARTY-LICENSES.txt` carries the OR-Tools entry and the
+  bundled libraries' notice (`BUNDLED`); `libortools.9.dylib` appears three times in the bundle,
+  two of them the `.app` layout's symlinks, so nothing ships twice.
 - **Extract sizes**: **The basemap**.
 
 ## Limitations

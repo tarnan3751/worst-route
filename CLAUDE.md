@@ -117,6 +117,12 @@ So is the worst order (M6): with `plan --reorder`, the API's `reorder` or the fr
 order" box, every order of the stops between the start and the end is tried and the one with the
 longest seed planned, at most 7 stops on a city's build and 5 on a larger one, the route document
 and the `snapped` event saying the order (`docs/reference/engine.md`, **Seed and baseline**).
+So is the certified worst (M6): with `plan --certified`, the API's `certified` or the frontend's
+"Certified" box, the provably longest legal route for the stops within a small area (at most 300
+nodes and 1,000 edges; the automatic leash narrowed to 600 edges), solved by OR-Tools' CP-SAT
+from the seed route, each better route streamed with the solver's bound, the route stored with
+`run.certified`, proven or how much longer the worst possible may be (`docs/reference/engine.md`,
+**Certified worst**).
 The plan (`docs/PLAN.md`,
 2026-10-30) is written and its open questions answered as far as `docs/project_overview.md` §3
 records. **M1 is built**: in the acceptance run on the
@@ -138,7 +144,8 @@ every build, Portland's turn tables included; it plans the reference's routes by
   **NumPy** CSR arrays as the graph, searched by a pure-Python reference backend (M1) and
   **Numba** kernels in production (M2), with **networkx** as the tests' oracle;
   **shapely 2**, **scipy**, **pyarrow**; **FastAPI** + **uvicorn** with SSE for progress;
-  **matplotlib** for the share image; **typer** for the CLI; **pytest** + **hypothesis**;
+  **matplotlib** for the share image; **OR-Tools** (CP-SAT, the certified worst; imported only
+  inside `engine/exact.py`); **typer** for the CLI; **pytest** + **hypothesis**;
   **pywebview** (the desktop app's window) and **PyInstaller** (its freezing) in a `desktop`
   dependency group, which neither the gate nor the image installs.
 - **Frontend: Vite + TypeScript, no framework, MapLibre GL JS.** `npm` only under `frontend/`.
@@ -169,7 +176,7 @@ Every command below exists. One a later milestone adds is marked with that miles
 | Delete a written build's stages once its QA passed (or failed only the connectivity thresholds of a build cleaned with `--allow-fragmented`), keeping the build (`--force` whatever QA said; the steps from `cleanup` on then need `build` again) | `uv run worst-route pipeline prune --region portland` |
 | Fetch the Census boundary files (a person, never the gate or an agent; FIPS codes of the states whose places to fetch) | `tools/fetch_census.sh 41 53` |
 | Write the places index (states, outlines, the region's towns) from them | `uv run worst-route aux places --region portland` |
-| Plan a route from the CLI, validated (`--target ratio:20` or `duration:9h` aims for a target within ±2 %; `--base route.json` continues a saved route; `--objective time` the slowest; `--no-left` / `--no-right` such turns at a kilometre each, `--strict` none; `--hard` each road in one stretch, never driven again once left; `--objective collect --item bridge` collects bridges, or `toll_booth`, `level_crossing`, `roundabout`; `--objective brand --brand Starbucks` visits a brand's locations, by name or id; `--objective alphabet` drives roads A, B, C, … from `--from` to `--to`; `--reorder` visits the `--via` stops in the worst order) | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
+| Plan a route from the CLI, validated (`--target ratio:20` or `duration:9h` aims for a target within ±2 %; `--base route.json` continues a saved route; `--objective time` the slowest; `--no-left` / `--no-right` such turns at a kilometre each, `--strict` none; `--hard` each road in one stretch, never driven again once left; `--objective collect --item bridge` collects bridges, or `toll_booth`, `level_crossing`, `roundabout`; `--objective brand --brand Starbucks` visits a brand's locations, by name or id; `--objective alphabet` drives roads A, B, C, … from `--from` to `--to`; `--reorder` visits the `--via` stops in the worst order; `--certified` the provably longest route in a small area, a tight `--leash-km` or the automatic one) | `uv run worst-route plan --region portland --from LAT,LON --to LAT,LON --seed 1 --budget 30 --out route.json` |
 | Validate a saved route | `uv run worst-route validate route.json` |
 | Print a saved route's turn-by-turn directions (`--no-jokes` without the jokes) | `uv run worst-route directions route.json` |
 | API server (the coordinator only; agents use `--port 0` or a port of their own, `--store` in their own tree, and `--geocoder none` or `--nominatim-url` pointed at a local stub: no agent calls Nominatim; `--region` repeated serves several builds, each trip on the smallest holding its stops, `--build-id` the first one's; for public hosting `--public`, `--trust-proxy`, `--log-format json` and `--frontend frontend/dist`, the basemap by `WORST_ROUTE_BASEMAP=raster\|openfreemap\|pmtiles`, its file by `--basemap-name`, by default the first region) | `uv run worst-route serve --region portland` (or `--region oregon --region us-t1`) |

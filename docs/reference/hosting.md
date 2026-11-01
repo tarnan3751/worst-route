@@ -301,8 +301,12 @@ the search off, and `--nominatim-url` points the proxy at a self-hosted Nominati
   Positron style (CC BY 4.0 design, BSD-3-Clause code) and icons (Maki, CC0), the map icons
   (derived from `tangrams/icons`, MIT, Copyright (c) 2017 Mapzen), the fonts (Noto Sans, SIL OFL
   1.1), MapLibre GL JS and `pmtiles` (BSD-3-Clause), and the desktop app's pywebview
-  (BSD-3-Clause), PyInstaller's bootloader (GPL-2.0-or-later with its exception) and Python with
-  its libraries (each its own licence, in the app's `THIRD-PARTY-LICENSES.txt`).
+  (BSD-3-Clause), PyInstaller's bootloader (GPL-2.0-or-later with its exception), OR-Tools
+  (Apache-2.0, the certified worst's solver) with its Python dependencies absl-py (Apache-2.0),
+  protobuf (BSD-3-Clause) and immutabledict (MIT) and the libraries its native library bundles
+  (COIN-OR's Cbc, Clp, Cgl, Osi and CoinUtils under the EPL-2.0, SCIP, HiGHS, RE2, Abseil and
+  Protocol Buffers for C++, utf8_range, zlib, bzip2, with where their sources are), and Python
+  with its libraries (each its own licence, in the app's `THIRD-PARTY-LICENSES.txt`).
   It is the "(more)" the Protomaps maintainer suggests for the credits the attribution control
   has no room for.
 - **The land cover is not drawn**: `@protomaps/basemaps` 5.7's grayscale flavor has no

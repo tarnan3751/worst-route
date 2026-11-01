@@ -58,6 +58,15 @@ describe("the data sources and notices", () => {
         "GPL-2.0-or-later with the bootloader exception",
         "https://pyinstaller.org/en/stable/license.html",
       ],
+      ["OR-Tools", "Apache-2.0", "https://github.com/google/or-tools"],
+      ["absl-py", "Apache-2.0", "https://github.com/abseil/abseil-py"],
+      ["protobuf", "BSD-3-Clause", "https://github.com/protocolbuffers/protobuf"],
+      ["immutabledict", "MIT", "https://github.com/corenting/immutabledict"],
+      [
+        "Libraries in OR-Tools' native library",
+        "each its own, as named; zlib License; bzip2 License",
+        "https://github.com/coin-or",
+      ],
       [
         "Python and its libraries",
         "each its own: THIRD-PARTY-LICENSES.txt in the app",

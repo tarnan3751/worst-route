@@ -10,9 +10,14 @@
 # - The Numba kernels' module also as its source file: a frozen module's code names a file that
 #   does not exist, for which Numba ignores NUMBA_CACHE_DIR and caches in a directory of its own
 #   choosing; with the file there, the kernels compile once into the user's directory.
+# - OR-Tools whole (`collect_all`): hooks-contrib has no hook for it, so the analysis alone would
+#   miss its native library and the solver libraries beside it in `ortools/.libs`; with them its
+#   modules, protobuf's `_pb2` ones and `ortools.sat.python.cp_model_helper`, which the certified
+#   driver imports (`engine/exact.py`).
 # - The data (`data/`), the frontend's build (`frontend/`), and THIRD-PARTY-LICENSES.txt: the
 #   licence of every distribution the app ships (those whose top-level packages the analysis
-#   collected, and PyInstaller, whose bootloader the app runs) and Python's.
+#   collected, and PyInstaller, whose bootloader the app runs), the notice of the libraries
+#   OR-Tools' wheel bundles (BUNDLED) and Python's.
 # - macOS: `Worst Route.app`, its executable `Worst Route`, ad-hoc signed by PyInstaller, or by
 #   the identity MACOS_SIGNING_IDENTITY names (the release workflow's, when its secrets exist), with
 #   the hardened runtime's exceptions in entitlements.plist; Windows and Linux: a folder
@@ -22,6 +27,8 @@ import re
 import sys
 from importlib import metadata
 from pathlib import Path
+
+from PyInstaller.utils.hooks import collect_all
 
 ROOT = Path(SPECPATH).resolve().parents[1]  # SPECPATH, workpath and the classes: PyInstaller's
 DATA = Path(os.environ["WORST_ROUTE_DESKTOP_DATA"])
@@ -36,9 +43,22 @@ for needed in (DATA / "desktop.json", FRONTEND / "index.html"):
         raise SystemExit(f"{needed} is missing: stage the data and build the frontend first")
 
 
-def write_licenses(path: Path, shipped: set[str]) -> Path:
+# The libraries OR-Tools' wheel carries inside `ortools/.libs`, which no distribution's metadata
+# names: the same entry as the notices page's (frontend/public/notices.html).
+BUNDLED = """\
+Libraries bundled in OR-Tools' native library (ortools/.libs), built by the OR-Tools project:
+COIN-OR Cbc, Clp, Cgl, Osi and CoinUtils (Eclipse Public License 2.0; sources at
+https://github.com/coin-or), SCIP (Apache License 2.0), HiGHS (MIT License), RE2 (BSD-3-Clause),
+Abseil (Apache License 2.0) and Protocol Buffers (BSD-3-Clause) for C++, its UTF-8 validation
+utf8_range (libutf8_validity; MIT License, Copyright (c) 2019 Yibo Cai; sources at
+https://github.com/protocolbuffers/utf8_range), zlib (zlib License) and bzip2 (bzip2 License).
+The sources of every one, and how OR-Tools builds them, are at https://github.com/google/or-tools.
+"""
+
+
+def write_licenses(path: Path, shipped: set[str], extra: str = "") -> Path:
     """The name, version, licence and licence files of each distribution `shipped` names (by
-    its normalised name), then Python's."""
+    its normalised name), then `extra`, then Python's."""
     parts = []
     dists = [d for d in metadata.distributions() if normal(d.metadata["Name"]) in shipped]
     for dist in sorted(dists, key=lambda d: d.metadata["Name"].lower()):
@@ -55,6 +75,8 @@ def write_licenses(path: Path, shipped: set[str]) -> Path:
                 if located.is_file():
                     texts.append(located.read_text(errors="replace"))
         parts.append(f"{'=' * 78}\n{name} {version}: {licence}\n{'=' * 78}\n" + "\n".join(texts))
+    if extra:
+        parts.append(f"{'=' * 78}\n{extra}")
     python = Path(sys.base_prefix) / "lib" / f"python{sys.version_info[0]}.{sys.version_info[1]}"
     for candidate in (python / "LICENSE.txt", Path(sys.base_prefix) / "LICENSE.txt"):
         if candidate.is_file():
@@ -87,16 +109,21 @@ PLATFORMS = {"cocoa", "winforms", "edgechromium", "win32", "gtk", "qt", "cef", "
 OWN = {"cocoa"} if MACOS else {"winforms", "edgechromium", "win32"}
 EXCLUDES += ["webview"] if LINUX else [f"webview.platforms.{p}" for p in PLATFORMS - OWN]
 
+# OR-Tools' modules, data and native libraries, collected whole: hooks-contrib has no hook for it.
+ORTOOLS_DATAS, ORTOOLS_BINARIES, ORTOOLS_HIDDEN = collect_all("ortools")
+
 a = Analysis(
     [str(ROOT / "packaging" / "desktop" / "launch.py")],
     pathex=[str(ROOT / "src")],
-    datas=[(str(DATA), "data"), (str(FRONTEND), "frontend")],
-    hiddenimports=["worst_route.api.worker"],  # what a spawned job worker unpickles
+    binaries=ORTOOLS_BINARIES,
+    datas=[(str(DATA), "data"), (str(FRONTEND), "frontend"), *ORTOOLS_DATAS],
+    # what a spawned job worker unpickles, and OR-Tools' modules
+    hiddenimports=["worst_route.api.worker", *ORTOOLS_HIDDEN],
     excludes=EXCLUDES,
     module_collection_mode={"worst_route.graph.kernels": "py"},
 )
 LICENSES = Path(workpath) / "THIRD-PARTY-LICENSES.txt"
-write_licenses(LICENSES, shipped_distributions(a.pure + a.binaries))
+write_licenses(LICENSES, shipped_distributions(a.pure + a.binaries), BUNDLED)
 a.datas += [("THIRD-PARTY-LICENSES.txt", str(LICENSES), "DATA")]
 pyz = PYZ(a.pure)
 exe = EXE(

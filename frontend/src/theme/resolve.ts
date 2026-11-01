@@ -20,7 +20,6 @@ export type SchemeQuery = Pick<MediaQueryList, "matches" | "addEventListener">;
 
 /** The theme `setting` names, the system `dark` or not; an id no theme has gives the default. */
 export function resolveTheme(setting: string, dark: boolean): Theme {
-  // Night is among the presets still to come: until it is in THEMES, auto by night is the default.
   const id = setting === "auto" ? (dark ? "night" : "studio") : setting;
   return (
     THEMES.find((theme) => theme.id === id) ??

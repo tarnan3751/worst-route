@@ -1,20 +1,9 @@
 // The theme the settings name: by its id, "auto" by the system's scheme (studio by day, night by
 // night), an unknown id the default; kept in the browser's storage; followed as the setting and
 // the system change.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS, IDLE_RUN, Store } from "../state";
-import type { Theme } from "./theme";
-
-// Night is the presets' to write: a stand-in, after them, so "auto" by night has one to find.
-vi.mock("./presets", async (original) => {
-  const { THEMES } = await original<typeof import("./presets")>();
-  const studio = THEMES.find(({ id }) => id === "studio") as Theme;
-  const night: Theme = { ...studio, id: "night", name: "Night drive", scheme: "dark" };
-  return { THEMES: [...THEMES, night] };
-});
-
-const { DEFAULT_THEME, THEME_KEY, followTheme, resolveTheme, storedTheme } =
-  await import("./resolve");
+import { DEFAULT_THEME, THEME_KEY, followTheme, resolveTheme, storedTheme } from "./resolve";
 
 function store(theme: string): Store {
   return new Store({

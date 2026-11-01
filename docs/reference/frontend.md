@@ -28,7 +28,7 @@ nothing there.
 | `settings/panel.ts` | the request's settings (the region pinned, the mode with its item or brand, the turns, hard mode, the worst order and Certified, the vehicle and the departure among them; `regionOptions`, the region picker's; `loadBrands` and `brandOptions`, the brand picker's), the row an error's `field` names, and the units |
 | `settings/themeRow.ts` | the settings' Theme row, `themeOptions` (**Themes**) |
 | `theme/theme.ts` | `Theme` and its parts (`ThemeColors`, `ThemeFonts`, `ThemeShape`), `ThemeId`, `Scheme`, `BasemapVariant` (**Themes**) |
-| `theme/presets/` | one `Theme` a file (`classic.ts`, `studio.ts`), and `THEMES` (`index.ts`), the settings' order |
+| `theme/presets/` | one `Theme` a file (`studio.ts`, `night.ts`, `transit.ts`, `topo.ts`, `arcade.ts`, `dashboard.ts`, `atlas.ts`, `sign.ts`, `ledger.ts`, `classic.ts`), and `THEMES` (`index.ts`), the settings' order |
 | `theme/apply.ts` | `themeProperties` (a theme as CSS custom properties) and `applyTheme` (on `<html>`, its fonts loaded) |
 | `theme/resolve.ts` | `DEFAULT_THEME`, `resolveTheme` (a setting, `auto` by the system's scheme), `storedTheme` and `followTheme` (the setting kept in the browser's storage, followed as it or the scheme changes) |
 | `run/controls.ts` | `JobRunner`, a job's lifecycle (no DOM, so the tests drive it), and the retries without strict and without hard mode; `mountRunControls`, Go, Cancel, Reroll, Make it worse, Draw it and the stat line; `statLines`, `countsTitle` and `routeLines`, its rows; `awaitingBrand`, which holds the buttons under Brand until the brands are known, and `worseRefused`, which turns Make it worse off for an alphabet route and a certified one |
@@ -684,12 +684,21 @@ the route's colours and widths on the map and the basemap's variant come from on
 Protomaps' grayscale flavor, one wrong-way orange for the route, Go and the ratio, its teal start
 also the flash and a step's highlight, which must read against the orange route; Manrope), and
 `classic`, the app's first look (the yellow-to-red gradient, the system's fonts, the grayscale
-flavor, blue links, the page's white behind the tiles), kept exactly but for MapLibre's zoom
-buttons and attribution and the share section's two links, which the themes colour (below). A
-preset changes values only: it adds no CSS, no selector and no layer, and what the interface does
-not name it cannot set (the buttons' and badges' background, `--field`, is white under a light
-scheme and the panel under a dark one; native inputs follow `color-scheme`; the shadows are
-black).
+flavor, blue links, the page's white behind the tiles), kept exactly but for MapLibre's zoom buttons
+and attribution and the share section's two links, which the themes colour (below), and eight more,
+each with its one bold thing named in its file's comment: night drive (navy, a glowing magenta
+route, Sora, dark tiles), transit (black on white, a signal-orange metro line with no casing,
+station circles, Archivo), topo (paper and pine, a trail-orange route, Zilla Slab and Nunito Sans;
+its contour lines later), arcade (a navy nav unit, a yellow route, square corners and markers, Press
+Start 2P and VT323, dark tiles), dashboard (an amber readout on a dark panel, square chips, IBM Plex
+Mono and Sans, dark tiles), road atlas (atlas blue over a white casing, highway red for Go, Barlow
+Condensed and Source Sans 3), highway sign (a green panel, a warning-yellow route over a black
+casing, Overpass) and ledger (black type on white, one stamp-red route, square markers, Courier
+Prime). Their fonts are Fontsource's packages, a stylesheet per weight imported dynamically by
+`load`, so a theme's are fetched only when it is chosen. A preset changes values only: it adds no
+CSS, no selector and no layer, and what the interface does not name it cannot set (the buttons' and
+badges' background, `--field`, is white under a light scheme and the panel under a dark one; native
+inputs follow `color-scheme`; the shadows are black).
 
 **Putting one on the page** (`theme/apply.ts`): `applyTheme` sets `data-theme="<id>"` on
 `<html>` and writes `themeProperties(theme)` there as inline custom properties (`--panel`,
@@ -724,15 +733,14 @@ place when the variant changes (**Basemap**), not `setStyle`, which would drop t
 and their data.
 
 **The setting** (`settings.theme`, `theme/resolve.ts`) is a theme's id or `auto`, the default:
-studio while the system is light and night while it is dark (`prefers-color-scheme`, followed as
-it changes; until the night preset is among `THEMES`, auto by night is studio, the default). An id
-no theme has gives the default. It is the device's own, kept in the browser's `localStorage`
-under `worst-route.theme`, read before anything is drawn and written when the row changes it,
-every read and write in a try (a private window, storage blocked: the setting lasts as long as the
-page). It is not in the URL, unlike the request's settings (**Links**), so a link carries no theme
-and opens in the receiver's own; nor is it in a request. The row (`settings/themeRow.ts`), last in the settings,
-lists "Auto (studio by day, night by night)", then each theme by its name; it is never locked, a
-theme changing nothing a job asks.
+studio while the system is light and night while it is dark (`prefers-color-scheme`, followed as it
+changes). An id no theme has gives the default. It is the device's own, kept in the browser's
+`localStorage` under `worst-route.theme`, read before anything is drawn and written when the row
+changes it, every read and write in a try (a private window, storage blocked: the setting lasts as
+long as the page). It is not in the URL, unlike the request's settings (**Links**), so a link
+carries no theme and opens in the receiver's own; nor is it in a request. The row
+(`settings/themeRow.ts`), last in the settings, lists "Auto (studio by day, night by night)", then
+each theme by its name; it is never locked, a theme changing nothing a job asks.
 
 ## Links
 
@@ -810,7 +818,7 @@ follows the app again from the next change. The units and the theme are not in t
 | `map/routeLayer.test.ts` | `spliceLine` on hand-made lines (a longer and a shorter detour, either end, the input left alone); each recording replayed: it ends with the stored route's node count, every node where the job's final snapshot has it (whose stop positions are the route's), every drawn point a point of the stored geometry in order with the same ends; and at every snapshot after splices (the max-mode recording's after its 50th `progress`), the replayed nodes equal the snapshot's (the alphabet and certified recordings' snapshots follow none; the certified one's straight streets are drawn unsimplified); the alphabet recording through a `RouteLayer` on a stand-in map: each snapshot drawn whole, no flash ever, the stored geometry drawn at the end; `paintRoute`: classic's paint the first look's (yellow to dark red in four even stops, the route 4 wide over a white casing 7 wide, the grey baseline, the cyan flash, the blue highlight), one colour a flat gradient, a glow in the route's colour, wide and blurred |
 | `theme/apply.test.ts` | `themeProperties`: classic's the stylesheet's first values (the panel, the hover, white buttons, blue links, white behind the tiles, the ghost's and the attribution's translucent colours, 6 px, round markers, no capitals, the system's fonts); links in the accent unless a theme names them, a dark scheme's buttons and attribution on its panel, a bare 0 radius written 0px, capitals, a three-digit casing made translucent; `style.css`'s `:root` holding studio's values; every variable `style.css` reads written, for every theme; `applyTheme` on a stand-in root: `data-theme` and every property, then the fonts loaded and asked for at the three weights; a font chunk and a font file that fail, the properties set all the same, one debug line each, no error |
 | `map/drawLayer.test.ts` | `paintDrawing`: classic's paint the first look's (violet over white, the next moves green), another theme's draw, par and casing colours |
-| `theme/resolve.test.ts` | with a stand-in night after the presets: auto studio by day and night by night, an id its theme, an unknown id the default; `storedTheme`: an id or auto read back, anything else auto, and auto when the storage throws; `followTheme`: the theme shown at once, again when the system's scheme flips under auto and when the setting changes (kept in the storage), not for another setting nor a flip under an id; a storage that throws survived |
+| `theme/resolve.test.ts` | auto studio by day and night by night, an id its theme, an unknown id the default; `storedTheme`: an id or auto read back, anything else auto, and auto when the storage throws; `followTheme`: the theme shown at once, again when the system's scheme flips under auto and when the setting changes (kept in the storage), not for another setting nor a flip under an id; a storage that throws survived |
 | `settings/themeRow.test.ts` | the picker's options: auto first, then every theme by its name, in their order |
 | `api/types.test.ts` | each type's runtime spec, which the compiler holds to the type's keys; the specs against `api.md` (its JSON request example, and the field lists of the events, `done`'s metrics, `/regions` (its `name` optional: the recordings predate it), `/regions/pick`, the 202, the job status, the route document, `/routes/{id}/directions`, `/brands`, `/geocode`, `/config` `/daily`, with its example, `/draw` and `/draw/finish`) and against every payload of the eight recordings and the recorded drawing's answers, finish and refusal; the ratio recording's target reached in `done` and the document, its round-trip refusal; the slowest-time recording's time ratio, delays and turns in `done` and the document, its refusal of both turn constraints; the collect recording's bridges counted in every `progress`, in `done` and the document, its refusal of a ratio target; the directions recording's vehicle, fuel and cost, states and towns, its steps numbered from 1 with the driving steps' ranges covering the route's edges in order and adding up to its length, its first toast, its refusal of a vehicle of 0 mpg; the brand recording's visits never falling in its `progress` events (8, 13, 14 of 19), `done` and the document agreeing, its refusal of a ratio target; the alphabet recording's better routes, each a snapshot then a `progress` with no splice, the same metrics and a higher score, from "A" to "ABCDEFGHIJKLMNO", `done` and the document agreeing, its refusal of a stop along the way (`field: "stops"`); a payload that does not fit is caught; the request's `reorder` and the `order` of `snapped` and the route document (optional: the recordings predate them) |
 | `map/basemap.test.ts` | `basemapParts`: OSM's raster tiles for `raster`; nothing (an error on the console, never OSM's tiles) for `pmtiles` without its file; Protomaps' tiles from the server for `pmtiles`, its `pmtiles://` URL absolute under `/api`, the attribution the app's own, no symbol layer without the server's fonts; with them the fonts' and icons' URLs absolute with the template's braces kept, and the labels asking for no font but the four `tools/fetch_basemap.sh` fetches; `addBasemap` on a stand-in map: the fonts, icons and sources set, then every layer before the first layer the map already had (the route's), or on top of an empty map; the light and dark flavors with their own background, without points of interest, on the grayscale sprite and the four fonts, grayscale the default; `styleUrl`: OpenFreeMap's Dark for dark, Positron otherwise; `Basemap` on a stand-in map: a new variant's layers and sources swapped in under the route's, nothing redone for the same look, OpenFreeMap's style fetched once for each look (Positron once for grayscale and light) and kept, a style that did not load asked for again, raster one look |
@@ -832,6 +840,7 @@ follows the app again from the next change. The units and the theme are not in t
 | `challenges/panel.test.ts` | `ChallengePanel` over a real store, today's route stubbed: none listed before `/regions`, then the served regions', and today's once `GET /daily` has answered with a day (planning, done or failed), not before nor on a server without one; Set it up refused while a run goes, today's until its route is done ("could not be planned" when failed); Set it up pinning the region, putting in the stops and the settings it fixes, the rest of those their defaults (the worst order unticked) and the seed, budget and vehicle the panel's, the route shown forgotten, the challenge in the store, the map fitted to the stops; a trip's own stops kept for any trip in the region when they lie in it, else none, the map fitted to the region; the brand picked once the region's brands are known, by wikidata id over the one `loadBrands` carried, else by name when already loaded, and the challenge no longer set up once another brand is picked; set up through a run, its seed, the budget and the snaps, and no longer once the item, the worst order, a stop, the leash or the region changes; today's challenge opening today's route, set up while it is shown; a link's challenge set up (`setUpLink`), today's waiting for its route when `/daily` answers after `/regions`, nothing for a failed day, an id not in the list or a region not served; the collapse when a run or a drawing starts; `setUpLine` |
 | `daily/panel.test.ts` | `DailyRoute` with `fetch` and `EventSource` stubbed over a real store: a busy server's 429 a day to try again; planning, its job's stream followed (the ratio so far from its `snapshot` and `progress`), then on `done` the stream closed and `GET /daily` asked again, done, with the route's id for `?daily` (`route`), and never a `DELETE`; a route done at once, no stream opened; failed (no route for `?daily`), asked again, and asked again when the stream ends in an `error` or is lost; none on a server without a daily route; collapsed when a run of the user's own starts, not when a route is opened, shown again from the link, not collapsed again by the same run; `dailyLine` in each state; `openDailyAtStart`: today's route opened once done while the user has done nothing, never once a run has started (the wait ended at once, the run's job left as it is) or a route has been opened, nor for a failed day |
 | `format.test.ts` | distances in both units and their thresholds, durations, ratios, counts, items one and many; drive times typed as a target, read and written back; fuel and its cost, percentages ("under 1 %"), states by their codes and a name not known; a time written at the browser's offset to the second and read back, ISO times with an offset read and others (a day the month lacks among them) refused, a time shown as a clock at its own offset; a UTC day named as the daily route names it; places in an order (1st, 2nd, 3rd, 4th, 11th to 13th, 21st, 101st, 111th) |
+| `theme/presets/presets.test.ts` | `THEMES` in the order the settings list them, each id once; every preset's colours in hex, its route one to four of them; each preset's `load` resolving (the fontsource stylesheets it imports found, so a weight a package lacks fails here) |
 
 The drawn points are not the stored geometry point for point: a snapshot is simplified
 (`api.md`, **Applying the stream**) and a splice is not, so the replay has fewer points; it is

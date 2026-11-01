@@ -429,21 +429,30 @@ export function parLine(par: Par | null, units: Units): string {
   return par.phase === "done" ? `the engine: ${value}` : `the engine: ${value} so far`;
 }
 
-/** The verdict once the drawing is stored and the par done, by length (the same baseline):
- * "You 7.2× · the engine 31×: the engine wins." */
+/** Who has won once the drawing is stored and the par done, by length (the same baseline): a tie
+ * when the two read the same; null before. */
+export function verdictOf(
+  drawing: Pick<Drawing, "finished" | "par">,
+  units: Units,
+): "you" | "engine" | "tie" | null {
+  const { finished, par } = drawing;
+  if (finished === null || par?.phase !== "done" || par.lengthM === null) return null;
+  const you = measure(finished.ratio, finished.lengthM, units);
+  if (you === measure(par.ratio, par.lengthM, units)) return "tie";
+  return finished.lengthM > par.lengthM ? "you" : "engine";
+}
+
+const OUTCOMES = { you: "you beat the engine.", engine: "the engine wins.", tie: "a tie." };
+
+/** The verdict once the drawing is stored and the par done (`verdictOf`): "You 7.2× · the engine
+ * 31×: the engine wins." */
 export function verdictLine(drawing: Drawing, units: Units): string {
   const { finished, par } = drawing;
-  if (finished === null || par?.phase !== "done" || par.lengthM === null) return "";
+  const verdict = verdictOf(drawing, units);
+  if (verdict === null || finished === null || par?.lengthM == null) return "";
   const you = measure(finished.ratio, finished.lengthM, units);
   const engine = measure(par.ratio, par.lengthM, units);
-  const shown = (metres: number, ratio: number | null) => measure(ratio, metres, units);
-  const tie = shown(finished.lengthM, finished.ratio) === shown(par.lengthM, par.ratio);
-  const outcome = tie
-    ? "a tie."
-    : finished.lengthM > par.lengthM
-      ? "you beat the engine."
-      : "the engine wins.";
-  return `You ${you} · the engine ${engine}: ${outcome}`;
+  return `You ${you} · the engine ${engine}: ${OUTCOMES[verdict]}`;
 }
 
 /** A ratio, or for a round trip (no ratio) the length. */

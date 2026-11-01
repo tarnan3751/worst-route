@@ -16,6 +16,10 @@
                 value, achieved, within_tolerance}},
      run:      {attempts, accepted, stopped_because, elapsed_s, backend}}
 
+`document(data, request, snaps, route, baseline, run=..., target=...)` is the same document from
+its parts, with the run's numbers given as they are: `route_document` builds it from a plan's
+result, a route drawn by hand (`engine/draw.py`) from its own.
+
 `read_route(path)` reads one back as a `SavedRoute`, which the validator reads like a `Route`
 (its metrics' counters hold the file's `items`, a pilgrimage's `brand` and an alphabet route's
 `alphabet`, which the validator recounts):
@@ -27,6 +31,7 @@ A route's GeoJSON is `presentation/geojson.py`'s.
 """
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -37,7 +42,8 @@ from worst_route.engine import ENGINE_VERSION
 from worst_route.engine.objectives.collect import count_items
 from worst_route.engine.plan import PlanResult
 from worst_route.engine.request import RouteRequest
-from worst_route.engine.route import IntArray, Metrics
+from worst_route.engine.route import IntArray, Metrics, Route
+from worst_route.engine.seed_route import Baseline
 from worst_route.engine.turns import count_turns
 from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import Snap
@@ -63,19 +69,48 @@ class SavedRoute:
 
 def route_document(data: GraphData, result: PlanResult) -> dict[str, Any]:
     """The `route.json` of a planned route."""
-    route, baseline, run = result.route, result.baseline, result.run
+    route, run = result.route, result.run
+    return document(
+        data,
+        result.request,
+        result.snaps,
+        route,
+        result.baseline,
+        run={
+            "attempts": run.attempts,
+            "accepted": run.accepted,
+            "stopped_because": run.stopped_because,
+            "elapsed_s": run.elapsed_s,
+            "backend": result.backend,
+        },
+        target=result.goal.describe(result.goal.value(route.score, route.metrics)),
+    )
+
+
+def document(
+    data: GraphData,
+    request: RouteRequest,
+    snaps: Sequence[Snap],
+    route: Route,
+    baseline: Baseline,
+    *,
+    run: dict[str, Any],
+    target: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The `route.json` of `route`, planned or drawn for `request` on these stops against this
+    baseline: `run` its `{attempts, accepted, stopped_because, elapsed_s, backend}`, `target` a
+    ratio or duration target's `{kind, value, achieved, within_tolerance}`."""
     ratio = route.metrics.length_m / baseline.length_m if baseline.length_m > 0 else None
-    target = result.goal.describe(result.goal.value(route.score, route.metrics))
     return {
         "graph_version": data.meta["graph_version"],
         "region": data.meta["region"],
         "build_id": data.meta["build_id"],
-        "seed": result.request.seed,
+        "seed": request.seed,
         "engine_version": ENGINE_VERSION,
-        "request": result.request.model_dump(mode="json"),
+        "request": request.model_dump(mode="json"),
         "stops": [
             {"lat": s.lat, "lon": s.lon, "node": s.node, "moved_m": s.moved_m, "note": s.note}
-            for s in result.snaps
+            for s in snaps
         ],
         "nodes": route.nodes.tolist(),
         "edges": route.edges.tolist(),
@@ -93,13 +128,7 @@ def route_document(data: GraphData, result: PlanResult) -> dict[str, Any]:
             **route.metrics.counters,
             **({"target": target} if target is not None else {}),
         },
-        "run": {
-            "attempts": run.attempts,
-            "accepted": run.accepted,
-            "stopped_because": run.stopped_because,
-            "elapsed_s": run.elapsed_s,
-            "backend": result.backend,
-        },
+        "run": run,
     }
 
 

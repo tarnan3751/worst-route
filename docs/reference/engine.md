@@ -27,7 +27,7 @@ routes either way, on every build, transition tables included (**Searches**).
 | `worsen.py` | `worsen`, `run_worsen`, `pick_segment`, `detour_ends`, `widened`, `UnusedNodes`, `Budget`, `ProgressEvent`, `WorsenResult` |
 | `alphabet_search.py` | `alphabet_route`, `edge_letters`, `alphabet_counts`, `alphabet_scored` (**Alphabet**) |
 | `plan.py` | `plan_route`, `PlanResult`, `check_base`, `BaseRouteMismatch` |
-| `io.py` | `route_document`, `read_route` / `SavedRoute` |
+| `io.py` | `route_document`, `document`, `read_route` / `SavedRoute` |
 
 `ENGINE_VERSION` (`engine/__init__.py`) is recorded with every route: bump it when the same
 build, request and seed would give a different route. The engine's numbers (thresholds,
@@ -1001,6 +1001,10 @@ check reports `ok`, the first offending index and a detail. `report.ok` is their
   ratio or its experienced time in seconds, and whether that is within ±2 %);
 - `run`: `{attempts, accepted, stopped_because, elapsed_s, backend}` (`backend` is `"csr"` or
   `"python"`; every backend gives the same route).
+
+`route_document(data, result)` builds it from a plan's result through `document(data, request,
+snaps, route, baseline, *, run, target=None)`, which takes the run's numbers as they are and a
+target's description, for a route that no plan made.
 
 `worst-route plan --out` writes it with the presentation's fields
 (`docs/reference/presentation.md`, **The document**): `directions` (the turn-by-turn steps,

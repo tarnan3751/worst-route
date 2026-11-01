@@ -645,6 +645,12 @@ def test_a_target_goal_never_anneals() -> None:
     assert splices(hot) == splices(greedy) and hot.reheats == 0
 
 
+def test_plan_route_anneals_a_max_run_once_it_converges() -> None:
+    result = plan(1, 10**6, data=UNEVEN, stops=UNEVEN_CORNERS)  # check_delta on, validated
+    assert result.run.stopped_because == "converged" and result.run.reheats == ANNEAL_REHEATS
+    assert result.report.ok and result.route is result.run.best
+
+
 def test_both_backends_anneal_alike_and_the_same_seed_twice_alike() -> None:
     town = random_town(1, turns=True)
     scc = np.flatnonzero(PythonBackend(town).largest_scc_mask())

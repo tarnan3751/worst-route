@@ -1,11 +1,15 @@
-"""`plan_route`'s hooks for the API: `on_start` before the loop, and `base` to continue a route."""
+"""`plan_route`'s hooks for the API: `on_start` before the loop, and `base` to continue a route;
+and the temperature a max run anneals from."""
 
 from dataclasses import dataclass, field, replace
+from typing import Any
 
 import numpy as np
 import pytest
 from numpy.typing import NDArray
 
+from worst_route.config import ANNEAL_T0_FRACTION
+from worst_route.engine import plan as plan_module
 from worst_route.engine import request as request_module
 from worst_route.engine.constraints import NO_CONSTRAINTS, Constraints
 from worst_route.engine.plan import BaseRouteMismatch, PlanResult, check_base, plan_route
@@ -13,8 +17,9 @@ from worst_route.engine.request import RequestMasks, RouteRequest, request_masks
 from worst_route.engine.route import Route, Splice
 from worst_route.engine.seed_route import Baseline, choose_order
 from worst_route.engine.snap import InfeasibleTurnConstraint, StopUnreachable
+from worst_route.engine.target import Target
 from worst_route.engine.turns import count_turns, turn_classes
-from worst_route.engine.worsen import ProgressEvent
+from worst_route.engine.worsen import ProgressEvent, WorsenResult
 from worst_route.graph.backend import TURN_LEFT, TURN_U, GraphBackend
 from worst_route.graph.csr_backend import CsrBackend
 from worst_route.graph.python_backend import PythonBackend
@@ -71,6 +76,30 @@ def replay(route: Route, splices: list[Splice]) -> bytes:
     for s in splices:
         nodes = np.concatenate((nodes[: s.i], s.nodes, nodes[s.j + 1 :]))
     return nodes.tobytes()
+
+
+def test_a_max_run_anneals_from_a_hundredth_of_its_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    passed: list[float | None] = []
+    loop = plan_module.run_worsen
+
+    def spy(*args: Any, **kwargs: Any) -> WorsenResult:
+        passed.append(kwargs["anneal_t0"])
+        return loop(*args, **kwargs)
+
+    monkeypatch.setattr(plan_module, "run_worsen", spy)
+    result, _ = plan(request([0, 63], 1, 40))
+    assert passed[-1] == pytest.approx(ANNEAL_T0_FRACTION * result.baseline.length_m)
+    slowest, _ = plan(request([0, 63], 1, 40).model_copy(update={"objective": "time"}))
+    baseline = slowest.baseline
+    assert passed[-1] == pytest.approx(ANNEAL_T0_FRACTION * (baseline.time_s + baseline.delay_s))
+    plan(request([0, 63], 1, 40).model_copy(update={"target": Target(kind="ratio", value=3)}))
+    assert passed[-1] is None  # a target goal never anneals
+    here = at_node(GRID, 27)  # a round trip, whose baseline is 0 m: its loop's length
+    loop_trip, seen = plan(RouteRequest(stops=[here, here], seed=2, max_iterations=40))
+    assert loop_trip.baseline.length_m == 0.0
+    assert passed[-1] == pytest.approx(ANNEAL_T0_FRACTION * seen.starts[0][4].metrics.length_m)
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3])

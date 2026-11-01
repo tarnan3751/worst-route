@@ -17,8 +17,11 @@ request's item and active nodes, a pilgrimage with its brand and active nodes, w
 request's constraints (`constraints.constrain`; a strict turn constraint and hard mode
 constrain the seed too), and its goal (`target.Goal`, the request's target against that
 baseline), and runs the worsen loop toward that goal within the request's budget,
-handing each accepted splice and the baseline to `on_progress`. The alphabet route runs its own
-search instead (`alphabet_search.alphabet_route`, from the seed scored with its letters), whose
+handing each accepted splice and the baseline to `on_progress`; for a max goal the loop anneals
+once it converges (`worsen`), from `ANNEAL_T0_FRACTION` of the objective's primary quantity of
+the baseline, of the route it starts from when that is 0 (a round trip;
+`anneal_temperature`). The alphabet route runs its own search instead
+(`alphabet_search.alphabet_route`, from the seed scored with its letters), whose
 events each replace the whole route by a better one, and is validated with its `alphabet` check;
 it cannot be continued from a base route (`ValueError`). It searches with the backend it
 is given, else `make_backend`'s default (`config.DEFAULT_BACKEND`); every backend gives the same
@@ -51,9 +54,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from worst_route.config import ANNEAL_T0_FRACTION
 from worst_route.engine.alphabet_search import alphabet_route, alphabet_scored, edge_letters
 from worst_route.engine.constraints import Constraints, constrain, returning
 from worst_route.engine.objectives import make_objective
+from worst_route.engine.objectives.base import Objective
 from worst_route.engine.objectives.brand import BrandRefused, brand_problem
 from worst_route.engine.request import RequestMasks, RouteRequest, reorder_problem, request_masks
 from worst_route.engine.route import IllegalSplice, Route
@@ -230,6 +235,7 @@ def plan_route(
             goal=goal,
             check_delta=check_delta,
             on_event=progress,
+            anneal_t0=anneal_temperature(objective, baseline, route) if goal.maximise else None,
         )
     report = validate_route(
         data,
@@ -290,6 +296,13 @@ def check_base(
         road = data.strings.identities[data.edge_identity[edges[again]]]
         message = f"the base route comes back to {road} at edge {again}, which hard mode refuses"
         raise BaseRouteMismatch("route", message)
+
+
+def anneal_temperature(objective: Objective, baseline: Baseline, route: Route) -> float:
+    """The temperature a max run's reheats start at: `ANNEAL_T0_FRACTION` of the objective's
+    primary quantity of the baseline, or of `route`'s when that is 0 (a round trip)."""
+    scale = objective.primary(baseline.metrics) or objective.primary(route.metrics)
+    return ANNEAL_T0_FRACTION * scale
 
 
 def _refused(error: ValueError | IllegalSplice, stop_idx: Sequence[int] | None) -> StopUnreachable:

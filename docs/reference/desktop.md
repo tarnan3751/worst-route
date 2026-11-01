@@ -110,6 +110,11 @@ webview/                           WebView2's storage, its HTTP cache among it (
 worst-route.log                    the log (three of 1 MB kept)
 ```
 
+A job worker killed in the middle of a job (Cancel, quitting during a job, a worker whose
+parent went away) leaves one empty `tmp*` directory in the system's temporary directory:
+PyInstaller's matplotlib runtime hook makes one in every frozen process and removes it only
+at a normal exit. The app's own is removed, and the system clears the rest on its own.
+
 Removing the app leaves it (the Windows uninstaller too); deleting it starts the app afresh. On
 macOS, WKWebView keeps its storage and cache under `~/Library/WebKit/` and `~/Library/Caches/`,
 named by the app's bundle identifier, `io.github.tarnan3751.worst-route`.

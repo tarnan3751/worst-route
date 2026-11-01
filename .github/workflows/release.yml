@@ -63,7 +63,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       # Notarized only when the app is signed and the Apple account is there too (a step's `if`
       # cannot read secrets).
-      NOTARIZE: ${{ secrets.MACOS_CERTIFICATE != '' && secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
+      NOTARIZE: ${{ secrets.MACOS_CERTIFICATE != '' && secrets.MACOS_SIGNING_IDENTITY != '' && secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6

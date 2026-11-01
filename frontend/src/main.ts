@@ -4,8 +4,10 @@
 // the map fitted to all their bboxes, and the build each trip runs on picked from its stops
 // (RegionPicker); a stored route when the URL names one, or today's once it is done for
 // `?daily` (unless a run of the user's own has started first), the URL left alone until then;
-// clicks on the map and a place search's picks add stops, the same way (placeStop); leaving the
-// page cancels a running job.
+// clicks on the map and a place search's picks add stops, the same way (placeStop), but in
+// drawing mode, where a click takes the move nearest it (draw/drawing.ts), Backspace takes the last
+// one back and Esc leaves; changing the stops forgets a drawing; leaving the page cancels a running
+// job, and a drawing's par.
 // The basemap the server names (GET /config) goes under the route's layers once the map has
 // loaded (OpenFreeMap's once its style has).
 import "./style.css";
@@ -13,7 +15,10 @@ import { API_BASE, errorBody, getConfig, getRegions } from "./api/client";
 import { mountBanner } from "./banner";
 import { DailyRoute, mountDaily, openDailyAtStart } from "./daily/panel";
 import { DirectionsPanel, mountDirections } from "./directions/panel";
+import { Drawing } from "./draw/drawing";
+import { mountDraw } from "./draw/panel";
 import { addBasemap, basemapParts, fetchStyle } from "./map/basemap";
+import { DrawLayer } from "./map/drawLayer";
 import { createMap, fitTo } from "./map/map";
 import { RouteLayer } from "./map/routeLayer";
 import { StopsLayer } from "./map/stopsLayer";
@@ -45,13 +50,16 @@ const store = new Store({
 const map = createMap(byId("map"));
 const config = getConfig();
 let routeLayer: RouteLayer | null = null;
+let drawLayer: DrawLayer | null = null;
 let runner: JobRunner | null = null;
+let drawing: Drawing | null = null;
 let ready: (runner: JobRunner) => void = () => undefined;
 const loaded = new Promise<JobRunner>((resolve) => (ready = resolve)); // the runner, on the map
 
-/** Change the stops; the route shown no longer goes through them. */
+/** Change the stops; the route shown no longer goes through them, nor a drawing. */
 function edit(stops: Stop[]): void {
   routeLayer?.clear();
+  drawing?.discard();
   store.update({ stops, error: null, route: null, run: IDLE_RUN });
 }
 
@@ -81,13 +89,40 @@ if (url.route === null && url.daily !== null) {
   void openDailyAtStart(daily, store, openDaily).then((opened) => urlSync.start(opened));
 }
 
-map.on("click", (event) => place(event.lngLat.lat, event.lngLat.lng));
+map.on("click", (event) => {
+  if (drawing?.active) {
+    const move = drawLayer?.pick(event.point);
+    if (move) void drawing.take(move.edge);
+    return;
+  }
+  place(event.lngLat.lat, event.lngLat.lng);
+});
+
+addEventListener("keydown", (event) => {
+  const typing =
+    event.target instanceof HTMLElement && event.target.closest("input, select, textarea");
+  if (!drawing?.active || typing) return;
+  if (event.key === "Backspace") {
+    event.preventDefault();
+    drawing.undo();
+  } else if (event.key === "Escape") {
+    drawing.leave();
+  }
+});
 
 map.once("load", () => {
   routeLayer = new RouteLayer(map);
   runner = new JobRunner(store, routeLayer, (bounds) => fitTo(map, bounds));
-  mountRunControls(byId("run"), store, runner);
+  drawLayer = new DrawLayer(map, store);
+  const shown = runner;
   const layer = routeLayer;
+  drawing = new Drawing(store, drawLayer, {
+    clearRoute: () => layer.clear(),
+    open: (id) => openRoute(id, store, shown),
+  });
+  mountDraw(byId("draw"), drawing, store);
+  const drawn = drawing;
+  mountRunControls(byId("run"), store, runner, () => drawn.start());
   const directions = new DirectionsPanel(store, {
     highlight: (line) => layer.highlight(line),
     panTo: (at) => map.panTo(at),
@@ -113,4 +148,7 @@ getRegions()
   })
   .catch((error: unknown) => store.update({ error: errorBody(error) }));
 
-addEventListener("pagehide", () => runner?.leave());
+addEventListener("pagehide", () => {
+  runner?.leave();
+  drawing?.leavePage();
+});

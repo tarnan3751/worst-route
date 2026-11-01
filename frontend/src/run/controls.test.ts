@@ -893,3 +893,16 @@ describe("leaving the page", () => {
     expect(calls.at(-1)).toMatchObject({ method: "DELETE", url: "/api/jobs/j3", keepalive: true });
   });
 });
+
+describe("a route drawn by hand", () => {
+  it("says the run is a drawing, and a drawn route's moves", () => {
+    const s = store();
+    s.update({ run: { ...IDLE_RUN, phase: "drawing" } });
+    expect(busy(s)).toBe(true);
+    expect(statLines(s.state)[1]).toBe("Drawing by hand: click a highlighted road to take it.");
+    const run = { ...fixture.route.run, attempts: 25, accepted: 25, elapsed_s: 0 };
+    const drawn = { ...fixture.route, run: { ...run, stopped_because: "drawn" as const } };
+    new JobRunner(s, fakeView(), () => {}).showRoute({ ...drawn, seed: 1 });
+    expect(statLines(s.state)[3]).toBe("25 moves · drawn by hand · seed 1");
+  });
+});

@@ -163,7 +163,8 @@ export function modeOf(settings: Settings): RequestMode {
   return mode;
 }
 
-export type Phase = "idle" | "starting" | "running" | "done" | "failed";
+/** Where the run stands; `drawing` while the user draws a route by hand (draw/drawing.ts). */
+export type Phase = "idle" | "starting" | "running" | "done" | "failed" | "drawing";
 
 /** A route's numbers as the stat line shows them: while it grows (a collecting route's `items`,
  * a pilgrimage's `brand` and an alphabet route's `alphabet` among them), and once stored its

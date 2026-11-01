@@ -5,8 +5,8 @@
 // the server's); once done, its ratio, its share image and "Open it", which opens it as a
 // ?route= link does; failed (or the server too busy to plan it, a 429), "Try again", which asks
 // again (and so plans it again). The section collapses once the user starts a route of their own
-// (Go, Reroll, Make it worse), and "Today's route" in the header shows it again. Neither shows
-// until the server has answered, nor on a server with no daily route (GET /daily refused).
+// (Go, Reroll, Make it worse, Draw it), and "Today's route" in the header shows it again. Neither
+// shows until the server has answered, nor on a server with no daily route (GET /daily refused).
 // `?daily` opens today's route at start once it is done, unless the user has started a run or
 // opened a route meanwhile (`openDailyAtStart`).
 //
@@ -35,7 +35,8 @@ export class DailyRoute extends EventTarget {
     super();
     let phase = store.state.run.phase;
     store.watch(["run"], ({ run }) => {
-      if (run.phase === "starting" && phase !== "starting") this.setCollapsed(true);
+      const own = run.phase === "starting" || run.phase === "drawing";
+      if (own && phase !== run.phase) this.setCollapsed(true);
       phase = run.phase;
     });
   }

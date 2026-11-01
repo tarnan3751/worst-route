@@ -458,6 +458,52 @@ body {
   cursor: default;
 }
 
+.buttons button.draw-it {
+  grid-column: 1 / -1;
+  border-color: #7c3aed;
+  color: #7c3aed;
+  font-weight: 600;
+}
+
+/* Drawing by hand */
+
+.draw-progress {
+  margin: 0 0 6px;
+}
+
+.draw-you,
+.draw-par {
+  margin: 0 0 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.draw-you {
+  color: #7c3aed;
+  font-weight: 700;
+}
+
+.draw-verdict {
+  margin: 6px 0 10px;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.draw-verdict:empty {
+  display: none;
+}
+
+#draw .buttons {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+#draw .buttons:last-child {
+  grid-template-columns: 1fr 1fr;
+}
+
+#draw .buttons[hidden] {
+  display: none;
+}
+
 .stat-ratio {
   font-size: 34px;
   font-weight: 800;

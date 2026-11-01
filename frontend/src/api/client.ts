@@ -1,5 +1,5 @@
-// The API client (docs/reference/api.md): fetch wrappers for the endpoints the app uses, and a
-// job's event stream.
+// The API client (docs/reference/api.md): fetch wrappers for the endpoints the app uses (a
+// drawing's steps among them), and a job's event stream.
 //
 // Every call goes to /api, which the dev server proxies to the API (vite.config.ts). A refusal
 // is an ApiError carrying the API's body; a refusal without one (a proxy's 502) gets the code
@@ -17,6 +17,9 @@ import type {
   BrandList,
   Daily,
   Done,
+  DrawAnswer,
+  DrawFinished,
+  DrawRequest,
   ErrorBody,
   GeocodeResult,
   JobCreated,
@@ -140,6 +143,24 @@ export function geocode(q: string, region: string): Promise<GeocodeResult> {
 /** Today's route: its trip, and how the server's plan of it stands. */
 export function getDaily(): Promise<Daily> {
   return call("/daily");
+}
+
+/** A route drawn by hand so far, with its legal next moves. */
+export function draw(body: DrawRequest): Promise<DrawAnswer> {
+  return call("/draw", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+/** Store a drawing that has reached the end as a route. */
+export function finishDraw(body: DrawRequest): Promise<DrawFinished> {
+  return call("/draw/finish", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 /** What a job's stream calls, in the order the server sends. */

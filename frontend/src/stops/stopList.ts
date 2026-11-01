@@ -54,10 +54,11 @@ export function stopErrored(
   return error?.field === "stops" && roleOf(index, count) === "via";
 }
 
-/** Whether a job is starting or running (stops and settings are then locked). */
+/** Whether a job is starting or running, or a route is being drawn (stops and settings are then
+ * locked). */
 export function busy(store: Store): boolean {
   const { phase } = store.state.run;
-  return phase === "starting" || phase === "running";
+  return phase === "starting" || phase === "running" || phase === "drawing";
 }
 
 /** Place the next stop at (lat, lon), as a click on the map does, through `edit`; nothing while

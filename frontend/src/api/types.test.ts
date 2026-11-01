@@ -2,8 +2,8 @@
 // holds to the type's (`object<T>` needs exactly T's keys); the specs are checked against the
 // shapes docs/reference/api.md writes down (its JSON request example, and the field lists of
 // the events, /regions, /regions/pick, the 202, the job status, the route document, its
-// directions, /geocode, /config and /daily) and against every payload of the streams recorded from
-// the server.
+// directions, /geocode, /config, /daily, /draw and /draw/finish) and against every payload of the
+// streams recorded from the server, and a drawing's answers recorded from it.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { RECORDINGS, loadStream } from "../__fixtures__/stream";
@@ -22,6 +22,10 @@ import type {
   DocumentMetrics,
   Done,
   DoneMetrics,
+  DrawAnswer,
+  DrawFinished,
+  DrawMove,
+  DrawRequest,
   ErrorBody,
   GeocodeCandidate,
   GeocodeResult,
@@ -128,7 +132,7 @@ function problems(value: unknown, spec: Spec, path = "$"): string[] {
 const lonLat: Spec = { tuple: ["number", "number"] };
 const lineString = object<LineString>({ type: literal("LineString"), coordinates: array(lonLat) });
 const tier = literal("auto", "T0", "T1", "T2", "T3", "T4");
-const stopReason = literal("budget", "converged", "target", "cancelled", "timeout");
+const stopReason = literal("budget", "converged", "target", "cancelled", "timeout", "drawn");
 const errorBody = object<ErrorBody>({ code: "string", message: "string" }, "any");
 const collectItem = literal("toll_booth", "level_crossing", "roundabout", "bridge");
 const itemCounts = object<ItemCounts>({
@@ -243,18 +247,17 @@ const region = object<Region>({
 const regionPick = object<RegionPick>({ region: "string", build_id: "string", reason: "string" });
 const jobCreated = object<JobCreated>({ job_id: "string", events_url: "string", seed: "integer" });
 
+const snappedStop = object<SnappedStop>({
+  input: object<SnappedStop["input"]>({ lat: "number", lon: "number" }),
+  label: nullable("string"),
+  node: "integer",
+  lat: "number",
+  lon: "number",
+  moved_m: "number",
+  note: nullable("string"),
+});
 const snapped = object<Snapped>({
-  stops: array(
-    object<SnappedStop>({
-      input: object<SnappedStop["input"]>({ lat: "number", lon: "number" }),
-      label: nullable("string"),
-      node: "integer",
-      lat: "number",
-      lon: "number",
-      moved_m: "number",
-      note: nullable("string"),
-    }),
-  ),
+  stops: array(snappedStop),
   tier: "string",
   leash_km: "number",
   active_nodes: "integer",
@@ -436,6 +439,32 @@ const daily = object<Daily>({
   stopped_because: nullable(stopReason),
   attempts: nullable("integer"),
 });
+
+const drawMove = object<DrawMove>({
+  edge: "integer",
+  node: "integer",
+  lat: "number",
+  lon: "number",
+  name: nullable("string"),
+  length_m: "number",
+  turn: nullable(literal("left", "right", "straight", "u_turn")),
+  stop: nullable("integer"),
+  coords: array(lonLat),
+});
+const drawAnswer = object<DrawAnswer>({
+  stops: array(snappedStop),
+  at: object<DrawAnswer["at"]>({ node: "integer", lat: "number", lon: "number" }),
+  reached: array("integer"),
+  legal: literal(true),
+  length_m: "number",
+  baseline_length_m: "number",
+  ratio: nullable("number"),
+  geometry: nullable(lineString),
+  next: array(drawMove),
+  done: "boolean",
+});
+const drawRequest = object<DrawRequest>({ request: routeRequest, path: array("integer") });
+const drawFinished = object<DrawFinished>({ route_id: "string", ratio: nullable("number") });
 
 const EVENTS: Record<string, Spec> = {
   snapped,
@@ -635,6 +664,13 @@ describe("the types against docs/reference/api.md", () => {
     expect(problems({ ...shown, status: "queued" }, daily)).not.toEqual([]);
   });
 
+  it("has the fields of /draw and /draw/finish", () => {
+    expect(differences(documentedOn("| POST | `/draw` |"), drawRequest, "draw")).toEqual([]);
+    expect(differences(documentedOn("| POST | `/draw` |", 1), drawAnswer, "drawn")).toEqual([]);
+    const finish = "| POST | `/draw/finish` |";
+    expect(differences(documentedOn(finish, 1), drawFinished, "finished")).toEqual([]);
+  });
+
   it("has the route document's fields", () => {
     const block = /\*\*The route document\*\*[^\n]*\n\n```\n([\s\S]*?)```/.exec(reference)?.[1];
     expect(block).toBeDefined();
@@ -800,5 +836,22 @@ describe("what the recordings say", () => {
     expect(route.request).toMatchObject({ objective: "alphabet", target: { kind: "max" } });
     expect(route.run).toMatchObject({ attempts: 150, accepted: 20 }); // restarts, better routes
     expect(refused.body).toMatchObject({ code: "INVALID_REQUEST", field: "stops" });
+  });
+});
+
+describe("the types against a drawing recorded from the server", () => {
+  const fixture = JSON.parse(
+    readFileSync(new URL("../__fixtures__/portland-draw.json", import.meta.url), "utf8"),
+  );
+
+  it("fit its request, its answers, its finish and a refusal", () => {
+    expect(problems({ request: fixture.request, path: fixture.path }, drawRequest)).toEqual([]);
+    for (const answer of [...fixture.steps, fixture.near_end, fixture.done]) {
+      expect(problems(answer, drawAnswer)).toEqual([]);
+    }
+    expect(problems(fixture.finished, drawFinished)).toEqual([]);
+    const refused = object<ErrorBody>({ code: literal("ILLEGAL_PATH"), message: "string" }, "any");
+    expect(problems(fixture.refused.body, refused)).toEqual([]);
+    expect(fixture.refused.body.index).toBe(2);
   });
 });

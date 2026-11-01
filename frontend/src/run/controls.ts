@@ -27,7 +27,9 @@
 // API's, or CLIENT_ERROR for one of the app's own (a running job is then cancelled). Leaving the
 // page cancels a running job, or a job whose POST is in flight as soon as it is answered. Under
 // Brand, Go, Reroll and Make it worse wait for the region's brands (`awaitingBrand`); an alphabet
-// route cannot be made worse (`worseRefused`).
+// route cannot be made worse (`worseRefused`). Draw it starts drawing a route by hand on the same
+// stops (draw/drawing.ts), which locks the run like a job; a route drawn by hand reads "drawn by
+// hand" and its moves.
 import {
   cancelJob,
   cancelJobOnLeave,
@@ -372,8 +374,14 @@ export function worseRefused({ route }: Readonly<AppState>): string | null {
   return route?.request.objective === "alphabet" ? "the alphabet route cannot be continued" : null;
 }
 
-/** The run section in `root`: the buttons, which drive `runner`, and the stat line. */
-export function mountRunControls(root: HTMLElement, store: Store, runner: JobRunner): void {
+/** The run section in `root`: the buttons, which drive `runner` (Draw it, `draw`), and the stat
+ * line. */
+export function mountRunControls(
+  root: HTMLElement,
+  store: Store,
+  runner: JobRunner,
+  draw: () => Promise<void>,
+): void {
   const button = (text: string, className: string, action: () => Promise<void>) => {
     const b = el("button", className, text);
     b.addEventListener("click", () => void action());
@@ -383,8 +391,10 @@ export function mountRunControls(root: HTMLElement, store: Store, runner: JobRun
   const cancel = button("Cancel", "", () => runner.cancel());
   const reroll = button("Reroll", "", () => runner.reroll());
   const worse = button("Make it worse", "", () => runner.worse());
+  const drawIt = button("Draw it", "draw-it", draw);
+  drawIt.title = "Draw your own worst route, junction by junction, against the engine's";
   const buttons = el("div", "buttons");
-  buttons.append(go, cancel, reroll, worse);
+  buttons.append(go, cancel, reroll, worse, drawIt);
   const names = ["ratio", "line", "target", "note", "time", "items", "turns"];
   const rows = names.map((name) => el("div", `stat-${name}`));
   const [ratio, line, target, note, time, items, turns] = rows;
@@ -402,6 +412,7 @@ export function mountRunControls(root: HTMLElement, store: Store, runner: JobRun
     worse.disabled = state.region === null || state.route === null || locked || refused !== null;
     worse.title = refused ?? "";
     cancel.disabled = state.run.phase !== "running";
+    drawIt.disabled = state.region === null || state.stops.length < 2 || busy(store);
     statLines(state).forEach((text, k) => (rows[k].textContent = text));
     items.title = countsTitle(state);
     routeLines(state).forEach(({ text, title }, k) => {
@@ -412,7 +423,10 @@ export function mountRunControls(root: HTMLElement, store: Store, runner: JobRun
 }
 
 // How a run ended, where the API's word needs one.
-const STOPPED: Partial<Record<StopReason, string>> = { target: "target reached" };
+const STOPPED: Partial<Record<StopReason, string>> = {
+  target: "target reached",
+  drawn: "drawn by hand",
+};
 
 /** A target's number: × for a ratio, a drive time for a duration. */
 function targetValue(kind: TargetMetrics["kind"], value: number): string {
@@ -486,6 +500,7 @@ export function statLines(state: Readonly<AppState>): StatLines {
   const { run, settings } = state;
   const only = (line: string): StatLines => ["", line, "", "", "", "", ""];
   if (run.phase === "starting") return only("Starting…");
+  if (run.phase === "drawing") return only("Drawing by hand: click a highlighted road to take it.");
   if (run.metrics === null) {
     if (run.phase === "running") return only("Planning the sensible route…");
     if (run.phase === "failed") return only("No route.");
@@ -496,11 +511,12 @@ export function statLines(state: Readonly<AppState>): StatLines {
   const { length_m, time_s, ratio, time_ratio, delay_s, turns } = run.metrics;
   const slowest = run.mode.objective === "time";
   const numbers = `${formatDistance(length_m, settings.units)} · ${formatDuration(time_s)}`;
+  const drawn = run.stoppedBecause === "drawn";
   const attempts =
     run.phase === "done"
-      ? `${formatCount(run.iteration)} attempts`
+      ? `${formatCount(run.iteration)} ${drawn ? "moves" : "attempts"}`
       : `attempt ${formatCount(run.iteration)}`;
-  const parts = [attempts, formatElapsed(run.elapsedS)];
+  const parts = drawn ? [attempts] : [attempts, formatElapsed(run.elapsedS)];
   if (run.phase === "running") {
     parts.push(run.connection === "open" ? "getting worse…" : "reconnecting…");
   }

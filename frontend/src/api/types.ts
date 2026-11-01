@@ -15,7 +15,8 @@ export type Tier = "auto" | "T0" | "T1" | "T2" | "T3" | "T4";
 export type Objective = "distance" | "time" | "collect" | "brand" | "alphabet";
 export type CollectItem = "toll_booth" | "level_crossing" | "roundabout" | "bridge";
 export type TargetKind = "max" | "ratio" | "duration";
-export type StopReason = "budget" | "converged" | "target" | "cancelled" | "timeout";
+/** How a run ended; `drawn`, a route drawn by hand (its run's backend `human`). */
+export type StopReason = "budget" | "converged" | "target" | "cancelled" | "timeout" | "drawn";
 export type JobState = "queued" | "running" | "done" | "error";
 
 /** `{code, message}` and the error's own fields (`stop_index`, `leg`, `field`, `constraint`,
@@ -457,4 +458,52 @@ export interface Daily {
   ratio: number | null;
   stopped_because: StopReason | null;
   attempts: number | null;
+}
+
+// --- A route drawn by hand (POST /draw, POST /draw/finish) --------------------------------
+
+/** The class of a turn from one edge into the next. */
+export type TurnName = "left" | "right" | "straight" | "u_turn";
+
+/** `POST /draw` and `POST /draw/finish`: the request drawn on, as `POST /jobs` takes it (a
+ * drawing's objective `distance` and target `max` only), and the path, its edges in order. */
+export interface DrawRequest {
+  request: RouteRequest;
+  path: number[];
+}
+
+/** A legal next move: its edge, the node it leads to, the road's name (else its ref), its length,
+ * the turn into it (null for the first move), the stop it reaches (its index) and its shape. */
+export interface DrawMove {
+  edge: number;
+  node: number;
+  lat: number;
+  lon: number;
+  name: string | null;
+  length_m: number;
+  turn: TurnName | null;
+  stop: number | null;
+  coords: LonLat[];
+}
+
+/** `POST /draw`: the drawing so far (always legal: an illegal path is ILLEGAL_PATH, with its
+ * `refusal` and `index`, the first illegal edge), its legal next moves, and its ratio once done
+ * (null before, and for a round trip). */
+export interface DrawAnswer {
+  stops: SnappedStop[];
+  at: { node: number; lat: number; lon: number };
+  reached: number[];
+  legal: true;
+  length_m: number;
+  baseline_length_m: number;
+  ratio: number | null;
+  geometry: LineString | null;
+  next: DrawMove[];
+  done: boolean;
+}
+
+/** `POST /draw/finish`: the finished drawing, stored as a route. */
+export interface DrawFinished {
+  route_id: string;
+  ratio: number | null;
 }

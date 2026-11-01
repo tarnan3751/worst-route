@@ -364,8 +364,8 @@ which is 1.7 mi (2.7 km). It still counts."
 baseline_edges=None, objective="distance", palette=CLASSIC) -> bytes` draws a route (its nodes and
 edges on its build, along the build's geometry, its document's `metrics`, the objective it was
 planned for) as a 1200 × 630 PNG, the Open Graph size, in a theme's colours (**Palettes** below),
-from our own data only. The API serves it at `GET /routes/{id}/share.png`, rendered once and
-cached (`docs/reference/api.md`, **Share image**).
+from our own data only. The API serves it at `GET /routes/{id}/share.png`, `?theme=<id>` in that
+theme's colours, rendered once and cached (`docs/reference/api.md`, **Share image**).
 
 - **The text column** (the left 38 %): the headline in bold, as large as fits the column (at
   most 110 pt), its caption under it, and the comparison line at the bottom, wrapped at 30
@@ -402,7 +402,8 @@ above, so an image without a theme is the same bytes as before. Every other them
 preset's (the frontend's `theme/presets/`): the surface its panel, the ink its ink, the secondary
 and the outlines its muted, the network its line (but transit's, `#d4d4d4`, and ledger's,
 `#cfcfcb`, a light grey: their line is black, which would bury the map), the baseline its
-baseline, the route its route's last colour. The fonts stay DejaVu Sans, whatever the theme.
+baseline, the route its route's last colour. The fonts stay DejaVu Sans, whatever the theme. The
+module imports nothing heavy, so the API checks a request's theme without matplotlib.
 
 **The network** is found without decoding most of it. A road unit with an end inside the box
 (the outline's in the build's CRS, then the extent in lon/lat) meets it: its ends are points of
@@ -494,9 +495,10 @@ Census publishes them.
 
 ## Limitations
 
-- **The cache knows the drawing, not the data**: an image is cached under its route id and
-  `SHARE_IMAGE_VERSION`, so a places index written after a route's first render leaves that
-  image without outlines until `share/` is cleared.
+- **The cache knows the drawing, not the data**: an image is cached under its route id, its
+  theme and `SHARE_IMAGE_VERSION`, so a places index written after a route's first render leaves
+  that image without outlines until `share/` is cleared. The files cached before the themes
+  (`share/<id>-v2.png`, an older server's or a desktop home's) are left behind, never served.
 - **Places cover the files present**: a region's towns in a state whose places file was not
   fetched are unknown (`aux places` warns). Portland's build reaches little of Washington (the
   Oregon extract stops just past the Columbia), so a route seldom gets there anyway.

@@ -1,7 +1,7 @@
 """`GET /routes/{id}/share.png` over httpx in process: the PNG, rendered once for concurrent
-first requests and then served from the cache, with and without a places index; HEAD; unknown
-and malformed ids; a route whose build is gone; a render that fails; and the app importing
-without matplotlib."""
+first requests and then served from the cache, with and without a places index, once per theme;
+HEAD; unknown and malformed ids; unknown themes; a route whose build is gone; a render that
+fails; and the app importing without matplotlib."""
 
 import asyncio
 import os
@@ -24,6 +24,7 @@ from worst_route.api.store import RouteStore
 from worst_route.engine.io import route_document
 from worst_route.engine.plan import plan_route
 from worst_route.presentation import share_image
+from worst_route.presentation.share_palettes import PALETTES
 
 from ..presentation.support import write_fixture_places
 from .support import PORTLAND, SLOW, api_input, loaded, request, save_build
@@ -71,7 +72,7 @@ async def test_the_image_renders_once_then_comes_from_the_cache(
     real = share_image.render_share_image
 
     def counted(*args: Any, **kwargs: Any) -> bytes:
-        renders.append(route_id)
+        renders.append(next(t for t, p in PALETTES.items() if p == kwargs["palette"]))
         return real(*args, **kwargs)
 
     # The endpoint imports the drawing when it renders, so it finds this stand-in there.
@@ -87,15 +88,60 @@ async def test_the_image_renders_once_then_comes_from_the_cache(
             assert r.headers["cache-control"] == "public, max-age=86400"
         assert first.content == second.content
         assert struct.unpack(">II", first.content[16:24]) == (1200, 630)
-        assert renders == [route_id]  # two first requests, one render
-        cached = data / "share" / f"{route_id}-v2.png"
+        assert renders == ["classic"]  # two first requests, one render, in today's colours
+        cached = data / "share" / f"{route_id}-classic-v2.png"
         assert cached.read_bytes() == first.content
         assert sorted(p.name for p in cached.parent.iterdir()) == [cached.name]
         assert api.share_locks == {}
         cached.write_bytes(b"from the cache")
-        again = await client.get(url)
-        assert again.status_code == 200 and again.content == b"from the cache"
-        assert renders == [route_id]
+        for again in (await client.get(url), await client.get(f"{url}?theme=classic")):
+            assert again.status_code == 200 and again.content == b"from the cache"
+        assert renders == ["classic"]
+        # Another theme is another image, rendered once in its own palette and kept beside it.
+        night = await client.get(f"{url}?theme=night")
+        assert night.status_code == 200 and night.headers["content-type"] == "image/png"
+        assert night.content not in (first.content, b"from the cache")
+        assert (await client.get(f"{url}?theme=night")).content == night.content
+        assert renders == ["classic", "night"]
+        kept = sorted(p.name for p in cached.parent.iterdir())
+        assert kept == [cached.name, f"{route_id}-night-v2.png"]
+        assert api.share_locks == {}
+
+
+async def test_an_image_s_lock_is_kept_while_it_renders_whatever_another_theme_did(
+    data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Night's render waits while classic's first request finishes: night's lock stays known, so
+    # a later request for night waits on it rather than rendering it again.
+    route_id = store_route(data)
+    started, release = threading.Event(), threading.Event()
+    renders: list[str] = []
+    real = share_image.render_share_image
+
+    def held(*args: Any, **kwargs: Any) -> bytes:
+        theme = next(t for t, p in PALETTES.items() if p == kwargs["palette"])
+        renders.append(theme)
+        if theme == "night":
+            started.set()
+            assert release.wait(10)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(share_image, "render_share_image", held)
+    url = f"/routes/{route_id}/share.png"
+    async with serving(data) as (client, app):
+        api: Api = app.state.api
+        classic = asyncio.create_task(client.get(url))
+        night = asyncio.create_task(client.get(f"{url}?theme=night"))
+        assert await asyncio.to_thread(started.wait, 10)
+        assert (await classic).status_code == 200
+        assert list(api.share_locks) == [(route_id, "night")]
+        again = asyncio.create_task(client.get(f"{url}?theme=night"))
+        release.set()
+        first, second = await night, await again
+        assert first.status_code == second.status_code == 200
+        assert first.content == second.content
+        assert sorted(renders) == ["classic", "night"]
+        assert api.share_locks == {}
 
 
 async def test_a_slowest_time_route_shows_its_time_ratio(
@@ -138,13 +184,35 @@ async def test_unknown_and_malformed_ids_are_not_found(data: Path) -> None:
         assert app.state.api.share_locks == {}
 
 
+async def test_an_unknown_theme_is_an_invalid_request(data: Path) -> None:
+    route_id = store_route(data)
+    known = ", ".join(PALETTES)
+    async with serving(data) as (client, app):
+        # "auto" is the frontend's setting, which it resolves before asking.
+        for theme in ("neon", "Night", "auto", ""):
+            r = await client.get(f"/routes/{route_id}/share.png", params={"theme": theme})
+            assert r.status_code == 422, theme
+            assert r.json() == {
+                "code": "INVALID_REQUEST",
+                "message": f"unknown theme {theme!r}; known: {known}",
+                "field": "theme",
+            }
+        head = await client.head(f"/routes/{route_id}/share.png?theme=neon")
+        assert head.status_code == 422 and head.content == b""
+        # Not a route id is not found first, whatever the theme.
+        malformed = await client.get("/routes/ABCDEF012345/share.png?theme=neon")
+        assert malformed.status_code == 404
+        assert not (data / "share").exists()
+        assert app.state.api.share_locks == {}
+
+
 async def test_head_gives_the_headers_without_the_image(data: Path) -> None:
     route_id = store_route(data)
     url = f"/routes/{route_id}/share.png"
     async with serving(data) as (client, _):
         head = await client.head(url)  # first: it renders, to know the length
         assert head.status_code == 200 and head.content == b""
-        assert (data / "share" / f"{route_id}-v2.png").exists()
+        assert (data / "share" / f"{route_id}-classic-v2.png").exists()
         got = await client.get(url)
         for name in ("content-type", "cache-control", "content-length"):
             assert head.headers[name] == got.headers[name], name
@@ -207,8 +275,9 @@ async def test_two_writers_of_one_image_leave_one_file_and_no_part(
         first, second = await asyncio.gather(one.get(url), two.get(url))
     assert first.status_code == second.status_code == 200
     share = data / "share"
-    assert [p.name for p in share.iterdir()] == [f"{route_id}-v2.png"]  # no part left
-    assert (share / f"{route_id}-v2.png").read_bytes() in (b"\x89PNG first", b"\x89PNG second")
+    assert [p.name for p in share.iterdir()] == [f"{route_id}-classic-v2.png"]  # no part left
+    image = share / f"{route_id}-classic-v2.png"
+    assert image.read_bytes() in (b"\x89PNG first", b"\x89PNG second")
 
 
 def test_the_app_imports_without_matplotlib() -> None:

@@ -116,7 +116,8 @@ class Api:
     geocode: GeocodeService | None  # None when the geocoder is "none"
     places: dict[str, PlaceIndex | None]  # by region; None for one without its own index
     share_dir: Path  # the share images' cache
-    share_locks: dict[str, asyncio.Lock] = field(default_factory=dict)  # by route, while rendering
+    # by route and theme, while its image renders
+    share_locks: dict[tuple[str, str], asyncio.Lock] = field(default_factory=dict)
     # each build's edge letters (`alphabet_search.edge_letters`), by graph_version, worked out
     # once for the alphabet routes' documents
     letters: dict[str, np.ndarray] = field(default_factory=dict)

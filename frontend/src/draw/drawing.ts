@@ -11,12 +11,13 @@
 // "Draw it" resumes it), and Finish stores it (POST /draw/finish) once it has reached the end, or
 // when the end is one move away taking the longest such move (`finalMove`), then opens the stored
 // route like a link. An illegal path (ILLEGAL_PATH: a server that moved on) is cut back to its
-// first illegal edge. The engine's own route for the same request is the par: a normal job,
-// started with the drawing and followed for its ratio only (nothing of it drawn); once both are
-// done, the verdict, by length, and the engine's route to open. The drawing is forgotten, its par
-// cancelled, once the stops or the settings it was drawn on (the region, the tier, the leash, the
-// turns, hard mode) are no longer the store's, whatever changed them (an edit, a route opened by
-// link or from today's route), and when a run starts; leaving the page cancels the par.
+// first illegal edge. The engine's route for the same request aiming at DRAW_PAR_RATIO is the par:
+// a normal job with that ratio target (a round trip's, whose ratio target the API refuses, the full
+// run), started with the drawing and followed for its ratio only (nothing of it drawn); once both
+// are done, the verdict, by length, and the engine's route to open. The drawing is forgotten, its
+// par cancelled, once the stops or the settings it was drawn on (the region, the tier, the leash,
+// the turns, hard mode) are no longer the store's, whatever changed them (an edit, a route opened
+// by link or from today's route), and when a run starts; leaving the page cancels the par.
 import {
   cancelJob,
   cancelJobOnLeave,
@@ -44,10 +45,18 @@ export interface DrawHooks {
   open(routeId: string): Promise<boolean>;
 }
 
-/** The engine's route for the same request: planning (its job's ratio so far, once it has one),
- * done (its stored route) or failed (why). */
+/** The par's ratio target. On the short in-town trips people draw by hand the engine's full run
+ * reaches 200–320× while a patient drawing lands around 10–15×, so nobody would ever beat it; it
+ * aims at 10× instead, which it reaches within ±2 % in a second or two: a bar the player sees
+ * before drawing much and can beat with patience. */
+export const DRAW_PAR_RATIO = 10;
+
+/** The engine's route for the same request, aiming at `target` (DRAW_PAR_RATIO; null for a round
+ * trip's full run): planning (its job's ratio so far, once it has one), done (its stored route) or
+ * failed (why). */
 export interface Par {
   phase: "planning" | "done" | "failed";
+  target: number | null;
   jobId: string | null;
   ratio: number | null;
   lengthM: number | null;
@@ -337,10 +346,17 @@ export class Drawing extends EventTarget {
     this.#changed();
   }
 
-  /** Plan the engine's route for `request`, following its ratio. */
+  /** Plan the engine's route for `request` aiming at DRAW_PAR_RATIO, or for a round trip, whose
+   * ratio target the API refuses (its baseline is 0 m when it has no stop between), the request as
+   * it is; follow its ratio. */
   async #startPar(request: RouteRequest, generation: number): Promise<void> {
+    const stops = request.stops ?? [];
+    const [start, end] = [stops[0], stops[stops.length - 1]];
+    const roundTrip = stops.length >= 2 && start.lat === end.lat && start.lon === end.lon;
+    const target = roundTrip ? null : DRAW_PAR_RATIO;
     const planning: Par = {
       phase: "planning",
+      target,
       jobId: null,
       ratio: null,
       lengthM: null,
@@ -356,7 +372,9 @@ export class Drawing extends EventTarget {
     };
     let created;
     try {
-      created = await createJob(request);
+      created = await createJob(
+        target === null ? request : { ...request, target: { kind: "ratio", value: target } },
+      );
     } catch (error) {
       update({ phase: "failed", note: errorBody(error).message });
       return;
@@ -419,14 +437,18 @@ export function youLine(drawing: Drawing, units: Units): string {
   return `you: ${formatDistance(answer.length_m, units)} so far · ${stops}`;
 }
 
-/** The par as it stands: "the engine: planning…", "the engine: 12.3× so far", "the engine:
- * 31×", or that it could not plan the route. */
+/** The par as it stands: "the engine: aiming for 10×…", "the engine: 7.2× so far, aiming for
+ * 10×", "the engine: 10.1×" (where it stopped, short of the target or not), or that it could not
+ * plan the route; a round trip's "the engine: planning…", then its ratio, or its length when it
+ * has no stop between (no ratio). */
 export function parLine(par: Par | null, units: Units): string {
   if (par === null) return "";
   if (par.phase === "failed") return `the engine could not plan it: ${par.note ?? "it failed"}`;
-  if (par.lengthM === null) return "the engine: planning…";
+  const aim = par.target === null ? "" : `aiming for ${par.target}×`;
+  if (par.lengthM === null) return `the engine: ${aim || "planning"}…`;
   const value = measure(par.ratio, par.lengthM, units);
-  return par.phase === "done" ? `the engine: ${value}` : `the engine: ${value} so far`;
+  if (par.phase === "done") return `the engine: ${value}`;
+  return aim ? `the engine: ${value} so far, ${aim}` : `the engine: ${value} so far`;
 }
 
 /** Who has won once the drawing is stored and the par done, by length (the same baseline): a tie

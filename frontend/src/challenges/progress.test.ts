@@ -273,6 +273,7 @@ describe("the completions", () => {
     );
     const par = (lengthM: number): Par => ({
       phase: "done",
+      target: 10,
       jobId: "par1",
       ratio: lengthM / 680,
       lengthM,

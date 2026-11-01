@@ -133,9 +133,9 @@ export const CHALLENGES: readonly Challenge[] = [
     settings: { hard: true },
     goal: { kind: "hard", min_ratio: 8 },
   },
-  // On a 300 m leash the engine's route (the par) converges within 1.3 s at 7.9–11.0× (seeds 1–12;
-  // 63–90 edges), so its best, 11.0× (seed 2, 90 edges), beats ten of those twelve pars: a drawing
-  // can win.
+  // On a 300 m leash the engine's par, aiming at 10×, comes to 7.9–10.1× within 0.3 s (seeds 1–12;
+  // 62–84 edges; four converge short of it), so the engine's own longest, 11.0× (its full run on
+  // seed 2, 90 edges), drawn by hand, beats all twelve pars: a drawing can win.
   {
     id: "portland-draw",
     title: "Beat the engine by hand",

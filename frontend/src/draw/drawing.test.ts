@@ -1,10 +1,11 @@
 // A route drawn by hand without a DOM: `Drawing` over a real Store with `fetch` and `EventSource`
 // stubbed, answered from a drawing recorded on Portland's build (portland-draw.json: Powell's →
 // Pioneer Courthouse Square, its first steps, the answer one move before the end, the end, the
-// finish and a refusal): the request it makes, the start and the par, steps, undo, an illegal path
-// cut back, Finish taking the longest move to the end, the par's ratio and the verdict, leaving and
-// resuming, the drawing forgotten when the stops change or a run starts; and what the panel and the
-// map say (`progressLine`, `youLine`, `parLine`, `verdictLine`, `nearestMove`, `moveLabel`).
+// finish and a refusal): the request it makes, the start and the par (aiming at 10×, a round
+// trip's the full run), steps, undo, an illegal path cut back, Finish taking the longest move to
+// the end, the par's ratio and the verdict, leaving and resuming, the drawing forgotten when the
+// stops change or a run starts; and what the panel and the map say (`progressLine`, `youLine`,
+// `parLine`, `verdictLine`, `nearestMove`, `moveLabel`).
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { json, settle, stubEventSource, stubFetch, type Call } from "../__fixtures__/http";
@@ -13,6 +14,7 @@ import type { DrawAnswer, DrawFinished, DrawMove, RouteRequest } from "../api/ty
 import { DEFAULT_SETTINGS, IDLE_RUN, Store, type Settings } from "../state";
 import { busy } from "../stops/stopList";
 import {
+  DRAW_PAR_RATIO,
   Drawing,
   drawRequest,
   finalMove,
@@ -120,13 +122,14 @@ describe("a route drawn by hand", () => {
     });
   });
 
-  it("starts at the start, locks the run like a job, and plans the par on the same request", async () => {
+  it("starts at the start, locks the run like a job, and plans the par aiming at 10×", async () => {
     const { store, calls, sources, shown, hooks, drawing } = setup();
     await drawing.start();
     expect(posted(calls)).toEqual(["POST /api/draw", "POST /api/jobs"]);
     const request = drawRequest(store.state);
     expect(calls[0].body).toEqual({ request, path: [] });
-    expect(calls[1].body).toEqual(request);
+    expect(calls[1].body).toEqual({ ...request, target: { kind: "ratio", value: 10 } });
+    expect(DRAW_PAR_RATIO).toBe(10);
     expect(hooks.clearRoute).toHaveBeenCalledOnce();
     expect(store.state.run.phase).toBe("drawing");
     expect(busy(store)).toBe(true);
@@ -136,8 +139,22 @@ describe("a route drawn by hand", () => {
     expect(sources.map((s) => s.url)).toEqual(["/api/jobs/par1/events"]);
     expect(progressLine(drawing)).toBe("Click a highlighted road to take it.");
     expect(youLine(drawing, "mi")).toBe("you: 0 ft so far · 1 of 2 stops");
-    expect(parLine(drawing.par, "mi")).toBe("the engine: planning…");
+    expect(parLine(drawing.par, "mi")).toBe("the engine: aiming for 10×…");
     expect([drawing.canUndo, drawing.canFinish]).toEqual([false, false]);
+  });
+
+  it("plans a round trip's par as the full run: the API refuses its ratio target", async () => {
+    const { store, calls, sources, drawing } = setup();
+    const [start] = store.state.stops;
+    store.update({ stops: [start, { ...start }] });
+    await drawing.start();
+    const request = drawRequest(store.state);
+    expect(request.target).toEqual({ kind: "max" });
+    expect(calls[1]).toMatchObject({ url: "/api/jobs", body: request });
+    expect(drawing.par?.target).toBeNull();
+    expect(parLine(drawing.par, "mi")).toBe("the engine: planning…");
+    sources[0].send("progress", { metrics: metrics(4000, null), splices: [] });
+    expect(parLine(drawing.par, "mi")).toBe("the engine: 2.5 mi so far");
   });
 
   it("takes offered moves, takes them back without asking, and ignores the rest", async () => {
@@ -200,22 +217,29 @@ describe("a route drawn by hand", () => {
     await drawing.start();
     const [source] = sources;
     source.send("snapshot", { metrics: metrics(700, 1.2) });
-    source.send("progress", { metrics: metrics(4000, 7.2), splices: [] });
-    expect(parLine(drawing.par, "mi")).toBe("the engine: 7.2× so far");
+    source.send("progress", { metrics: metrics(4900, 7.2), splices: [] });
+    expect(parLine(drawing.par, "mi")).toBe("the engine: 7.2× so far, aiming for 10×");
     await drawing.take(fixture.path[0]);
     await drawing.take(NEXT.next[0].edge);
     await drawing.finish();
     expect(verdictLine(drawing, "mi")).toBe(""); // the par still plans
-    source.send("done", { route_id: "engine1", metrics: metrics(20000, 37.5) });
-    expect(parLine(drawing.par, "mi")).toBe("the engine: 37.5×");
-    expect(verdictLine(drawing, "mi")).toBe("You 14.3× · the engine 37.5×: the engine wins.");
+    source.send("done", { route_id: "engine1", metrics: metrics(6880, 10.1) });
+    expect(parLine(drawing.par, "mi")).toBe("the engine: 10.1×");
+    expect(verdictLine(drawing, "mi")).toBe("You 14.3× · the engine 10.1×: you beat the engine.");
     await drawing.show("engine");
     expect(hooks.open).toHaveBeenLastCalledWith("engine1");
     expect(drawing.showing).toBe("engine");
     await drawing.show("mine");
     expect(hooks.open).toHaveBeenLastCalledWith(fixture.finished.route_id);
-    drawing.par = { ...drawing.par!, lengthM: 3000, ratio: 5.6 };
-    expect(verdictLine(drawing, "mi")).toBe("You 14.3× · the engine 5.6×: you beat the engine.");
+    drawing.finished = { ...drawing.finished!, lengthM: 4900, ratio: 7.2 };
+    expect(verdictLine(drawing, "mi")).toBe("You 7.2× · the engine 10.1×: the engine wins.");
+  });
+
+  it("gives the par's ratio where it stopped short of its target", async () => {
+    const { sources, drawing } = setup();
+    await drawing.start();
+    sources[0].send("done", { route_id: "engine1", metrics: metrics(5720, 8.4) });
+    expect(parLine(drawing.par, "mi")).toBe("the engine: 8.4×");
   });
 
   it("says when the par fails", async () => {
@@ -391,7 +415,15 @@ describe("what the panel and the map say", () => {
   it("measures a round trip by its length", () => {
     expect(
       parLine(
-        { phase: "done", jobId: null, ratio: null, lengthM: 16093.44, routeId: "r", note: null },
+        {
+          phase: "done",
+          target: null,
+          jobId: null,
+          ratio: null,
+          lengthM: 16093.44,
+          routeId: "r",
+          note: null,
+        },
         "mi",
       ),
     ).toBe("the engine: 10.0 mi");

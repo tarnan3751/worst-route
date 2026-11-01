@@ -108,7 +108,10 @@ storage, which the desktop app's own port keeps between starts (`docs/reference/
 **Challenges**).
 OSM's turn restrictions are honoured (M6, pipeline version 8): `filter` keeps them and cleanup
 makes them turn tables at the junctions, which the engine, the splice and the validator read as
-they read a super-junction's (`docs/reference/pipeline.md`, **Turn restrictions**).
+they read a super-junction's (`docs/reference/pipeline.md`, **Turn restrictions**). So are
+portfolio runs (M6): `POST /jobs`' `portfolio` runs up to 4 seeds of one request at once (2 on a
+public server), each in a worker, streams the leader's route and stores the best under its seed
+(`docs/reference/api.md`, **Portfolios**), from the frontend's Seeds setting.
 So is the worst order (M6): with `plan --reorder`, the API's `reorder` or the frontend's "Worst
 order" box, every order of the stops between the start and the end is tried and the one with the
 longest seed planned, at most 7 stops on a city's build and 5 on a larger one, the route document

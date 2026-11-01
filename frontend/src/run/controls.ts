@@ -1,10 +1,10 @@
 // Running a job (docs/reference/frontend.md, **Run**): `JobRunner`, a job's lifecycle, which the
-// tests drive without a DOM, and `mountRunControls`, the Go, Cancel, Reroll and Make it worse
-// buttons and the live stat line (ratio, length, drive time, attempts, elapsed, a portfolio's seeds
-// and its leader's seed; the drive and the delays under the slowest time, the items collected, a
-// pilgrimage's visits, an alphabet route's letters, the turns, a certified route's certificate;
-// once stored, its arrival, the towns and states it passes through, its extra fuel and its share
-// of the roads within reach).
+// tests drive without a DOM, and `mountRunControls`, the Go, Cancel, Reroll ("Try another") and
+// Make it worse buttons and the live stat line (ratio, length, drive time, attempts, elapsed, a
+// portfolio's seeds and its leader's seed; the drive and the delays under the slowest time, the
+// items collected, a pilgrimage's visits, an alphabet route's letters, the turns, a certified
+// route's certificate; once stored, its arrival, the towns and states it passes through, its extra
+// fuel and its share of the roads within reach).
 //
 // Go posts the stops (each stop along the way labelled as its marker is numbered, "Stop 2") and
 // settings (the target, the objective with its item or brand, the turn constraints and hard mode,
@@ -30,12 +30,12 @@
 // progress carries the solver's bound, which the target row gives as "the worst possible is at most
 // 12 % longer"), and while a run's best route so far scores above its current one (an annealing run
 // takes shorter splices too) the stat line gives the best's ratio beside it, "best 31.0×"; `done`
-// shows the stored route whole (the best), and for a ratio or duration target what it achieved, for
-// a certified route its certificate; `error` shows its code and message.
+// shows the stored route whole (the best), and for a ratio or duration target, the goal, what it
+// reached, for a certified route its certificate; `error` shows its message in the banner.
 // The stat line follows the run's own objective and constraints, or a stored route's request. A
 // refusal under strict, or under hard mode, can be sent again without it.
 // Cancel sends DELETE, and the stream then ends with `done` (the route so far, stored) or
-// `error`. Every error ends the run with its code in the banner and the controls unlocked: the
+// `error`. Every error ends the run with its message in the banner and the controls unlocked: the
 // API's, or CLIENT_ERROR for one of the app's own (a running job is then cancelled). Leaving the
 // page cancels a running job, or a job whose POST is in flight as soon as it is answered. Under
 // Brand, Go, Reroll and Make it worse wait for the region's brands (`awaitingBrand`); an alphabet
@@ -393,7 +393,7 @@ export class JobRunner {
         if (state === "lost") {
           this.#fail({
             code: "STREAM_LOST",
-            message: "the job's event stream closed and could not reconnect",
+            message: "Lost the connection to the server. Try again.",
           });
         }
       }),
@@ -411,11 +411,11 @@ export class JobRunner {
     try {
       if (base !== null && done.route_id === base.route_id) {
         this.#tried.set(base.route_id, seed);
-        let note = `no worse route found with seed ${seed}; try again or Reroll`;
+        let note = `seed ${seed} found nothing worse`;
         if (goal !== null) {
           note = outcome?.within_tolerance
-            ? "already within the target"
-            : `no route nearer the target found with seed ${seed}; try again or Reroll`;
+            ? "Already at the goal."
+            : "No route nearer the goal found. Try another.";
         }
         this.showRoute(base, { note, goal, outcome, mode, order });
       } else {
@@ -443,11 +443,11 @@ export function awaitingBrand({ settings, brands }: Readonly<AppState>): boolean
  * and the API continues no route under the alphabet route; nor is a certified route made worse,
  * the worst its area allows when proven, else better planned again with a longer budget. */
 export function worseRefused({ route }: Readonly<AppState>): string | null {
-  if (route?.request.objective === "alphabet") return "the alphabet route cannot be continued";
+  if (route?.request.objective === "alphabet") return "The alphabet route cannot be made worse.";
   if (route?.request.certified !== true) return null;
   return route.run.certified?.status === "optimal"
-    ? "a certified route is the worst its area allows"
-    : "plan it again with a longer budget";
+    ? "A proven route is already the worst its area allows."
+    : "Plan it again with a longer time budget.";
 }
 
 /** The run section in `root`: the buttons, which drive `runner` (Draw it, `draw`), and the stat
@@ -465,10 +465,10 @@ export function mountRunControls(
   };
   const go = button("Go", "primary", () => runner.go());
   const cancel = button("Cancel", "", () => runner.cancel());
-  const reroll = button("Reroll", "", () => runner.reroll());
+  const reroll = button("Try another", "", () => runner.reroll());
   const worse = button("Make it worse", "", () => runner.worse());
   const drawIt = button("Draw it", "draw-it", draw);
-  drawIt.title = "Draw your own worst route, junction by junction, against the engine's";
+  drawIt.title = "Draw a worse route than the engine's, one junction at a time.";
   const buttons = el("div", "buttons");
   buttons.append(go, cancel, reroll, worse, drawIt);
   const names = ["ratio", "line", "target", "note", "time", "items", "turns"];
@@ -498,9 +498,13 @@ export function mountRunControls(
   });
 }
 
-// How a run ended, where the API's word needs one.
-const STOPPED: Partial<Record<StopReason, string>> = {
-  target: "target reached",
+// How a run ended, in words; none for a run that spent its time budget, the usual end.
+const STOPPED: Record<StopReason, string> = {
+  budget: "",
+  converged: "nothing worse found",
+  target: "goal reached",
+  cancelled: "cancelled",
+  timeout: "timed out",
   drawn: "drawn by hand",
   optimal: "proven",
 };
@@ -510,31 +514,31 @@ function targetValue(kind: TargetMetrics["kind"], value: number): string {
   return kind === "ratio" ? formatRatio(value) : formatDuration(value);
 }
 
-/** The target row: the run's target, and once done what it achieved. */
+/** The target row: the run's target, its goal ("goal 9 h"), and once done what it reached ("goal
+ * 25.0×, reached 24.6×, within ±2 %"). */
 function targetLine(goal: Target | null, outcome: TargetMetrics | null): string {
   if (outcome !== null) {
     const band = outcome.within_tolerance ? "within" : "outside";
     return (
-      `target ${targetValue(outcome.kind, outcome.value)}, ` +
-      `achieved ${targetValue(outcome.kind, outcome.achieved)}, ` +
+      `goal ${targetValue(outcome.kind, outcome.value)}, ` +
+      `reached ${targetValue(outcome.kind, outcome.achieved)}, ` +
       `${band} ±${TARGET_TOLERANCE * 100} %`
     );
   }
   if (goal === null || goal.kind === "max") return "";
   const value = goal.kind === "ratio" ? goal.value : goal.seconds;
-  return value == null ? "" : `target ${targetValue(goal.kind, value)}`;
+  return value == null ? "" : `goal ${targetValue(goal.kind, value)}`;
 }
 
-/** The target row of a certified run: proven, "certified: no legal route in this area is longer ·
- * 212 nodes"; else the longest found once stored, and how much longer the worst possible may be,
+/** The target row of a certified run: proven, "no longer legal route in this area · 212
+ * junctions"; else the longest found once stored, and how much longer the worst possible may be,
  * "longest found · the worst possible is at most 12 % longer", or "longest found · no bound yet"
  * when the solver ended without one (while it runs, the second part, once it has one). */
 function certifiedLine(run: Readonly<AppState>["run"]): string {
   const certified = run.certified;
   if (certified === null) return "";
   if ("status" in certified && certified.status === "optimal") {
-    const nodes = formatCount(certified.nodes);
-    return `certified: no legal route in this area is longer · ${nodes} nodes`;
+    return `no longer legal route in this area · ${formatCount(certified.nodes)} junctions`;
   }
   const { gap } = certified;
   const percent = gap === null ? "" : (gap * 100).toFixed(gap < 0.1 ? 1 : 0);
@@ -587,8 +591,9 @@ export function countsTitle({ run }: Readonly<AppState>): string {
 type StatLines = [string, string, string, string, string, string, string];
 
 /** The stat line's rows: the ratio (under the slowest time, of experienced times once stored);
- * the length and drive time; the target; the run (for a portfolio, "best of 4 seeds" and the
- * seed of its leader, or once stored of its winner); and, shown between the second and the third,
+ * the length and drive time; the target; the run ("Try 12 · 4.2 s" while it goes, "12 tries ·
+ * 4.2 s" and how it ended once done; for a portfolio, "best of 4 runs" and the seed of its
+ * leader, or once stored of its winner); and, shown between the second and the third,
  * the drive and the delays (the slowest time, live from each progress event, then the stored
  * route's), the objective's counter (live: the items collected, a pilgrimage's visits, an
  * alphabet route's letters), and the turns (once stored). */
@@ -596,7 +601,7 @@ export function statLines(state: Readonly<AppState>): StatLines {
   const { run, settings } = state;
   const only = (line: string): StatLines => ["", line, "", "", "", "", ""];
   if (run.phase === "starting") return only("Starting…");
-  if (run.phase === "drawing") return only("Drawing by hand: click a highlighted road to take it.");
+  if (run.phase === "drawing") return only("Drawing by hand. Click a highlighted road to take it.");
   if (run.metrics === null) {
     if (run.phase === "running") {
       // under the worst order, the server tries every order before it says where the stops went
@@ -607,26 +612,25 @@ export function statLines(state: Readonly<AppState>): StatLines {
       );
     }
     if (run.phase === "failed") return only("No route.");
-    return only(
-      state.stops.length < 2 ? "Click the map to set a start and an end." : "Ready when you are.",
-    );
+    return only(state.stops.length < 2 ? "Click the map to set a start and an end." : "Ready.");
   }
   const { length_m, time_s, ratio, time_ratio, delay_s, turns } = run.metrics;
   const slowest = run.mode.objective === "time";
   const numbers = `${formatDistance(length_m, settings.units)} · ${formatDuration(time_s)}`;
   const drawn = run.stoppedBecause === "drawn";
-  const attempts =
+  const one = run.iteration === 1;
+  const tries =
     run.phase === "done"
-      ? `${formatCount(run.iteration)} ${drawn ? "moves" : "attempts"}`
-      : `attempt ${formatCount(run.iteration)}`;
-  const parts = drawn ? [attempts] : [attempts, formatElapsed(run.elapsedS)];
+      ? `${formatCount(run.iteration)} ${drawn ? (one ? "move" : "moves") : one ? "try" : "tries"}`
+      : `Try ${formatCount(run.iteration)}`;
+  const parts = drawn ? [tries] : [tries, formatElapsed(run.elapsedS)];
   if (run.phase === "running") {
     if (run.bestRatio !== null) parts.push(`best ${formatRatio(run.bestRatio)}`);
-    parts.push(run.connection === "open" ? "getting worse…" : "reconnecting…");
+    if (run.connection !== "open") parts.push("reconnecting…");
   }
   if (run.phase === "failed") parts.push("failed");
-  if (run.stoppedBecause) parts.push(STOPPED[run.stoppedBecause] ?? run.stoppedBecause);
-  if (run.portfolio > 1) parts.push(`best of ${run.portfolio} seeds`);
+  if (run.stoppedBecause && STOPPED[run.stoppedBecause]) parts.push(STOPPED[run.stoppedBecause]);
+  if (run.portfolio > 1) parts.push(`best of ${run.portfolio} runs`);
   if (run.seed !== null) parts.push(`seed ${run.seed + run.leader}`); // a portfolio's leader's
   if (run.note) parts.push(run.note);
   return [

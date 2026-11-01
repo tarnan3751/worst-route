@@ -229,7 +229,7 @@ describe("the build a trip runs on", () => {
     expect([store.state.region, store.state.pick]).toEqual([null, null]);
     expect(store.state.error).toEqual({
       code: "HTTP_502",
-      message: "could not ask the server which build these stops run on: bad gateway",
+      message: "Could not ask the server which map these stops are on. Move a stop to retry.",
     });
     await vi.advanceTimersByTimeAsync(10 * PICK_RETRY_MS); // and asks no more
     const asked = stubFetch((call) => answer(call.body));

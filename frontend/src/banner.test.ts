@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { retryOf } from "./banner";
+import { retryOf, sentence } from "./banner";
+
+describe("the banner's message", () => {
+  it("is a sentence: a capital first, a full stop last", () => {
+    expect(sentence("the server cannot be reached")).toBe("The server cannot be reached.");
+    expect(sentence("That stop is outside the map. Try somewhere in the lower 48.")).toBe(
+      "That stop is outside the map. Try somewhere in the lower 48.",
+    );
+    expect(sentence("…, under the strict no-left constraint; try without strict")).toBe(
+      "…, under the strict no-left constraint; try without strict.",
+    );
+  });
+});
 
 describe("the banner's retry", () => {
   it("offers to drop strict, or hard mode, when the refusal says it is why", () => {

@@ -1,9 +1,9 @@
-// The error banner (docs/reference/frontend.md, **Errors**): every API error's code and message,
-// over the map, until closed or the next action; never modal. A strict turn constraint that
-// finds no route (INFEASIBLE_TURN_CONSTRAINT) offers to try again without strict, and a refusal
-// hard mode is why without hard mode: a leg the seed cannot build under it
-// (STOP_UNREACHABLE_WITHOUT_REPEAT, "under hard mode"), or a base route that comes back to a road
-// (BASE_ROUTE_MISMATCH, "which hard mode refuses").
+// The error banner (docs/reference/frontend.md, **Errors**): every API error's message as a
+// sentence (`sentence`), its code in the banner's tooltip, over the map, until closed or the next
+// action; never modal. A strict turn constraint that finds no route (INFEASIBLE_TURN_CONSTRAINT)
+// offers to try again without strict, and a refusal hard mode is why without hard mode: a leg the
+// seed cannot build under it (STOP_UNREACHABLE_WITHOUT_REPEAT, "under hard mode"), or a base route
+// that comes back to a road (BASE_ROUTE_MISMATCH, "which hard mode refuses").
 import type { ErrorBody } from "./api/types";
 import type { Store } from "./state";
 import { el } from "./util/dom";
@@ -18,7 +18,14 @@ export function retryOf(error: ErrorBody): "strict" | "hard" | null {
   return code === "BASE_ROUTE_MISMATCH" && message.includes("hard mode") ? "hard" : null;
 }
 
-const RETRIES = { strict: "Try without strict", hard: "Try without hard mode" };
+const RETRIES = { strict: "Try without strict", hard: 'Try without "No road twice, ever"' };
+
+/** `message` as the banner says it: its first letter a capital, and a full stop at its end when
+ * it ends without one. */
+export function sentence(message: string): string {
+  const text = message.charAt(0).toUpperCase() + message.slice(1);
+  return /[.?!…]$/.test(text) ? text : `${text}.`;
+}
 
 /** The banner in `root`; `retry.strict` unticks strict and runs again, `retry.hard` hard mode. */
 export function mountBanner(
@@ -28,6 +35,7 @@ export function mountBanner(
 ): void {
   store.watch(["error"], ({ error }) => {
     root.hidden = error === null;
+    root.title = error?.code ?? "";
     if (error === null) {
       root.replaceChildren();
       return;
@@ -35,7 +43,9 @@ export function mountBanner(
     const close = el("button", "close", "×");
     close.title = "Dismiss";
     close.addEventListener("click", () => store.update({ error: null }));
-    root.replaceChildren(el("strong", "", error.code), el("span", "", error.message), close);
+    // a refusal without a message (a proxy's empty 502) says its code instead
+    const text = error.message === "" ? error.code : sentence(error.message);
+    root.replaceChildren(el("span", "", text), close);
     const without = retryOf(error);
     if (without !== null) {
       const button = el("button", "retry", RETRIES[without]);

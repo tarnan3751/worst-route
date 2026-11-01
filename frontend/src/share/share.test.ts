@@ -727,8 +727,8 @@ describe("a pilgrimage, an alphabet route and a hard-mode route opened by their 
     await followPortfolioMax(capped, Promise.resolve(2));
     await openRoute(won.route_id, capped, new JobRunner(capped, fakeView(), () => {}));
     expect(capped.state.settings).toMatchObject({ seed: 40, portfolio: 2 });
-    expect(statLines(capped.state)[3]).toMatch(/ · best of 4 seeds · seed 42$/);
-    expect(statLines(store.state)[3]).toMatch(/ · best of 4 seeds · seed 42$/);
+    expect(statLines(capped.state)[3]).toMatch(/ · best of 4 runs · seed 42$/);
+    expect(statLines(store.state)[3]).toMatch(/ · best of 4 runs · seed 42$/);
     expect(encodeUrlState(urlStateOf(store.state))).toContain(`=${won.route_id}&seed=40&seeds=4&`);
     const single = await open({ objective: "distance" }, { portfolio: 3 });
     expect(single.state.settings.portfolio).toBe(1);

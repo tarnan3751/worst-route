@@ -61,8 +61,11 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
     response = await fetch(API_BASE + path, init);
-  } catch (error) {
-    throw new ApiError(0, { code: "NETWORK", message: `the server cannot be reached (${error})` });
+  } catch {
+    throw new ApiError(0, {
+      code: "NETWORK",
+      message: "Cannot reach the server. Try again shortly.",
+    });
   }
   const text = await response.text();
   let body: unknown;

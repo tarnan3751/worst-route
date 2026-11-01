@@ -6,7 +6,8 @@
 // `snapped`, which moves no stop), drops an answer the stops have moved on from, and puts a
 // refusal (STOP_OUTSIDE_REGION, naming the stop) in the banner; any other failure (the server
 // unreachable, busy or failing) it asks again `PICK_RETRY_MS` later, up to `PICK_RETRIES` times,
-// then says in the banner that the server could not be asked, until the stops change again.
+// then says in the banner that the server could not be asked (the failure's code in its tooltip),
+// until the stops change again.
 // Until it answers there is no region, so Go waits. A region pinned in the settings skips the pick, and one the server does
 // not serve is unpinned once /regions has answered. `pickLine` is the stop list's header: the
 // region by its name, with its roads (from its tiers), and why ("Oregon · all roads", "all
@@ -116,7 +117,8 @@ export class RegionPicker {
         return;
       }
       const body = errorBody(error);
-      const message = `could not ask the server which build these stops run on: ${body.message}`;
+      const message =
+        "Could not ask the server which map these stops are on. Move a stop to retry.";
       store.update({ pick: null, error: refused ? body : { ...body, message } });
     }
   }

@@ -8,7 +8,7 @@ import {
   type Call,
 } from "../__fixtures__/http";
 import { loadStream } from "../__fixtures__/stream";
-import type { RouteDocument, RouteRequest } from "../api/types";
+import type { RouteDocument, RouteRequest, StopReason } from "../api/types";
 import { isoWithOffset } from "../format";
 import { DEFAULT_SETTINGS, IDLE_RUN, Store, type Settings } from "../state";
 import { busy, visitLine } from "../stops/stopList";
@@ -114,10 +114,13 @@ describe("the best ratio so far", () => {
     stubFetch((call) => created(call, "jb"));
     const s = store();
     await new JobRunner(s, fakeView(), () => {}).go();
-    const running = (rest: string) => `attempt 7 · 0.5 s · ${rest}getting worse… · seed 77`;
+    const running = (rest: string) => `Try 7 · 0.5 s · ${rest}seed 77`;
     sources[0].send("progress", progress(12.3, 14.1));
     expect(statLines(s.state)[0]).toBe("12.3×");
     expect(statLines(s.state)[3]).toBe(running("best 14.1× · "));
+    s.updateRun({ connection: "reconnecting" }); // a dropped stream, which the browser retries
+    expect(statLines(s.state)[3]).toBe(running("best 14.1× · reconnecting… · "));
+    s.updateRun({ connection: "open" });
     sources[0].send("progress", progress(14.1, 14.1)); // the current route is the best
     expect(statLines(s.state)[3]).toBe(running(""));
     // a best that scores higher with a ratio that rounds alike, and one with a lower ratio (a
@@ -150,9 +153,7 @@ describe("make it worse", () => {
     expect(s.state.route).toBe(base);
     expect(s.state.settings.seed).toBe(1);
     expect(s.state.run.seed).toBe(1);
-    expect(statLines(s.state)[3]).toContain(
-      "no worse route found with seed 2; try again or Reroll",
-    );
+    expect(statLines(s.state)[3]).toMatch(/ s · seed 1 · seed 2 found nothing worse$/);
     expect(calls).toHaveLength(1); // the base route is not fetched again
 
     await runner.worse();
@@ -200,13 +201,13 @@ describe("targets", () => {
     expect(calls[0].body).toMatchObject({ target: { kind: "ratio", value: 25 } });
     expect(statLines(s.state)[2]).toBe("");
     for (const event of ratio.events.slice(2, -1)) sources[0].send(event.event, event.data);
-    expect(statLines(s.state)[2]).toBe("target 25.0×");
+    expect(statLines(s.state)[2]).toBe("goal 25.0×");
     const done = ratio.events.at(-1)!;
     sources[0].send(done.event, done.data);
     await settle();
     const [, , target, run] = statLines(s.state);
-    expect(target).toBe("target 25.0×, achieved 25.0×, within ±2 %");
-    expect(run).toContain("target reached");
+    expect(target).toBe("goal 25.0×, reached 25.0×, within ±2 %");
+    expect(run).toContain("goal reached");
   });
 
   it("sends a drive time in seconds, and shows it in hours and minutes", async () => {
@@ -217,12 +218,12 @@ describe("targets", () => {
     expect(calls[0].body).toMatchObject({ target: { kind: "duration", seconds: 32400 } });
     expect(statLines(s.state)[2]).toBe("");
     sources[0].send("snapshot", ratio.events[2].data);
-    expect(statLines(s.state)[2]).toBe("target 9 h");
+    expect(statLines(s.state)[2]).toBe("goal 9 h");
     s.updateRun({
       phase: "done",
       outcome: { kind: "duration", value: 32400, achieved: 31800, within_tolerance: false },
     });
-    expect(statLines(s.state)[2]).toBe("target 9 h, achieved 8 h 50 min, outside ±2 %");
+    expect(statLines(s.state)[2]).toBe("goal 9 h, reached 8 h 50 min, outside ±2 %");
   });
 
   it("says so when the base route already meets the target", async () => {
@@ -234,7 +235,7 @@ describe("targets", () => {
     sources[0].send("done", done.data); // names the base route
     await settle();
     expect(s.state.route).toBe(ratio.route);
-    expect(statLines(s.state)[3]).toContain("already within the target");
+    expect(statLines(s.state)[3]).toContain("Already at the goal.");
   });
 });
 
@@ -336,7 +337,7 @@ describe("modes and turn constraints", () => {
     const s = store(letters.route);
     for (const objective of ["distance", "time", "collect", "brand", "alphabet"] as const) {
       s.updateSettings({ objective }); // a continuation keeps its route's objective
-      expect(worseRefused(s.state)).toBe("the alphabet route cannot be continued");
+      expect(worseRefused(s.state)).toBe("The alphabet route cannot be made worse.");
     }
     s.update({ route: collect.route });
     s.updateSettings({ objective: "alphabet" });
@@ -411,7 +412,7 @@ describe("modes and turn constraints", () => {
     expect(items).toBe("");
     expect(turns).toBe("277 left · 282 right");
     expect(target).toBe("");
-    expect(run).toBe("552 attempts · 4.0 s · budget · seed 1");
+    expect(run).toBe("552 tries · 4.0 s · seed 1");
   });
 
   it("counts a collecting run's items live, then the stored route's", async () => {
@@ -612,7 +613,7 @@ describe("a pilgrimage's visits, an alphabet route's letters and hard mode's ref
     await settle();
     const [ratio, , , run, , visits] = statLines(s.state);
     expect([ratio, visits]).toEqual(["13.2×", "14 of 19 Starbucks"]);
-    expect(run).toBe("450 attempts · 0.3 s · budget · seed 1");
+    expect(run).toBe("450 tries · 0.3 s · seed 1");
   });
 
   it("follows the recorded alphabet route's better routes, each replacing the last", async () => {
@@ -645,7 +646,7 @@ describe("a pilgrimage's visits, an alphabet route's letters and hard mode's ref
     expect(view.setFinal).toHaveBeenCalledWith(alphabet.route.geometry);
     const [ratio, , , run, , letters] = statLines(s.state);
     expect([ratio, letters]).toEqual(["1.9×", "letters: 15 (A–O)"]);
-    expect(run).toMatch(/^150 attempts · 4\.5 s · budget · seed 1$/);
+    expect(run).toMatch(/^150 tries · 4\.5 s · seed 1$/);
     const roads = countsTitle(s.state).split("\n");
     expect(roads).toHaveLength(15);
     expect([roads[0], roads.at(-1)]).toEqual([
@@ -928,16 +929,36 @@ describe("leaving the page", () => {
   });
 });
 
+describe("how a run ended", () => {
+  it("is said in words, and not at all for a spent time budget, the usual end", () => {
+    const s = store();
+    const ended = (stopped_because: StopReason) => {
+      const run = { ...fixture.route.run, attempts: 1, elapsed_s: 2, stopped_because };
+      new JobRunner(s, fakeView(), () => {}).showRoute({ ...fixture.route, seed: 1, run });
+      return statLines(s.state)[3];
+    };
+    expect(ended("budget")).toBe("1 try · 2.0 s · seed 1");
+    expect(ended("converged")).toBe("1 try · 2.0 s · nothing worse found · seed 1");
+    expect(ended("cancelled")).toBe("1 try · 2.0 s · cancelled · seed 1");
+    expect(ended("timeout")).toBe("1 try · 2.0 s · timed out · seed 1");
+  });
+});
+
 describe("a route drawn by hand", () => {
   it("says the run is a drawing, and a drawn route's moves", () => {
     const s = store();
     s.update({ run: { ...IDLE_RUN, phase: "drawing" } });
     expect(busy(s)).toBe(true);
-    expect(statLines(s.state)[1]).toBe("Drawing by hand: click a highlighted road to take it.");
+    expect(statLines(s.state)[1]).toBe("Drawing by hand. Click a highlighted road to take it.");
     const run = { ...fixture.route.run, attempts: 25, accepted: 25, elapsed_s: 0 };
     const drawn = { ...fixture.route, run: { ...run, stopped_because: "drawn" as const } };
     new JobRunner(s, fakeView(), () => {}).showRoute({ ...drawn, seed: 1 });
     expect(statLines(s.state)[3]).toBe("25 moves · drawn by hand · seed 1");
+    new JobRunner(s, fakeView(), () => {}).showRoute({
+      ...drawn,
+      run: { ...drawn.run, attempts: 1 },
+    });
+    expect(statLines(s.state)[3]).toBe("1 move · drawn by hand · seed 1");
   });
 });
 
@@ -1003,9 +1024,9 @@ describe("a portfolio", () => {
       portfolio: { k: 4, leader, best_ratios: [2.5, 2.8, 3, 2.9] },
     });
     sources[0].send("progress", progress(0));
-    expect(statLines(s.state)[3]).toMatch(/getting worse… · best of 4 seeds · seed 40$/);
+    expect(statLines(s.state)[3]).toMatch(/^Try 12 · 1\.5 s · best of 4 runs · seed 40$/);
     sources[0].send("progress", progress(2));
-    expect(statLines(s.state)[3]).toMatch(/ · best of 4 seeds · seed 42$/);
+    expect(statLines(s.state)[3]).toMatch(/ · best of 4 runs · seed 42$/);
     // the leader's best above its current route: its ratio first, then the portfolio's parts
     const annealing = {
       ...progress(2),
@@ -1014,12 +1035,12 @@ describe("a portfolio", () => {
     };
     sources[0].send("progress", annealing);
     expect(statLines(s.state)[3]).toMatch(
-      /^attempt 12 · 1\.5 s · best 3\.2× · getting worse… · best of 4 seeds · seed 42$/,
+      /^Try 12 · 1\.5 s · best 3\.2× · best of 4 runs · seed 42$/,
     );
     sources[0].send("done", { route_id: won.route_id, stopped_because: "budget", metrics: {} });
     await settle();
     expect(calls.at(-1)).toMatchObject({ method: "GET", url: `/api/routes/${won.route_id}` });
-    expect(statLines(s.state)[3]).toMatch(/ · budget · best of 4 seeds · seed 42$/);
+    expect(statLines(s.state)[3]).toMatch(/ s · best of 4 runs · seed 42$/);
     expect(s.state.settings.seed).toBe(40); // Go plans the same four seeds again
     await runner.worse(); // a continuation is one search, from the winner's seed
     expect(calls.at(-1)!.body).toMatchObject({ base_route_id: won.route_id, seed: 43 });
@@ -1051,7 +1072,7 @@ describe("a route an earlier run stored", () => {
     await settle();
     expect(s.state.route?.route_id).toBe(portfolios.route_id);
     expect(s.state.settings.seed).toBe(12);
-    expect(statLines(s.state)[3]).toMatch(/ · budget · seed 12$/);
+    expect(statLines(s.state)[3]).toMatch(/ s · seed 12$/);
   });
 
   it("shows a portfolio's own seeds and keeps its first seed in the panel", async () => {
@@ -1066,7 +1087,7 @@ describe("a route an earlier run stored", () => {
     });
     await settle();
     expect(s.state.settings.seed).toBe(11);
-    expect(statLines(s.state)[3]).toMatch(/ · budget · best of 2 seeds · seed 12$/);
+    expect(statLines(s.state)[3]).toMatch(/ s · best of 2 runs · seed 12$/);
   });
 });
 
@@ -1201,7 +1222,7 @@ describe("a certified route", () => {
     await settle();
     const [ratio, , target, run] = statLines(s.state);
     expect(ratio).toBe("21.5×");
-    expect(target).toBe("certified: no legal route in this area is longer · 182 nodes");
+    expect(target).toBe("no longer legal route in this area · 182 junctions");
     expect(run).toMatch(/ · proven · seed 1$/);
   });
 
@@ -1209,10 +1230,8 @@ describe("a certified route", () => {
     const proven = certified.route;
     const s = store(proven);
     new JobRunner(s, fakeView(), () => {}).showRoute(proven);
-    expect(statLines(s.state)[2]).toBe(
-      "certified: no legal route in this area is longer · 182 nodes",
-    );
-    expect(worseRefused(s.state)).toBe("a certified route is the worst its area allows");
+    expect(statLines(s.state)[2]).toBe("no longer legal route in this area · 182 junctions");
+    expect(worseRefused(s.state)).toBe("A proven route is already the worst its area allows.");
     const run = proven.run;
     const feasible: RouteDocument = {
       ...proven,
@@ -1224,7 +1243,7 @@ describe("a certified route", () => {
     };
     new JobRunner(s, fakeView(), () => {}).showRoute(feasible);
     expect(statLines(s.state)[2]).toBe("longest found · the worst possible is at most 12 % longer");
-    expect(worseRefused(s.state)).toBe("plan it again with a longer budget");
+    expect(worseRefused(s.state)).toBe("Plan it again with a longer time budget.");
     const unbounded: RouteDocument = {
       ...feasible,
       run: { ...feasible.run, certified: { ...feasible.run.certified!, bound_m: null, gap: null } },

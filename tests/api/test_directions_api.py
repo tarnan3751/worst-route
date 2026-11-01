@@ -73,8 +73,8 @@ async def test_the_document_carries_directions_toasts_and_the_presentation_s_num
     assert [s["text"] for s in steps if s["kind"] == "stop"] == ["Arrive at stop 1; continue"]
     driving = [s for s in steps if s["edge_range"][0] < s["edge_range"][1]]
     assert sum(s["distance_m"] for s in driving) == pytest.approx(m["length_m"])
-    assert doc["toasts"][0] == f"{m['ratio']:.1f}× less efficient than the sensible route."
-    assert 6 <= len(doc["toasts"]) <= TOASTS_MAX
+    assert doc["toasts"][0] == f"{m['ratio']:.1f}× longer than it had to be."
+    assert 4 <= len(doc["toasts"]) <= TOASTS_MAX
     miles = (m["length_m"] - m["baseline_length_m"]) / 1609.344
     assert m["extra_fuel_gal"] == pytest.approx(miles / 24)
     assert m["extra_cost_usd"] == pytest.approx(miles / 24 * 3.89)

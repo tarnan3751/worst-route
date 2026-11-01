@@ -88,25 +88,22 @@ BARE = Stats(None, None, None, None, None, 0.1234)
 def test_the_toasts_come_most_striking_first() -> None:
     lines = toasts(FULL, metrics(), nodes=NODES, edges=EAST_THEN_NORTH_EDGES)
     assert lines == [
-        "42.9× less efficient than the sensible route.",
-        "Passes through 2 towns and communities. Portland twice, in spirit.",
-        "An extra 3.4 gallons, or $13.20, for nothing.",
+        "42.9× longer than it had to be.",
+        "Passes through 2 towns. Portland twice.",
+        "An extra 3.4 gallons, $13.20, for nothing.",
         "10 h 54 min on the road instead of 21 min.",
         "2 h 57 min waiting at signals and stop signs.",
         "18 intersections, none of them twice.",
         "17 stretches of road, each driven exactly once.",
-        "Visits 2 states: Oregon and Washington.",
-        "717 left turns and 733 right turns.",
-        "Uses 12 % of the roads within reach.",
     ]
     assert toasts(FULL, metrics(), nodes=NODES, edges=EAST_THEN_NORTH_EDGES) == lines
 
 
-def test_without_places_or_a_vehicle_there_are_still_six() -> None:
+def test_without_places_or_a_vehicle_there_are_still_four() -> None:
     no_delays = metrics(delay_s=0.0, baseline_delay_s=0.0)
     lines = toasts(BARE, no_delays, nodes=NODES, edges=EAST_THEN_NORTH_EDGES)
-    assert len(lines) == 6
-    assert lines[0] == "42.9× less efficient than the sensible route."
+    assert len(lines) == 4
+    assert lines[0] == "42.9× longer than it had to be."
     assert not any("gallons" in line or "towns" in line or "waiting" in line for line in lines)
 
 
@@ -123,11 +120,9 @@ def test_toasts_that_depend_on_the_route() -> None:
     assert "Never leaves Portland. Sees all of it instead." in lines(
         replace(BARE, towns=["Portland"], towns_n=1)
     )
-    assert not any("states" in line for line in lines(replace(BARE, states=["Oregon"])))
-    assert (
-        lines(replace(BARE, network_fraction=0.001))[-1]
-        == "Uses under 1 % of the roads within reach."
-    )
+    # what the stat line already says: the states, the turns both ways, the share of the roads
+    said = lines(replace(BARE, states=["Oregon", "Washington"], network_fraction=0.001))
+    assert not any("Oregon" in line or " % " in line or " left turns" in line for line in said)
     collecting = lines(items={"toll_booth": 0, "level_crossing": 1, "roundabout": 2, "bridge": 37})
     assert collecting[-1] == "Passes 1 level crossing, 2 roundabouts and 37 bridges on the way."
     assert not any("Passes " in line for line in lines(items={"bridge": 0, "roundabout": 0}))
@@ -136,7 +131,7 @@ def test_toasts_that_depend_on_the_route() -> None:
 def test_a_round_trip_goes_nowhere() -> None:
     loop = metrics(ratio=None, baseline_time_s=0.0, baseline_delay_s=0.0)
     lines = toasts(BARE, loop, nodes=LOOP, edges=LOOP[:-1])
-    assert lines[0] == "Ends exactly where it began, as all things do."
+    assert lines[0] == "Ends exactly where it began."
     assert "10 h 54 min on the road to get nowhere." in lines
     assert "4 intersections, none of them twice." in lines  # the start once
     assert not any("×" in line for line in lines)
@@ -145,8 +140,8 @@ def test_a_round_trip_goes_nowhere() -> None:
 def test_a_round_trip_through_a_via_has_a_ratio_first() -> None:
     lines = toasts(BARE, metrics(), nodes=LOOP, edges=LOOP[:-1])
     assert lines[:2] == [
-        "42.9× less efficient than the sensible route.",
-        "Ends exactly where it began, as all things do.",
+        "42.9× longer than it had to be.",
+        "Ends exactly where it began.",
     ]
     assert "10 h 54 min on the road instead of 21 min." in lines
 
@@ -154,8 +149,8 @@ def test_a_round_trip_through_a_via_has_a_ratio_first() -> None:
 def test_the_items_toast_is_never_dropped() -> None:
     items = {"toll_booth": 0, "level_crossing": 0, "roundabout": 0, "bridge": 3}
     lines = toasts(FULL, metrics(items=items), nodes=NODES, edges=EAST_THEN_NORTH_EDGES)
-    assert len(lines) == 11 and lines[-1] == "Passes 3 bridges on the way."
+    assert len(lines) == 8 and lines[-1] == "Passes 3 bridges on the way."
     # every toast a route can have at once: a round trip through a via, never turning left
     no_left = {"left": 0, "right": 5, "straight": 9, "u_turn": 0}
     lines = toasts(FULL, metrics(items=items, turns=no_left), nodes=LOOP, edges=LOOP[:-1])
-    assert len(lines) == TOASTS_MAX == 12 and lines[-1] == "Passes 3 bridges on the way."
+    assert len(lines) == TOASTS_MAX == 10 and lines[-1] == "Passes 3 bridges on the way."

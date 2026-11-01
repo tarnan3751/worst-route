@@ -44,11 +44,7 @@ describe("the toasts", () => {
   it("go through the waiting lines and the live ratio while a run goes, every 4 s", () => {
     const s = store();
     const t = new Toasts(s);
-    expect(WAITING).toEqual([
-      "Finding the worst way. Please hold.",
-      "Rejecting good ideas…",
-      "Still not repeating a road.",
-    ]);
+    expect(WAITING).toEqual(["Finding a worse way.", "Skipping the shortcut.", "Still going."]);
     s.updateRun({ phase: "starting" });
     expect(t.text).toBe(WAITING[0]);
     s.updateRun({ phase: "running", metrics: metrics(17.2) });

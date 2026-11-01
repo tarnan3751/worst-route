@@ -86,7 +86,7 @@ def test_plan_writes_the_presentation_into_route_json(data_dir: Path, tmp_path: 
         g, saved.nodes, saved.edges, saved.stop_idx, labels=[None] * 3, seed=3, ratio=m["ratio"]
     )
     assert doc["directions"] == [s.as_dict() for s in steps]
-    assert doc["toasts"][0] == f"{m['ratio']:.1f}× less efficient than the sensible route."
+    assert doc["toasts"][0] == f"{m['ratio']:.1f}× longer than it had to be."
     assert m["extra_fuel_gal"] is None and m["extra_cost_usd"] is None  # no vehicle in the CLI
     assert m["states"] == ["Westland", "Eastland"] and m["towns_n"] == len(m["towns"]) > 0
     assert 0 < m["network_fraction"] <= 1

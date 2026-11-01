@@ -70,6 +70,6 @@ def test_powells_to_reed_reads_as_directions_and_toasts(
         banned=result.masks.banned,
     )  # fmt: skip
     lines = toasts(numbers, metrics, nodes=route.nodes, edges=route.edges)
-    assert lines[0] == f"{metrics['ratio']:.1f}× less efficient than the sensible route."
-    assert 6 <= len(lines) <= TOASTS_MAX
+    assert lines[0] == f"{metrics['ratio']:.1f}× longer than it had to be."
+    assert 4 <= len(lines) <= TOASTS_MAX
     assert 0 < numbers.network_fraction < 1

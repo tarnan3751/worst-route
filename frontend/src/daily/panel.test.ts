@@ -73,11 +73,11 @@ describe("today's route", () => {
     const opened = daily.route();
     await daily.load();
     expect(daily.phase).toBe("planning");
-    expect(dailyLine(daily)).toBe("planning…");
+    expect(dailyLine(daily)).toBe("Planning…");
     expect(sources.map((s) => s.url)).toEqual(["/api/jobs/abc123/events"]);
     const [source] = sources;
     source.send("snapshot", { metrics: metrics(1.2) });
-    expect(dailyLine(daily)).toBe("planning… 1.2× so far");
+    expect(dailyLine(daily)).toBe("Planning… 1.2× so far");
     source.send("progress", { metrics: metrics(7.25), splices: [] });
     expect(daily.ratio).toBe(7.25);
     source.send("done", { route_id: "5ea844bffd40", stopped_because: "budget", metrics: {} });
@@ -85,7 +85,7 @@ describe("today's route", () => {
     expect(source.readyState).toBe(2); // closed: the job is done
     expect(daily.phase).toBe("done");
     expect(daily.daily?.route_id).toBe("5ea844bffd40");
-    expect(dailyLine(daily)).toBe("11.0× less efficient than the sensible route");
+    expect(dailyLine(daily)).toBe("11.0× longer than it had to be");
     await expect(opened).resolves.toBe("5ea844bffd40");
     // GET /daily twice, and never a DELETE: the job is the server's
     expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual(["GET /api/daily", "GET /api/daily"]);

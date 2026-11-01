@@ -14,11 +14,7 @@ import type { AppState, Store } from "./state";
 import { el } from "./util/dom";
 
 const TOAST_MS = 4000;
-export const WAITING = [
-  "Finding the worst way. Please hold.",
-  "Rejecting good ideas…",
-  "Still not repeating a road.",
-];
+export const WAITING = ["Finding a worse way.", "Skipping the shortcut.", "Still going."];
 
 /** Where the lines come from: the run going, the route shown, or nowhere. */
 type Source = "run" | RouteDocument | null;

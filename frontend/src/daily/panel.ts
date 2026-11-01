@@ -1,6 +1,6 @@
 // The daily route (docs/reference/frontend.md, **Today's route**): one trip a day, the same for
 // everyone on the server (GET /daily), at the top of the panel as "Today's route": its date and
-// its two towns; while the server plans it, "planning…" with the ratio so far, from its job's
+// its two towns; while the server plans it, "Planning…" with the ratio so far, from its job's
 // events (the stream a run follows, nothing drawn on the map and the job never cancelled: it is
 // the server's); once done, its ratio, its share image and "Open it", which opens it as a
 // ?route= link does; failed (or the server too busy to plan it, a 429), "Try again", which asks
@@ -133,13 +133,13 @@ export function openDailyAtStart(
   });
 }
 
-/** What the section says of today's route as it stands: "planning… 7.2× so far", its ratio
- * ("12.3× less efficient than the sensible route"), or that it could not be planned. */
+/** What the section says of today's route as it stands: "Planning… 7.2× so far", its ratio
+ * ("12.3× longer than it had to be"), or that it could not be planned. */
 export function dailyLine(daily: DailyRoute): string {
   const { phase, ratio } = daily;
   if (phase === "planning")
-    return ratio === null ? "planning…" : `planning… ${formatRatio(ratio)} so far`;
-  if (phase === "done") return `${formatRatio(ratio)} less efficient than the sensible route`;
+    return ratio === null ? "Planning…" : `Planning… ${formatRatio(ratio)} so far`;
+  if (phase === "done") return `${formatRatio(ratio)} longer than it had to be`;
   if (phase === "failed") return "Today's route could not be planned.";
   return "";
 }

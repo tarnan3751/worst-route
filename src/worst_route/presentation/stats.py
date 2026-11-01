@@ -20,11 +20,11 @@ works out:
 them and the document's metrics (the ratio, the times and delays, the turns, the items when the
 route collects), the most striking first, in a fixed order: the ratio; a round trip's ending
 where it began; the towns; never turning one way; the fuel; the time; the delays; the
-intersections, none twice; the stretches of road, each once; the states; the turns; the share
-of the roads within reach; the items. A fact a route does not have (no towns without an index,
-no fuel without a vehicle, no ratio for a round trip without a via, whose baseline is 0 m) is
-left out, so the cap is never reached. No randomness: the same route always gets the same
-toasts.
+intersections, none twice; the stretches of road, each once; the items. A fact the stat line
+already gives as it stands (the states, the turns both ways, the share of the roads within
+reach) is no toast. A fact a route does not have (no towns without an index, no fuel without a
+vehicle, no ratio for a round trip without a via, whose baseline is 0 m) is left out, so the
+cap is never reached. No randomness: the same route always gets the same toasts.
 """
 
 from collections.abc import Mapping
@@ -130,13 +130,12 @@ def toasts(
     experienced = metrics["time_s"] + metrics["delay_s"]
     sensible = metrics["baseline_time_s"] + metrics["baseline_delay_s"]
     lines: list[str | None] = [
-        f"{ratio:.1f}× less efficient than the sensible route." if ratio is not None else None,
-        "Ends exactly where it began, as all things do." if round_trip else None,
+        f"{ratio:.1f}× longer than it had to be." if ratio is not None else None,
+        "Ends exactly where it began." if round_trip else None,
         _towns(stats.towns),
         f"Never turns left. {_count(right, 'right turn')}." if left == 0 and right > 0 else None,
         f"Never turns right. {_count(left, 'left turn')}." if right == 0 and left > 0 else None,
-        f"An extra {stats.extra_fuel_gal:.1f} gallons, or ${stats.extra_cost_usd:,.2f}, "
-        "for nothing."
+        f"An extra {stats.extra_fuel_gal:.1f} gallons, ${stats.extra_cost_usd:,.2f}, for nothing."
         if stats.extra_fuel_gal is not None and stats.extra_cost_usd is not None
         else None,
         f"{_duration(experienced)} on the road instead of {_duration(sensible)}."
@@ -148,13 +147,6 @@ def toasts(
         f"{_count(len(nodes) - 1 if round_trip else len(nodes), 'intersection')}, "
         "none of them twice.",
         f"{_count(len(edges), 'stretch', 'stretches')} of road, each driven exactly once.",
-        f"Visits {len(stats.states)} states: {_listed(stats.states)}."
-        if stats.states is not None and len(stats.states) > 1
-        else None,
-        f"{_count(left, 'left turn')} and {_count(right, 'right turn')}."
-        if left > 0 and right > 0
-        else None,
-        f"Uses {_percent(stats.network_fraction)} of the roads within reach.",
         _items(metrics.get("items")),
     ]
     return [line for line in lines if line is not None][:TOASTS_MAX]
@@ -165,7 +157,7 @@ def _towns(towns: list[str] | None) -> str | None:
         return None
     if len(towns) == 1:
         return f"Never leaves {towns[0]}. Sees all of it instead."
-    return f"Passes through {len(towns)} towns and communities. {towns[0]} twice, in spirit."
+    return f"Passes through {len(towns)} towns. {towns[0]} twice."
 
 
 def _items(items: Mapping[str, int] | None) -> str | None:
@@ -191,9 +183,3 @@ def _duration(seconds: float) -> str:
         return f"{secs} s"
     hours, minutes = divmod(minutes, 60)
     return f"{hours} h {minutes} min" if hours else f"{minutes} min"
-
-
-def _percent(fraction: float) -> str:
-    """The share as a percentage: "12 %", or "under 1 %"."""
-    percent = round(fraction * 100)
-    return f"{percent} %" if percent > 0 else "under 1 %"

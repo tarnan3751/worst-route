@@ -218,8 +218,8 @@ North Multnomah Street", "Take the ramp toward I 5", "At the roundabout, take th
 ..."), each with its distance and time and its
 range of edges, with forty deadpan jokes about every eighth step, drawn from the route's seed;
 its extra fuel and cost (from the request's vehicle), the states and towns it passes through,
-its share of the roads within reach, and up to twelve toasts, the most striking first ("34.2× less
-efficient than the sensible route."). `GET /routes/{id}` carries them, worked out again on every
+its share of the roads within reach, and up to ten toasts, the most striking first ("34.2× longer
+than it had to be."). `GET /routes/{id}` carries them, worked out again on every
 request and never stored, `GET /routes/{id}/directions` the directions alone, `worst-route plan
 --out` writes them into route.json, and `worst-route directions route.json` prints the steps.
 On Portland, Powell's → Reed (34.21×, 2,819 edges) reads as 1,532 steps, and its document
@@ -349,8 +349,8 @@ client sees one route, the leader's, a search whose best is strictly better taki
 once in 2 s (a snapshot of its route, then only its splices), and the job stores the best route the
 searches finish with, or the first to reach its target, under the winner's seed, so `plan --seed
 <winner>` reproduces it; each search holds one of the server's workers until it ends, a public
-client still running one job. The frontend's Seeds setting sends it, and its stat line names the
-leader's seed while it runs ("best of 4 seeds · seed 42"). On Portland four seeds at 60,000
+client still running one job. The frontend's "Runs at once" setting sends it, and its stat line
+names the leader's seed while it runs ("best of 4 runs · seed 42"). On Portland four seeds at 60,000
 attempts each ended in 14.5 s on the best of the four seeds' own routes (63.01×, against 35 s for
 the four one after another); on `us-t3`, with the dev machine swapping, two searches at once,
 a portfolio's or two jobs', each ran at a fifth of one alone, so a portfolio of two did not beat
@@ -883,7 +883,7 @@ brief):
   seed; the API always tells them (the `joke` kind lets a client hide them), the CLI's
   `directions` has `--no-jokes`; a joke's distance in miles with kilometres, as the comparisons
   write it. Toasts in a fixed order, the most striking first, the ratio first whenever a route has one (a
-  round trip through a via too), at most twelve, so none is dropped. The presentation is
+  round trip through a via too), at most ten, so none is dropped. The presentation is
   added by `presentation.document.present` from the CLI's `plan --out` and `GET /routes/{id}`
   only, never stored, so the stored document (`engine/io.py`'s `route_document`, the job
   manager's) is unchanged and every stored route gets it; worked out on every request, not

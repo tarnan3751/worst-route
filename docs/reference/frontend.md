@@ -23,7 +23,7 @@ nothing there.
 | `map/stopsLayer.ts` | the stop markers and the snapped-position ghosts |
 | `map/drawLayer.ts` | `DrawLayer`: a route drawn by hand, its next moves, their names on hover, the move a click takes (**Drawing**); `paintDrawing`, their colours from the theme |
 | `stops/stopList.ts` | how a click, a drag or a removal changes the stops (`placeStop`: a click's, and a place search's pick); `stopErrored`, the stops an error names; `busy`, whether a job or a drawing locks them; the list in the panel |
-| `stops/pick.ts` | `RegionPicker` (the build a trip runs on, asked of `POST /regions/pick` as the stops change, no DOM), `pickLine` (the stop list's header), `regionLabel`, `regionName`, `roadsOf` (**Stops**) |
+| `stops/pick.ts` | `RegionPicker` (the build a trip runs on, asked of `POST /regions/pick` as the stops change, no DOM), `pickLine` (the stop list's header), `regionLabel`, `regionName`, `roadsOf`, `ROADS` (each tier's roads by name, the settings' Roads options too) (**Stops**) |
 | `stops/search.ts` | `PlaceSearch` (the place search, no DOM, so the tests drive it), `searchRegion` (the region it asks in) and `mountPlaceSearch`, its field, button and results |
 | `settings/panel.ts` | the request's settings (the region pinned, the mode with its item or brand, the turns, hard mode, the worst order and Certified, the vehicle and the departure among them; `regionOptions`, the region picker's; `loadBrands` and `brandOptions`, the brand picker's), the row an error's `field` names, and the units |
 | `settings/themeRow.ts` | the settings' Theme row, `themeOptions` (**Themes**) |
@@ -31,7 +31,7 @@ nothing there.
 | `theme/presets/` | one `Theme` a file (`studio.ts`, `night.ts`, `transit.ts`, `topo.ts`, `arcade.ts`, `dashboard.ts`, `atlas.ts`, `sign.ts`, `ledger.ts`, `classic.ts`), and `THEMES` (`index.ts`), the settings' order |
 | `theme/apply.ts` | `themeProperties` (a theme as CSS custom properties) and `applyTheme` (on `<html>`, its fonts loaded) |
 | `theme/resolve.ts` | `DEFAULT_THEME`, `resolveTheme` (a setting, `auto` by the system's scheme), `storedTheme` and `followTheme` (the setting kept in the browser's storage, followed as it or the scheme changes) |
-| `run/controls.ts` | `JobRunner`, a job's lifecycle (no DOM, so the tests drive it), and the retries without strict and without hard mode; `mountRunControls`, Go, Cancel, Reroll, Make it worse, Draw it and the stat line; `statLines`, `countsTitle` and `routeLines`, its rows; `awaitingBrand`, which holds the buttons under Brand until the brands are known, and `worseRefused`, which turns Make it worse off for an alphabet route and a certified one |
+| `run/controls.ts` | `JobRunner`, a job's lifecycle (no DOM, so the tests drive it), and the retries without strict and without hard mode; `mountRunControls`, Go, Cancel, Reroll ("Try another"), Make it worse, Draw it and the stat line; `statLines`, `countsTitle` and `routeLines`, its rows; `awaitingBrand`, which holds the buttons under Brand until the brands are known, and `worseRefused`, which turns Make it worse off for an alphabet route and a certified one |
 | `directions/panel.ts` | `StepLocator` (where the steps lie along the route's geometry), `stepRows`, `DirectionsPanel` (the list's rows, a hover's highlight and a click's pan, no DOM) and `mountDirections` (**Directions**) |
 | `toasts.ts` | `Toasts`, the rotation and the notices shown once each (`notify`; no DOM), and `mountToasts`, the strip under the map (**Toasts**) |
 | `share/share.ts` | the URL state, `UrlSync`, `openRoute`, `shareImageUrl`, `geojsonUrl`, the share section (**Links**) |
@@ -41,7 +41,7 @@ nothing there.
 | `challenges/list.ts` | `CHALLENGES`, the challenges, each measured where it is set (**Challenges**); `Challenge`, `ChallengeSettings`, `Goal` |
 | `challenges/progress.ts` | `sameTrip` and `tripOf` (whether a route is a challenge's trip), `reached` (its goal), `ChallengeProgress` (the completions, graded on every route shown and on a drawing's verdict, kept in the browser's storage; no DOM), `completedLine`, the toast (**Challenges**) |
 | `challenges/panel.ts` | `ChallengePanel` (the challenges listed, Set it up, whether one is still set up, the collapse; no DOM), `challengeSettings`, `stillSetUp`, `setUpLine`, `mountChallenges`, the section and the header's link (**Challenges**) |
-| `banner.ts` | the error banner, with "Try without strict" or "Try without hard mode" when the refusal says either is why (`retryOf`) |
+| `banner.ts` | the error banner, an error's message as a sentence (`sentence`) and its code in the tooltip, with "Try without strict" or "Try without "No road twice, ever"" when the refusal says either is why (`retryOf`, on the code or the message's stable ending) |
 | `format.ts` | distances (mi/km), durations, ratios, counts, items collected; fuel and its cost, percentages, states by their codes; times of day (`isoWithOffset`, `parseIsoTime`, `formatClock`); the daily route's day (`formatDay`) |
 | `util/geo.ts`, `util/dom.ts` | rounding and bounds; building DOM with text, never HTML |
 | `public/notices.html` | "Data sources and notices", the page the footer links to (**Basemap**) |
@@ -93,12 +93,12 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   the same for everyone on the server (`GET /daily`, `docs/reference/api.md`, **The daily route**),
   asked for at start and shown once the server has answered. It reads "Today's route", the day
   ("Saturday, October 31", the UTC date the server plans it for), the two towns ("Sageville, IA →
-  Acworth, GA"), then how it stands: while the server plans it, "planning…" and the ratio so far
-  ("planning… 7.2× so far"), from its job's `snapshot` and `progress` events, followed with the
+  Acworth, GA"), then how it stands: while the server plans it, "Planning…" and the ratio so far
+  ("Planning… 7.2× so far"), from its job's `snapshot` and `progress` events, followed with the
   stream a run uses (`subscribe`), nothing drawn on the map and the job never cancelled (it is the
   server's, which refuses a client's cancel, `DAILY_JOB`: not on `pagehide` either); once done (the
-  stream's `done`, after which it asks `GET /daily` again), the route's ratio, "6.6× less efficient
-  than the sensible route", its share image (the server's PNG, `shareImageUrl`, the existing card)
+  stream's `done`, after which it asks `GET /daily` again), the route's ratio, "6.6× longer than it
+  had to be", its share image (the server's PNG, `shareImageUrl`, the existing card)
   and an "Open it" button, which opens the route exactly as a `?route=` link does (`openRoute`),
   disabled while a job runs; failed, or a server too busy to plan it (`GET /daily`'s 429
   `TOO_MANY_JOBS`), "Today's route could not be planned." and a "Try again" button, which asks again
@@ -135,9 +135,9 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   order; the seed, the budget, the vehicle, the departure and the units stay the panel's); its
   brand is picked once the region's brands are known, by its wikidata id, else its name. It forgets
   the route shown and a drawing (as an edit of the stops does), scrolls the stop list into view and
-  fits the map to the stops (or the region), and the row says what next: "Set up: press Go.", "Set
-  up: press Draw it.", "Set up: place a start and an end, then press Go." Today's challenge instead
-  opens today's route as "Open it" does ("Set up: press Make it worse."; its button disabled until
+  fits the map to the stops (or the region), and the row says what next: "Set up. Press Go.", "Set
+  up. Press Draw it.", "Set up. Place a start and an end, then press Go." Today's challenge instead
+  opens today's route as "Open it" does ("Set up. Press Make it worse."; its button disabled until
   the day's route is done). A challenge stays set up (the store's `challenge`, the row highlighted,
   `?challenge=` in the URL) while its region, stops and fixed settings are the store's (a run, its
   seed and the snaps change none of them), and today's while its route is shown. **Grading**
@@ -158,8 +158,8 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   completed is recorded with the day (the browser's, YYYY-MM-DD) in the browser's `localStorage` under
   `worst-route.challenges` (a JSON object from id to day; what is not a known id with a string is
   ignored), every read and write in a try, so the page works without it (a private window, storage
-  blocked: the badges then last as long as the page); its toast, "Challenge completed: Cross 20
-  bridges", is shown once (**Toasts**), and its badge turns on. "Reset badges", under the list once
+  blocked: the badges then last as long as the page); its toast, "Challenge done. Cross 20
+  bridges.", is shown once (**Toasts**), and its badge turns on. "Reset badges", under the list once
   one is completed, forgets them all; a route still shown that meets a challenge (a reload of a
   page whose URL still names it, `?route=`) completes it again. The storage is the page's origin's:
   the badges are a browser's and a site's, and the desktop app keeps its own between starts on its
@@ -210,36 +210,42 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   **Picking a build**: the smallest served region that holds every stop), and every request then
   names the region picked; an answer for stops since moved is dropped. Under the list's heading
   the region by its name and roads, the roads read from `/regions`' tiers (the first tier holding
-  all of a build's edges: "all roads", "primary roads and up"), with the server's reason under it
-  in grey: "Oregon · all roads" / "all stops in Oregon", "United States · primary roads and up" /
-  "stops in Oregon and Illinois"; "Finding the build…" while it asks. Until it answers Go and
-  Reroll are disabled. A refusal (`STOP_OUTSIDE_REGION`, a stop no served region holds with the
+  all of a build's edges, named as the Roads setting names them, `ROADS`: "all roads", "main
+  roads"), with the server's reason under it in grey: "Oregon · all roads" / "all stops in Oregon",
+  "United States · main roads" / "stops in Oregon and Illinois"; "Finding the map…" while it
+  asks. Until it answers Go and Reroll are disabled. A refusal (`STOP_OUTSIDE_REGION`, a stop no
+  served region holds with the
   others) is in the banner with that stop highlighted, and the header empty. Any other failure
   (`NETWORK`, a proxy's 502, a public server's `RATE_LIMITED`) is asked again a second later, up
-  to three times (`PICK_RETRY_MS`, `PICK_RETRIES`); then the banner says "could not ask the
-  server which build these stops run on: …", and the next change of the stops asks again. A region pinned in
+  to three times (`PICK_RETRY_MS`, `PICK_RETRIES`); then the banner says "Could not ask the
+  server which map these stops are on. Move a stop to retry." (the failure's code in its tooltip),
+  and the next change of the stops asks again. A region pinned in
   the settings (**Settings**) skips the pick: the header names it, "set in the settings". Stops and settings are locked while a job runs. Under the alphabet route
-  a second hint says "start and end only: the alphabet route takes no stops along the way" (the
+  a second hint says "The alphabet route takes a start and an end, no stops between." (the
   API refuses a stop along the way).
-- **Settings.** The seed (empty: random, picked by the server); under it, the seeds a job runs at
-  once (a portfolio, `docs/reference/api.md`, **Portfolios**): a list from 1, the default, to the
-  most the server runs (`GET /config`'s `limits.portfolio_max`: 4, 2 on a public server, never
+- **Settings.** The seed (empty: random, picked by the server); under it, "Runs at once", the
+  seeds a job runs at once (a portfolio, `docs/reference/api.md`, **Portfolios**): a list from 1,
+  the default, to the most the server runs (`GET /config`'s `limits.portfolio_max`: 4, 2 on a public
+  server, never
   more than its workers), the row hidden until the server has said it runs more than one (always,
   on a server older than portfolios), a setting above it (a link's, a route's opened by link)
-  lowered to it once it has said, and a note under it from two ("the best of that many seeds,
-  searched at once; the route drawn is the one ahead"); disabled under Alphabet, whatever the number,
+  lowered to it once it has said, and a note under it from two ("runs that many searches and
+  keeps the best; the map shows the one ahead"); disabled under Alphabet, whatever the number,
   with the note "the alphabet route runs one search", the number kept for another mode. A refusal
   naming `field: "portfolio"`, or `PORTFOLIO_TOO_LARGE`, highlights the row, and
   `PORTFOLIO_TOO_LARGE` lowers the setting to its `max` (**Limitations**). A row the panel hides (the
   seeds, the region with one region served) is `display: none` by `.field[hidden]`, a field's
   `display: grid` otherwise showing it: the Region row showed with one region served until then. The
-  time budget (1–120 s), the
-  tier (`auto`, `T0`–`T4`) and the leash (empty: auto, else up to 150 km); once a job has said,
-  what `auto` became ("auto was T4", "auto was 3.6 km"; to two decimals under a kilometre,
-  "auto was 0.42 km", a certified route's). When the server serves several regions,
-  a Region row: "Picked from the stops" (the default, with the note "the smallest the server has
-  that holds every stop") or one of them by its name and roads ("United States · primary roads
-  and up"), which pins every request to it. The inefficiency target is "as bad as
+  time budget (1–120 s), "Roads", the tier (`auto`, then `T0`–`T4` by the roads they keep:
+  "highways", "main roads", "main and secondary roads", "most roads", "all roads", each option's
+  tooltip its code and road classes, "T1: primary roads and up"), and "Corridor (km)", the leash
+  (empty: auto, else up to 5,000 km), with the note "how far off the direct line it may wander";
+  once a job has said, what `auto` became ("auto was all roads", "how far off the direct line it
+  may wander; auto was 3.6 km"; to two decimals under a kilometre, "auto was 0.42 km", a certified
+  route's). When the server serves several regions,
+  a Region row: "Picked from the stops" (the default, with the note "the smallest map that holds
+  every stop") or one of them by its name and roads ("United States · main roads"), which pins
+  every request to it. The inefficiency target, the "Goal" row, is "As bad as
   possible", "a ratio" to the sensible route (× it, more than 1; 20 by default) or "a drive
   time" (9 h by default), typed as `9h`, `90m`, `2h30m`, `45s` or a bare number of minutes, at
   most 7 days; typing a number picks its kind, and each kind keeps its number while another is
@@ -252,7 +258,7 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   request carries them as its `vehicle` (`{mpg, gas_price_usd}`), so every stored route has its
   extra fuel and its cost. An `INVALID_REQUEST` naming `field: "vehicle"` highlights the row.
 - **Departure.** A date and time (`datetime-local`, the browser's local time) under the
-  vehicle, empty by default ("empty: now"). Every request carries it as its `departure`, an ISO
+  vehicle, empty by default ("empty means now"). Every request carries it as its `departure`, an ISO
   8601 time with the browser's offset to the second (`2026-10-31T09:00:00-05:00`), or, when
   empty, the time Go (Reroll, Make it worse) is pressed; the document's `arrival` follows from
   it. A departure that came with a link or a stored route keeps its own offset until it is
@@ -263,7 +269,10 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   crossings, roundabouts or bridges (`toll_booth`, `level_crossing`, `roundabout`, `bridge`;
   bridges by default; the pick is kept while another mode is chosen), "Brand" (`brand`, the
   pilgrimage: the most locations of a brand), which shows a list of the region's brands, or
-  "Alphabet" (`alphabet`: named roads whose letters run A, B, C, ...). The brands come from
+  "Alphabet" (`alphabet`: named roads whose letters run A, B, C, ...); a line under the row says
+  what the mode picked does ("the longest legal route", "the slowest, counting delays", "passes as
+  many of one thing as it can", "visits as many of a chain's locations as it can", "named roads in
+  A, B, C order"). The brands come from
   `GET /brands?region=`, asked for the region trips run on, again whenever it changes
   (`followBrands`; an answer for a region since left is dropped, and after a failure the next
   change asks again, to the same region too), and kept in the store, in the API's order (the most
@@ -278,30 +287,32 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   region's), so no request goes without a brand; the other modes run meanwhile. A
   collect or brand run takes no ratio target (the API refuses one: it counts items or visits):
   under Collect or Brand the ratio is disabled, with the hint "a collect run takes a drive-time
-  target only" or "a brand run counts visits: a drive-time target only". The alphabet route
+  goal only" or "a brand run counts visits, so a drive-time goal only". The alphabet route
   takes no target at all: under Alphabet the whole target is disabled, with the hint "the
-  alphabet route takes no target". Picking a mode that refuses the target chosen makes it "as
+  alphabet route takes no goal". Picking a mode that refuses the target chosen makes it "as
   bad as possible" (`takesTarget` says which targets a mode takes, for the panel and for links).
   The Turns row is "Any" (the default), "Avoid left
   turns" (`no_left`: each left turn, and U-turn, costs the route a kilometre's worth of its
   score, or 90 s under the slowest time) or "Avoid right turns" (`no_right`), and a "strict"
   checkbox (none at all), enabled only when a side is chosen, with the hint "strict rarely
-  finds a route on a street grid: the route may not exist"; picking "Any" unticks it. Under them
-  a "Hard mode" checkbox (`hard`: each road in one stretch, never driven again once left, which
-  its tooltip says, and a note under it while ticked), independent of the side and of strict,
-  and beside it a "Worst order" checkbox (`reorder`: the stops between the start and the end in
+  finds a route on a street grid"; picking "Any" unticks it. Under them hard mode's checkbox, "No
+  road twice, ever" (`hard`: its tooltip, and a note under it while ticked, "each road in one
+  stretch; once left, never again"), independent of the side and of strict,
+  and beside it "Worst order of stops" (`reorder`: the stops between the start and the end in
   whatever order is worst, up to 7 stops, 5 on a state's or the national map, and the ratio
-  compares against the sensible route in the chosen order, which its tooltip and a note under it
-  while ticked say), disabled under Alphabet, which keeps its tick for
+  compares against the sensible route in the chosen order; its tooltip and a note under it
+  while ticked say "visits the stops between in the worst order; 7 at most, 5 on a big map"),
+  disabled under Alphabet, which keeps its tick for
   another mode; too many stops is the API's `TOO_MANY_STOPS_TO_REORDER`, in the banner. Beside
-  them a "Certified" checkbox (`certified`: the provably worst route in a small area, its tooltip
-  and the note under it while ticked "the provably worst route in a small area; tighten the leash
-  to make the area small"), enabled under Longest only and keeping its tick under another mode.
-  Ticked under Longest it disables what a certified route does not take, each keeping its value
-  for when it is unticked: the target kinds but "as bad as possible" (the hint "a certified route
-  is the longest: no target"), the turn sides, strict, Hard mode, Worst order and the seeds (the
-  hint "a certified route runs one search"). An area too large to certify is the API's
-  `AREA_TOO_LARGE_TO_CERTIFY` on `field: "leash"`, which highlights the Leash row (the control
+  them Certified's checkbox, "Prove it" (`certified`: the provably worst route in a small area, its
+  tooltip and the note under it while ticked "proves there is no longer legal route in this small
+  area; keep the corridor short to keep the area small"), enabled under Longest only and keeping
+  its tick under another mode. Ticked under Longest it disables what a certified route does not
+  take, each keeping its value
+  for when it is unticked: the target kinds but "As bad as possible" (the hint "a proof finds the
+  longest, so it takes no goal"), the turn sides, strict, hard mode, the worst order and the seeds
+  (the hint "a proof runs one search"). An area too large to certify is the API's
+  `AREA_TOO_LARGE_TO_CERTIFY` on `field: "leash"`, which highlights the Corridor row (the control
   takes 0.1 km and up), the counts and the caps in the banner.
 - **Run.** Go posts the stops, each stop along the way with the `label` its marker's number
   gives it ("Stop 2", "Stop 3", …, which the directions say: "Arrive at Stop 2; continue"; the
@@ -317,14 +328,15 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   `constraints`, `reorder` or `portfolio`; the `vehicle`
   and the `departure`), and its 202's seed goes into the settings (a portfolio's first). Once the
   route is stored, a seed the user gave stays the settings' and the stat line's (for a portfolio
-  the line names the winner's), and "best of K seeds" shows only when the run asked for K: a
+  the line names the winner's), and "best of K runs" shows only when the run asked for K: a
   route's id is its content's and the store keeps the first record, so a seed's route may come
   back with an earlier portfolio's document; a Reroll's seed, the server's, follows the document.
   Under the worst
   order the stat line says "Trying every order…" until the `snapped` event comes, which the
-  server sends once it has tried them (`docs/reference/api.md`, **Jobs**). Reroll posts the same without a
-  seed, so the server picks one. Make it worse posts the shown route as `base_route_id` to the
-  route's own region (its build), with the route's own objective and its item or brand, from the
+  server sends once it has tried them (`docs/reference/api.md`, **Jobs**). Reroll (its button
+  reads "Try another") posts the same without a seed, so the server picks one. Make it worse
+  posts the shown route as `base_route_id` to the route's own region (its build), with the route's
+  own objective and its item or brand, from the
   route's recorded request, never the panel's (a brand's id is its build's, and the panel's are
   those of the region trips now run on, which may be another build's: Starbucks is 229 on
   Portland's build and 1991 on the national one), and with the budget, turns and hard mode,
@@ -333,15 +345,17 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   stops, tier and leash to the base route (the API's rule, which continues a worst-order route in
   the order it visits its stops, without `reorder`), and the seed after the last one tried
   on that route (its own seed at first). The Mode row is the next Go's. An alphabet route cannot
-  be made worse: Make it worse is disabled while one is shown, its tooltip "the alphabet route
-  cannot be continued" (`worseRefused`), the API continuing no route under the alphabet route.
-  Nor is a certified route: its tooltip says "a certified route is the worst its area allows"
-  when proven, else "plan it again with a longer budget" (the API would continue one under the
+  be made worse: Make it worse is disabled while one is shown, its tooltip "The alphabet route
+  cannot be made worse." (`worseRefused`), the API continuing no route under the alphabet route.
+  Nor is a certified route: its tooltip says "A proven route is already the worst its area
+  allows." when proven, else "Plan it again with a longer time budget." (the API would continue
+  one under the
   loop within its stored leash).
   The settings' seed follows the route shown: when the
   job's `done` names the base route (nothing worse was found), the route and its seed stay, and
-  the next press tries the seed after; with a target, the base route may already meet it ("already
-  within the target"), or no route nearer it was found. A target below the base route's value
+  the next press tries the seed after; with a target, the base route may already meet it ("Already
+  at the goal."), or no route nearer it was found ("No route nearer the goal found. Try
+  another."). A target below the base route's value
   shrinks it (the API's rule). Cancel sends `DELETE`; the stream then ends with `done`
   (the route so far, stored as `cancelled`) or `error`. Leaving the page sends `DELETE` with
   `keepalive` for a running job, and for one whose POST is in flight as soon as the POST is
@@ -353,7 +367,7 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   the longest route with no target, whatever the Mode row and the target say (`drawRequest`: a
   drawing takes no other, `docs/reference/api.md`, **Drawing a route**). The route shown goes, the
   run is `drawing` (the stops, the settings, Go, Reroll and Make it worse locked as while a job
-  runs, the stat line "Drawing by hand: click a highlighted road to take it."), today's route
+  runs, the stat line "Drawing by hand. Click a highlighted road to take it."), today's route
   collapses, and the server's first answer (`POST /draw`, no edge yet) puts where the stops snapped
   in the list and on the map. The map then shows the drawing (`wr-drawn`, the theme's draw colour
   over its casing: violet over white under classic), the node it is at (`wr-at`) and the legal next
@@ -371,23 +385,26 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   the end is one move away taking the longest such move (`finalMove`), and opens the stored route as
   a link does (`openRoute`): the stat line then reads "N moves · drawn by hand · seed S", and
   directions, toasts, share image and Make it worse are a route's. The section "Drawn by hand",
-  under the run's, says what to do next ("Click a highlighted road to take it.", "Next: stop 2.",
-  "Next: the end.", "The end is one move away: Finish takes the longest.", "Dead end: Undo
-  (Backspace) and try another way.", "Arrived: Finish stores your route."), the drawing's length and
+  under the run's, says what to do next ("Click a highlighted road to take it.", "Head for stop 2.",
+  "Head for the end.", "The end is one move away. Finish takes the longest.", "Dead end. Undo
+  (Backspace) and try another way.", "Arrived. Finish stores your route.", and once left "Left
+  drawing mode. Draw it picks up where you left off."), the drawing's length and
   stops ("you: 0.6 mi so far · 1 of 2 stops"), its ratio once done ("you: 14.3×"; a round trip's
   length), and the par. **The par** is the engine's route for the same request aiming at 10×
   (`DRAW_PAR_RATIO`): a normal job (`POST /jobs`, the client's share of the jobs on a public server)
   with that ratio target, started with the drawing and followed for its ratio only, nothing of it
   drawn ("the engine: aiming for 10×…", "the engine: 7.2× so far, aiming for 10×", "the engine:
   9.9×", its ratio as well where the engine stops short of the target, its budget spent or
-  converged, or "the engine could not plan it: …"). On the short in-town trips people draw by hand
-  the engine's full run reaches 200–320× while a patient drawing lands around 10–15×, so nobody beat
+  converged, or "the engine could not plan it: …", "the engine lost the connection to the server" when
+  its stream is lost). On the short in-town trips people draw by hand the engine's full run reaches 200–320× while a
+  patient drawing lands around 10–15×, so nobody beat
   it; 10× the engine reaches within ±2 % in a second or two, a bar the player sees before drawing
   much and can beat with patience. A round trip, whose ratio target the API refuses (its baseline is
   0 m when it has no stop between), keeps the full run as its par ("the engine: planning…", then its
   length, or for one with a stop between its ratios). Once both are done, the verdict, by length
-  (one baseline): "You 14.3× · the engine 9.9×: you beat the engine.", "…: the engine wins." or "…:
-  a tie.", and "Your route" and "The engine's route" open either. The drawing is forgotten, and its
+  (one baseline): "You 14.3× · the engine 9.9×. You beat the engine.", "… The engine wins." or
+  "… A tie.", and "Your route" and "The engine's route" open either. The drawing is forgotten, and
+  its
   par cancelled if it still plans, once the stops or the settings it was drawn on (the region, the
   tier, the leash, the turns, strict, hard mode) are no longer the store's, whatever changed them
   (an edit, a route opened by link or from today's route; the store's watch, not the edit), and when
@@ -408,28 +425,33 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   Alder Street", `countsTitle`); once stored, the turns ("277 left ·
   282 right", "no lefts" or "no rights" when the side avoided has none and the route no U-turn,
   which either constraint counts too); for a ratio or duration
-  target, the target while the run goes ("target 9 h") and what it achieved once done ("target
-  9 h, achieved 8 h 50 min, within ±2 %", from `done`'s `metrics.target`, or the document's for
+  target, the goal while the run goes ("goal 9 h") and what it reached once done ("goal 9 h,
+  reached 8 h 50 min, within ±2 %", from `done`'s `metrics.target`, or the document's for
   a route opened by link); in the same row for a certified route, while the run goes, how much
   longer the worst possible may be by the solver's bound ("the worst possible is at most 0.5 %
   longer", a tenth of a percent below 10 %, from each `progress` event's `certified`), and once
-  stored its certificate (`run.certified`): "certified: no legal route in this area is longer ·
-  182 nodes" when proven, else "longest found · the worst possible is at most 12 % longer"
-  ("longest found · no bound yet" when the solver ended without one: its time ran out before it took in the seed), the run row then saying "proven"; the attempts (the attempt of the last splice while running, the
-  route's attempts once stored; the alphabet route's count its restarts), the elapsed time,
+  stored its certificate (`run.certified`): "no longer legal route in this area · 182
+  junctions" when proven, else "longest found · the worst possible is at most 12 % longer"
+  ("longest found · no bound yet" when the solver ended without one: its time ran out before it took
+  in the seed), the run row then saying "proven"; the tries, the engine's attempts ("Try 12", the
+  attempt of the
+  last splice, while running; "12 tries", the route's attempts, once stored, "N moves" for a route
+  drawn by hand; the alphabet route's count its restarts), the elapsed time,
   while the run goes and the best route so far scores above the current one (`best_score` above
   `score`), the best's ratio ("best 14.1×", from the event's `best_metrics`, shown even where it
   rounds like the current ratio or lies below it: under the slowest time the current route can be
   longer but faster than the best; since engine version 6 a max run that converges reheats and
   takes shorter splices too, so the route drawn and its ratio can fall for a while, and the
   stored route, the best, comes as the snapshot before `done`; such a run usually goes on to the
-  end of its budget, where it used to converge sooner), how the run
-  is going or ended (`getting worse…`, `reconnecting…`, `budget`, `converged`, `target
-  reached`, `cancelled`, `timeout`, `failed`), for a portfolio "best of 4 seeds", the seed (a
+  end of its budget, where it used to converge sooner), "reconnecting…"
+  while the stream is down, how the run ended in words (nothing for `budget`, the usual end;
+  "nothing worse found" for `converged`, "goal reached", "cancelled", "timed out", "drawn by
+  hand", "proven"; "failed"), for a portfolio "best of 4 runs", the seed (a
   portfolio's leader's while it runs, from each `progress` event's `portfolio.leader`, then its
-  winner's, the stored route's `seed`; "… · best of 4 seeds · seed 42" for a route opened by link
+  winner's, the stored route's `seed`; "… · best of 4 runs · seed 42" for a route opened by link
   too, from its `run.portfolio`), and, when Make it worse found nothing,
-  "no worse route found with seed N; try again or Reroll". The rows follow the run's own mode (what it asked, a Make it
+  "seed N found nothing worse". The rows follow the run's own mode (what it
+  asked, a Make it
   worse its route's own, even when it found nothing and shows the base route), or a route opened
   by link's request. Under them, once the route is stored, five rows from its document (`routeLines`): when it
   arrives, the day and the minute at the departure's offset ("arrives Sat 14:57", the whole time in
@@ -437,7 +459,7 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   Beaverton, West Slope +14", every name in the row's tooltip); the states by their USPS codes
   ("states: OR, WA", the names in the tooltip); the fuel it burns beyond the sensible route's and
   its cost ("fuel: +6.8 gal · $28.83"); and its share of the roads within reach ("roads used: 29 %
-  of those within reach", "under 1 %" as the toasts say). A row the document has nothing for (a
+  of those within reach", "under 1 %"). A row the document has nothing for (a
   server without the places index has no towns or states; one stored without a departure has no
   arrival) is left empty, and all five are while a job runs.
 - **Directions** (`directions/panel.ts`). A collapsible section under the run's, empty (with
@@ -474,42 +496,49 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   513 mi one.
 - **Toasts** (`toasts.ts`). A strip under the map (not over it; it keeps its height, so the map
   does not resize) shows one line at a time, the next every 4 s. While a job starts and runs:
-  "Finding the worst way. Please hold.", "Rejecting good ideas…", "Still not repeating a road."
-  and the live ratio, "Currently 17.2× worse", four slots in a fixed cycle, round again. The
-  ratio is the run's own, from its snapshots and `progress` (its number follows them while
+  "Finding a worse way.", "Skipping the shortcut.", "Still going." and the live ratio, "Currently
+  17.2× worse", four slots in a fixed cycle, round again. The ratio is the run's own, from its
+  snapshots and `progress` (its number follows them while
   shown; a run starting shows none of the last one's), and its slot is skipped while the run has
   none (before its first snapshot, or a round trip), so the line shown never jumps when the
   ratio comes. Once the
   route is stored (or opened by a link), its document's `toasts`, from the first, in order,
-  looping. A notice, a challenge completed ("Challenge completed: Cross 20 bridges",
+  looping. A notice, a challenge completed ("Challenge done. Cross 20 bridges.",
   **Challenges**), is shown once, for one period, before the lines go on where they were (several
   notices in turn). The pointer over the strip holds the line shown; a click shows the next one at
   once and starts the 4 s again. Nothing is shown while no job runs, no route is shown and no
   notice waits.
-- **Errors.** Every API error shows its `code` and `message` in a banner over the map, closed by
-  its × or the next action (a place search's too: `RATE_LIMITED`, "the geocoder is busy, try
-  again in a few seconds", when the server's slots are taken; a search closes the banner first); an error with a `stop_index` (`STOP_OUTSIDE_REGION`,
+- **Errors.** Every API error shows its `message` in a banner over the map, as a sentence (its
+  first letter a capital, a full stop at its end when it has none; its `code` when it has no
+  message), its `code` in the banner's tooltip, closed by its × or the next action (a place
+  search's too: `RATE_LIMITED`, "Place search is busy. Try again in a few seconds.", when the
+  server's slots are taken; a search closes the banner first); an error with a `stop_index`
+  (`STOP_OUTSIDE_REGION`,
   `NO_NODE_NEAR`, `STOP_UNREACHABLE_WITHOUT_REPEAT`, `INFEASIBLE_TURN_CONSTRAINT`) highlights
   that stop in the list and on the map, one whose `field` is `stops` (the alphabet route's
   refusal of a stop along the way, "the alphabet route takes a start and an end") every stop
   along the way, and an error whose `field` is `target`, `item`, `brand`, `constraints` or
-  `vehicle` (`INVALID_REQUEST`) highlights the How bad, Mode, Turns or Vehicle row. A strict turn
+  `vehicle` (`INVALID_REQUEST`) highlights the Goal, Mode, Turns or Vehicle row. A strict turn
   constraint under which the trip cannot be driven (`INFEASIBLE_TURN_CONSTRAINT`, refused by
-  the `POST`) shows the server's message ("... under the strict no-left constraint; try without
-  strict") and a "Try without strict" button, which unticks strict and sends the refused
+  the `POST`) shows the server's message ("No route from stop 1 to stop 2 without repeating a road and with
+  no left turns. Try without strict.") and a "Try without strict" button, which unticks strict and sends the refused
   request again without it: the same Go, Reroll or Make it worse, with its seed (none for a
   Reroll, so the server picks one) and its base route (so a refused Make it worse continues the
-  route shown), hard mode kept. A refusal hard mode is why gets a "Try without hard mode" button
+  route shown), hard mode kept. A refusal hard mode is why gets a "Try without "No road twice, ever"" button
   the same way (`retryOf` picks the button): a leg the seed finds no way to build under it
-  (`STOP_UNREACHABLE_WITHOUT_REPEAT`, its message saying "under hard mode", refused by the
-  `POST`: "the seed found no way from stop 0 to stop 1 under hard mode, ...; try without hard"),
+  (`STOP_UNREACHABLE_WITHOUT_REPEAT`, its message ending "Try without it.", refused by the
+  `POST`: "No route from stop 1 to stop 2 without repeating a road and with no road twice. Try
+  without it."; the API's error has no field that says hard mode is why),
   or a Make it worse whose base route comes back to a road (`BASE_ROUTE_MISMATCH`, "the base
   route comes back to OR 99E at edge 40, which hard mode refuses"). It unticks hard mode and
   sends the refused request again without `hard`, its seed and base route kept, its turn
-  constraint kept and its `constraints` left out when no side is avoided. The client adds codes of its own: `NETWORK` (the server cannot be reached),
-  `HTTP_<status>` (a refusal without the API's body, as a proxy's 502), `BAD_RESPONSE` (a
+  constraint kept and its `constraints` left out when no side is avoided. The client adds codes
+  of its own: `NETWORK` (the server cannot be reached: "Cannot reach the server. Try again
+  shortly."), `HTTP_<status>` (a refusal without the API's body, as a proxy's 502), `BAD_RESPONSE`
+  (a
   success that is not JSON, as a page where the API should be; the message is its first 80
-  characters), `STREAM_LOST` (the event stream closed and the browser gave up reconnecting) and
+  characters), `STREAM_LOST` (the event stream closed and the browser gave up reconnecting:
+  "Lost the connection to the server. Try again.") and
   `CLIENT_ERROR` (an error of the app's own, with its message). Every error ends the run with
   the controls unlocked: a request refused before its job exists keeps what was shown, and an
   error while following a job closes its stream (and, for `CLIENT_ERROR`, cancels the job).
@@ -825,11 +854,11 @@ follows the app again from the next change. The units and the theme are not in t
 | `api/types.test.ts` | each type's runtime spec, which the compiler holds to the type's keys; the specs against `api.md` (its JSON request example, and the field lists of the events, `done`'s metrics, `/regions` (its `name` optional: the recordings predate it), `/regions/pick`, the 202, the job status, the route document, `/routes/{id}/directions`, `/brands`, `/geocode`, `/config` `/daily`, with its example, `/draw` and `/draw/finish`) and against every payload of the eight recordings and the recorded drawing's answers, finish and refusal; the ratio recording's target reached in `done` and the document, its round-trip refusal; the slowest-time recording's time ratio, delays and turns in `done` and the document, its refusal of both turn constraints; the collect recording's bridges counted in every `progress`, in `done` and the document, its refusal of a ratio target; the directions recording's vehicle, fuel and cost, states and towns, its steps numbered from 1 with the driving steps' ranges covering the route's edges in order and adding up to its length, its first toast, its refusal of a vehicle of 0 mpg; the brand recording's visits never falling in its `progress` events (8, 13, 14 of 19), `done` and the document agreeing, its refusal of a ratio target; the alphabet recording's better routes, each a snapshot then a `progress` with no splice, the same metrics and a higher score, from "A" to "ABCDEFGHIJKLMNO", `done` and the document agreeing, its refusal of a stop along the way (`field: "stops"`); a payload that does not fit is caught; the request's `reorder` and the `order` of `snapped` and the route document (optional: the recordings predate them) |
 | `map/basemap.test.ts` | `basemapParts`: OSM's raster tiles for `raster`; nothing (an error on the console, never OSM's tiles) for `pmtiles` without its file; Protomaps' tiles from the server for `pmtiles`, its `pmtiles://` URL absolute under `/api`, the attribution the app's own, no symbol layer without the server's fonts; with them the fonts' and icons' URLs absolute with the template's braces kept, and the labels asking for no font but the four `tools/fetch_basemap.sh` fetches; `addBasemap` on a stand-in map: the fonts, icons and sources set, then every layer before the first layer the map already had (the route's), or on top of an empty map; the light and dark flavors with their own background, without points of interest, on the grayscale sprite and the four fonts, grayscale the default; `styleUrl`: OpenFreeMap's Dark for dark, Positron otherwise; `Basemap` on a stand-in map: a new variant's layers and sources swapped in under the route's, nothing redone for the same look, OpenFreeMap's style fetched once for each look (Positron once for grayscale and light) and kept, a style that did not load asked for again, raster one look |
 | `map/bounds.test.ts` | `US_BOUNDS` runs west to east and south to north, and holds the national build's extent and Portland's bbox; `fitZoom` against the zooms MapLibre gave for the box filling a map of three sizes, the lesser of its two axes'; `holdToUs`: a view smaller than the box kept inside it (a centre outside put half a view from its edge), the whole box kept in a view larger than it on that axis (taller and wider maps at the fit zoom), a zoom below the fit raised to it, a camera already held unchanged |
-| `run/controls.test.ts` | `JobRunner` with `fetch` and `EventSource` stubbed: the stat line while drawing and for a route drawn by hand ("25 moves · drawn by hand · seed 1"); a TypeError from the client and an event the app cannot handle end the run as `CLIENT_ERROR` with the controls unlocked (the job cancelled), the server's `error` closes the stream; Make it worse keeps the route and its seed when nothing worse is found and tries the next seed, follows a worse route's seed; Go and Reroll send the settings' seed, then none; leaving the page cancels a job whose POST is in flight once it is answered, a running one at once; a ratio and a drive-time target sent, shown while running and with what was achieved (`target reached`), and Make it worse whose base already meets its target; the objective, the item only under collect and the constraints only with a side sent (and not by default), the brand only under brand, the alphabet route with no item nor brand, Brand waiting for the region's brands with the brand set among them (none, a link's before they answer, one they lack, an empty list) and no other mode waiting, hard mode's `hard: true` alone or beside a side (the key left out when off, strict sent only with a side), Make it worse in its route's own objective with its own item or brand, whatever the panel's mode and brand (a pilgrimage under hard mode, its whole body, the panel's brand another build's id), with the panel's turns and target (as bad as possible where the route's objective refuses it); the slowest-time recording replayed (the lengths' ratio while running, then the time ratio, the drive and delays, the turns) and the collect recording's bridges counted live, then the stored route's; the route's own mode shown when Make it worse, the panel in another, finds nothing; "no lefts" and "no rights" (not with a U-turn); `INFEASIBLE_TURN_CONSTRAINT` as the error, and the refused request sent again without strict: a Go with its seed, a Make it worse on the same route with its seed, a Reroll with none, hard mode kept; the counter row's "17 of 19 Starbucks" and "letters: 23 (A–W)", "letters: 1 (A)", "letters: 0", the laps past Z for 26, 27 and 29 letters ("(A–Z)", "(A–Z, A)", "(A–Z, A–C)"), the roads one a line in its tooltip, nothing under another mode; Make it worse off for an alphabet route with its reason, whatever the mode set, and for no other route; the brand recording's visits counted live (1, 8, 13, 14 of 19), then the stored route's; the alphabet recording replayed: every snapshot drawn, no splice, the ratio and letters following each better route (1.1× and 1, 1.0× and 2, ...), the stored route drawn, its fifteen roads in the tooltip; a refusal under hard mode sent again without it: a Go with its seed and no constraints left, a Make it worse with its base and seed and its strict side kept, a Reroll with none, and a Make it worse whose base hard mode refuses (`BASE_ROUTE_MISMATCH`) on the same route with the same seed; each stop along the way labelled as its marker is numbered ("Stop 2", "Stop 3"), the start and the end without a label; the vehicle set sent by Make it worse, Go and Reroll (the default in Make it worse's whole body); the departure set sent, or, empty, the time Go is pressed at the browser's offset (on a fake clock); "arrives Sat 17:42" from a document's arrival at its own offset, nothing without one; the directions recording replayed: no route rows while it runs, then its towns, states, fuel and share of the roads; the first two towns and how many more with every name in the tooltip, two states by their codes, no fuel without a vehicle, "under 1 %", and nothing from a document without them; the worst order sent only when ticked and never under the alphabet route, "Trying every order…" until `snapped`, its stops snapped onto the list in the order it names and the run's order kept with the stored route, Make it worse's stops through the base route's order, and no order for a run in the list's own, nor for a `snapped` without one (an older server's), whose stops say no place; the best's ratio beside the current one while the best route scores above it ("best 14.1×"), also when the two round alike and when the best's is the lower (a faster but longer current route under the slowest time), not when the current route is the best nor from a stream without the best's numbers; a certified route sent with as bad as possible and no constraints, worst order or portfolio, whatever the panel holds (kept), and Certified counting for nothing under another mode; the certified recording replayed: the bound live on the target row ("at most 6368 % longer" at first, "0.5 %" while proving), no splice, then "certified: no legal route in this area is longer · 182 nodes" and "proven"; a stored route's certificate when not proven, with its gap and without one ("longest found · no bound yet"), and Make it worse off for a certified route with the reason for each; a portfolio sent only above one seed and never under the alphabet route, the stat line's "best of 4 seeds" with its leader's seed from each `progress` event (after the leader's "best 3.2×" while its best scores above its current route), then the stored route's winner, the settings keeping the first seed, and Make it worse from the winner's next seed with no portfolio; `PORTFOLIO_TOO_LARGE` lowering the seeds to its `max`, the next Go passing; a route an earlier portfolio stored coming back to a Go of one seed (the user's seed kept on the panel and the stat line, no "best of") and to a portfolio's Go (its winner's seed shown, its first kept) |
+| `run/controls.test.ts` | `JobRunner` with `fetch` and `EventSource` stubbed: the stat line while drawing and for a route drawn by hand ("25 moves · drawn by hand · seed 1", "1 move"); how a run ended, in words ("1 try · 2.0 s · nothing worse found · seed 1", nothing for a spent budget); "goal 25.0×, reached 25.0×, within ±2 %" and "goal reached"; a TypeError from the client and an event the app cannot handle end the run as `CLIENT_ERROR` with the controls unlocked (the job cancelled), the server's `error` closes the stream; Make it worse keeps the route and its seed when nothing worse is found and tries the next seed, follows a worse route's seed; Go and Reroll send the settings' seed, then none; leaving the page cancels a job whose POST is in flight once it is answered, a running one at once; a ratio and a drive-time target sent, shown while running and with what was achieved (`target reached`), and Make it worse whose base already meets its target; the objective, the item only under collect and the constraints only with a side sent (and not by default), the brand only under brand, the alphabet route with no item nor brand, Brand waiting for the region's brands with the brand set among them (none, a link's before they answer, one they lack, an empty list) and no other mode waiting, hard mode's `hard: true` alone or beside a side (the key left out when off, strict sent only with a side), Make it worse in its route's own objective with its own item or brand, whatever the panel's mode and brand (a pilgrimage under hard mode, its whole body, the panel's brand another build's id), with the panel's turns and target (as bad as possible where the route's objective refuses it); the slowest-time recording replayed (the lengths' ratio while running, then the time ratio, the drive and delays, the turns) and the collect recording's bridges counted live, then the stored route's; the route's own mode shown when Make it worse, the panel in another, finds nothing; "no lefts" and "no rights" (not with a U-turn); `INFEASIBLE_TURN_CONSTRAINT` as the error, and the refused request sent again without strict: a Go with its seed, a Make it worse on the same route with its seed, a Reroll with none, hard mode kept; the counter row's "17 of 19 Starbucks" and "letters: 23 (A–W)", "letters: 1 (A)", "letters: 0", the laps past Z for 26, 27 and 29 letters ("(A–Z)", "(A–Z, A)", "(A–Z, A–C)"), the roads one a line in its tooltip, nothing under another mode; Make it worse off for an alphabet route with its reason, whatever the mode set, and for no other route; the brand recording's visits counted live (1, 8, 13, 14 of 19), then the stored route's; the alphabet recording replayed: every snapshot drawn, no splice, the ratio and letters following each better route (1.1× and 1, 1.0× and 2, ...), the stored route drawn, its fifteen roads in the tooltip; a refusal under hard mode sent again without it: a Go with its seed and no constraints left, a Make it worse with its base and seed and its strict side kept, a Reroll with none, and a Make it worse whose base hard mode refuses (`BASE_ROUTE_MISMATCH`) on the same route with the same seed; each stop along the way labelled as its marker is numbered ("Stop 2", "Stop 3"), the start and the end without a label; the vehicle set sent by Make it worse, Go and Reroll (the default in Make it worse's whole body); the departure set sent, or, empty, the time Go is pressed at the browser's offset (on a fake clock); "arrives Sat 17:42" from a document's arrival at its own offset, nothing without one; the directions recording replayed: no route rows while it runs, then its towns, states, fuel and share of the roads; the first two towns and how many more with every name in the tooltip, two states by their codes, no fuel without a vehicle, "under 1 %", and nothing from a document without them; the worst order sent only when ticked and never under the alphabet route, "Trying every order…" until `snapped`, its stops snapped onto the list in the order it names and the run's order kept with the stored route, Make it worse's stops through the base route's order, and no order for a run in the list's own, nor for a `snapped` without one (an older server's), whose stops say no place; the best's ratio beside the current one while the best route scores above it ("best 14.1×"), "reconnecting…" while the stream is down, also when the two round alike and when the best's is the lower (a faster but longer current route under the slowest time), not when the current route is the best nor from a stream without the best's numbers; a certified route sent with as bad as possible and no constraints, worst order or portfolio, whatever the panel holds (kept), and Certified counting for nothing under another mode; the certified recording replayed: the bound live on the target row ("at most 6368 % longer" at first, "0.5 %" while proving), no splice, then "certified: no legal route in this area is longer · 182 nodes" and "proven"; a stored route's certificate when not proven, with its gap and without one ("longest found · no bound yet"), and Make it worse off for a certified route with the reason for each; a portfolio sent only above one seed and never under the alphabet route, the stat line's "best of 4 runs" with its leader's seed from each `progress` event (after the leader's "best 3.2×" while its best scores above its current route), then the stored route's winner, the settings keeping the first seed, and Make it worse from the winner's next seed with no portfolio; `PORTFOLIO_TOO_LARGE` lowering the seeds to its `max`, the next Go passing; a route an earlier portfolio stored coming back to a Go of one seed (the user's seed kept on the panel and the stat line, no "best of") and to a portfolio's Go (its winner's seed shown, its first kept) |
 | `directions/panel.test.ts` | on the directions recording: a row per step classed by its kind, numbered as the document numbers them (none for the 40 jokes, the numbers skipping them), a driving step's distance and time in miles and kilometres, the arrival's and a stop's rows with none; `StepLocator`: the driving steps' lines ending on their first and last nodes (more than 99 % exactly, all within a metre; the job's last snapshot gives where the nodes are) and covering the geometry end to end, a step given at least one segment however short its distance, no line for a step that drives nothing, every step starting where it is; `DirectionsPanel` with a stand-in map: the rows of the route shown and none without one, the units followed, a hover highlighting the right edges, from node to node (once for the same step), a joke and none highlighting nothing, a click panning to the step's start, the highlight forgotten when the route changes, a document without directions listing nothing |
 | `settings/panel.test.ts` | the brand picker with `fetch` stubbed: one `GET /api/brands?region=`, the options in the API's order named with their locations ("Starbucks (126)", "(1,234)"), the first picked when the settings name none, the list put in the store, a brand the region has kept and one it lacks replaced, a region without brands leaving the settings alone; the brand picked kept across a change of region by its wikidata id, else its name, else the first; the brands of a region since left dropped; the seeds picker's options, 1 up to the server's most and never above 4, a setting above it lowered to it, then and whenever raised later (`followPortfolioMax`), and the stylesheet's `.field[hidden]` rule, without which a hidden row shows (no DOM here); the region picker's options, the server's pick first, then each region by its name and roads; `followBrands`: one request per region it changes to, a region's answer dropped once it is left, and after a failure (the region null meanwhile) the same region asked again |
-| `banner.test.ts` | `retryOf`: "Try without strict" for `INFEASIBLE_TURN_CONSTRAINT`, "Try without hard mode" for `STOP_UNREACHABLE_WITHOUT_REPEAT` under hard mode and `BASE_ROUTE_MISMATCH` naming hard mode, nothing for the same codes without it (a base route a strict constraint refuses) nor for another refusal |
-| `stops/pick.test.ts` | `RegionPicker` with `fetch` stubbed on fake timers over a real store: no request without stops, one `POST /api/regions/pick` after the stops stop changing (for the last of them), no region meanwhile (so Go waits) and "Finding the build…" in the header, then the region picked and the header "Oregon · all roads" with its reason, then "United States · primary roads and up" for a stop in Chicago; an answer for stops since moved dropped; a job's snaps asking nothing; a refusal in the banner with its stop, asked no more; any other failure asked again a second later, up to three times, then the banner saying the server could not be asked, until the stops change; a pinned region taken without asking, "set in the settings", and the pick asked again once unpinned; nothing before `/regions`, and a pin the server does not serve dropped; `roadsOf` and `regionLabel` from the real builds' tiers |
+| `banner.test.ts` | `sentence`: a message with its first letter a capital and a full stop at its end, one it already has kept; `retryOf`: "Try without strict" for `INFEASIBLE_TURN_CONSTRAINT`, "Try without hard mode" for `STOP_UNREACHABLE_WITHOUT_REPEAT` under hard mode and `BASE_ROUTE_MISMATCH` naming hard mode, nothing for the same codes without it (a base route a strict constraint refuses) nor for another refusal |
+| `stops/pick.test.ts` | `RegionPicker` with `fetch` stubbed on fake timers over a real store: no request without stops, one `POST /api/regions/pick` after the stops stop changing (for the last of them), no region meanwhile (so Go waits) and "Finding the map…" in the header, then the region picked and the header "Oregon · all roads" with its reason, then "United States · main roads" for a stop in Chicago; an answer for stops since moved dropped; a job's snaps asking nothing; a refusal in the banner with its stop, asked no more; any other failure asked again a second later, up to three times, then the banner saying the server could not be asked, until the stops change; a pinned region taken without asking, "set in the settings", and the pick asked again once unpinned; nothing before `/regions`, and a pin the server does not serve dropped; `roadsOf` and `regionLabel` from the real builds' tiers |
 | `stops/stopList.test.ts` | `stopErrored`: the stop of an error's `stop_index`, every stop along the way for `field: "stops"`, none otherwise; `visitLine`: "visited 1st" to "visited 5th" for a route visiting the list 0, 1, 3, 2, 4, nothing in the list's own order or for a stop moved since |
 | `toasts.test.ts` | `Toasts` on fake timers: nothing and no timer while idle; the three waiting lines and the live ratio every 4 s while a job starts and runs (the ratio following `progress` while shown, round again), the ratio's slot skipped without one, and the line shown kept when the ratio comes; none of the last run's ratio while the next one's POST is in flight (and the route's back when it is refused); the stored route's toasts from the first, in order, every 4 s, looping (ten toasts, so ten periods come round); held under the pointer, a click moving on at once and starting the period again; two notices, each once for a period, then the route's toasts from the first, a click moving on from a notice too; a notice with nothing else to show, then nothing and no timer; nothing once the route is forgotten, nor for a document without toasts |
 | `api/client.test.ts` | the API's error bodies, `BAD_RESPONSE` for an HTML success, `HTTP_<status>`, `NETWORK`, `CLIENT_ERROR` |
@@ -839,7 +868,7 @@ follows the app again from the next change. The units and the theme are not in t
 | `draw/drawing.test.ts` | `Drawing` with `fetch` and `EventSource` stubbed over a real store, answered from a drawing recorded on Portland (`portland-draw.json`): the request (the longest route with no target, whatever the panel's mode and target; the turns and hard mode, the labels, the seed); the start (one `POST /api/draw` with no edge, the run `drawing` and locked, the stops snapped, the route shown cleared) and the par (`POST /api/jobs` with the same request and a ratio target of 10, a round trip's as it is, its stream followed); moves taken only when offered, taken back without a request; a refused path cut back to its first illegal edge with the error in the banner; the drawing forgotten, its par cancelled, once the stops change (a stop moved; another route opened over a drawing left with Esc) or a setting it was drawn on (the tier, the leash, the turns, strict, hard mode, the region), kept when one it does not depend on changes (the seed, the budget, the units, the mode, the vehicle, the departure, the target) and by the stops' snaps; Finish taking the longest move to the end, the stored route opened, the drawing then neither active nor drawn; the par's line as it plans (its aim, then its ratio so far) and where it stopped short, its failure, and the verdict both ways once both are done, either route opened; leaving drawing mode and resuming without asking again; the drawing forgotten and its par cancelled when a run starts; an answer for a drawing since forgotten dropped; a start the server refuses giving the run back with no par; `nearestMove` (the nearer line, nothing beyond the pixels, a tie to the first), `moveLabel`, `finalMove`, the panel's lines at the end, at a dead end and for a round trip |
 | `challenges/list.test.ts` | the ids, each once, of lowercase letters, digits and hyphens (`share.test.ts` reads each from a link); about ten challenges in the regions the tests' builds serve (Portland, Oregon, `us-t3`), each with challenges, today's with no region of its own, and every goal kind present; each challenge's parts agreeing (an items goal collecting what its settings collect, a pilgrimage naming its brand's wikidata id, the alphabet's goal under the alphabet route, hard mode's under hard mode, a drawing on fixed stops, the ratio, drawing and hard-mode goals on the longest route) |
 | `challenges/progress.test.ts` | grading the recordings' stored routes: the collect recording's 18 bridges (its stops within 500 m of the challenge's) short of 20 and reaching 18, not under another item; the alphabet recording's A–O short of A–W and reaching 15 letters, not 16; the brand recording's 14 of 19 Starbucks by name (no brands loaded) and by wikidata id, not when the build's brand 229 is another, not against Oregon's challenge; the max-mode recording's 78× completing any trip in Portland at 30× and the ratio recording's 25× not, nor another mode, another region, a round trip or the worst order (which a challenge setting it takes, and only it); hard mode's ratio only under hard mode; today's route made worse (its base and at least its ratio, on the region of today's route, `us-t1` too; not shrunk below it, not a continuation of another route, not without a day, not on another region); a stop 489 m away the challenge's and one 512 m not, nor another number of stops; the drawing challenge's 300 m leash a trip's, the automatic leash and 500 m not, a challenge with no leash taking any; no drawing goal from a stored route; the completions recorded once for the routes the store shows, with the toast's line, in the storage; read back by another page, reset (storage cleared), junk in the storage ignored; a storage that throws, or none, survived for as long as the page; a drawing's verdict completing the drawing challenge only when it beat the engine (not unfinished, not before the par is done, not a tie as shown, not the engine's win, not another region, not on the automatic leash or another) |
-| `challenges/panel.test.ts` | `ChallengePanel` over a real store, today's route stubbed: none listed before `/regions`, then the served regions', and today's once `GET /daily` has answered with a day (planning, done or failed), not before nor on a server without one; Set it up refused while a run goes, today's until its route is done ("could not be planned" when failed); Set it up pinning the region, putting in the stops and the settings it fixes, the rest of those their defaults (the worst order unticked) and the seed, budget and vehicle the panel's, the route shown forgotten, the challenge in the store, the map fitted to the stops; a trip's own stops kept for any trip in the region when they lie in it, else none, the map fitted to the region; the brand picked once the region's brands are known, by wikidata id over the one `loadBrands` carried, else by name when already loaded, and the challenge no longer set up once another brand is picked; set up through a run, its seed, the budget and the snaps, and no longer once the item, the worst order, a stop, the leash or the region changes; today's challenge opening today's route, set up while it is shown; a link's challenge set up (`setUpLink`), today's waiting for its route when `/daily` answers after `/regions`, nothing for a failed day, an id not in the list or a region not served; the collapse when a run or a drawing starts; `setUpLine` |
+| `challenges/panel.test.ts` | `ChallengePanel` over a real store, today's route stubbed: none listed before `/regions`, then the served regions', and today's once `GET /daily` has answered with a day (planning, done or failed), not before nor on a server without one; Set it up refused while a run goes, today's until its route is done ("Today's route could not be planned." when failed); Set it up pinning the region, putting in the stops and the settings it fixes, the rest of those their defaults (the worst order unticked) and the seed, budget and vehicle the panel's, the route shown forgotten, the challenge in the store, the map fitted to the stops; a trip's own stops kept for any trip in the region when they lie in it, else none, the map fitted to the region; the brand picked once the region's brands are known, by wikidata id over the one `loadBrands` carried, else by name when already loaded, and the challenge no longer set up once another brand is picked; set up through a run, its seed, the budget and the snaps, and no longer once the item, the worst order, a stop, the leash or the region changes; today's challenge opening today's route, set up while it is shown; a link's challenge set up (`setUpLink`), today's waiting for its route when `/daily` answers after `/regions`, nothing for a failed day, an id not in the list or a region not served; the collapse when a run or a drawing starts; `setUpLine` |
 | `daily/panel.test.ts` | `DailyRoute` with `fetch` and `EventSource` stubbed over a real store: a busy server's 429 a day to try again; planning, its job's stream followed (the ratio so far from its `snapshot` and `progress`), then on `done` the stream closed and `GET /daily` asked again, done, with the route's id for `?daily` (`route`), and never a `DELETE`; a route done at once, no stream opened; failed (no route for `?daily`), asked again, and asked again when the stream ends in an `error` or is lost; none on a server without a daily route; collapsed when a run of the user's own starts, not when a route is opened, shown again from the link, not collapsed again by the same run; `dailyLine` in each state; `openDailyAtStart`: today's route opened once done while the user has done nothing, never once a run has started (the wait ended at once, the run's job left as it is) or a route has been opened, nor for a failed day |
 | `format.test.ts` | distances in both units and their thresholds, durations, ratios, counts, items one and many; drive times typed as a target, read and written back; fuel and its cost, percentages ("under 1 %"), states by their codes and a name not known; a time written at the browser's offset to the second and read back, ISO times with an offset read and others (a day the month lacks among them) refused, a time shown as a clock at its own offset; a UTC day named as the daily route names it; places in an order (1st, 2nd, 3rd, 4th, 11th to 13th, 21st, 101st, 111th) |
 | `theme/presets/presets.test.ts` | `THEMES` in the order the settings list them, each id once; every preset's colours in hex, its route one to four of them; each preset's `load` resolving (the fontsource stylesheets it imports found, so a weight a package lacks fails here) |
@@ -1165,7 +1194,7 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
   public server), so Make it worse runs that long unless the budget is changed first.
 
 - **A stream through the dev proxy whose upstream drops is not ended**: Vite's proxy keeps the
-  browser's response open, so if the API dies mid-run the stat line stays at `getting worse…`.
+  browser's response open, so if the API dies mid-run the stat line stays at its last try.
   A connection dropped between the browser and the server is reconnected as above.
 - **Seeds above 2⁵³ − 1** cannot be typed: the API allows up to 2⁶³ − 1, but a JavaScript number
   is exact only up to 2⁵³. A stored route with a larger seed (from the CLI or a script) shows it
@@ -1174,9 +1203,10 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
   the experienced time's ratio ("× slower") only once the route is stored (from the document's
   `time_ratio`), and the lengths' ratio while the run goes; the drive and delays row below it is
   live from `progress`'s `delay_s` and settles on the stored route's.
-- **Seeds before the server has said how many it runs**: until `GET /config` answers, the Seeds
-  row is hidden and a link's `seeds=4` is kept, so a Go in that window on a server that runs fewer
-  is refused with `PORTFOLIO_TOO_LARGE`, shown in the banner as any refusal, and the setting is
+- **Seeds before the server has said how many it runs**: until `GET /config` answers, the Runs
+  at once row is hidden and a link's `seeds=4` is kept, so a Go in that window on a server that
+  runs fewer is refused with `PORTFOLIO_TOO_LARGE`, shown in the banner as any refusal, and the
+  setting is
   lowered to the error's `max`, so the next Go passes; the row appears once `/config` answers.
 - **Desktop layout only**. The share image is a link to the server's PNG, not shown in the page.
 - **Most alphabet routes are short of letters**: on random trips the alphabet route gets a median

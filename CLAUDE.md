@@ -33,7 +33,7 @@ toll booths, level crossings, roundabouts or bridges (`--objective collect --ite
 the API and the frontend's settings, and so is the fourth, the brand pilgrimage (`--objective
 brand --brand`, the API's `brand` and `GET /brands`, the frontend's Brand mode; its index built at
 `enrich`, pipeline version 3), and so is hard mode, each road in one stretch (`--hard`, the API's
-`constraints.hard`, the frontend's Hard mode checkbox), and the alphabet route (`--objective
+`constraints.hard`, the frontend's "No road twice, ever" box), and the alphabet route (`--objective
 alphabet`, named roads whose letters run A, B, C, ..., its own constructive search; the API's
 `objective: "alphabet"`, the frontend's Alphabet mode). So is the frontend (`docs/reference/frontend.md`,
 M2's third step): a MapLibre map on which stops are clicked, the route drawn growing live from the
@@ -112,13 +112,13 @@ makes them turn tables at the junctions, which the engine, the splice and the va
 they read a super-junction's (`docs/reference/pipeline.md`, **Turn restrictions**). So are
 portfolio runs (M6): `POST /jobs`' `portfolio` runs up to 4 seeds of one request at once (2 on a
 public server), each in a worker, streams the leader's route and stores the best under its seed
-(`docs/reference/api.md`, **Portfolios**), from the frontend's Seeds setting.
+(`docs/reference/api.md`, **Portfolios**), from the frontend's "Runs at once" setting.
 So is the worst order (M6): with `plan --reorder`, the API's `reorder` or the frontend's "Worst
-order" box, every order of the stops between the start and the end is tried and the one with the
+order of stops" box, every order of the stops between the start and the end is tried and the one with the
 longest seed planned, at most 7 stops on a city's build and 5 on a larger one, the route document
 and the `snapped` event saying the order (`docs/reference/engine.md`, **Seed and baseline**).
 So is the certified worst (M6): with `plan --certified`, the API's `certified` or the frontend's
-"Certified" box, the provably longest legal route for the stops within a small area (at most 300
+"Prove it" box, the provably longest legal route for the stops within a small area (at most 300
 nodes and 1,000 edges; the automatic leash narrowed to 600 edges), solved by OR-Tools' CP-SAT
 from the seed route, each better route streamed with the solver's bound, the route stored with
 `run.certified`, proven or how much longer the worst possible may be (`docs/reference/engine.md`,

@@ -1,7 +1,7 @@
 # Worst Route
 
-The least efficient way to get anywhere in the US. Set a start, an end and some stops; get a
-route that never repeats an intersection or a road and is as bad as the time budget allows.
+The long way. Then longer. Set a start, an end and some stops in the US; get a route that never
+repeats an intersection or a road and is as bad as the time budget allows.
 
 It is a joke that holds: every route is proved legal by a validator before it is shown, and a
 seed gives the same route on the same build forever. The pipeline turns an OpenStreetMap state

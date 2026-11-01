@@ -126,7 +126,7 @@ if TYPE_CHECKING:
     from worst_route.graph.geometry import Geometry
     from worst_route.presentation.places import PlaceIndex
 
-app = typer.Typer(help="The least efficient way to get anywhere in the US.", no_args_is_help=True)
+app = typer.Typer(help="The long way. Then longer.", no_args_is_help=True)
 pipeline_app = typer.Typer(
     help="Offline pipeline steps, one region at a time.", no_args_is_help=True
 )

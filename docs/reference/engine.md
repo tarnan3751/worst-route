@@ -234,9 +234,10 @@ it moves to its next candidate, and a trip never silently collapses into a loop.
 off another stop's node gets the note "moved N m: another stop is at the nearest node". `resnap` is the fallback below; its note is
 "moved N m: nearer nodes cannot be reached without repeating one". `StopUnreachable` names a
 leg no route covers without repeating a road: `leg = (k, k + 1)`, and `stop_index` is its later
-stop, the stop the API's `STOP_UNREACHABLE_WITHOUT_REPEAT` error names. Its message names both
-ends and the stops that were moved: "no route from stop 1 to stop 2 without repeating a road,
-after moving stop 1 and stop 2 up to 10 times each".
+stop, the stop the API's `STOP_UNREACHABLE_WITHOUT_REPEAT` error names. Its message is one sentence
+for people, the stops numbered from 1 as the app's markers are, naming both ends and the stops
+that were moved: "No route from stop 2 to stop 3 without repeating a road, after moving stop 2
+and stop 3 up to 10 times each."
 
 ## Searches
 
@@ -354,8 +355,8 @@ saved route with it; the cost is a few seed builds.
 6. **Blame.** An unreachable leg is put down to the constraints that shape the seed only when the
    seed builds without them, with at most two more builds, on failure only: under a strict turn
    constraint, `InfeasibleTurnConstraint` when it builds without it; under hard mode,
-   `InfeasibleHardMode` ("the seed found no way from stop 0 to stop 1 under hard mode, after moving
-   stop 1 up to 10 times") when it builds without that; under both, the strict constraint's when
+   `InfeasibleHardMode` ("No route from stop 1 to stop 2 without repeating a road and with no road
+   twice, after moving stop 2 up to 10 times.") when it builds without that; under both, the strict constraint's when
    hard mode alone builds, hard mode's when the strict constraint alone does; else the plain
    `StopUnreachable`.
 
@@ -642,8 +643,8 @@ its hooks keep the rule:
 
 The seed keeps the rule itself (**Seed and baseline**, step 3). It is a heuristic, not a search
 for every legal route: a leg it finds no way to build under hard mode, but can without it, is
-`InfeasibleHardMode`, which says only that ("the seed found no way from stop 0 to stop 1 under
-hard mode"; the API's `STOP_UNREACHABLE_WITHOUT_REPEAT`, "…; try without hard"), and a stop the
+`InfeasibleHardMode` ("No route from stop 1 to stop 2 without repeating a road and with no road
+twice."; the API's `STOP_UNREACHABLE_WITHOUT_REPEAT`, "… Try without it."), and a stop the
 fallback moves notes "the seed found no way to nearer nodes under hard mode". On random 4–6 × 4–6
 lattices whose rows and columns repeat two or three names (the review's exhaustive probe, seeds
 11–14, 800 trips with two or three stops), the seed refused 90 trips, 56 of which have a legal
@@ -1083,9 +1084,8 @@ inside the masks, the other stops blocked, the walk never leaving its end nor co
 start, legality otherwise ignored, and the nodes those walks pass; the edges into the start and
 out of the end are left out. Its counts are what a certificate allows: at most
 `CERTIFIED_MAX_NODES` (300) nodes and `CERTIFIED_MAX_EDGES` (1,000) edges, else `AreaTooLarge`
-(a `ValueError`, `field` `"leash"`: "the area within a 1.5 km leash holds 1,132 nodes and 3,865
-edges, over the 300 and 1,000 a certificate allows: tighten the leash or bring the stops
-closer"). The reach is two breadth-first searches a leg (scipy's), over the area's candidate
+(a `ValueError`, `field` `"leash"`: "This area is too big to prove. It holds 1,132 junctions and
+3,865 roads; a proof allows 300 and 1,000. Shorten the corridor or bring the stops closer."). The reach is two breadth-first searches a leg (scipy's), over the area's candidate
 edges only.
 
 **The leash** (`certified_request(data, spatial, request)`). A request's own leash is used as
@@ -1483,10 +1483,10 @@ most one line every 2 s. On stdout it prints:
 
 It writes the files it is asked for. A stop that cannot be snapped or reached is one line, `cannot
 plan: ` and the error (for an unreachable stop, the leg and the stops it moved), and exit 1; under
-`--strict`, "cannot plan: no route from stop 0 to stop 1 without repeating a road, after moving stop
-1 up to 10 times, under the strict no-left constraint; try without --strict", and when the seed
-finds no way under hard mode but does without it, "cannot plan: the seed found no way from stop 0 to
-stop 1 under hard mode, after moving stop 1 up to 10 times; try without --hard". A route that fails
+`--strict`, "cannot plan: No route from stop 1 to stop 2 without repeating a road and with no left
+turns, after moving stop 2 up to 10 times. Try without --strict.", and when the seed finds no way
+under hard mode but does without it, "cannot plan: No route from stop 1 to stop 2 without repeating
+a road and with no road twice, after moving stop 2 up to 10 times. Try without --hard.". A route that fails
 the validator is reported as an engine bug, exit 1, and never printed. A bad argument is exit 2:
 `--no-left` with `--no-right`, an unknown objective, and `--strict` without `--no-left` or
 `--no-right` (one line, "--strict needs --no-left or --no-right").

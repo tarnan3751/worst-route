@@ -86,11 +86,12 @@ PDX (seed 1) takes one ramp, "Take the ramp toward I 5", then "Continue onto I 5
 
 ## Jokes
 
-`JOKES` holds forty lines of a GPS that has given up ("In 400 feet, reconsider your choices.",
-"You have passed this intersection's neighbour. Not this one. Rules are rules.", "Recalculating.
-No. This is the route."). Nine fill placeholders from the route: `{ratio}` ("34.2×"), `{turns}`
+`JOKES` holds forty lines of a sat-nav that has quietly given up, the one voice in the app that
+says "I" ("In 400 feet, this gets worse.", "Recalculating. No. This is the route.", "Your
+destination is behind you. It has been for some time."): short declaratives, no triple beats, no
+colon before a reveal. Nine fill placeholders from the route: `{ratio}` ("34.2×"), `{turns}`
 (how many `turn` steps came before) and `{distance}` (the step just driven, "2.3 mi (3.7 km)" as
-the comparisons write distances, "330 ft (100 m)" under a tenth of a mile).
+`distance_text` writes distances, "330 ft (100 m)" under a tenth of a mile).
 
 `inject(steps, rng, *, ratio)` puts them among a route's steps, from a
 `Generator(PCG64(seed))` on the route's seed, so a route and its seed always tell the same jokes
@@ -120,7 +121,7 @@ are none (the CLI has none), its jokes the file's seed's:
   16. Turn right onto North Multnomah Street  (0.18 km, 0 min 20 s)
   17. Slight right to stay on North Multnomah Street  (0.03 km, 0 min 34 s)
   ...
-  33. Keep calm. Keep driving. Keep not arriving.
+  33. Keep driving. Arriving is not part of this.
 ```
 
 ## Stats and toasts
@@ -140,31 +141,30 @@ are none (the CLI has none), its jokes the file's seed's:
   (its leash, tier and bubbles: `docs/reference/engine.md`, **Requests**).
 
 `toasts(stats, metrics, *, nodes, edges) -> list[str]` gives one-line facts in a fixed order,
-the most striking first, a fact the route does not have left out; no randomness:
+the most striking first, a fact the route does not have left out, and so is one the stat line
+already gives as it stands (the states, "states: OR, WA"; the turns both ways, "725 left · 724
+right"; the share of the roads within reach, "roads used: 23 % of those within reach"); the
+ratio stays, the stat line giving only its number. No randomness:
 
 | | Toast | When |
 |---|---|---|
-| 1 | "34.2× less efficient than the sensible route." | a ratio (every route but a round trip without a via, whose baseline is 0 m) |
-| 2 | "Ends exactly where it began, as all things do." | a round trip |
-| 3 | "Passes through 11 towns and communities. Portland twice, in spirit." / "Never leaves Portland. Sees all of it instead." | towns known, at least one |
+| 1 | "34.2× longer than it had to be." | a ratio (every route but a round trip without a via, whose baseline is 0 m) |
+| 2 | "Ends exactly where it began." | a round trip |
+| 3 | "Passes through 11 towns. Portland twice." / "Never leaves Portland. Sees all of it instead." | towns known, at least one |
 | 4 | "Never turns left. 847 right turns." (or right) | no turn one way, some the other |
-| 5 | "An extra 6.6 gallons, or $25.80, for nothing." | a vehicle |
+| 5 | "An extra 6.6 gallons, $25.80, for nothing." | a vehicle |
 | 6 | "10 h 54 min on the road instead of 21 min." / "... on the road to get nowhere." | always (the second when the baseline takes no time); the experienced times, driving and delays, in whole minutes as `plan` counts them |
 | 7 | "2 h 57 min waiting at signals and stop signs." | delays |
 | 8 | "2,820 intersections, none of them twice." | always (a round trip's start once) |
 | 9 | "2,819 stretches of road, each driven exactly once." | always |
-| 10 | "Visits 2 states: Oregon and Washington." | more than one state |
-| 11 | "725 left turns and 724 right turns." | turns both ways (never with 4) |
-| 12 | "Uses 23 % of the roads within reach." ("under 1 %") | always |
-| 13 | "Passes 12 level crossings, 28 roundabouts and 10 bridges on the way." | the metrics' `items` (every route's, `docs/reference/engine.md`), some above 0 |
+| 10 | "Passes 12 level crossings, 28 roundabouts and 10 bridges on the way." | the metrics' `items` (every route's, `docs/reference/engine.md`), some above 0 |
 
-A route has at most twelve at once (4 and 11 exclude each other), and `TOASTS_MAX` is 12, so
-none is ever dropped; one without a places index, a vehicle or delays still has six. Powell's →
-Reed through the API with a vehicle (24 mpg, $3.89) has ten: the ratio,
-"Never leaves Portland. Sees all of it instead.", "An extra 6.6 gallons, or $25.80, for
-nothing.", the time, the delays, the intersections and stretches, the turns, "Uses 23 % of the
-roads within reach." and "Passes 12 level crossings, 28 roundabouts and 10 bridges on the
-way."
+A route has at most ten at once (4's two lines exclude each other), and `TOASTS_MAX` is 10, so
+none is ever dropped; one without a places index, a vehicle or delays still has four. Powell's →
+Reed through the API with a vehicle (24 mpg, $3.89) has eight: the ratio,
+"Never leaves Portland. Sees all of it instead.", "An extra 6.6 gallons, $25.80, for
+nothing.", the time, the delays, the intersections and stretches, and "Passes 12 level
+crossings, 28 roundabouts and 10 bridges on the way."
 
 ## The document
 
@@ -322,40 +322,40 @@ Vancouver (WA).
 `comparison_line(length_m) -> str` compares a route's length with the longest of
 `COMPARISONS` it **strictly exceeds**: that thing's "N×" line when the route is at least twice
 as long (N to one decimal), else its "Longer than" line; a route no longer than the shortest
-thing gets `SHORTER`. Every line names the thing's length in miles with kilometres in
-parentheses (`distance_text`: one decimal below 100 with ".0" dropped, whole numbers with
+thing gets `SHORTER`. Every line names the thing's length in parentheses, in miles and
+kilometres, "(26.2 mi, 42.2 km)" (one decimal below 100 with ".0" dropped, whole numbers with
 separators from 100).
 It is a pure function of the length: no randomness, no state.
 
 | Miles | Thing | "Longer than" line |
 |---|---|---|
-| 1.7 | the Golden Gate Bridge | Longer than the Golden Gate Bridge, which is 1.7 mi (2.7 km). |
-| 2.5 | a lap of the Indianapolis Motor Speedway | Longer than a lap of the Indianapolis Motor Speedway, which is 2.5 mi (4 km). |
-| 13.4 | Manhattan | Longer than Manhattan from end to end, which is 13.4 mi (21.6 km). |
-| 26.2 | the Boston Marathon | Longer than the Boston Marathon, which is 26.2 mi (42.2 km). |
-| 72 | Lake Tahoe's shoreline | Longer than driving around Lake Tahoe, which is 72 mi (116 km) of shoreline. |
-| 174 | Portland to Seattle | Longer than driving from Portland to Seattle, which is 174 mi (280 km). |
-| 363 | the Oregon coast on US 101 | Longer than the whole Oregon coast on US 101, which is 363 mi (584 km). |
-| 1,381 | I-5 | Longer than I-5 from Mexico to Canada, which is 1,381 mi (2,223 km). |
-| 2,448 | Route 66 | Longer than driving Route 66 end to end, which is 2,448 mi (3,940 km). |
-| 2,790 | New York to Los Angeles | Longer than driving from New York to Los Angeles, which is 2,790 mi (4,490 km). |
-| 3,020 | I-90 | Longer than I-90 from Seattle to Boston, which is 3,020 mi (4,860 km). |
-| 5,500 | the Great Wall of China | Longer than the Great Wall of China, which is 5,500 mi (8,851 km). |
-| 19,000 | the Pan-American Highway | Longer than the Pan-American Highway from Alaska to Argentina, which is 19,000 mi (30,578 km). |
-| 24,901 | Earth's circumference | Longer than driving around the Earth, which is 24,901 mi (40,074 km). |
-| 238,900 | the distance to the Moon | Longer than the distance to the Moon, which is 238,900 mi (384,472 km). |
+| 1.7 | the Golden Gate Bridge | Longer than the Golden Gate Bridge (1.7 mi, 2.7 km). |
+| 2.5 | a lap of the Indianapolis Motor Speedway | Longer than a lap of the Indianapolis Motor Speedway (2.5 mi, 4 km). |
+| 13.4 | Manhattan | Longer than Manhattan from end to end (13.4 mi, 21.6 km). |
+| 26.2 | the Boston Marathon | Longer than the Boston Marathon (26.2 mi, 42.2 km). |
+| 72 | Lake Tahoe's shoreline | Longer than driving around Lake Tahoe (72 mi, 116 km of shoreline). |
+| 174 | Portland to Seattle | Longer than driving from Portland to Seattle (174 mi, 280 km). |
+| 363 | the Oregon coast on US 101 | Longer than the whole Oregon coast on US 101 (363 mi, 584 km). |
+| 1,381 | I-5 | Longer than I-5 from Mexico to Canada (1,381 mi, 2,223 km). |
+| 2,448 | Route 66 | Longer than driving Route 66 end to end (2,448 mi, 3,940 km). |
+| 2,790 | New York to Los Angeles | Longer than driving from New York to Los Angeles (2,790 mi, 4,490 km). |
+| 3,020 | I-90 | Longer than I-90 from Seattle to Boston (3,020 mi, 4,860 km). |
+| 5,500 | the Great Wall of China | Longer than the Great Wall of China (5,500 mi, 8,851 km). |
+| 19,000 | the Pan-American Highway | Longer than the Pan-American Highway from Alaska to Argentina (19,000 mi, 30,578 km). |
+| 24,901 | Earth's circumference | Longer than driving around the Earth (24,901 mi, 40,074 km). |
+| 238,900 | the distance to the Moon | Longer than the distance to the Moon (238,900 mi, 384,472 km). |
 
-The "N×" lines read "2.1× the Boston Marathon, which is 26.2 mi (42.2 km).". A thing whose next one
+The "N×" lines read "2.1× the Boston Marathon (26.2 mi, 42.2 km).". A thing whose next one
 is less than twice as long never gets its "N×" line (a route that long has passed the next thing):
 the Golden Gate Bridge, Manhattan, I-5, Route 66, New York to Los Angeles, I-90 and the Pan-American
-Highway (the test derives them from the list). Below 1.7 mi: "Shorter than the Golden Gate Bridge,
-which is 1.7 mi (2.7 km). It still counts."
+Highway (the test derives them from the list). Below 1.7 mi: "Shorter than the Golden Gate Bridge
+(1.7 mi, 2.7 km). It still counts."
 
 ```
-    5 km: Longer than a lap of the Indianapolis Motor Speedway, which is 2.5 mi (4 km).
-   90 km: 2.1× the Boston Marathon, which is 26.2 mi (42.2 km).
-  480 km: Longer than driving from Portland to Seattle, which is 174 mi (280 km).
- 5000 km: Longer than I-90 from Seattle to Boston, which is 3,020 mi (4,860 km).
+    5 km: Longer than a lap of the Indianapolis Motor Speedway (2.5 mi, 4 km).
+   90 km: 2.1× the Boston Marathon (26.2 mi, 42.2 km).
+  480 km: Longer than driving from Portland to Seattle (174 mi, 280 km).
+ 5000 km: Longer than I-90 from Seattle to Boston (3,020 mi, 4,860 km).
 ```
 
 ## Share image
@@ -371,11 +371,11 @@ theme's colours, rendered once and cached (`docs/reference/api.md`, **Share imag
   most 110 pt), its caption under it, and the comparison line at the bottom, wrapped at 30
   characters (never between a number and its unit) and shrunk if still too wide. Ink colours,
   never the route's. `headline(metrics, objective)` picks the headline and caption:
-  - the **ratio of lengths** ("62.4×", "12,345.7×"), "less efficient than the sensible route",
+  - the **ratio of lengths** ("62.4×", "12,345.7×"), "longer than it had to be",
     for every objective but the slowest time;
   - for a route planned for the **slowest time** (its request's `objective` is `"time"`), its
     **time ratio**, the experienced time (driving and delays) over the baseline's, as its
-    document's `time_ratio` has it: "slower than the sensible route";
+    document's `time_ratio` has it: "slower than it had to be";
   - for a **round trip**, which has neither ratio (its baseline is 0 m), its length ("299 mi"),
     "to end up where it started", whatever its objective.
 - **The map** fills the rest, edge to edge, with **no basemap of any kind**. Its extent is the
@@ -427,7 +427,7 @@ another matplotlib or FreeType may draw a pixel differently). Importing matplotl
 build its font manager's cache, a scan of the system's fonts that took 11 s on a cold machine,
 once per machine; the API therefore imports this module only when it first renders, never at
 startup. matplotlib is not thread-safe, so renders take one lock in turn. `SHARE_IMAGE_VERSION`
-(2 since the network's cap, in `api/share_api.py`) names the drawing; the API's cache files
+(3 since the caption's words, in `api/share_api.py`) names the drawing; the API's cache files
 carry it, so it goes up whenever the drawing changes.
 
 **Measured** (Portland, `serve --port 0`, the dev machine, 2026-10-30, a warm font cache):
@@ -476,11 +476,11 @@ data directory and holds a route over the API tests' 10 × 10 lattice):
 | `test_fetch_census.py` | the script against a `curl` stand-in on PATH: the URLs and User-Agent, a file without a pinned sum kept with its sum printed, a pinned file whose sum differs deleted (exit 1), a failed fetch leaving no `.part` file and fetching no further (exit 1), a bad FIPS code fetching nothing (exit 2) |
 | `test_directions.py` | each step's words on small named graphs (`streets.py`): the town's turns, an interior stop with and without a label (the road going on as "Continue on"), a round trip's arrival, the turn words at the slight and sharp bands' ends, straight on continuing only on a new road, a turn on the same road its own step ("to stay on"), never "to stay on" an unnamed road, US 26 through downtown (a ref joining a name straight on unannounced, then each turn a step), unnamed roads and an alley in words, a ramp of two links toward the motorway's first ref and one the route ends on, a ramp carrying the ref of the road it joins (US 30) still ending, toward that road, an interchange on the ramp or where it meets the motorway adding no second ramp, an interchange without a link a junction like another and a roundabout node (the same road through it cut too), the diamond and roundabout fixtures through the pipeline; planned lattice routes with signals, a round trip included: the ranges tiling the edges, the distances adding up to the length and the times to the driving and delays; names, refs and the compass, half-way bearings clockwise |
 | `test_jokes.py` | forty distinct jokes and their placeholders, one turn counted as "1 turn"; the same seed the same jokes, another seed others; over 20 seeds no joke twice, every placeholder filled, the real steps kept in order and numbered again, each joke empty after a driving step, the gaps within their band; a long route spreading nearly all forty to its end; the ratio, the turns before and the step's distance filled in; a round trip without ratio jokes and a route without turns without turn counts; a short route without a joke; the distances' format; `route_directions` with and without jokes |
-| `test_stats.py` | fuel and cost from a vehicle (the API's `Vehicle`), null without; states and towns from the census fixture in route order, null without an index; the network fraction over the units within reach, less what the request bans or leaves outside its area, a unit of two edges counted once; the toasts in order with everything known, six without places, a vehicle or delays, never turning one way, one town, one state left out, under 1 %, the items, a round trip with and without a via (its ratio first, then its ending where it began), twelve at most and the items never dropped |
+| `test_stats.py` | fuel and cost from a vehicle (the API's `Vehicle`), null without; states and towns from the census fixture in route order, null without an index; the network fraction over the units within reach, less what the request bans or leaves outside its area, a unit of two edges counted once; the toasts in order with everything known, four without places, a vehicle or delays, never turning one way, one town, what the stat line says left out (the states, the turns both ways, the share of the roads), the items, a round trip with and without a via (its ratio first, then its ending where it began), ten at most and the items never dropped |
 | `test_geojson.py` | the route, the baseline and the stops as features, one point per node along a lattice route, a round trip's null baseline, and the collection from a stored route's parts equal to the planned route's |
 | `test_document.py` | `present`'s keys, `with_presentation`'s layout, and the same presentation from a planned route and from its route.json |
 | `test_cli_directions.py` | `plan --out` writing the directions (the ones `route_directions` gives), the toasts and the metrics (no fuel, the fixture's states and towns, null without an index) into route.json, which `validate` and `plan --base` still read; `worst-route directions` printing the file's steps with and without jokes, and refusing another graph_version or a file it cannot read |
-| `test_directions_data.py` (`data`) | Portland: Powell's → Reed's first step heads along a road at Powell's (West Burnside Street, NW Couch Street, NW or SW 10th or 11th Avenue), every step has words, the driving steps tile the route, there are jokes, and the toasts open with the ratio, six to twelve of them |
+| `test_directions_data.py` (`data`) | Portland: Powell's → Reed's first step heads along a road at Powell's (West Burnside Street, NW Couch Street, NW or SW 10th or 11th Avenue), every step has words, the driving steps tile the route, there are jokes, and the toasts open with the ratio, four to ten of them |
 | `test_places_data.py` (`data`) | Portland: Powell's → Reed crosses `[OR]` and enters Portland city first; a straight line over the Columbia enters WA and ends in Vancouver. It needs the index `aux places` wrote under `WORST_ROUTE_DATA` beside the build, and is skipped without either |
 
 `tests/api/test_share_api.py` and `tests/api/test_directions_api.py` cover the endpoints

@@ -23,7 +23,15 @@ the baseline, of the route it starts from when that is 0 (a round trip;
 `anneal_temperature`). The alphabet route runs its own search instead
 (`alphabet_search.alphabet_route`, from the seed scored with its letters), whose
 events each replace the whole route by a better one, and is validated with its `alphabet` check;
-it cannot be continued from a base route (`ValueError`). It searches with the backend it
+it cannot be continued from a base route (`ValueError`). A request with `certified` runs the
+certified driver instead (`exact.certified_route`, CP-SAT, from the seed): its leash is first
+chosen (`exact.certified_request`: with the automatic leash, the widest whose area a certificate
+allows), so the request planned from then on carries the leash as a number, its area is worked
+out from the resolved stops and refused over the caps (`exact.AreaTooLarge`), the solver gets the
+time left of the request's budget less `CERTIFIED_MARGIN_S` (at least a tenth of the budget), each
+better route it finds replaces the whole route in `on_progress`, its bound goes to `on_bound`
+between them, and the result carries the `Certificate`; it cannot be continued from a base route
+either (`ValueError`). It searches with the backend it
 is given, else `make_backend`'s default (`config.DEFAULT_BACKEND`); every backend gives the same
 route, and the result records which one searched. The best
 route is then validated against the request's masks and the resolved stops; a route that fails
@@ -48,15 +56,24 @@ drawn from the rng before the loop then, so the run is fixed by the base, the re
 seed. Without them, planning is exactly as above.
 """
 
+import time
 from bisect import bisect_right
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import numpy as np
 
-from worst_route.config import ANNEAL_T0_FRACTION
+from worst_route.config import ANNEAL_T0_FRACTION, CERTIFIED_MARGIN_S
 from worst_route.engine.alphabet_search import alphabet_route, alphabet_scored, edge_letters
 from worst_route.engine.constraints import Constraints, constrain, returning
+from worst_route.engine.exact import (
+    Certificate,
+    OnBound,
+    certified_area,
+    certified_request,
+    certified_route,
+    too_large,
+)
 from worst_route.engine.objectives import make_objective
 from worst_route.engine.objectives.base import Objective
 from worst_route.engine.objectives.brand import BrandRefused, brand_problem
@@ -104,6 +121,7 @@ class PlanResult:
     backend: str  # the name of the backend that searched
     goal: Goal
     order: tuple[int, ...]
+    certified: Certificate | None = None  # a certified route's (`exact.certified_route`)
 
 
 def plan_route(
@@ -115,17 +133,23 @@ def plan_route(
     base: RouteLike | None = None,
     on_start: OnStart | None = None,
     on_progress: Callable[[ProgressEvent, Baseline], None] | None = None,
+    on_bound: OnBound | None = None,
     check_delta: bool = False,
 ) -> PlanResult:
     """Plan, worsen and validate the route `request` asks for on this build (from `base` if
     given)."""
+    started = time.monotonic()
     alphabet = request.objective == "alphabet"
     if alphabet and base is not None:
         raise ValueError("the alphabet route cannot be continued")
     if request.reorder and base is not None:
         raise ValueError("a continuation keeps its base route's order: reorder must be off")
+    if request.certified and base is not None:
+        raise ValueError("a certified route is planned from its stops: no base route")
     backend = backend if backend is not None else make_backend(data)
     spatial = spatial if spatial is not None else SpatialIndex(data)
+    if request.certified:
+        request = certified_request(data, spatial, request)
     masks = request_masks(spatial, data, request)
     if request.brand is not None:
         problem = brand_problem(data, request.brand, masks.active)
@@ -144,6 +168,9 @@ def plan_route(
 
     snaps = resolve_stops(data, spatial, backend, request, masks)
     stop_nodes = [s.node for s in snaps]
+    area = certified_area(data, masks, stop_nodes) if request.certified else None
+    if area is not None and (oversized := too_large(area, round(masks.leash_m, 1))) is not None:
+        raise oversized
     if base is None:
         try:
             seed = seed_route(
@@ -206,7 +233,22 @@ def plan_route(
             on_progress(event, baseline)
 
     budget = Budget(seconds=request.budget_s, max_iterations=request.max_iterations)
-    if alphabet:
+    certificate = None
+    if request.certified:
+        assert area is not None  # the stops resolve, so a walk joins each to the next
+        left = request.budget_s - (time.monotonic() - started) - CERTIFIED_MARGIN_S
+        run, certificate = certified_route(
+            data,
+            route,
+            area,
+            objective,
+            Budget(max(left, request.budget_s / 10), request.max_iterations),
+            leash_m=round(masks.leash_m, 1),
+            banned_edges=masks.banned,
+            on_event=progress,
+            on_bound=on_bound,
+        )
+    elif alphabet:
         run = alphabet_route(
             backend,
             data,
@@ -250,7 +292,17 @@ def plan_route(
     if not report.ok:
         raise ValidationFailed(report)
     return PlanResult(
-        request, masks, tuple(snaps), baseline, run.best, run, report, backend.name, goal, order
+        request,
+        masks,
+        tuple(snaps),
+        baseline,
+        run.best,
+        run,
+        report,
+        backend.name,
+        goal,
+        order,
+        certificate,
     )
 
 

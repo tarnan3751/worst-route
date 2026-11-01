@@ -9,15 +9,18 @@ one: its id in the build's brand index), the turn constraints (`constraints.Cons
 none by default), whether its stops may be visited in the worst order (`reorder`: every order
 of the stops between the start and the end is tried, `seed_route.choose_order`; at most
 `MAX_REORDER_STOPS` stops, fewer on a large build: `reorder_problem`; not for the alphabet
-route), the tier (`"auto"` or `"T0"`..`"T4"`), the leash in km (`"auto"` or a number,
-at most 150), the budget in seconds (at most 120) and iterations, the seed, and the target
+route), whether it asks for the certified worst (`certified`: the provably longest route in a
+small area, `engine/exact.py`; the distance with no target, no worst order, no turn constraint,
+no hard mode and no round trip: `certified_problem`), the tier (`"auto"` or `"T0"`..`"T4"`), the
+leash in km (`"auto"` or a number, at most 150), the budget in seconds (at most 120) and
+iterations, the seed, and the target
 (`target.Target`: max by default; a ratio target is refused for a round trip, whose baseline is
 0 m, and for `collect` and `brand`, which count items and visits rather than metres;
 `objective_problem` names what is wrong with an objective, its item, its brand, its target kind,
 its number of stops and the worst order, for the API to refuse it as early). Every number is
 finite, so it round-trips through JSON (`model_dump(mode="json")`) without `Infinity`; its JSON
-leaves the constraints out when there are none, the brand when there is none, and `reorder`
-when it is off, so a request without them reads as it did before they existed.
+leaves the constraints out when there are none, the brand when there is none, and `reorder` and
+`certified` when they are off, so a request without them reads as it did before they existed.
 
 `request_masks(spatial, data, request)` turns it into `RequestMasks`, from the request alone,
 so the validator can recompute them from a saved route. The stops are projected and the trip
@@ -38,6 +41,7 @@ length is the straight-line length of the polyline through them.
 Every array is read-only.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
@@ -91,6 +95,7 @@ class RouteRequest(BaseModel):
     brand: int | None = Field(default=None, ge=0)
     constraints: Constraints = NO_CONSTRAINTS
     reorder: bool = False
+    certified: bool = False
     tier: TierChoice = "auto"
     leash_km: Annotated[float, Field(gt=0, le=LEASH_MAX_KM)] | Literal["auto"] = "auto"
     budget_s: float = Field(default=DEFAULT_BUDGET_S, gt=0, le=BUDGET_MAX_S)
@@ -130,6 +135,19 @@ class RouteRequest(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _certifiable(self) -> "RouteRequest":
+        problem = (
+            certified_problem(
+                self.objective, self.target.kind, self.reorder, self.constraints, self.stops
+            )
+            if self.certified
+            else None
+        )
+        if problem is not None:
+            raise ValueError(problem)
+        return self
+
+    @model_validator(mode="after")
     def _few_enough_to_reorder(self) -> "RouteRequest":
         problem = reorder_problem(len(self.stops)) if self.reorder else None
         if problem is not None:
@@ -145,6 +163,8 @@ class RouteRequest(BaseModel):
             del fields["brand"]
         if not self.reorder:
             del fields["reorder"]
+        if not self.certified:
+            del fields["certified"]
         return fields
 
 
@@ -178,6 +198,29 @@ def objective_problem(
         return "target", "the alphabet route takes no target: it counts letters"
     if objective == "alphabet" and reorder:
         return "reorder", "the alphabet route takes no worst order: it has no stop to reorder"
+    return None
+
+
+def certified_problem(
+    objective: str,
+    target: TargetKind,
+    reorder: bool,
+    constraints: Constraints,
+    stops: Sequence[tuple[float, float]],
+) -> str | None:
+    """Why a request with these settings cannot be certified, or None: a certified route is the
+    longest, so the distance objective with no target, its stops in the order given, no turn
+    constraint and no hard mode; and not a round trip (its start would be its end)."""
+    if objective != "distance":
+        return "a certified route is the longest: the distance objective only"
+    if target != "max":
+        return "a certified route takes no target: it is the longest there is"
+    if reorder:
+        return "a certified route takes no worst order: its stops are visited as given"
+    if constraints != NO_CONSTRAINTS:
+        return "a certified route takes no turn constraint and no hard mode"
+    if is_round_trip(stops):
+        return "a certified route takes no round trip: its start and end must differ"
     return None
 
 

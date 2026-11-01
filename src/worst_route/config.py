@@ -298,6 +298,32 @@ MAX_REORDER_STOPS = 7
 MAX_REORDER_STOPS_LARGE = 5
 REORDER_LARGE_NODES = 100_000
 
+# The certified worst (`engine/exact.py`; docs/reference/engine.md, **Certified worst**): CP-SAT
+# proves the longest legal route within the request's area, which holds at most
+# CERTIFIED_MAX_NODES nodes and CERTIFIED_MAX_EDGES edges (an explicit leash over either is
+# refused). With the automatic leash, the leash is the widest, in CERTIFIED_LEASH_STEP_M steps
+# from CERTIFIED_LEASH_MIN_M, whose area holds at most CERTIFIED_MAX_NODES nodes and
+# CERTIFIED_AUTO_MAX_EDGES edges, so a default request is proven within the default budget while
+# an explicit leash and a longer budget may certify up to the hard caps. Measured on Portland
+# (0b72253e5e8a, 4 threads with max_lp, 19 s of the default 20, loads 8-21): at 300 nodes and 600
+# edges 10 of 14 short trips were proven (0.1-17 s; the other four within 0.75-4.7 %); at 800
+# edges only the downtown ones (one-way grids), the residential grids 0.16-7.9 % short of a
+# proof; at 60 s, 773 and 914 edges proven in 23 s and 7 s, 803 and 811 within 0.4 % and 1.1 %.
+# The solver runs CERTIFIED_WORKERS threads with CERTIFIED_SUBSOLVERS added to CP-SAT's own (its
+# portfolio of 4 has no max_lp, whose circuit cuts prove the street grids: Sellwood at 400 m,
+# 134 nodes and 435 edges, in 2.6-3.8 s with it, 18-35 s without), and stops
+# CERTIFIED_MARGIN_S before the request's budget, for the validator and the document; between
+# better routes its bound is reported at most every CERTIFIED_BOUND_EVERY_S.
+CERTIFIED_MAX_NODES = 300
+CERTIFIED_MAX_EDGES = 1000
+CERTIFIED_AUTO_MAX_EDGES = 600
+CERTIFIED_LEASH_MIN_M = 50
+CERTIFIED_LEASH_STEP_M = 10
+CERTIFIED_WORKERS = 4
+CERTIFIED_SUBSOLVERS = ("max_lp",)
+CERTIFIED_MARGIN_S = 0.5
+CERTIFIED_BOUND_EVERY_S = 1.0
+
 # Detours (`docs/PLAN.md` §3.5). A strategy is drawn with STRATEGY_WEIGHTS (waypoint, random
 # weight, local exhaustive); local exhaustive only when the window's ends lie less than
 # LOCAL_EXHAUSTIVE_MAX_M apart, in a ball of LOCAL_EXHAUSTIVE_BALL_FACTOR × that distance capped

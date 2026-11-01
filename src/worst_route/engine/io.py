@@ -15,7 +15,9 @@
                 name, visits, of}, an alphabet route's alphabet: {letters, sequence, roads,
                 alpha_from, free_from}), and for a ratio or duration target, target: {kind,
                 value, achieved, within_tolerance}},
-     run:      {attempts, accepted, stopped_because, elapsed_s, backend}}
+     run:      {attempts, accepted, stopped_because, elapsed_s, backend, and for a certified
+                route certified: {status, bound_m, gap, nodes, edges, leash_m, solve_s,
+                workers} (`exact.Certificate`)}}
 
 `document(data, request, snaps, route, baseline, run=..., target=..., order=...)` is the same
 document from its parts, with the run's numbers given as they are (`order` the identity when not
@@ -86,6 +88,7 @@ def route_document(data: GraphData, result: PlanResult) -> dict[str, Any]:
             "stopped_because": run.stopped_because,
             "elapsed_s": run.elapsed_s,
             "backend": result.backend,
+            **({"certified": result.certified.as_dict()} if result.certified else {}),
         },
         target=result.goal.describe(result.goal.value(route.score, route.metrics)),
         order=result.order,

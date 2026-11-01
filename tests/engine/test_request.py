@@ -15,6 +15,7 @@ from worst_route.engine.request import (
     RouteRequest,
     auto_leash_m,
     auto_tier,
+    certified_problem,
     max_reorder_stops,
     objective_problem,
     reorder_problem,
@@ -193,6 +194,36 @@ def test_the_worst_order_is_asked_for_up_to_seven_stops_and_not_by_the_alphabet_
         "the alphabet route takes no worst order: it has no stop to reorder",
     )
     assert objective_problem("distance", None, "max", None, 7, True) is None
+
+
+@pytest.mark.parametrize(
+    ("fields", "problem"),
+    [
+        ({"objective": "time"}, "a certified route is the longest: the distance objective only"),
+        (
+            {"target": {"kind": "ratio", "value": 3}},
+            "a certified route takes no target: it is the longest there is",
+        ),
+        ({"reorder": True}, "a certified route takes no worst order"),
+        ({"constraints": {"no_left": True}}, "no turn constraint and no hard mode"),
+        ({"constraints": {"hard": True}}, "no turn constraint and no hard mode"),
+        ({"stops": [PORTLAND[0], PORTLAND[0]]}, "a certified route takes no round trip"),
+    ],
+)
+def test_a_certified_route_is_the_longest_alone(fields: dict[str, object], problem: str) -> None:
+    with pytest.raises(ValidationError, match=problem):
+        RouteRequest.model_validate({"stops": PORTLAND, "seed": 1, "certified": True, **fields})
+    assert RouteRequest.model_validate({"stops": PORTLAND, "seed": 1, **fields}).certified is False
+
+
+def test_a_certified_request_round_trips_and_others_leave_it_out() -> None:
+    three = [PORTLAND[0], (45.5, -122.65), PORTLAND[1]]  # stops between the ends are fine
+    request = RouteRequest(stops=three, seed=1, certified=True, leash_km=0.4)
+    dumped = request.model_dump(mode="json")
+    assert dumped["certified"] is True
+    assert RouteRequest.model_validate(json.loads(json.dumps(dumped))) == request
+    assert "certified" not in RouteRequest(stops=PORTLAND, seed=1).model_dump(mode="json")
+    assert certified_problem("distance", "max", False, NO_CONSTRAINTS, PORTLAND) is None
 
 
 def test_a_large_build_reorders_fewer_stops(monkeypatch: pytest.MonkeyPatch) -> None:

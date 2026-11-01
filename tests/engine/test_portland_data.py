@@ -1,7 +1,8 @@
 # Powell's Books → Reed College on Portland's latest build, read through WORST_ROUTE_DATA: on both
 # backends, then the slowest time, the turn constraints and hard mode, collecting each item, a
-# pilgrimage to the brand with the most locations, and an alphabet route on both backends. Run on
-# demand with `uv run pytest -m data`; skipped when there is no build.
+# pilgrimage to the brand with the most locations, an alphabet route on both backends, and the
+# certified worst in town. Run on demand with `uv run pytest -m data`; skipped when there is no
+# build.
 import numpy as np
 import pytest
 
@@ -207,3 +208,26 @@ def test_an_alphabet_route_is_the_same_on_both_backends_on_portland(portland: Gr
     letters = two.route.metrics.counters["alphabet"]
     assert letters["letters"] >= 5
     assert letters["sequence"] == "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[: letters["letters"]]
+
+
+def test_the_certified_worst_in_town_is_proven_and_longer_than_the_loop_s(
+    portland: GraphData,
+) -> None:
+    # On build 0b72253e5e8a: Powell's to Pioneer Courthouse Square at a 400 m leash, 139 nodes and
+    # 277 edges, 8.26 km proven in a fraction of a second, where the loop's converged route is
+    # 7.38 km; the same length at every seed.
+    stops = [(45.5230, -122.6814), (45.5189, -122.6793)]
+    trip = {"stops": stops, "seed": 1, "leash_km": 0.4, "budget_s": 60}
+    certified = [
+        plan_route(portland, RouteRequest(**{**trip, "seed": seed}, certified=True))
+        for seed in (1, 2)
+    ]
+    for result in certified:
+        assert result.report.ok and result.certified is not None
+        assert result.certified.status == "optimal" and result.run.stopped_because == "optimal"
+    one, two = (r.route.metrics.length_m for r in certified)
+    assert one == two
+    loop = plan_route(
+        portland, RouteRequest(**trip, max_iterations=10**6), backend=CsrBackend(portland)
+    )
+    assert one > loop.route.metrics.length_m

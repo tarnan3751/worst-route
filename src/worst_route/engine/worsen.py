@@ -114,7 +114,8 @@ from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import SpatialIndex
 
 BoolArray = NDArray[np.bool_]
-StopReason = Literal["converged", "budget", "target"]
+# Why a run stopped; "optimal" is the certified driver's (`engine/exact.py`), never the loop's.
+StopReason = Literal["converged", "budget", "target", "optimal"]
 
 
 @dataclass(frozen=True)

@@ -25,28 +25,30 @@ an exception (`exit_on_sigterm`: its `with` blocks unwind, so its temporary file
 shell that started it ignores, which is how `tools/bench_build.py`'s watchdog stops one.
 
 `plan` plans a route on a saved build (`docs/reference/engine.md`, **The CLI**), on the
-`--objective` (distance, time, collect with an `--item`, brand with a `--brand`, an id or a
-name of the build's brand index, or alphabet, from `--from` to `--to` only, without a target or
-a base), with `--no-left` or `--no-right` (such turns cost a kilometre each; none with
-`--strict`), `--hard` (each road in one stretch) and `--reorder` (the stops between `--from` and
-`--to` in the worst order: at most 7 stops, 5 on a build of more than 100,000 nodes; not with
-`--objective alphabet`): it prints the objective and constraints when not the default, the order
-the stops are visited in (with `--reorder`: each stop's place among those given), the snapped
-stops in that order, the baseline, the worst route, the ratio and the time
-ratio (of the experienced time, with its drive and delays), its turns and delays, the target and
-what was achieved (for `--target ratio:<x>` or `duration:<time>`), an alphabet route's letters
-and first roads, the search, the backend it searched with and the validator's report, with a
-progress line on stderr on an accepted splice (an alphabet route's better route), at most one
-every 2 s, and writes `route.json` (with its directions, toasts and extra metrics,
-`presentation.document`) and GeoJSON when asked; a stop that cannot be snapped or reached
-(under `--strict` or `--hard` when either is why, saying to try without it), or a
+`--objective` (distance, time, collect with an `--item`, brand with a `--brand`, an id or a name of
+the build's brand index, or alphabet, from `--from` to `--to` only, without a target or a base),
+with `--no-left` or `--no-right` (such turns cost a kilometre each; none with `--strict`), `--hard`
+(each road in one stretch), `--reorder` (the stops between `--from` and `--to` in the worst order:
+at most 7 stops, 5 on a build of more than 100,000 nodes; not with `--objective alphabet`) and
+`--certified` (the provably longest route in a small area, `engine/exact.py`: the distance only, no
+target, turn constraint, hard mode, worst order, round trip or base; an area over the caps is one
+line, "cannot certify: ...", and exit 1): it prints the objective and constraints when not the
+default, the order the stops are visited in (with `--reorder`: each stop's place among those given),
+the snapped stops in that order, the baseline, the worst route, the ratio and the time ratio (of the
+experienced time, with its drive and delays), its turns and delays, the target and what was achieved
+(for `--target ratio:<x>` or `duration:<time>`), an alphabet route's letters and first roads, the
+search, a certified route's certificate, the backend it searched with and the validator's report,
+with a progress line on stderr on an accepted splice (an alphabet route's better route, a certified
+route's better route or bound), at most one every 2 s, and writes `route.json` (with its directions,
+toasts and extra metrics, `presentation.document`) and GeoJSON when asked; a stop that cannot be
+snapped or reached (under `--strict` or `--hard` when either is why, saying to try without it), or a
 missing build (or one without an array of the format, which names its remedy: the rebuild from
-`filter` when another pipeline version wrote it, which a plain `save` names too; `validate`,
-`serve` and `qa` say the same), is one line and exit 1, and a route that fails the validator is
-never printed. `--base route.json` continues a saved route ("make it worse", toward the new
-target): its stops (in the order its route visits them, so never with `--reorder`), tier,
-leash, objective and constraints come from the file, which must have been planned on the build
-at its graph_version by this engine version.
+`filter` when another pipeline version wrote it, which a plain `save` names too; `validate`, `serve`
+and `qa` say the same), is one line and exit 1, and a route that fails the validator is never
+printed. `--base route.json` continues a saved route ("make it worse", toward the new target): its
+stops (in the order its route visits them, so never with `--reorder`), tier, leash, objective and
+constraints come from the file, which must have been planned on the build at its graph_version by
+this engine version.
 `validate` re-checks a saved `route.json` against the build it names, with its stops re-derived
 from its request (`resolve_stops`), and exits 1 when a check fails; a file made by another
 engine version is one line and exit 1 (its stops could be re-derived differently).
@@ -117,6 +119,7 @@ from worst_route.config import (
 from worst_route.pipeline import PIPELINE_VERSION, layout
 
 if TYPE_CHECKING:
+    from worst_route.engine.exact import Certificate
     from worst_route.engine.request import RouteRequest
     from worst_route.graph.backend import GraphBackend
     from worst_route.graph.data import GraphData
@@ -1044,6 +1047,23 @@ def _letters_line(letters: dict[str, Any]) -> str:
     return f"letters: {n} ({', '.join(laps)}): {shown}"
 
 
+def _certified_line(c: "Certificate") -> str:
+    """A certified route's line: proven, or the longest found and how much longer the worst
+    possible may be, then the area, the leash, the solve's time and its threads."""
+    area = (
+        f"({c.nodes} nodes, {c.edges} edges, leash {c.leash_m:.0f} m, {c.solve_s:.1f} s, "
+        f"{c.workers} threads)"
+    )
+    if c.status == "optimal":
+        return f"certified: optimal: no legal route in this area is longer {area}"
+    if c.bound_m is None or c.gap is None:
+        return f"certified: feasible: the longest found; no bound yet {area}"
+    return (
+        f"certified: feasible: the longest found; the worst possible is at most "
+        f"{100 * c.gap:.2f} % longer ({c.bound_m / 1000:.2f} km) {area}"
+    )
+
+
 @app.command()
 def plan(
     ctx: typer.Context,
@@ -1117,6 +1137,15 @@ def plan(
             "5 on a large build).",
         ),
     ] = False,
+    certified: Annotated[
+        bool,
+        typer.Option(
+            "--certified",
+            help="The provably longest route in a small area (CP-SAT): the distance, no target, "
+            "no turn constraint, hard mode or worst order, not a round trip; with the automatic "
+            "leash, the widest whose area a certificate allows.",
+        ),
+    ] = False,
     base: Annotated[
         Path | None,
         typer.Option(
@@ -1130,11 +1159,18 @@ def plan(
     from pydantic import ValidationError
 
     from worst_route.engine import ENGINE_VERSION
+    from worst_route.engine.constraints import Constraints
+    from worst_route.engine.exact import AreaTooLarge, Incumbent
     from worst_route.engine.io import SavedRoute, read_route, route_document
     from worst_route.engine.objectives import OBJECTIVE_KEYS
     from worst_route.engine.objectives.brand import BrandRefused
     from worst_route.engine.plan import BaseRouteMismatch, plan_route
-    from worst_route.engine.request import RouteRequest, objective_problem, reorder_problem
+    from worst_route.engine.request import (
+        RouteRequest,
+        certified_problem,
+        objective_problem,
+        reorder_problem,
+    )
     from worst_route.engine.route import IllegalSplice
     from worst_route.engine.seed_route import Baseline
     from worst_route.engine.snap import (
@@ -1158,6 +1194,7 @@ def plan(
         "brand": None if brand is None else 0,  # resolved once the build is loaded
         "constraints": {"no_left": no_left, "no_right": no_right, "strict": strict, "hard": hard},
         "reorder": reorder,
+        "certified": certified,
     }
     saved: SavedRoute | None = None
     if base is None:
@@ -1172,6 +1209,8 @@ def plan(
         except ValueError as error:
             raise typer.BadParameter(f"--leash-km: {error}") from None
     else:
+        if certified:
+            _fail("invalid --certified: a certified route is planned from its stops: no --base", 2)
         stops = (("--from", from_), ("--to", to), ("--via", via), ("--reorder", reorder))
         given = [name for name, value in stops if value]
         for name in ("tier", "leash_km"):
@@ -1235,6 +1274,12 @@ def plan(
         _fail(f"invalid --{option}: {problem[1]}", code=2)
     if reorder and (refused := reorder_problem(len(fields["stops"]))) is not None:
         _fail(f"invalid --reorder: {refused}", code=2)
+    if certified:
+        constraints = Constraints(**fields["constraints"])
+        kind = fields["target"]["kind"]
+        found = certified_problem(fields["objective"], kind, reorder, constraints, fields["stops"])
+        if found is not None:
+            _fail(f"invalid --certified: {found}", code=2)
     try:
         request = RouteRequest(**fields)
     except ValidationError as error:
@@ -1269,6 +1314,11 @@ def plan(
             km = event.metrics.length_m / 1000
             ratio = event.metrics.length_m / baseline.length_m if baseline.length_m else 0.0
             line = f"iteration {event.iteration}: ratio {ratio:.2f}x, {km:.2f} km"
+            if isinstance(event, Incumbent):  # a better route the solver found
+                line = (
+                    f"solution {event.iteration}: ratio {ratio:.2f}x, {km:.2f} km, the worst "
+                    f"possible at most {100 * event.gap:.2f} % longer"
+                )
             if "alphabet" in event.metrics.counters:  # each event a better route, of a restart
                 letters = event.metrics.counters["alphabet"]["letters"]
                 line = (
@@ -1276,14 +1326,28 @@ def plan(
                 )
             typer.echo(line, err=True)
 
+    def bound(elapsed_s: float, bound_m: float, gap: float) -> None:
+        nonlocal last
+        if time.monotonic() - last >= PROGRESS_EVERY_S:
+            last = time.monotonic()
+            typer.echo(
+                f"{elapsed_s:.1f} s: the worst possible at most {100 * gap:.2f} % longer "
+                f"({bound_m / 1000:.2f} km)",
+                err=True,
+            )
+
     try:
-        result = plan_route(data, request, backend=engine, base=saved, on_progress=progress)
+        result = plan_route(
+            data, request, backend=engine, base=saved, on_progress=progress, on_bound=bound
+        )
     except InfeasibleTurnConstraint as error:
         _fail(f"cannot plan: {error}; try without --strict")
     except InfeasibleHardMode as error:
         _fail(f"cannot plan: {error}; try without --hard")
     except BrandRefused as error:
         _fail(f"invalid --brand: {error}", code=2)
+    except AreaTooLarge as error:
+        _fail(f"cannot certify: {error}")
     except (SnapError, StopUnreachable, BaseRouteMismatch) as error:
         _fail(f"cannot plan: {error}")
     except (IllegalSplice, IndexError) as error:
@@ -1299,9 +1363,11 @@ def plan(
     typer.echo(
         f"build: {meta['region']}/{meta['build_id']} (graph_version {meta['graph_version'][:12]})"
     )
+    leash = masks.leash_m / 1000
+    attempts = "" if request.certified else f" or {request.max_iterations} attempts"
     typer.echo(
-        f"request: tier {masks.tier}, leash {masks.leash_m / 1000:.1f} km, seed {request.seed}, "
-        f"budget {request.budget_s:g} s or {request.max_iterations} attempts"
+        f"request: tier {masks.tier}, leash {leash:.{2 if leash < 1 else 1}f} km, "
+        f"seed {request.seed}, budget {request.budget_s:g} s{attempts}"
     )
     if request.objective != "distance" or request.constraints.kinds or request.constraints.hard:
         typer.echo(_mode_line(request))
@@ -1356,6 +1422,8 @@ def plan(
         f"search: {run.attempts} attempts, {run.accepted} accepted, {run.elapsed_s:.1f} s, "
         f"stopped: {run.stopped_because}"
     )
+    if result.certified is not None:
+        typer.echo(_certified_line(result.certified))
     typer.echo(f"backend: {result.backend}")
     names = ", ".join(c.name for c in result.report.checks)
     typer.echo(f"validator: ok ({names})")

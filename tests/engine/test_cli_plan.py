@@ -11,10 +11,11 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
-from worst_route.cli import _letters_line, _seconds, app
+from worst_route.cli import _certified_line, _letters_line, _seconds, app
 from worst_route.config import PIPELINE_VERSION
-from worst_route.engine import ENGINE_VERSION
+from worst_route.engine import ENGINE_VERSION, exact
 from worst_route.engine import request as request_module
+from worst_route.engine.exact import Certificate
 from worst_route.graph.data import EdgeFlag, GraphData
 from worst_route.graph.store import write_build
 from worst_route.graph.testing import make_graph
@@ -939,3 +940,63 @@ def test_the_worst_order_s_refusals_are_one_line(
     monkeypatch.setattr(request_module, "REORDER_LARGE_NODES", GRID.n - 1)  # GRID a large build
     message = "invalid --reorder: the worst order takes at most 5 stops on portland, not 6\n"
     assert plan(*ends, *eight[:8]) == (2, "", message)
+
+
+def test_a_certified_route_is_printed_with_its_certificate(data_dir: Path, tmp_path: Path) -> None:
+    save(data_dir, GRID, "b1")
+    out = tmp_path / "route.json"
+    code, stdout, stderr = plan(
+        "--from", latlon(GRID, 0), "--to", latlon(GRID, 9), "--leash-km", "0.25", "--certified",
+        "--seed", "3", "--out", str(out),
+    )  # fmt: skip
+    assert code == 0, stdout + stderr
+    lines = stdout.splitlines()
+    assert lines[1] == "request: tier T4, leash 0.25 km, seed 3, budget 20 s"  # no attempts
+    search = next(k for k, line in enumerate(lines) if line.startswith("search: "))
+    assert lines[search].endswith("stopped: optimal")
+    assert re.fullmatch(
+        r"certified: optimal: no legal route in this area is longer \(30 nodes, \d+ edges, "
+        r"leash 250 m, [\d.]+ s, 4 threads\)",
+        lines[search + 1],
+    ), lines[search + 1]
+    assert any(line.startswith("validator: ok") for line in lines)
+    doc = json.loads(out.read_text())
+    assert doc["request"]["certified"] is True and doc["run"]["certified"]["status"] == "optimal"
+    assert runner.invoke(app, ["validate", str(out)]).exit_code == 0
+
+
+def test_the_certified_route_s_refusals_are_one_line(
+    data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    save(data_dir, GRID, "b1")
+    ends = ["--from", latlon(GRID, 0), "--to", latlon(GRID, 9), "--certified"]
+    message = "invalid --certified: a certified route is the longest: the distance objective only\n"
+    assert plan(*ends, "--objective", "time") == (2, "", message)
+    refused = plan(*ends, "--no-left")
+    assert refused[0] == 2 and "no turn constraint and no hard mode" in refused[2]
+    refused = plan(*ends, "--target", "ratio:3")
+    assert refused[0] == 2 and "a certified route takes no target" in refused[2]
+    monkeypatch.setattr(exact, "CERTIFIED_MAX_EDGES", 20)
+    code, stdout, stderr = plan(*ends, "--leash-km", "1")
+    assert code == 1 and stdout == ""
+    assert stderr.startswith("cannot certify: the area within a 1 km leash holds 100 nodes and")
+    out = tmp_path / "route.json"
+    assert plan("--from", latlon(GRID, 0), "--to", latlon(GRID, 9), "--out", str(out))[0] == 0
+    refused = plan("--base", str(out), "--certified")
+    assert refused[0] == 2 and refused[2].startswith("invalid --certified: a certified route is")
+
+
+def test_a_certificate_s_line_says_what_the_solver_knew() -> None:
+    area = {"nodes": 30, "edges": 94, "leash_m": 250.0, "solve_s": 1.25, "workers": 4}
+    tail = "(30 nodes, 94 edges, leash 250 m, 1.2 s, 4 threads)"
+    proven = Certificate("optimal", 3000.0, 0.0, **area)
+    line = _certified_line(proven)
+    assert line == f"certified: optimal: no legal route in this area is longer {tail}"
+    found = Certificate("feasible", 3150.0, 0.05, **area)
+    assert _certified_line(found) == (
+        f"certified: feasible: the longest found; the worst possible is at most 5.00 % longer "
+        f"(3.15 km) {tail}"
+    )
+    unknown = Certificate("feasible", None, None, **area)
+    line = _certified_line(unknown)
+    assert line == f"certified: feasible: the longest found; no bound yet {tail}"

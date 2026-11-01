@@ -303,6 +303,12 @@ checks) or by hand:
    the run's artifacts, kept a day);
 3. the owner reads the draft and publishes it.
 
+The first run (v0.1.0, 2026-11-01) found two Windows-only faults, both fixed: the data pin's line
+read from Python ended CR LF, so its sha256 never matched (`tr -d '\r'` in the workflow), and Git
+Bash rewrote ISCC's `/Q` and `/D...` switches as paths (`MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'`
+in `tools/build_desktop.sh`); the draft's Windows installer came from a by-hand run on main with
+the fixes, attached with `gh release upload`. The actions are on the versions that target Node 24.
+
 No Intel Mac build: Numba publishes no Intel macOS wheels since 0.63 (the project has 0.68), and
 Intel Macs use the hosted site. The repository is public (the owner, 2026-11-01), so its release
 assets download without a token: the public downloads the installers and the basemap's file from its

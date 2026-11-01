@@ -28,7 +28,7 @@ jobs:
   draft:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: The tag names the package's version, and its draft release exists
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -65,10 +65,10 @@ jobs:
       # cannot read secrets).
       NOTARIZE: ${{ secrets.MACOS_CERTIFICATE != '' && secrets.MACOS_SIGNING_IDENTITY != '' && secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
       - run: uv python install 3.12
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: The app's environment
@@ -144,14 +144,14 @@ jobs:
           fi
       - name: The installer, as the run's artifact (run by hand)
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: installer-${{ matrix.os }}
           path: tools/out/desktop/worst-route-*
           retention-days: 1
       - name: The smoke tests' reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: smoke-${{ matrix.os }}
           path: tools/out/smoke-*.json

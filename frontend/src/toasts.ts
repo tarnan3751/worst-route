@@ -2,9 +2,9 @@
 // map, the next every 4 s. While a run goes, three lines about waiting and the live ratio
 // ("Currently 17.2× worse"), four slots in a fixed cycle, the ratio's skipped while the run has
 // none, so no line jumps when it comes; once a route is stored, its document's toasts, in order,
-// looping. The pointer
-// over the strip holds the line shown; a click shows the next. Nothing while no run goes and no
-// route is shown.
+// looping. A notice (a challenge completed: `notify`) is shown once, for a period, before the
+// rotation goes on where it was. The pointer over the strip holds the line shown; a click shows
+// the next. Nothing while no run goes, no route is shown and no notice waits.
 //
 // `Toasts` holds the rotation and no DOM, so the tests drive it on fake timers; `mountToasts`
 // draws it.
@@ -34,6 +34,7 @@ export class Toasts extends EventTarget {
   readonly #store: Store;
   #source: Source = null;
   #k = 0; // the line shown, counted from the first since the source changed
+  #notices: string[] = []; // lines to show once each, the first shown now
   #held = false;
   #timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -53,7 +54,16 @@ export class Toasts extends EventTarget {
 
   /** Show the next line now. */
   next(): void {
-    this.#k++;
+    if (this.#notices.length > 0) this.#notices.shift();
+    else this.#k++;
+    this.#arm();
+    this.#show();
+  }
+
+  /** Show `line` once, for a period, after the notices before it, then go on with the lines. */
+  notify(line: string): void {
+    this.#notices.push(line);
+    if (this.#notices.length > 1) return;
     this.#arm();
     this.#show();
   }
@@ -76,7 +86,7 @@ export class Toasts extends EventTarget {
   /** The next line in TOAST_MS, unless held or there is none. */
   #arm(): void {
     clearTimeout(this.#timer);
-    if (this.#source !== null && !this.#held) {
+    if ((this.#source !== null || this.#notices.length > 0) && !this.#held) {
       this.#timer = setTimeout(() => this.next(), TOAST_MS);
     }
   }
@@ -84,7 +94,7 @@ export class Toasts extends EventTarget {
   #show(): void {
     const lines = this.#lines();
     for (let n = 0; n < lines.length && lines[this.#k % lines.length] === null; n++) this.#k++;
-    const text = lines.length > 0 ? lines[this.#k % lines.length] : null;
+    const text = this.#notices[0] ?? (lines.length > 0 ? lines[this.#k % lines.length] : null);
     if (text === this.text) return;
     this.text = text;
     this.dispatchEvent(new Event("change"));

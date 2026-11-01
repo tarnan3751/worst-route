@@ -59,6 +59,7 @@ function setup(regions: Region[] | null = [OREGON, US]) {
     route: null,
     error: null,
     brands: null,
+    challenge: null,
   });
   new RegionPicker(store);
   const place = (...points: { lat: number; lon: number }[]) =>

@@ -227,6 +227,7 @@ export interface AppState {
   route: RouteDocument | null; // the route shown, once stored
   error: ErrorBody | null; // the banner's
   brands: BrandEntry[] | null; // the region's, once GET /brands has answered
+  challenge: string | null; // the challenge set up, while what it set is unchanged (challenges/)
 }
 
 export type StateKey = keyof AppState;

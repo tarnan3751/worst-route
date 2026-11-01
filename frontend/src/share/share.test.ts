@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeView, json, stubFetch } from "../__fixtures__/http";
 import { loadStream } from "../__fixtures__/stream";
 import type { RouteDocument, RouteRequest } from "../api/types";
+import { CHALLENGES } from "../challenges/list";
 import { JobRunner, countsTitle, statLines } from "../run/controls";
 import { DEFAULT_SETTINGS, IDLE_RUN, ITEMS, Store, type AppState, type Settings } from "../state";
 import { round6 } from "../util/geo";
@@ -21,6 +22,7 @@ import {
 const full: UrlState = {
   route: "5ea844bffd40",
   daily: null,
+  challenge: null,
   seed: 12345,
   budgetS: 15,
   tier: "T2",
@@ -44,6 +46,7 @@ const full: UrlState = {
 const nothing: UrlState = {
   route: null,
   daily: null,
+  challenge: null,
   seed: null,
   budgetS: null,
   tier: null,
@@ -104,6 +107,7 @@ describe("the URL state", () => {
       route: null,
       error: null,
       brands: null,
+      challenge: null,
     };
     expect(urlStateOf(state).region).toBe("oregon");
     expect(urlStateOf({ ...state, settings: DEFAULT_SETTINGS }).region).toBeNull();
@@ -124,8 +128,45 @@ describe("the URL state", () => {
       route: null,
       error: null,
       brands: null,
+      challenge: null,
     };
     expect(urlStateOf(state).daily).toBeNull(); // once opened, a route like any other
+  });
+
+  it("carries ?challenge, the challenge to set up, written only while one is set up", () => {
+    const query = "?challenge=portland-bridges&stops=45.523475,-122.676653;45.481983,-122.626625";
+    const set = decodeUrlState(query);
+    expect(set).toMatchObject({ challenge: "portland-bridges", route: null, daily: null });
+    expect(encodeUrlState(set)).toBe(query);
+    for (const id of ["", "Portland", "../x", "-bridges", "a b"]) {
+      expect(decodeUrlState(`?challenge=${encodeURIComponent(id)}`).challenge).toBeNull();
+    }
+    for (const { id } of CHALLENGES) expect(decodeUrlState(`?challenge=${id}`).challenge).toBe(id);
+    const state: AppState = {
+      regions: null,
+      region: null,
+      pick: null,
+      stops: [],
+      settings: DEFAULT_SETTINGS,
+      run: IDLE_RUN,
+      route: null,
+      error: null,
+      brands: null,
+      challenge: null,
+    };
+    expect(urlStateOf(state).challenge).toBeNull();
+    expect(encodeUrlState(urlStateOf({ ...state, challenge: "us-chicago" }))).toBe(
+      "?challenge=us-chicago&budget=20&tier=auto&leash=auto&target=max",
+    );
+    const written: string[] = [];
+    const store = new Store(state);
+    new UrlSync(store, (url) => written.push(url)).start(false);
+    store.update({ challenge: "portland-30x" });
+    store.update({ challenge: null });
+    expect(written).toEqual([
+      "?challenge=portland-30x&budget=20&tier=auto&leash=auto&target=max",
+      "?budget=20&tier=auto&leash=auto&target=max",
+    ]);
   });
 
   it("keeps clicked coordinates exactly", () => {
@@ -176,6 +217,7 @@ describe("the URL state", () => {
       route: null,
       error: null,
       brands: null,
+      challenge: null,
       regions: null,
       pick: null,
     };
@@ -204,6 +246,7 @@ describe("opening a ?route= link at startup", () => {
       route: null,
       error: null,
       brands: null,
+      challenge: null,
       regions: null,
       pick: null,
     });
@@ -271,6 +314,7 @@ describe("a ratio-target route opened by its link", () => {
       route: null,
       error: null,
       brands: null,
+      challenge: null,
       regions: null,
       pick: null,
     });
@@ -403,6 +447,7 @@ describe("the mode and the turns in the URL", () => {
       route: null,
       error: null,
       brands: null,
+      challenge: null,
       regions: null,
       pick: null,
     });
@@ -498,6 +543,7 @@ describe("a route of another mode opened by its link", () => {
       route: null,
       error: null,
       brands: null,
+      challenge: null,
       regions: null,
       pick: null,
     });
@@ -630,6 +676,7 @@ describe("the vehicle in the URL", () => {
     route: null,
     error: null,
     brands: null,
+    challenge: null,
     regions: null,
     pick: null,
   });
@@ -688,6 +735,7 @@ describe("a route's vehicle opened by its link", () => {
       route: null,
       error: null,
       brands: null,
+      challenge: null,
       regions: null,
       pick: null,
     });
@@ -789,6 +837,7 @@ function emptyApp(): AppState {
     route: null,
     error: null,
     brands: null,
+    challenge: null,
     regions: null,
     pick: null,
   };

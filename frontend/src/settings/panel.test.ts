@@ -20,6 +20,7 @@ function store(brand: number | null, region: Region | null = null): Store {
     route: null,
     error: null,
     brands: null,
+    challenge: null,
     regions: null,
     pick: null,
   });

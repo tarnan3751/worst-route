@@ -49,6 +49,7 @@ function setup(...answers: (Daily | number)[]) {
     route: null,
     error: null,
     brands: null,
+    challenge: null,
   });
   const calls: Call[] = stubFetch(() => {
     const next = answers.length > 1 ? answers.shift() : answers[0];

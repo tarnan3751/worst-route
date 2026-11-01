@@ -19,6 +19,7 @@ function store(): Store {
     route: null,
     error: null,
     brands: null,
+    challenge: null,
     regions: null,
     pick: null,
   });
@@ -148,6 +149,33 @@ describe("the toasts", () => {
     t.next();
     vi.advanceTimersByTime(TOAST_MS - 1);
     expect(t.text).toBe(toasts[4]); // a click starts the period again
+  });
+
+  it("show a notice once, for a period, then go on with the route's toasts from the first", () => {
+    const s = store();
+    const t = new Toasts(s);
+    s.update({ route, run: { ...IDLE_RUN, phase: "done" } });
+    t.notify("Challenge completed: Cross 20 bridges"); // as the route is shown
+    t.notify("Challenge completed: A 30× route in town");
+    expect(t.text).toBe("Challenge completed: Cross 20 bridges");
+    vi.advanceTimersByTime(TOAST_MS - 1);
+    expect(t.text).toBe("Challenge completed: Cross 20 bridges");
+    vi.advanceTimersByTime(1);
+    expect(t.text).toBe("Challenge completed: A 30× route in town");
+    t.next(); // a click moves on from a notice too
+    expect(t.text).toBe(toasts[0]);
+    vi.advanceTimersByTime(TOAST_MS);
+    expect(t.text).toBe(toasts[1]);
+  });
+
+  it("show a notice with nothing else to show, then nothing", () => {
+    const s = store();
+    const t = new Toasts(s);
+    t.notify("Challenge completed: Beat the engine by hand");
+    expect(t.text).toBe("Challenge completed: Beat the engine by hand");
+    vi.advanceTimersByTime(TOAST_MS);
+    expect(t.text).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("stop when the route is forgotten, and say nothing for a route without toasts", () => {

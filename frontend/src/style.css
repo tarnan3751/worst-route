@@ -132,8 +132,9 @@ body {
   display: none;
 }
 
-.daily-show {
-  margin: 0 0 12px;
+.daily-show,
+.challenges-show {
+  margin: 0 12px 12px 0;
   padding: 0;
   font: inherit;
   color: var(--via);
@@ -141,6 +142,93 @@ body {
   background: none;
   border: none;
   cursor: pointer;
+}
+
+/* Challenges */
+
+.challenge-list {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.challenge {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 6px;
+}
+
+.challenge.current {
+  background: #eef4fa;
+  outline: 1px solid var(--via);
+}
+
+.challenge .body {
+  flex: 1;
+  min-width: 0;
+}
+
+.challenge .body .hint {
+  margin: 2px 0 0;
+  font-size: 12px;
+}
+
+.challenge-badge {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  line-height: 20px;
+  text-align: center;
+  font-weight: 700;
+  color: #fff;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: #fff;
+}
+
+.challenge.done .challenge-badge {
+  background: var(--start);
+  border-color: var(--start);
+}
+
+.challenge-next {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--via);
+}
+
+.challenge button {
+  flex: none;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.challenge button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.challenges-reset {
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  text-decoration: underline;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.challenges-reset[hidden] {
+  display: none;
 }
 
 /* Stops */

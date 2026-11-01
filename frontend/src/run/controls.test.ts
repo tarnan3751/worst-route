@@ -35,6 +35,7 @@ function store(route: RouteDocument | null = null): Store {
     route,
     error: null,
     brands: null,
+    challenge: null,
     regions: null,
     pick: null,
   });

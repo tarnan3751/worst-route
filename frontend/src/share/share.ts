@@ -10,8 +10,9 @@
 // settings pin as `region=<id>` (only when pinned: otherwise the server picks it from the stops, as
 // it did), the stops as `lat,lon;lat,lon;...` at 6 decimals, as they were clicked), so a link
 // reproduces a request; `?route=<id>` opens a stored route without running anything, its own
-// request then giving the stops and settings, and `?daily` today's route (daily/panel.ts), once the
-// server has planned it. `UrlSync` keeps the URL in step with what the app shows once it is
+// request then giving the stops and settings, `?daily` today's route (daily/panel.ts), once the
+// server has planned it, and `?challenge=<id>` sets a challenge up (challenges/panel.ts), written
+// while it stays set up. `UrlSync` keeps the URL in step with what the app shows once it is
 // started, which is after a `?route=` or `?daily` link has been opened, or has failed to open (the
 // parameter then stays). The share section copies a link to the route shown, opens its share image
 // (`GET /routes/{id}/share.png`) in a new tab, and downloads its GeoJSON
@@ -52,10 +53,12 @@ export type UrlMode =
 
 /** What a URL can carry; null where it says nothing (or nothing valid). `strict` only with a
  * side to avoid; no ratio target under collect or brand, none but max under the alphabet route;
- * the vehicle only within the panel's limits; `daily`, today's route to open. */
+ * the vehicle only within the panel's limits; `daily`, today's route to open; `challenge`, the id
+ * of a challenge to set up. */
 export interface UrlState {
   route: string | null;
   daily: true | null;
+  challenge: string | null;
   seed: number | null;
   budgetS: number | null;
   tier: Tier | null;
@@ -135,6 +138,7 @@ export function decodeUrlState(search: string): UrlState {
   const leash = number("leash");
   const stops = params.get("stops");
   const region = params.get("region");
+  const challenge = params.get("challenge");
   const side = params.get("turns");
   const turns = side === "left" || side === "right" ? SIDES[side] : null;
   const mode = parseMode(params.get("mode"));
@@ -142,6 +146,7 @@ export function decodeUrlState(search: string): UrlState {
   return {
     route: route !== null && /^[0-9a-f]+$/.test(route) ? route : null,
     daily: params.has("daily") ? true : null,
+    challenge: challenge !== null && /^[a-z0-9][a-z0-9-]*$/.test(challenge) ? challenge : null,
     seed: Number.isSafeInteger(seed) && seed >= 0 ? seed : null,
     budgetS: inRange(budget, 0, BUDGET_MAX_S) ? budget : null,
     tier: TIERS.find((tier) => tier === params.get("tier")) ?? null,
@@ -167,6 +172,7 @@ export function encodeUrlState(state: UrlState): string {
   const params: string[] = [];
   if (state.route !== null) params.push(`route=${state.route}`);
   if (state.daily !== null) params.push("daily");
+  if (state.challenge !== null) params.push(`challenge=${state.challenge}`);
   if (state.seed !== null) params.push(`seed=${state.seed}`);
   if (state.budgetS !== null) params.push(`budget=${state.budgetS}`);
   if (state.tier !== null) params.push(`tier=${state.tier}`);
@@ -210,7 +216,8 @@ function urlModeOf({ objective, item, brand }: Settings): UrlMode | null {
 }
 
 /** What the app shows, as a URL carries it: the mode, the turns and the vehicle only when not
- * the default, hard mode and the worst order only when on, the region only when pinned. */
+ * the default, hard mode and the worst order only when on, the region only when pinned, the
+ * challenge only while it is set up. */
 export function urlStateOf(state: Readonly<AppState>): UrlState {
   const { settings } = state;
   const { turns, mpg, gasPriceUsd } = settings;
@@ -218,6 +225,7 @@ export function urlStateOf(state: Readonly<AppState>): UrlState {
   return {
     route: state.route?.route_id ?? null,
     daily: null, // once opened, today's route is a route like any other
+    challenge: state.challenge,
     seed: settings.seed,
     budgetS: settings.budgetS,
     tier: settings.tier,
@@ -236,7 +244,7 @@ export function urlStateOf(state: Readonly<AppState>): UrlState {
 }
 
 /** The settings that give `target`. */
-function targetSettings(target: Target): Partial<Settings> {
+export function targetSettings(target: Target): Partial<Settings> {
   if (target.kind === "ratio" && target.value != null) {
     return { target: "ratio", ratio: target.value };
   }
@@ -324,7 +332,7 @@ export class UrlSync {
   constructor(store: Store, write: (query: string) => void) {
     this.#store = store;
     this.#write = write;
-    store.watch(["route", "stops", "settings"], (state) => {
+    store.watch(["route", "stops", "settings", "challenge"], (state) => {
       if (this.#started) write(encodeUrlState(urlStateOf(state)));
     });
   }

@@ -55,6 +55,7 @@ function setup(
     route: null,
     error: null,
     brands: null,
+    challenge: null,
     regions,
     pick: null,
   });

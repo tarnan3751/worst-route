@@ -53,6 +53,7 @@ function storeWith(settings: Partial<Settings> = {}): Store {
     route: null,
     error: null,
     brands: null,
+    challenge: null,
   });
 }
 

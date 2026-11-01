@@ -1,13 +1,24 @@
 // Grading without a DOM: each goal kind on the recordings' stored routes (the collect recording's
 // 18 bridges, the alphabet recording's A–O, the brand recording's 14 of 19 Starbucks, the max-mode
-// recording's 78×), and what makes a route a challenge's trip.
+// recording's 78×) and on a drawing's verdict; what makes a route a challenge's trip; the
+// completions kept in a stand-in storage (persisted, reset, junk ignored, a throwing storage
+// survived); and the toast line.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { loadStream } from "../__fixtures__/stream";
 import type { BrandEntry, Daily, RouteDocument, RouteRequest } from "../api/types";
+import type { Par } from "../draw/drawing";
 import { DEFAULT_SETTINGS, IDLE_RUN, Store } from "../state";
 import { CHALLENGES, type Challenge } from "./list";
-import { reached, sameTrip, tripOf } from "./progress";
+import {
+  ChallengeProgress,
+  STORAGE_KEY,
+  completedLine,
+  reached,
+  sameTrip,
+  tripOf,
+  type ChallengeStorage,
+} from "./progress";
 
 const challenge = (id: string): Challenge => CHALLENGES.find((c) => c.id === id) as Challenge;
 const collect = loadStream("portland-collect-stream").route;
@@ -46,7 +57,22 @@ function storeWith(brands: BrandEntry[] | null = null): Store {
     route: null,
     error: null,
     brands,
+    challenge: null,
   });
+}
+
+/** A storage in memory; `fail` makes every call throw. */
+function memory(fail = false): ChallengeStorage & { items: Map<string, string> } {
+  const items = new Map<string, string>();
+  const check = () => {
+    if (fail) throw new DOMException("blocked", "SecurityError");
+  };
+  return {
+    items,
+    getItem: (key) => (check(), items.get(key) ?? null),
+    setItem: (key, value) => (check(), void items.set(key, value)),
+    removeItem: (key) => (check(), void items.delete(key)),
+  };
 }
 
 /** `route` as another route: its request and metrics patched. */
@@ -160,5 +186,108 @@ describe("grading a route", () => {
   it("never completes a drawing's challenge from a stored route", () => {
     const route = variant(max, { stops: drawn.request.stops }, { ratio: 1000 });
     expect(reached(challenge("portland-draw").goal, route, TODAY)).toBe(false);
+  });
+});
+
+describe("the completions", () => {
+  it("are recorded once, for the routes the store shows, with a toast's line each", () => {
+    const store = storeWith();
+    const storage = memory();
+    const progress = new ChallengeProgress(
+      store,
+      () => TODAY,
+      () => storage,
+    );
+    const completed: string[] = [];
+    progress.addEventListener("completed", (event) => {
+      completed.push(completedLine((event as CustomEvent<Challenge>).detail));
+    });
+    store.update({ route: ratio25 });
+    expect(completed).toEqual([]);
+    store.update({ route: max });
+    expect(completed).toEqual(["Challenge completed: A 30× route in town"]);
+    expect(Object.keys(progress.done)).toEqual(["portland-30x"]);
+    expect(progress.done["portland-30x"]).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    store.update({ route: null });
+    store.update({ route: max });
+    expect(completed).toHaveLength(1); // done already
+    expect(JSON.parse(storage.items.get(STORAGE_KEY) as string)).toEqual(progress.done);
+  });
+
+  it("persist, are reset, and ignore what is not theirs", () => {
+    const storage = memory();
+    const store = storeWith();
+    new ChallengeProgress(
+      store,
+      () => TODAY,
+      () => storage,
+    ).route(max);
+    const again = new ChallengeProgress(
+      storeWith(),
+      () => TODAY,
+      () => storage,
+    );
+    expect(Object.keys(again.done)).toEqual(["portland-30x"]);
+    let changes = 0;
+    again.addEventListener("change", () => changes++);
+    again.reset();
+    expect(again.done).toEqual({});
+    expect(changes).toBe(1);
+    expect(storage.items.has(STORAGE_KEY)).toBe(false);
+    for (const junk of ["not json", "[1]", "null", '{"nope": "2026-10-31", "us-chicago": 5}']) {
+      storage.items.set(STORAGE_KEY, junk);
+      expect(
+        new ChallengeProgress(
+          storeWith(),
+          () => TODAY,
+          () => storage,
+        ).done,
+      ).toEqual({});
+    }
+  });
+
+  it("survive a storage that throws, or none at all, for as long as the page", () => {
+    for (const storage of [
+      () => memory(true),
+      (): ChallengeStorage => {
+        throw new Error("none");
+      },
+    ]) {
+      const progress = new ChallengeProgress(storeWith(), () => TODAY, storage);
+      expect(progress.done).toEqual({});
+      let completed = 0;
+      progress.addEventListener("completed", () => completed++);
+      progress.route(max);
+      expect(Object.keys(progress.done)).toEqual(["portland-30x"]);
+      expect(completed).toBe(1);
+      progress.reset();
+      expect(progress.done).toEqual({});
+    }
+  });
+
+  it("complete the drawing's challenge when the drawing beats the engine, and only then", () => {
+    const progress = new ChallengeProgress(
+      storeWith(),
+      () => TODAY,
+      () => memory(),
+    );
+    const par = (lengthM: number): Par => ({
+      phase: "done",
+      jobId: "par1",
+      ratio: lengthM / 680,
+      lengthM,
+      routeId: "e1",
+      note: null,
+    });
+    const finished = { routeId: "d1", ratio: 16.9, lengthM: 11_492 };
+    const { request } = drawn; // Powell's → Pioneer Courthouse Square, Portland's build
+    progress.drawn({ request, finished: null, par: par(5000) }); // not finished
+    progress.drawn({ request, finished, par: { ...par(5000), phase: "planning" } });
+    progress.drawn({ request, finished, par: par(11_500) }); // a tie: 16.9× each
+    progress.drawn({ request, finished, par: par(12_000) }); // the engine wins
+    progress.drawn({ request: { ...request, region: "oregon" }, finished, par: par(5000) });
+    expect(progress.done).toEqual({});
+    progress.drawn({ request, finished, par: par(10_000) });
+    expect(Object.keys(progress.done)).toEqual(["portland-draw"]);
   });
 });

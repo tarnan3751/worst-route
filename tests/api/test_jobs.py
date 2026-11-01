@@ -111,7 +111,7 @@ async def test_events_come_in_order_and_replay_to_the_stored_route(data: Path) -
         assert done["metrics"]["length_m"] == saved.metrics.length_m
         assert saved.run["attempts"] == 400 and saved.run["accepted"] == job.accepted
         assert saved.input["stops"][1]["label"] == "stop 1"
-        mirrored = m._document(job, job.route, "budget")
+        mirrored = m._document(job, job.lead, job.route, "budget")
         stored = m.store.get(done["route_id"])
         assert stored is not None and mirrored["metrics"] == stored.metrics_json
         assert m.status(job, with_snapshot=False).status == "done"

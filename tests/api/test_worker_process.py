@@ -32,12 +32,12 @@ async def test_jobs_run_cancel_and_die_in_spawned_processes(data: Path) -> None:
     save_build(data, huge, "huge", latest=False)
     async with manager(data, inline_workers=False) as m:
         job = submit(m, loaded(data), request(GRID, [0, 45, 99], max_iterations=300))
-        assert isinstance(job.worker, _ProcessWorker)
+        assert isinstance(job.searches[0].worker, _ProcessWorker)
         events = await collect(m.subscribe(job))
         assert [e.name for e in events[:3]] == ["snapped", "baseline", "snapshot"]
         assert events[-1].name == "done" and "progress" in {e.name for e in events}
         assert m.store.get(json.loads(events[-1].data)["route_id"]) is not None
-        worker = job.worker
+        worker = job.searches[0].worker
         await until(lambda: not worker.alive(), timeout=10)  # joined after `done`
 
         build = loaded(data, "huge")
@@ -49,12 +49,13 @@ async def test_jobs_run_cancel_and_die_in_spawned_processes(data: Path) -> None:
         events = await collect(subscription)
         assert events[-1].name == "done"
         assert json.loads(events[-1].data)["stopped_because"] == "cancelled"
-        assert cancelled.worker is not None and not cancelled.worker.alive()  # terminated
+        stopped = cancelled.searches[0].worker
+        assert stopped is not None and not stopped.alive()  # terminated
 
         killed = submit(m, build, long)
         await until(lambda: killed.route is not None)
-        assert isinstance(killed.worker, _ProcessWorker)
-        os.kill(killed.worker._process.pid or 0, signal.SIGKILL)
+        assert isinstance(killed.searches[0].worker, _ProcessWorker)
+        os.kill(killed.searches[0].worker._process.pid or 0, signal.SIGKILL)
         await until(lambda: killed.end is not None)
         assert killed.error is not None and killed.error.code == "WORKER_FAILED"
         late = await collect(m.subscribe(killed))

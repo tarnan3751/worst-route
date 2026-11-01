@@ -267,8 +267,29 @@ class _ThreadWorker:
 
 
 @dataclass(eq=False)
+class Search:
+    """One of a job's searches: its seed, its worker, and its own copy of the route, with the
+    best route so far by the job's goal."""
+
+    seed: int
+    worker: _Worker | None = None
+    route: RouteArrays | None = None
+    score: float = 0.0
+    best: RouteArrays | None = None  # the best route so far, by the goal: often `route` itself
+    best_value: float = 0.0
+    best_score: float = 0.0
+    iteration: int = 0
+    accepted: int = 0
+    elapsed_s: float = 0.0
+    finished: Finished | None = None  # its validated route, once its worker has sent it
+    failure: ErrorBody | None = None  # why it ended without one
+    ended: bool = False  # its worker is no longer read, and holds no slot
+
+
+@dataclass(eq=False)
 class Job:
-    """One job and everything the manager knows of it."""
+    """One job and everything the manager knows of it. Its route, best route and numbers are
+    those of its leading search, the one its clients are shown."""
 
     id: str
     loaded: Loaded
@@ -292,15 +313,9 @@ class Job:
     end: Event | None = None
     subscribers: set["Subscription"] = field(default_factory=set)
     orphaned_since: float | None = None
-    route: RouteArrays | None = None
-    score: float = 0.0
+    searches: list[Search] = field(default_factory=list)
+    leader: int = 0  # the search its clients are shown
     goal: Goal | None = None
-    best: RouteArrays | None = None  # the best route so far, by the goal: often `route` itself
-    best_value: float = 0.0
-    best_score: float = 0.0
-    iteration: int = 0
-    accepted: int = 0
-    elapsed_s: float = 0.0
     baseline_length_m: float = 0.0
     baseline_time_s: float = 0.0
     baseline_delay_s: float = 0.0
@@ -311,9 +326,40 @@ class Job:
     route_id: str | None = None
     stopped_because: StopReason | None = None
     error: ErrorBody | None = None
-    worker: _Worker | None = None
     follower: "asyncio.Task[None] | None" = None
-    closing: bool = False  # an end is under way; the worker's queue is no longer read
+    closing: bool = False  # an end is under way; the workers' queues are no longer read
+
+    @property
+    def lead(self) -> Search:
+        return self.searches[self.leader]
+
+    @property
+    def route(self) -> RouteArrays | None:
+        return self.lead.route
+
+    @property
+    def best(self) -> RouteArrays | None:
+        return self.lead.best
+
+    @property
+    def score(self) -> float:
+        return self.lead.score
+
+    @property
+    def best_score(self) -> float:
+        return self.lead.best_score
+
+    @property
+    def iteration(self) -> int:
+        return self.lead.iteration
+
+    @property
+    def accepted(self) -> int:
+        return self.lead.accepted
+
+    @property
+    def elapsed_s(self) -> float:
+        return self.lead.elapsed_s
 
 
 class Subscription:
@@ -365,15 +411,15 @@ class JobManager:
         if self._sweeper is not None:
             self._sweeper.cancel()
         jobs = [self.jobs[j] for j in self._running]
+        workers = [s.worker for job in jobs for s in job.searches if s.worker is not None]
         for job in jobs:
             job.closing = True
-            if job.worker is not None:
-                job.worker.stop()
             if job.follower is not None:
                 job.follower.cancel()
+        for worker in workers:
+            worker.stop()
         await asyncio.gather(
-            *(asyncio.to_thread(j.worker.close) for j in jobs if j.worker is not None),
-            return_exceptions=True,
+            *(asyncio.to_thread(worker.close) for worker in workers), return_exceptions=True
         )
 
     def refusal(self, client: str | None = None) -> TooManyJobs | None:
@@ -418,23 +464,35 @@ class JobManager:
             order=tuple(range(len(prepared.request.stops))),
             request_id=logs.request_id.get(),
             client=client,
+            searches=[Search(prepared.request.seed)],
         )
         self.jobs[job.id] = job
         if not prepared.request.reorder:  # else once the worker has chosen the order
             self._emit(job, "snapped", self._snapped(job, prepared.masks))
-        if self._may_start(client):
+        if self._may_start(client, len(job.searches)):
             self._start(job)
         else:
             self._queued.append(job)
         return job
 
-    def _may_start(self, client: str | None) -> bool:
-        """Whether a worker is free and `client` runs fewer jobs than it may."""
-        s = self.settings
-        if len(self._running) >= s.max_jobs:
-            return False
-        limit = s.running_per_client
+    def _free(self) -> int:
+        """The workers free: `max_jobs` less one for each search of a running job that has not
+        ended."""
+        busy = sum(not s.ended for j in self._running for s in self.jobs[j].searches)
+        return self.settings.max_jobs - busy
+
+    def _client_may_run(self, client: str | None) -> bool:
+        """Whether `client` runs fewer jobs than it may."""
+        limit = self.settings.running_per_client
         return client is None or limit is None or self.client_jobs(client)[0] < limit
+
+    def _may_start(self, client: str | None, workers: int = 1) -> bool:
+        """Whether `workers` are free with no queued job waiting for workers before them, and
+        `client` runs fewer jobs than it may."""
+        if not self._client_may_run(client):
+            return False
+        waiting = any(self._client_may_run(j.client) for j in self._queued)
+        return not waiting and self._free() >= workers
 
     def _may_queue(self, client: str | None) -> bool:
         """Whether the queue has room, for `client` too."""
@@ -494,73 +552,86 @@ class JobManager:
     # Running a job ------------------------------------------------------------------------
 
     def _start(self, job: Job) -> None:
-        spec = JobSpec(
-            data_dir=self.data_dir,
-            region=str(job.loaded.data.meta["region"]),
-            build_id=str(job.loaded.data.meta["build_id"]),
-            backend=self.backend,
-            request=job.request,
-            base=job.base,
-        )
         kind = _ThreadWorker if self.settings.inline_workers else _ProcessWorker
-        try:
-            job.worker = kind(spec, f"worst-route job {job.id}")
-        except Exception as error:
-            log.exception("job %s: its worker did not start", job.id, extra=_fields(job))
-            message = f"the worker did not start: {type(error).__name__}: {error}"
-            job.error = ErrorBody(code="WORKER_FAILED", message=message)
-            self._emit(job, "error", job.error)
+        for search in job.searches:
+            spec = JobSpec(
+                data_dir=self.data_dir,
+                region=str(job.loaded.data.meta["region"]),
+                build_id=str(job.loaded.data.meta["build_id"]),
+                backend=self.backend,
+                request=job.request.model_copy(update={"seed": search.seed}),
+                base=job.base,
+            )
+            try:
+                search.worker = kind(spec, f"worst-route job {job.id}")
+            except Exception as error:
+                log.exception("job %s: its worker did not start", job.id, extra=_fields(job))
+                message = f"the worker did not start: {type(error).__name__}: {error}"
+                search.failure = ErrorBody(code="WORKER_FAILED", message=message)
+                search.ended = True
+        failure = job.searches[0].failure
+        if failure is not None and all(s.ended for s in job.searches):
+            job.error = failure
+            self._emit(job, "error", failure)
             self._record_end(job, "error")
             return
         job.status = "running"
         job.started = datetime.now(UTC)
         job.started_at = time.monotonic()
         self._running.add(job.id)
-        job.follower = asyncio.create_task(self._follow(job, job.worker))
+        job.follower = asyncio.create_task(self._follow(job))
 
-    async def _follow(self, job: Job, worker: _Worker) -> None:
-        """Read the worker's messages until the job ends."""
+    async def _follow(self, job: Job) -> None:
+        """Read the workers' messages until the job ends."""
         s = self.settings
         deadline = job.started_at + job.request.budget_s + s.kill_grace_s
         if job.request.reorder:  # its search for the order runs before its loop
             deadline += s.reorder_search_s
         try:
             while not job.closing:
-                alive = worker.alive()
+                live = [(x, x.worker) for x in job.searches if not x.ended and x.worker is not None]
+                alive = [worker.alive() for _, worker in live]
                 wait = s.read_grace_s
                 if job.pending:
                     due = job.last_flush + s.coalesce_s - time.monotonic()
                     wait = min(wait, max(0.0, due))
-                messages, closed = await asyncio.to_thread(_drain, worker, wait)
+                drained = await asyncio.gather(
+                    *(asyncio.to_thread(_drain, worker, wait) for _, worker in live)
+                )
                 if job.closing:
                     return
-                for message in messages:
-                    if isinstance(message, Started):
-                        if job.request.reorder:
-                            await self._reordered(job, message)
-                            if job.closing:
-                                return
-                            # the search has ended: the budget and the grace run from here
-                            deadline = time.monotonic() + job.request.budget_s + s.kill_grace_s
-                        self._started(job, message)
-                    elif isinstance(message, Spliced):
-                        self._spliced(job, message)
-                    elif isinstance(message, Improved):
-                        self._improved(job, message)
-                    else:
-                        self._flush(job)
-                        if isinstance(message, Finished):
-                            await self._finished(job, message)
+                for (search, _), (messages, _) in zip(live, drained, strict=True):
+                    for message in messages:
+                        if isinstance(message, Started):
+                            if job.request.reorder:
+                                await self._reordered(job, message)
+                                if job.closing:
+                                    return
+                                # the search has ended: the budget and the grace run from here
+                                deadline = time.monotonic() + job.request.budget_s + s.kill_grace_s
+                            self._started(job, search, message)
+                        elif isinstance(message, Spliced):
+                            self._spliced(job, search, message)
+                        elif isinstance(message, Improved):
+                            self._improved(job, search, message)
                         else:
-                            await self._failed(job, message)
-                        return
+                            self._flush(job)
+                            if isinstance(message, Finished):
+                                await self._finished(job, search, message)
+                            else:
+                                await self._failed(job, search, message)
+                            return
                 if job.pending and time.monotonic() - job.last_flush >= s.coalesce_s:
                     self._flush(job)
                 if time.monotonic() >= deadline:
                     await self._end_early(job, "timeout")
-                elif closed or (not messages and not alive):
-                    lost = Failed("WORKER_FAILED", "the worker stopped without a result")
-                    await self._failed(job, lost)
+                    continue
+                for (search, _), was_alive, (messages, closed) in zip(
+                    live, alive, drained, strict=True
+                ):
+                    if closed or (not messages and not was_alive):
+                        lost = Failed("WORKER_FAILED", "the worker stopped without a result")
+                        await self._failed(job, search, lost)
         except Exception as error:
             log.exception("job %s: following its worker failed", job.id, extra=_fields(job))
             await self._fail_unended(job, error)
@@ -579,8 +650,8 @@ class JobManager:
         job.request, job.masks, job.snaps, job.order = request, masks, m.snaps, m.order
         self._emit(job, "snapped", self._snapped(job, masks))
 
-    def _started(self, job: Job, m: Started) -> None:
-        job.route, job.score = m.route, m.score
+    def _started(self, job: Job, search: Search, m: Started) -> None:
+        search.route, search.score = m.route, m.score
         job.baseline_length_m, job.baseline_time_s = m.baseline_length_m, m.baseline_time_s
         job.baseline_edges, job.baseline_delay_s = m.baseline_edges, m.baseline_delay_s
         data = job.loaded.data
@@ -588,8 +659,8 @@ class JobManager:
         # no objective to make for it; the alphabet route's ratio is its length's, as distance's
         primary = OBJECTIVES.get(job.request.objective, Distance).primary
         job.goal = Goal(job.request.target, data, primary=primary, baseline=baseline)
-        job.best, job.best_value = m.route, job.goal.value(m.score, m.route.metrics)
-        job.best_score = m.score
+        search.best, search.best_value = m.route, job.goal.value(m.score, m.route.metrics)
+        search.best_score = m.score
         self._emit(
             job,
             "baseline",
@@ -600,34 +671,35 @@ class JobManager:
         self._emit(job, "snapshot", self._snapshot(job))
         job.last_flush = time.monotonic()
 
-    def _spliced(self, job: Job, m: Spliced) -> None:
-        route, goal = job.route, job.goal
+    def _spliced(self, job: Job, search: Search, m: Spliced) -> None:
+        route, goal = search.route, job.goal
         if route is None or goal is None:
             raise RuntimeError("a splice before the start")
         nodes = np.concatenate((route.nodes[: m.i], m.nodes, route.nodes[m.j + 1 :]))
         edges = np.concatenate((route.edges[: m.i], m.edges, route.edges[m.j :]))
         shift = len(m.nodes) - (m.j - m.i + 1)
         stop_idx = tuple(k if k <= m.i else k + shift for k in route.stop_idx)
-        job.route = RouteArrays(nodes.astype(np.int32), edges.astype(np.int32), stop_idx, m.metrics)
-        job.score, job.iteration, job.elapsed_s = m.score, m.iteration, m.elapsed_s
+        route = RouteArrays(nodes.astype(np.int32), edges.astype(np.int32), stop_idx, m.metrics)
+        search.route, search.score = route, m.score
+        search.iteration, search.elapsed_s = m.iteration, m.elapsed_s
         value = goal.value(m.score, m.metrics)
-        if goal.better(value, job.best_value):
-            job.best, job.best_value, job.best_score = job.route, value, m.score
-        job.accepted += 1
+        if goal.better(value, search.best_value):
+            search.best, search.best_value, search.best_score = route, value, m.score
+        search.accepted += 1
         job.pending.append(
             sse.splice_out(job.loaded.data, job.loaded.geometry, m.i, m.j, m.nodes, m.edges)
         )
 
-    def _improved(self, job: Job, m: Improved) -> None:
-        """A better alphabet route: the job's route and its best, sent as a `snapshot` and then
-        a `progress` with its numbers and no splice."""
+    def _improved(self, job: Job, search: Search, m: Improved) -> None:
+        """A better alphabet route: the search's route and its best, sent as a `snapshot` and
+        then a `progress` with its numbers and no splice."""
         goal = job.goal
-        if job.route is None or goal is None:
+        if search.route is None or goal is None:
             raise RuntimeError("a better route before the start")
-        job.route = job.best = m.route
-        job.score, job.iteration, job.elapsed_s = m.score, m.iteration, m.elapsed_s
-        job.best_value, job.best_score = goal.value(m.score, m.route.metrics), m.score
-        job.accepted += 1
+        search.route = search.best = m.route
+        search.score, search.iteration, search.elapsed_s = m.score, m.iteration, m.elapsed_s
+        search.best_value, search.best_score = goal.value(m.score, m.route.metrics), m.score
+        search.accepted += 1
         self._emit(job, "snapshot", self._snapshot(job))
         self._emit(job, "progress", self._progress(job, []))
         job.last_flush = time.monotonic()
@@ -644,7 +716,7 @@ class JobManager:
         if job.progress_count % self.settings.snapshot_every == 0:
             self._emit(job, "snapshot", self._snapshot(job))
 
-    async def _finished(self, job: Job, m: Finished) -> None:
+    async def _finished(self, job: Job, search: Search, m: Finished) -> None:
         job.closing = True
         rid = await asyncio.to_thread(
             self.store.put, m.document, input=job.input, baseline_edges=m.baseline_edges
@@ -654,10 +726,10 @@ class JobManager:
         nodes, edges = (np.array(doc[k], dtype=np.int32) for k in ("nodes", "edges"))
         stored = RouteArrays(nodes, edges, tuple(doc["stop_idx"]), metrics)
         if not _same_route(job.route, stored):
-            self._show(job, stored)
+            self._show(job, search, stored)
         await self._done(job, rid, doc["run"]["stopped_because"], _done_metrics(doc))
 
-    async def _failed(self, job: Job, m: Failed) -> None:
+    async def _failed(self, job: Job, search: Search, m: Failed) -> None:
         job.closing = True
         if m.trace:
             log.error("job %s failed: %s\n%s", job.id, m.message, m.trace, extra=_fields(job))
@@ -673,10 +745,10 @@ class JobManager:
             message = "cancelled before it started"
             await self._error(job, ErrorBody(code="CANCELLED", message=message))
             return
-        if job.worker is not None:
-            job.worker.stop()
+        self._stop_workers(job)
         self._flush(job)
-        route, masks = job.best, job.masks
+        search = job.lead
+        route, masks = search.best, job.masks
         if route is None or masks is None:
             if reason == "timeout":
                 body = ErrorBody(code="WORKER_TIMEOUT", message="no route before the time limit")
@@ -703,25 +775,31 @@ class JobManager:
             message = f"the route so far failed validation: {failed}"
             await self._error(job, ErrorBody(code="VALIDATION_FAILED", message=message))
             return
-        document = self._document(job, route, reason)
+        document = self._document(job, search, route, reason)
         rid = await asyncio.to_thread(
             self.store.put, document, input=job.input, baseline_edges=job.baseline_edges
         )
         if not _same_route(job.route, route):
-            self._show(job, route)
+            self._show(job, search, route)
         await self._done(job, rid, reason, _done_metrics(document))
 
-    def _show(self, job: Job, route: RouteArrays) -> None:
-        """Make `route`, the one the job stores, its route, and send it as a snapshot."""
+    def _show(self, job: Job, search: Search, route: RouteArrays) -> None:
+        """Make `route`, the one the job stores, the route of `search`, which leads, and send it
+        as a snapshot."""
         self._flush(job)
-        job.route = route
+        job.leader = job.searches.index(search)
+        search.route = route
         self._emit(job, "snapshot", self._snapshot(job))
+
+    def _stop_workers(self, job: Job) -> None:
+        for search in job.searches:
+            if search.worker is not None:
+                search.worker.stop()
 
     async def _fail_unended(self, job: Job, error: Exception) -> None:
         """End a job an unexpected error left without its `done` or `error`, so no stream hangs."""
         if job.end is None:
-            if job.worker is not None:
-                job.worker.stop()
+            self._stop_workers(job)
             body = ErrorBody(code="WORKER_FAILED", message=f"{type(error).__name__}: {error}")
             await self._error(job, body)
 
@@ -739,14 +817,20 @@ class JobManager:
 
     async def _end(self, job: Job, status: JobState) -> None:
         self._record_end(job, status)
-        for waiting in list(self._queued):  # in order, each that may start now
-            if len(self._running) >= self.settings.max_jobs:
+        self._advance()
+        workers = [s.worker for s in job.searches if s.worker is not None]
+        await asyncio.gather(*(asyncio.to_thread(worker.close) for worker in workers))
+
+    def _advance(self) -> None:
+        """Start the queued jobs that may, in order: one whose client runs all the jobs it may is
+        passed over, and one waiting for workers holds up those after it."""
+        for waiting in list(self._queued):
+            if not self._client_may_run(waiting.client):
+                continue
+            if self._free() < len(waiting.searches):
                 break
-            if self._may_start(waiting.client):
-                self._queued.remove(waiting)
-                self._start(waiting)  # a start that fails ends that job alone
-        if job.worker is not None:
-            await asyncio.to_thread(job.worker.close)
+            self._queued.remove(waiting)
+            self._start(waiting)  # a start that fails ends that job alone
 
     def _record_end(self, job: Job, status: JobState) -> None:
         job.status = status
@@ -861,18 +945,22 @@ class JobManager:
             simplify_m=self.settings.simplify_m,
         )
 
-    def _document(self, job: Job, route: RouteArrays, reason: StopReason) -> dict[str, Any]:
-        """The `route.json` of the manager's best route (`engine/io.py`'s layout)."""
+    def _document(
+        self, job: Job, search: Search, route: RouteArrays, reason: StopReason
+    ) -> dict[str, Any]:
+        """The `route.json` of the manager's best route of `search` (`engine/io.py`'s
+        layout)."""
         meta = job.loaded.data.meta
         ratio = sse.route_metrics(route.metrics, job.baseline_length_m).ratio
-        target = job.goal.describe(job.best_value) if job.goal is not None else None
+        target = job.goal.describe(search.best_value) if job.goal is not None else None
+        request = job.request.model_copy(update={"seed": search.seed})
         return {
             "graph_version": meta["graph_version"],
             "region": meta["region"],
             "build_id": meta["build_id"],
-            "seed": job.request.seed,
+            "seed": search.seed,
             "engine_version": ENGINE_VERSION,
-            "request": job.request.model_dump(mode="json"),
+            "request": request.model_dump(mode="json"),
             "stops": [
                 {"lat": s.lat, "lon": s.lon, "node": s.node, "moved_m": s.moved_m, "note": s.note}
                 for s in job.snaps
@@ -895,10 +983,10 @@ class JobManager:
                 **({"target": target} if target is not None else {}),
             },
             "run": {
-                "attempts": job.iteration,
-                "accepted": job.accepted,
+                "attempts": search.iteration,
+                "accepted": search.accepted,
                 "stopped_because": reason,
-                "elapsed_s": job.elapsed_s,
+                "elapsed_s": search.elapsed_s,
                 "backend": job.loaded.backend.name,
             },
         }

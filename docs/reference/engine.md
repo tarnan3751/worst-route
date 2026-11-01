@@ -24,9 +24,9 @@ routes either way, on every build, transition tables included (**Searches**).
 | `turns.py` | `turn_classes`, `count_turns` |
 | `constraints.py` | `Constraints`, `TurnConstraint`, `NoLeft`, `NoRight`, `HardMode`, `stretches`, `returning`, `constrain`, `turn_penalty_for`, `NO_CONSTRAINTS` |
 | `detour.py` | `find_detour`, `pick_strategy`, `waypoint_path`, `random_weight_path`, `local_exhaustive_paths` |
-| `worsen.py` | `worsen`, `run_worsen`, `pick_segment`, `detour_ends`, `widened`, `UnusedNodes`, `Budget`, `ProgressEvent`, `WorsenResult` |
+| `worsen.py` | `worsen`, `run_worsen`, `pick_segment`, `detour_ends`, `widened`, `UnusedNodes`, `temperature`, `Budget`, `ProgressEvent`, `WorsenResult` |
 | `alphabet_search.py` | `alphabet_route`, `edge_letters`, `alphabet_counts`, `alphabet_scored` (**Alphabet**) |
-| `plan.py` | `plan_route`, `PlanResult`, `check_base`, `BaseRouteMismatch` |
+| `plan.py` | `plan_route`, `PlanResult`, `check_base`, `BaseRouteMismatch`, `anneal_temperature` |
 | `io.py` | `route_document`, `document`, `read_route` / `SavedRoute` |
 | `draw.py` | `DrawRules`, `Drawing`, `check_drawing`, `next_moves`, `finish_drawing`, `DrawRefused`, `DrawingUnfinished`, `drawing_problem` (**Drawing**) |
 
@@ -725,13 +725,14 @@ seldom finds a new path there; the waypoint is the workhorse.
 ## The loop
 
 `worsen(backend, spatial, data, route, objective, budget, rng, node_mask, *, r_max,
-banned_edges=None, check_delta=False)` is a generator of `ProgressEvent(iteration, elapsed_s,
-score, metrics, splice)`, one per accepted splice. The `Splice(i, j, nodes, edges)` replays it
-on a copy of the route. The generator returns `WorsenResult(best, events, attempts, accepted,
-stopped_because, elapsed_s, refused_transitions)`, and `run_worsen(..., on_event=None)` drives
-it. `refused_transitions` counts the candidates the splice refused with `TransitionForbidden`:
-the searches see the tables, so a nonzero count means a search returned a turn it should not
-have. Each attempt:
+banned_edges=None, goal=None, check_delta=False, anneal_t0=None)` is a generator of
+`ProgressEvent(iteration, elapsed_s, score, metrics, splice)`, one per accepted splice. The
+`Splice(i, j, nodes, edges)` replays it on a copy of the route. The generator returns
+`WorsenResult(best, events, attempts, accepted, stopped_because, elapsed_s,
+refused_transitions, reheats)`, and `run_worsen(..., on_event=None)` drives it.
+`refused_transitions` counts the candidates the splice refused with `TransitionForbidden`: the
+searches see the tables, so a nonzero count means a search returned a turn it should not have.
+`reheats` counts the times a max run reheated (**Annealing**). Each attempt:
 
 1. **Window** (`pick_segment`). One edge (j = i + 1) with probability 0.8, else a run of
    1 + a geometric number of edges, 3 on average (`RUN_EDGES_MEAN`) and at most 12
@@ -771,7 +772,8 @@ have. Each attempt:
    new score and metrics are a full `objective.evaluate` of the spliced arrays.
    With `check_delta` (tests), the loop asserts that this equals the current score plus
    `delta`. The splice is told the request's and objective's bans as `extra_banned`. `best` is
-   tracked by `Goal.better`: for `max` the highest score.
+   tracked by `Goal.better`: for `max` the highest score. Once a max run has reheated
+   (**Annealing**, below), a detour that loses is sometimes taken too.
 
 **The ambition radius** starts at `objective.initial_radius`. It grows 1.5× on every accepted
 splice, up to `r_max`, and halves after every 20 failures in a row, down to
@@ -787,7 +789,69 @@ radius goes back to `objective.initial_radius` and a new cycle starts, giving ev
 attempt too; `"budget"` when `max_iterations` attempts are made or `budget.seconds` have
 passed; `"converged"` when 3 cycles in a row (`CONVERGED_EMPTY_CYCLES`) accept nothing, so a
 run ends 1,604 attempts after its last splice: the rest of that splice's cycle, then three
-empty ones. The same rule holds in every phase of a target run.
+empty ones. The same rule holds in every phase of a target run. A max run reheats instead, its
+first 3 times (**Annealing**), counting the empty cycles again from each reheat: it ends 1,604
+attempts after its last splice when that came after its last reheat, else 1,203 after the
+reheat.
+
+**Annealing** (engine version 6, 2026-10-31). A max run that would stop as converged reheats
+instead, up to `ANNEAL_REHEATS` (3) times, and stops as converged after the last; the cycle
+starts again as any new one does. While heated, a detour the goal refuses is taken anyway when
+it loses (`delta` < 0), adds no net penalised turn (`constraint_delta` ≥ 0) and
+`feasible_window` agrees, with probability exp(delta / T), one `rng.random()` drawn for it
+after it is scored: T = T0 × `ANNEAL_COOLING` (0.99)^k after k splices accepted since the
+reheat, and none once below T0 × `ANNEAL_FREEZE` (1/1000), so every heat ends greedy
+(`temperature`). T0 (`plan.anneal_temperature`) is `ANNEAL_T0_FRACTION` (1 %) of the
+objective's primary quantity of the baseline: metres for the distance, collecting and the
+pilgrimage, seconds of experienced time for the slowest time; of the route the loop starts
+from for a round trip, whose baseline is 0 m. An item or a visit weighs 10⁶ in the score, so a
+detour that loses one has a delta of −10⁶ plus whatever length it adds, and its chance is at most
+exp((−10⁶ + added) / T0): for a detour adding little length, 0 in floating point (exp underflows
+below about −745) while T0 is under about 1,342 m, a baseline under about 134 km; about
+1.4 × 10⁻¹¹ a candidate at a 4,000 km baseline (T0 40 km) and 9 × 10⁻⁹ at 5,400 km. Whatever
+the current route gives back, the route returned is the highest-scoring one the run had
+(`Goal.better`): the best never moves down. A target run never anneals (`plan_route` passes
+`anneal_t0` for a max goal only, and the loop ignores it for any other), and the alphabet route
+has its own search. Only a strict loss is taken: exp(0) = 1 would take every equal-length
+alternative at any temperature, and on a lattice, where every
+way round a block is as long, a heat then spliced in equal-length swaps until its freeze (688
+of them) and the random towns of `test_worsen.py` ran about a hundred times greedy's attempts
+(175,000 against 1,700); on Portland no candidate had a gain of exactly 0 (none of the 989–2,028
+a run weighed, on four pairs) and the strict rule gives the same routes byte for byte. A splice
+taken so is an accepted splice in every way: its event, the radius ×1.5, the failures reset, its
+cycle not empty. `best` moves only by `Goal.better`, so it is never one, and the run returns
+the highest-scoring route it had, which may come before its last (within 0.4 % of it in every
+Portland run below; on the fixture lattices the last is often a little below).
+
+Why it reheats at convergence rather than cooling from the first attempt, measured with greedy
+interleaved per pair in one session on Portland's acceptance pairs (build 0b72253e5e8a, seed
+1, 30 s, seed 2 on the first five for the Jaccard; a load of 7–24):
+
+| Schedule | Median | Range | Converged | Per pair against greedy | Jaccard of seeds 1 and 2: edges, road units | Median run |
+|---|---|---|---|---|---|---|
+| greedy (version 5) | 26.05× | 6.10–54.05× | 16 of 20 | – | 0.13–0.18, 0.28–0.33 | 9.2 s |
+| cooling per accepted splice from the start (×0.993, T0 3 %) | 27.92× | 7.15–51.31× | 18 | ×0.91–×1.71 | 0.14–0.20, 0.27–0.40 | 12.5 s |
+| cooling per cycle from the start (×0.7, T0 3 %) | 28.21× | 6.16–52.16× | 13 | ×0.92–×1.69 | 0.15–0.21, 0.28–0.39 | 19.0 s |
+| reheating on convergence (as built) | 29.96× | 7.11–55.17× | 7 | ×1.00–×1.64 | 0.17–0.23, 0.33–0.40 | 30.0 s |
+
+Greedy's own seeds differ that much per pair (seeds 2 and 3 against seed 1 run ×0.69–×1.77 and
+×0.65–×1.44, five and nine pairs more than 10 % lower), so a schedule that changes the run from
+its first draw is a reseed as much as annealing. Reheating keeps the greedy run, draw for draw,
+until it would have stopped, so its best is at least greedy's on every pair greedy converges on
+(16 of 16 here; the others ran to the budget in both), and it uses the budget greedy leaves
+idle. On Oregon's named trips (30 s) and the national ones on `us-t3` (Portland → Chicago and
+New York → Los Angeles, 60 s) every run stops on its budget, so none reheats and each is
+greedy's (their figures moved only with the attempts the load allowed: 14.72× and 15.25×,
+19.15× and 18.61×, 9.82× and 9.11×, 6.70× and 7.20×, 8.33× and 8.13×, 3.81× and 3.81×), where
+cooling from the start lost 5–9 % on four of the six. On eight of the pairs, reheating from 3 % of
+the baseline made a little more than from 1 % (a median ×1.29 against ×1.22 of greedy per pair)
+but converged within the budget in 2 of 8 runs against 5, and as many reheats as the budget
+allows (×1.31) in none: 3 reheats from 1 % keep a run bounded. The acceptance run as built
+(`tools/acceptance.py --region portland --pair-seed 2026 --pairs 20 --seed 1 --budget 30`, the
+same build, 2026-10-31, a load of 7–12) plans all 20 pairs and the validator passes all 20, at a
+median of 30.59× (7.11–54.56×), 10 of 20 runs converging within the 30 s, the median run 29.3 s
+at 7,019 attempts/s, no candidate refused for a transition; seeds 1 and 2 share 0.17–0.23 of
+their edges and 0.32–0.41 of their road units on the first five pairs.
 
 ## Targets
 
@@ -843,7 +907,8 @@ only approach it, so the best is the last route except after an overshoot that s
 bring back: on a 5 × 5 lattice, where every corner-to-corner path is 800 m plus a multiple of
 200 m, a 2.1× target (1,646–1,714 m) grows to 1,600 m, overshoots to 1,800 m, converges, and
 returns the 1,600 m route. For `max`, nothing changes: a gain is taken, the highest score is
-best, and the max loop draws and ranks exactly as before (the golden route).
+best, and the max loop draws and ranks exactly as before (the golden route); since engine
+version 6 a max run that converges goes on annealing (**Annealing**), which no target run does.
 
 **Determinism.** Every random choice is drawn from one `numpy.random.Generator(PCG64(seed))`, in
 a fixed order: the round-trip seed, then the loop's windows, strategies, waypoints and weights.
@@ -855,12 +920,20 @@ sequence of splices on any machine. The clock only decides when to stop:
   again with `max_iterations` set to its `run.attempts` and a budget in seconds at least as
   large as the first run's (or the clock may cut it shorter).
 
+Annealing (engine version 6, **The loop**) adds one draw, at a candidate a heated max run may
+take, and none before a run's first reheat. A run that stops before it would have converged
+therefore draws what version 5 drew and gives version 5's route, byte for byte: the goldens
+(400 attempts cannot end even a cycle), and the CLI's default 5,000 attempts and the daily
+route's 5,000 wherever greedy needs more to converge (16,406–173,807 attempts on Portland's
+acceptance pairs; the two national trips above did not converge within their minute). Its
+temperature is a count, so a run that stops on time is still a prefix of its run.
+
 **Measured** on the dev machine, with the reference backend unless the row says otherwise:
 
 | Graph | Result |
 |---|---|
-| 20 × 20 grid, corner to corner | converges in 0.2–0.4 s (3,800–6,800 attempts) at 10.3×, using 391–393 of 400 nodes (seeds 0–3) |
-| 30 × 30 grid, start, centre via and end | converges in 0.5–0.6 s at 14.9–15.1× |
+| 20 × 20 grid, corner to corner | converges in 0.2–0.4 s (3,800–6,800 attempts) at 10.3×, using 391–393 of 400 nodes (seeds 0–3); at engine version 6 (2026-11-01, `plan_route`, seeds 0–3) it converges after its 3 reheats in 0.35–0.38 s (8,345–8,898 attempts) at 10.26–10.32×, the same 391–393 nodes: every way round a block is as long, so a shorter alternative loses at least 200 m against a T0 of 38 m, and the heats took one shorter splice in the four runs; a heat that takes nothing adds its 1,203 attempts (3 empty cycles), so with no splice taken the route is greedy's and the run 3,609 attempts longer |
+| 30 × 30 grid, start, centre via and end | converges in 0.5–0.6 s at 14.9–15.1×; at engine version 6 (2026-11-01, `plan_route`, the via at node 465, seeds 0–3) it converges after its 3 reheats in 0.70–1.02 s (14,001–19,809 attempts) at 15.07–15.17×, 875–881 of 900 nodes, the heats taking 2–6 shorter splices a run |
 | `grid_graph(100, 100, 100)` corner to corner, 20 s budget | about 490 attempts/s (the review's run), so the default `max_iterations` of 5000 stops it at about 10 s, at 33×; after random weight was limited to the window's ball, about 680 attempts/s, the 5000 attempts in about 7.4 s, at 33–34× |
 | the same, 5000 attempts, both backends in one session (seeds 1 and 2) | reference 1007–1072 attempts/s, `CsrBackend` 1101–1164 attempts/s; identical routes, at 34.00× and 33.44×; with the release by ban counts and the balls scanning the request's nodes, reference 3,240–3,700 attempts/s, `CsrBackend` 5,120–5,400 attempts/s, the same routes; with the loop tuned for the M1 acceptance (8 × radius searches, longer windows, the segment bias, waypoints drawn half uniformly), reference 1,775–2,134 attempts/s, `CsrBackend` 3,363–3,715 attempts/s, identical routes at 33.14× and 31.63× |
 
@@ -1006,8 +1079,9 @@ report, backend, goal, order)` runs a request end to end. It searches with `back
 8. `Route.new` of the seed (or the base; an alphabet route's seed scored with its letters,
    `alphabet_scored`, none yet), then `on_start(snaps, masks, baseline, route, order)`;
 9. `run_worsen` toward the goal within the request's budget, calling
-   `on_progress(event, baseline)` on every accepted splice; for `alphabet`, `alphabet_route`
-   instead (**Alphabet**), calling it on every better route;
+   `on_progress(event, baseline)` on every accepted splice, with `anneal_t0` the reheats'
+   temperature (`anneal_temperature`, **Annealing**) for a max goal and none for a target; for
+   `alphabet`, `alphabet_route` instead (**Alphabet**), calling it on every better route;
 10. `validate_route` on the best route, against the request's masks and the resolved stops (and
     for `alphabet`, with its `alphabet` check).
 
@@ -1855,6 +1929,18 @@ from the line, past the 433 km leash; no turn-blind path lies inside it.
   0.46 s with the whole country active; about 2.6 GB at 42 M edges).
 - **Time budgets.** A run that stops on time is reproducible only through its recorded attempt
   count.
+- **Annealing** (engine version 6, **The loop**). A max run that converged before its budget now
+  goes on to its reheats, so most runs on Portland use their whole budget: the acceptance pairs'
+  median run took 30.0 s against greedy's 9.2 s at 30 s (7 of 20 converging within it against
+  16), and at the frontend's default 20 s most Portland runs end on the budget. It helps only a
+  run that converges: one that stops on its budget first (every Oregon and national trip
+  measured, at 30 s and 60 s) never reheats and is greedy's. While a heat lasts, the route drawn
+  and the stat line's ratio can fall (the stat line then shows the best so far beside it), and
+  the route stored is the best, which may come before the last. Annealed routes are longer and
+  fill more of their leash, so two seeds share more of them: the Jaccard of seeds 1 and 2 on the
+  first five acceptance pairs rose from 0.13–0.18 (mean 0.160) to 0.17–0.23 (mean 0.189) on the
+  edges and from 0.28–0.33 (0.298) to 0.33–0.40 (0.363) on the road units; the variety test's
+  0.3 on the edges still holds.
 - **The strategy mix.** Random weight found a path other than the removed run in 3 of 64
   one- and two-edge windows on a straight route (16 seeds, an 8 × 8 lattice; `test_detour.py`),
   against 32 of 64 for the waypoint. In whole runs on `grid_graph(100, 100, 100)` corner to
@@ -1934,16 +2020,16 @@ two-way street, which the drawing's tests and the API's draw on).
 | `test_search.py` | the turn edges counting only on a build with rows, a path driving both carriageways searched again, and the rounds' limit; a cheapest legal walk entering a node twice searched again, to a bypass or to no path (and none at once for the baseline's search), the rounds' limit (as many loops as rounds, not one more), on both backends; on every pair of two small towns with tables, the answer a legal simple path by brute force (or None, always when none exists), costing at least the walk; the searches made again on a 30 × 30 town the same bytes on both backends; a seed leg's tree (`leg_path`): the walk's first entry banned where banning its way back leaves nothing, the searches growing with the distance between the ends (as many loops as searches, not one more, unless the ends lie 100 km farther apart), the later twin banned, on the small towns the walk where it is simple and else a legal simple path costing at least it, all 107 with 17 searches, the same bytes on both backends there and on the 30 × 30 town |
 | `test_seed_route.py` | `resolve_stops` deterministic, node-disjoint legs, legs avoiding later stops, the penalty re-solve on a corridor, the baseline, the re-snap walk out of a one-entrance ring, the start never moving, a point-to-point trip never collapsing onto the start, a leg between two stops on one node, unreachable legs named by both ends, a leg going round a junction that allows only straight on, the turn at a via, the baseline's legal legs and its turn-blind fallback, a leg whose cheapest legal walk loops taking a simple path (the end staying, the baseline still turn-blind), a leg the chain of rounds refused entering the node by the way its walk came back (the end staying), a leg driving both carriageways going round, a round trip to a neighbour not one road out and back, round-trip loops (never back along the way out); the worst order against each order's seed found as planning finds it: the first of the longest (four orders tied, two on a round trip), the orders no seed fits skipped (8 of 24 round a round trip), the start and the end kept, a stop the fallback moves out of a one-entrance ring in every order and the order not given winning, the given order's refusal raised as `resolve_stops` raises it, the same order twice and on both backends, one order for one stop between the ends, a pilgrimage's order whose area lacks its brand skipped |
 | `test_objectives.py` | `Distance`, the radius, the registry (`brand` with its brand), and `delta` against a full re-score for every kind of term, the first-edge term included; the delays in every mode's metrics; `SlowestTime`'s terms, weights, waypoint pool, `describe` and primary quantity (the experienced time), and its `delta` against a full re-score |
-| `test_collect.py` | `count_items` and each item's score, items first then length (a bridge split by a junction once, a bridge at the start, a bridge run through a round trip's start once, a roundabout on a round trip's start once, a toll booth in either direction), `delta` against a full re-score for each item with windows at the route's start and at its end (a round trip's start inside a bridge run among them), the waypoint pool (the uncollected places, once per route, any node once none is left in the area), the radius, `describe`; for each item a loop run with `check_delta` that never gives an item back and validates; a request planning the same collecting route on both backends, and one reaching a duration target |
+| `test_collect.py` | `count_items` and each item's score, items first then length (a bridge split by a junction once, a bridge at the start, a bridge run through a round trip's start once, a roundabout on a round trip's start once, a toll booth in either direction), `delta` against a full re-score for each item with windows at the route's start and at its end (a round trip's start inside a bridge run among them), the waypoint pool (the uncollected places, once per route, any node once none is left in the area), the radius, `describe`; for each item a loop run with `check_delta` that never gives an item back and validates; a request planning the same collecting route on both backends, and one reaching a duration target; annealing to convergence and its reheats never giving an item back |
 | `test_brand.py` | `brand_counts` and the score, visits first then length (a round trip's start once), the counters and `describe`, an unknown brand refused, `delta` against a full re-score with windows at the route's start and at a round trip's end, the waypoint pool (the brand's unvisited nodes in the area, once per route, any node once none is left), the radius; a 300-attempt loop with `check_delta` that never gives a visit back, validates and is the same on both backends; the validator failing each tampered field of a reported brand and an `of` the area does not give; a request planning the same pilgrimage on both backends, its route.json read back with its brand and validated, an edited one failing; a brand the build lacks or the area does not hold refused as `BrandRefused`; a duration target reached |
 | `test_turns.py` | the classes by the change of bearing (the bands' ends, across north), the table against the rule written out, a lattice route's counts, a U-turn and the stored bearings deciding |
 | `test_constraints.py` | the request's constraints (`strict` alone refused); strict ones refusing turns and windows (at their boundaries), soft ones scoring minus the penalty a turn, a kilometre's worth in the objective's units (`turn_penalty_for`); the composite summing scores and combining hooks, its `constraint_delta` the penalties, its `delta` against a full re-score; the searches avoiding a class when they can and taking it when they must, refusing it when banned; the strict seed (vias, an unreachable leg as `InfeasibleTurnConstraint` with its note, one no route covers without the constraint either as the plain `StopUnreachable`, a round-trip loop), the strict loop never turning the refused way, the soft loop adding an avoided turn only for more than a kilometre of route (and far fewer than the plain loop), both on both backends, one-way towns with tables; a soft no-left base shrunk toward smaller ratios never adding a left turn or U-turn (each splice replayed) |
 | `test_hard_mode.py` | the rule read off a route's edges (an unnamed edge between two stretches of a road, a round trip coming home on the road it left by); `feasible_window` refusing a splice that splits a stretch or comes back to a road and accepting fresh roads and the neighbours' extended, and agreeing with a full check of the spliced route over every short window of three routes; the bans exact per window (all but the road inside a stretch), a fresh array each time and following the route after a splice; no terms; `window` widening a window inside a stretch, never past a stop, through the composite; `find_detour`'s local-exhaustive path the best hard mode allows; the request's flag (in the JSON only when set, its note, with strict and soft turns); the seed re-solving a leg that comes back to its road, and the earlier leg when the later cannot; round-trip loops; what an unreachable leg blames (hard mode, the strict constraint, nothing); a stop moved for hard mode; `check_base` refusing a base that comes back to a road; the loop with `check_delta` on both backends, alone and with soft no-left, every route along the way one stretch a road; the validator's proof; `plan --hard`, `validate` on a file edited to claim it, `--base` refusing `--hard`, and a trip it cannot drive in one line ending "try without --hard" |
 | `test_detour.py` | each strategy's legal detours and None when none exists, the waypoint's pool (and any node of the ball when it holds none of the pool), the strategy weights, random weight drawing only near the window, the local-exhaustive ranking and the refused-candidate skip, no turn refused on a lattice of straight-only junctions (and many when the searches are made turn-blind); shrinking toward a target, the local-exhaustive path closest to the band first, and never a longer one (a longer, faster path shadowed a shorter one for a duration) |
-| `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, a splice after two empty cycles and the run stopping only after three, the segment bias's rate and its anchors (the edges with the most unused nodes near), the unused-node grid's cap, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, and so do those with turn tables (no turn refused), a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable`; the same-seed test on both backends, and both backends planning the same route, splice for splice, on the grid and on one-way towns with and without turn tables; shrinking toward a target, runs of 6 edges on average and up to 24; the nodes a detour can leave or join (three distinct neighbours over the usable edges, the mask and bans of both directions taking one away), a window widened to them on a lattice whose streets are split in two, never past a stop, and every splice of a run there starting and ending at one or a stop |
+| `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, a splice after two empty cycles and the run stopping only after three, the segment bias's rate and its anchors (the edges with the most unused nodes near), the unused-node grid's cap, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, and so do those with turn tables (no turn refused), a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable`; the same-seed test on both backends, and both backends planning the same route, splice for splice, on the grid and on one-way towns with and without turn tables; shrinking toward a target, runs of 6 edges on average and up to 24; the nodes a detour can leave or join (three distinct neighbours over the usable edges, the mask and bans of both directions taking one away), a window widened to them on a lattice whose streets are split in two, never past a stop, and every splice of a run there starting and ending at one or a stop; annealing (on a lattice of uneven streets and a town with turn tables): the temperature's cooling and freeze, greedy an exact prefix of an annealed run (its first reheat where greedy stopped), shorter splices taken and the highest-scoring route returned and validated, a run capped below convergence and a target run unchanged, both backends and a second run alike, and `plan_route` reheating a max run 3 times |
 | `test_draw.py` | a drawing on a 5 × 5 lattice with one-ways, twins, a straight-only junction and named roads: an empty path at the start with its legal ways out, the stops reached in order and the end; every refusal at its first illegal edge (a one-way taken from its head, an id outside the graph, a path not from the start among them); of two refusals the earlier, the path before it legal, where the route check finds the later first; a round trip closing at its start only once its stops are reached and not out and back along one road (a road of its own back allowed); on 150 random walks under random stops, round trips, areas, bans, strict turns and hard mode, the next moves exactly the out-edges the check takes, each other refused at the path's end, every code met; on 300 walks that break the rules anywhere, the refusal at an edge whose path before passes and whose path with it is refused alike; a finished drawing's route.json (its run drawn by a human, its ratio), a round trip's without a ratio, an unfinished one refused; the objective and target a drawing takes, and no worst order |
 | `test_io.py` | the route files, the target in the request and, for a target run, in the metrics; the delays and the turns in the metrics, and a saved route's metrics carrying its file's item counts; the order and the reordered request in the file, a file without an order read as the identity |
-| `test_plan.py` | `plan_route`'s hooks: `on_start` once before the loop with the route it starts from (every splice replays from it to the result), the same route without the hooks, a continuation from `base` that never scores less, is fixed by its seed on both backends, and refuses a base for other stops, one leaving the request's area (before the loop) and, in `check_base`, a node outside the mask or an edge the request bans; a soft constraint starting from the plain seed and keeping left turns rarer than the plain run's, a strict one no route keeps as `InfeasibleTurnConstraint` with its note, one no route keeps without it either (two one-way rings) refused as without it, a stop the strict fallback moves noting why, a base refused for a turn a strict constraint refuses (taken by a soft one); a strict route validated against its constraint; the worst order planned and validated in the order it visits the stops (`on_start` given it), the identity and the same route without it, the same order and route twice, on both backends and with another seed's order, the reordered request planned again the same, refused with a base and past a large build's cap |
+| `test_plan.py` | `plan_route`'s hooks: `on_start` once before the loop with the route it starts from (every splice replays from it to the result), the same route without the hooks, a continuation from `base` that never scores less, is fixed by its seed on both backends, and refuses a base for other stops, one leaving the request's area (before the loop) and, in `check_base`, a node outside the mask or an edge the request bans; a soft constraint starting from the plain seed and keeping left turns rarer than the plain run's, a strict one no route keeps as `InfeasibleTurnConstraint` with its note, one no route keeps without it either (two one-way rings) refused as without it, a stop the strict fallback moves noting why, a base refused for a turn a strict constraint refuses (taken by a soft one); a strict route validated against its constraint; the worst order planned and validated in the order it visits the stops (`on_start` given it), the identity and the same route without it, the same order and route twice, on both backends and with another seed's order, the reordered request planned again the same, refused with a base and past a large build's cap; the temperature a max run anneals from (a hundredth of the baseline's length, of its experienced time under the slowest time, of the start route's length for a round trip; none for a target) |
 | `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32, `--backend` on both commands (the same route.json on both backends but the backend and the time), and the same on a build with turn tables, where `auto` is `csr` too, a file from another engine version refused; `--target` (its line, its parsing, its refusals) and `--base` (a continuation to a smaller target, the options it refuses, a file from another engine version, region or `graph_version`, a truncated or broken route, stops that do not resolve); a ratio target for a round trip, from the stops or the base, refused; an illegal route reported as the base file's fault only with `--base`; `--objective`, `--no-left`, `--no-right` and `--strict` (their lines, the time ratio with its drive and delays, the route.json, `validate`, their refusals, `--strict` alone in one line, a strict refusal in one line ending "try without --strict", `--base` taking them from its file); `validate` failing a soft route's file edited to claim a strict constraint; `--reorder` (its order line, the stops printed in the order visited, the order and the reordered request in route.json, `validate` passing it, `--base` continuing it in that order without `--reorder` and refusing it, no order line without it) and its refusals (`--objective alphabet`, eight stops, six on a large build), each one plain line; `--objective collect --item` (the collected line, the items and item in route.json, `--base` keeping them, a distance run's items) and its refusals, each one plain line (an unknown objective before its item); `--objective brand --brand` by name in any case and by id (the visited line, the brand in route.json, `--base` keeping it and refusing `--brand`, `validate` passing it and failing an edited count) and its refusals (the misfits, a name no brand has, one two brands share, an unknown id, a brand out of reach); a brand named "76" in a build whose brand 76 is another (the bare number refused, `"76"` the name, `#76` the id, `77` an id), `#` without a number, `²`; a build missing an array, one line for `plan` and `validate`; `validate` refusing a route.json whose item counts were edited; `--objective alphabet` (its objective and letters lines, the letters line for one letter and past Z, the `alphabet` check in the validator's line, the letters in route.json, `validate` passing it and failing a road edited in it) and its refusals (`--via`, a target, a `--base` file of an alphabet route), each one plain line |
 | `test_portland_data.py` | (`data`: Portland's latest build through `WORST_ROUTE_DATA`, skipped without one) Powell's → Reed, seed 1, 4,000 attempts: the same bytes on both backends, splice for splice, no turn refused; the slowest time reaching 9 h within ±2 %; soft no-left with fewer left turns a kilometre than its seed, at more than 5×; strict no-left planning Powell's → Reed with no left turn or U-turn, strict no-right refusing it in one line; hard mode over 4,000 attempts, the same on both backends, every road one stretch, at more than 3×; collecting each item over 4,000 attempts, more of it than the distance route passes (none of the toll booths, which lie outside the area), and a duration target under `collect` reached within ±2 %; a pilgrimage to the brand with the most locations visiting more of it than the distance route over the same 4,000 attempts, its counts the recount's; an alphabet route over 100 restarts, the same bytes and letters on both backends, no turn refused, its `alphabet` check passing, at least 5 letters (A to I on build ffe2e7c881ca) |
 
@@ -1974,7 +2060,9 @@ units). A pair that cannot be planned, or whose stop the re-snap fallback moved,
 again on the build without its transition rows, to tell whether the tables stopped it. It prints
 a table row per pair and a summary (planned, validator passes, median ratio and range, attempts
 per second, the failures the transitions caused, the Jaccards), writes the JSON report, and
-exits 1 only when a planned route fails the validator. On Portland it takes under two minutes.
+exits 1 only when a planned route fails the validator. On Portland it took under two minutes
+before engine version 6; with annealing most runs use their whole budget, and it takes about 11
+minutes (the 20 runs 505 s of them, 2026-10-31).
 
 `tests/golden/` freezes nine routes (seed 7, three stops but the last's two) on a 20 × 20
 lattice whose positions

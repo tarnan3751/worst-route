@@ -86,10 +86,14 @@ M5.2's array pipeline is built: every step from `build` to `save` runs on arrays
 engine, its stages directories of `.npy` files (`docs/reference/pipeline.md`, **The arrays
 engine**), to the networkx engine's build byte for byte (`--engine networkx`); Oregon's cleanup
 takes 5 s where networkx's takes 91.
-The engine is at version 5: when the cheapest legal walk the transition-aware search finds
-passes a node twice, a detour's search searches again with the edge that comes back to it banned,
-up to 8 times, and a seed leg's by a tree over bans, that edge else the one that first entered
-the node, its searches growing with the leg (`docs/reference/engine.md`, **Searches**).
+Since engine version 5, when the cheapest legal walk the transition-aware search finds passes a
+node twice, a detour's search searches again with the edge that comes back to it banned, up to 8
+times, and a seed leg's by a tree over bans, that edge else the one that first entered the node,
+its searches growing with the leg (`docs/reference/engine.md`, **Searches**). The engine is at
+version 6 (M6): a max run that would stop as converged reheats instead, up to 3 times, and takes
+shorter splices with a probability that cools, its greedy run an exact prefix; progress events
+carry the best route so far, which the stat line shows while a heat dips below it
+(`docs/reference/engine.md`, **Annealing**).
 M6's first piece is built too, the daily worst route: `GET /daily`, one trip a day between two
 towns drawn from the date, planned once on the main build with a fixed number of attempts so every
 server with the build gets the same route, shown as "Today's route" at the top of the panel and

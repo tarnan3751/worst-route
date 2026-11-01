@@ -100,7 +100,7 @@ def test_placeholders_are_filled_from_the_route() -> None:
     assert filled["You are {ratio} committed to this."][1] == "You are 42.9× committed to this."
     _, text = filled["You just drove {distance}. On purpose."]
     assert text == "You just drove 330 ft (100 m). On purpose."  # the 100 m step before it
-    k, text = filled["Turn number {turns}. Each one was necessary. None of them was necessary."]
+    k, text = filled["Turn number {turns}. None of them was necessary."]
     assert text.startswith(f"Turn number {sum(s.kind == 'turn' for s in out[:k])}. ")
 
 

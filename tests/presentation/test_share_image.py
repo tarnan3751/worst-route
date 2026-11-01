@@ -30,7 +30,7 @@ NODES = np.array(EAST_THEN_NORTH, dtype=np.int32)
 STRAIGHT = straight(GRID.m)
 BASELINE = edges_of(GRID, [10, 20, 30, 40, 50, 60, 70, 80, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99])
 METRICS = {"length_m": 1700.0, "baseline_length_m": 1700.0, "ratio": 1.0}
-LINE = "Longer than the Golden Gate Bridge, which is 1.7 mi (2.7 km)."
+LINE = "Longer than the Golden Gate Bridge (1.7 mi, 2.7 km)."
 Bbox = tuple[float, float, float, float]
 
 
@@ -100,8 +100,8 @@ def test_a_round_trip_shows_its_length(places: PlaceIndex) -> None:
 
 def test_the_headline_follows_the_objective() -> None:
     m = {"length_m": 481_585.4, "ratio": 62.43, "time_ratio": 48.07}
-    assert headline(m, "distance") == ("62.4×", "less efficient than\nthe sensible route")
-    assert headline(m, "time") == ("48.1×", "slower than\nthe sensible route")
+    assert headline(m, "distance") == ("62.4×", "longer than\nit had to be")
+    assert headline(m, "time") == ("48.1×", "slower than\nit had to be")
     assert headline({**m, "ratio": 12_345.67}, "distance")[0] == "12,345.7×"
     trip = {"length_m": 481_585.4, "ratio": None, "time_ratio": None}  # a round trip
     for objective in ("distance", "time"):

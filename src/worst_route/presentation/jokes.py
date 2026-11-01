@@ -1,9 +1,10 @@
 """Deadpan jokes among the directions (`docs/reference/presentation.md`, **Jokes**).
 
-`JOKES` are the lines of a GPS that has given up. Some fill placeholders from the route:
-`{ratio}` the route's ratio ("42.9×"), `{turns}` how many `turn` steps came before and
-`{turn_count}` the same with its noun ("1 turn", "370 turns"), `{distance}` the step just driven
-("2.3 mi (3.7 km)", or feet and metres under a tenth of a mile).
+`JOKES` are the lines of a sat-nav that has quietly given up, the one voice in the app that says
+"I". Some fill placeholders from the route: `{ratio}` the route's ratio ("42.9×"), `{turns}` how
+many `turn` steps came before and `{turn_count}` the same with its noun ("1 turn", "370 turns"),
+`{distance}` the step just driven ("2.3 mi (3.7 km)", or feet and metres under a tenth of a
+mile).
 
 `inject(steps, rng, *, ratio)` puts `joke` steps among a route's steps. `rng` is a
 `numpy.random.Generator(PCG64(seed))` from the route's seed, so a route and its seed always get
@@ -29,18 +30,18 @@ from worst_route.presentation.directions import Step, numbered
 FEET_PER_METRE = 3.28084
 
 JOKES: tuple[str, ...] = (
-    "In 400 feet, reconsider your choices.",
-    "You have passed this intersection's neighbour. Not this one. Rules are rules.",
+    "In 400 feet, this gets worse.",
+    "You have not been here before. You will not be back.",
     "Recalculating. No. This is the route.",
-    "That was turn {turns}. I have stopped counting. I have not stopped counting.",
+    "That was turn {turns}. I am still counting.",
     "You just drove {distance}. On purpose.",
     "Your destination is behind you. It has been for some time.",
-    "This route is {ratio} worse than it needs to be. You are doing great.",
+    "This route is {ratio} longer than it needs to be. Continue.",
     "Traffic is light. There is no reason for any of this.",
     "In half a mile, nothing happens.",
-    "Keep calm. Keep driving. Keep not arriving.",
+    "Keep driving. Arriving is not part of this.",
     "Stay in the lane that leads away from your destination.",
-    "Proceed to the highlighted route. The highlighted route is everything.",
+    "Proceed to the highlighted route. It is all highlighted.",
     "Your arrival time has been moved to later. It will be moved again.",
     "Every road is used once. You are using them all.",
     "If you see a sign for your destination, look away.",
@@ -48,27 +49,27 @@ JOKES: tuple[str, ...] = (
     "The sensible route was {ratio} shorter. It sends its regards.",
     "Please do not turn around. It would repeat an intersection.",
     "You are making excellent progress in the wrong direction.",
-    "Somewhere, a shorter route is crying.",
-    "Turn number {turns}. Each one was necessary. None of them was necessary.",
+    "Somewhere, a shorter route exists.",
+    "Turn number {turns}. None of them was necessary.",
     "That stretch was {distance}. It will not be the last.",
     "Your passengers have questions. I do not take questions.",
     "Arriving soon is not on the itinerary.",
-    "Lane guidance: any lane. They all go the long way.",
-    "This intersection is new to you. So is the next one. So is every one.",
+    "Use any lane. They all go the long way.",
+    "This intersection is new to you. So is the next one.",
     "You are {ratio} committed to this.",
     "Fuel is your concern. The route is mine.",
-    "Note: the destination still exists.",
+    "Your destination still exists. I checked.",
     "In 1 mile, keep going.",
     "This is the scenic route. The scenery is everything except your destination.",
     "Do not trust the signs. They want you to arrive.",
     "Construction ahead would have been faster.",
     "Satellite signal strong. Judgement weak.",
     "You have now made {turn_count}. A straight line was available.",
-    "Speed limit 25. Patience limit exceeded some time ago.",
+    "The speed limit is 25. There is no time limit.",
     "You drove {distance} just now. The map has noted it.",
-    "There is a faster route. We are not discussing it.",
+    "There is a faster route. I am not discussing it.",
     "Make a legal U-turn when possible. It is never possible.",
-    "Welcome to a road you have never driven before. Enjoy it. Once.",
+    "You will drive this road once. Enjoy it.",
 )
 
 
@@ -107,8 +108,8 @@ def inject(steps: Sequence[Step], rng: np.random.Generator, *, ratio: float | No
 
 
 def _distance(metres: float) -> str:
-    """The distance as the comparisons write one (`distance_text`), "2.3 mi (3.7 km)"; under a
-    tenth of a mile, "400 ft (120 m)", to the nearest 10."""
+    """The distance as `distance_text` writes one, "2.3 mi (3.7 km)"; under a tenth of a mile,
+    "400 ft (120 m)", to the nearest 10."""
     miles = metres / METRES_PER_MILE
     if miles < 0.1:
         return f"{round(metres * FEET_PER_METRE, -1):,.0f} ft ({round(metres, -1):,.0f} m)"

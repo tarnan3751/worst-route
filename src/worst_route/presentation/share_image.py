@@ -2,11 +2,11 @@
 (`docs/reference/presentation.md`, **Share image**; `docs/PLAN.md` §7 M4).
 
 `render_share_image` returns a 1200 × 630 PNG (the Open Graph size). The left column holds the
-headline, as large as fits, and its caption (`headline`): the ratio of lengths ("42.9×", "less
-efficient than the sensible route"), for a slowest-time route the time ratio ("slower than the
-sensible route"), for a round trip, which has neither, its length ("299 mi", "to end up where
-it started"); and the comparison line at the bottom (wrapped, never between a number and its
-unit). The map fills the rest, edge to edge, with no basemap: the build's roads as hairlines
+headline, as large as fits, and its caption (`headline`): the ratio of lengths ("42.9×", "longer
+than it had to be"), for a slowest-time route the time ratio ("slower than it had to be"), for a
+round trip, which has neither, its length ("299 mi", "to end up where it started"); and the
+comparison line at the bottom (wrapped, never between a number and its unit). The map fills the
+rest, edge to edge, with no basemap: the build's roads as hairlines
 (one edge per road unit, along the build's geometry: those whose bounds meet the map's, in the
 build's CRS grown by `NETWORK_MARGIN_M` and then in lon/lat, decoded only where their ends and
 lengths cannot tell; never more than `MAX_NETWORK_EDGES` of them, thinned to T0-T2, T0-T1 or T0
@@ -282,8 +282,8 @@ def headline(metrics: Mapping[str, Any], objective: str) -> tuple[str, str]:
         length = f"{miles:,.1f} mi" if miles < 100 else f"{miles:,.0f} mi"
         return length, "to end up where\nit started"
     if objective == "time":
-        return f"{metrics['time_ratio']:,.1f}×", "slower than\nthe sensible route"
-    return f"{ratio:,.1f}×", "less efficient than\nthe sensible route"
+        return f"{metrics['time_ratio']:,.1f}×", "slower than\nit had to be"
+    return f"{ratio:,.1f}×", "longer than\nit had to be"
 
 
 def _texts(fig: Figure, top: tuple[str, str], comparison: str, palette: SharePalette) -> None:

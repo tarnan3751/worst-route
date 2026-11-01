@@ -89,7 +89,7 @@ async def test_the_image_renders_once_then_comes_from_the_cache(
         assert first.content == second.content
         assert struct.unpack(">II", first.content[16:24]) == (1200, 630)
         assert renders == ["classic"]  # two first requests, one render, in today's colours
-        cached = data / "share" / f"{route_id}-classic-v2.png"
+        cached = data / "share" / f"{route_id}-classic-v3.png"
         assert cached.read_bytes() == first.content
         assert sorted(p.name for p in cached.parent.iterdir()) == [cached.name]
         assert api.share_locks == {}
@@ -104,7 +104,7 @@ async def test_the_image_renders_once_then_comes_from_the_cache(
         assert (await client.get(f"{url}?theme=night")).content == night.content
         assert renders == ["classic", "night"]
         kept = sorted(p.name for p in cached.parent.iterdir())
-        assert kept == [cached.name, f"{route_id}-night-v2.png"]
+        assert kept == [cached.name, f"{route_id}-night-v3.png"]
         assert api.share_locks == {}
 
 
@@ -169,8 +169,8 @@ async def test_a_slowest_time_route_shows_its_time_ratio(
     assert time_doc["delay_s"] > 0
     assert f"{time_doc['time_ratio']:.1f}" != f"{time_doc['ratio']:.1f}"
     assert drawn == {
-        "time": (f"{time_doc['time_ratio']:,.1f}×", "slower than\nthe sensible route"),
-        "distance": (f"{distance_doc['ratio']:,.1f}×", "less efficient than\nthe sensible route"),
+        "time": (f"{time_doc['time_ratio']:,.1f}×", "slower than\nit had to be"),
+        "distance": (f"{distance_doc['ratio']:,.1f}×", "longer than\nit had to be"),
     }
 
 
@@ -212,7 +212,7 @@ async def test_head_gives_the_headers_without_the_image(data: Path) -> None:
     async with serving(data) as (client, _):
         head = await client.head(url)  # first: it renders, to know the length
         assert head.status_code == 200 and head.content == b""
-        assert (data / "share" / f"{route_id}-classic-v2.png").exists()
+        assert (data / "share" / f"{route_id}-classic-v3.png").exists()
         got = await client.get(url)
         for name in ("content-type", "cache-control", "content-length"):
             assert head.headers[name] == got.headers[name], name
@@ -275,8 +275,8 @@ async def test_two_writers_of_one_image_leave_one_file_and_no_part(
         first, second = await asyncio.gather(one.get(url), two.get(url))
     assert first.status_code == second.status_code == 200
     share = data / "share"
-    assert [p.name for p in share.iterdir()] == [f"{route_id}-classic-v2.png"]  # no part left
-    image = share / f"{route_id}-classic-v2.png"
+    assert [p.name for p in share.iterdir()] == [f"{route_id}-classic-v3.png"]  # no part left
+    image = share / f"{route_id}-classic-v3.png"
     assert image.read_bytes() in (b"\x89PNG first", b"\x89PNG second")
 
 

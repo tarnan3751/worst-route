@@ -1,6 +1,7 @@
 // The MapLibre map (docs/reference/frontend.md): its attribution and navigation controls, its
 // camera held to the box around the contiguous US (bounds.ts: on each axis the view within the box
-// or the box within the view, zoomed out no further than the whole box in view), and the
+// or the box within the view, zoomed out no further than the whole box in view; flat and north-up,
+// rotation and pitch disabled), and the
 // `pmtiles://` protocol the vector basemap is read through. It starts with nothing drawn; the
 // route's layers (routeLayer.ts: baseline, casing, route, flash, the directions' highlight) come
 // once it has loaded and the basemap (basemap.ts) below them once the server has named it; the
@@ -31,7 +32,12 @@ export function createMap(container: HTMLElement): MapLibreMap {
     style: EMPTY_STYLE,
     bounds: US_BOUNDS,
     attributionControl: { compact: false },
+    // Flat and north-up, which the hold below relies on: no rotation or pitch by drag, touch or key.
+    dragRotate: false,
+    pitchWithRotate: false,
+    touchPitch: false,
   });
+  map.keyboard.disableRotation();
   // MapLibre's own constrain, replaced, kept the zoom within minZoom and maxZoom: so does this.
   map.setTransformConstrain((center, zoom) => {
     const within = Math.min(Math.max(zoom, map.getMinZoom()), map.getMaxZoom());

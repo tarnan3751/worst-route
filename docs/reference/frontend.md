@@ -168,7 +168,8 @@ pre-bundled dependencies in the dev server) does not keep, so `map.ts` imports i
   the zoom `fitBounds` picks for the box, worked out again as the map's size changes). Zoomed out
   furthest, the whole contiguous US is in view, with margin only on the axis the window has to
   spare, and a fit of anything within the box (the national build's bbox, a cross-country route)
-  is shown whole. Every build served lies within the contiguous US and beyond it there is nothing
+  is shown whole. The hold is flat and north-up, so the map's rotation and pitch (by drag, touch
+  or key) are disabled. Every build served lies within the contiguous US and beyond it there is nothing
   to show (the desktop app's basemap is cut to it), so the box is a constant, not the served
   regions' extent. The first click sets the
   start, the second the end; later clicks add stops along the

@@ -9,7 +9,8 @@ import type { Bounds } from "../util/geo";
  * held to it (`holdToUs`): on an axis where the view is smaller than the box the view never shows
  * beyond it, and on one where the view is larger the whole box is always in view; the map zooms
  * out no further than the whole box in view (`fitZoom`), so there the whole contiguous US is in
- * view, with margin only on the axis the window has to spare. A constant, not the served regions'
+ * view, with margin only on the axis the window has to spare. The hold is flat and north-up, so the
+ * map's rotation and pitch are disabled (map.ts). A constant, not the served regions'
  * extent: every build served lies within the contiguous US, and the desktop app's basemap is cut
  * to it, so beyond the box there is nothing to show; a server serving only Portland keeps the same
  * box, a stop outside any build being refused by the build picker. */

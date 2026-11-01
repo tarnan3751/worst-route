@@ -4,6 +4,7 @@ import { loadStream } from "../__fixtures__/stream";
 import type { RouteDocument, RouteRequest } from "../api/types";
 import { CHALLENGES } from "../challenges/list";
 import { JobRunner, countsTitle, statLines } from "../run/controls";
+import { followPortfolioMax } from "../settings/panel";
 import { DEFAULT_SETTINGS, IDLE_RUN, ITEMS, Store, type AppState, type Settings } from "../state";
 import { round6 } from "../util/geo";
 import {
@@ -24,6 +25,7 @@ const full: UrlState = {
   daily: null,
   challenge: null,
   seed: 12345,
+  seeds: null,
   budgetS: 15,
   tier: "T2",
   leashKm: 6.5,
@@ -48,6 +50,7 @@ const nothing: UrlState = {
   daily: null,
   challenge: null,
   seed: null,
+  seeds: null,
   budgetS: null,
   tier: null,
   leashKm: null,
@@ -521,6 +524,21 @@ describe("the mode and the turns in the URL", () => {
       expect(decodeUrlState(`?reorder=${value}`).reorder).toBeNull();
     }
   });
+
+  it("carries a portfolio's seeds only above one, as seeds=4, and gives them back", () => {
+    const shown = (patch: Partial<Settings>): AppState => ({
+      ...emptyApp(),
+      settings: { ...DEFAULT_SETTINGS, ...patch },
+    });
+    const four: Settings = { ...DEFAULT_SETTINGS, seed: 40, portfolio: 4 };
+    const query = encodeUrlState(urlStateOf(shown(four)));
+    expect(query).toMatch(/^\?seed=40&seeds=4&budget=/);
+    expect(settingsFrom(decodeUrlState(query), DEFAULT_SETTINGS)).toEqual(four);
+    expect(encodeUrlState(urlStateOf(shown({})))).not.toContain("seeds");
+    for (const value of ["1", "5", "2.5", "two", ""]) {
+      expect(decodeUrlState(`?seeds=${value}`).seeds).toBeNull();
+    }
+  });
 });
 
 describe("a route of another mode opened by its link", () => {
@@ -664,6 +682,32 @@ describe("a pilgrimage, an alphabet route and a hard-mode route opened by their 
     expect(encodeUrlState(urlStateOf(store.state))).toContain("&reorder=1&stops=");
     const plain = await open({ objective: "distance" }, { reorder: true });
     expect(plain.state.settings.reorder).toBe(false);
+  });
+
+  it("takes a portfolio's seeds, its first seed into the panel, its winner's on the stats", async () => {
+    const won: RouteDocument = {
+      ...route,
+      seed: 42,
+      request: { ...route.request, item: null, objective: "distance", seed: 40, portfolio: 4 },
+      run: { ...route.run, portfolio: { k: 4, seeds: [40, 41, 42, 43], winner: 2 } },
+    };
+    stubFetch((call) =>
+      call.url.endsWith("/geojson") ? json({ type: "FeatureCollection", features: [] }) : json(won),
+    );
+    const store = new Store(emptyApp());
+    await openRoute(won.route_id, store, new JobRunner(store, fakeView(), () => {}));
+    expect(store.state.settings).toMatchObject({ seed: 40, portfolio: 4 });
+    // a server that runs two seeds lowers them, as it does a link's, the stats still the route's
+    const capped = new Store(emptyApp());
+    await followPortfolioMax(capped, Promise.resolve(2));
+    await openRoute(won.route_id, capped, new JobRunner(capped, fakeView(), () => {}));
+    expect(capped.state.settings).toMatchObject({ seed: 40, portfolio: 2 });
+    expect(statLines(capped.state)[3]).toMatch(/ · best of 4 seeds · seed 42$/);
+    expect(statLines(store.state)[3]).toMatch(/ · best of 4 seeds · seed 42$/);
+    expect(encodeUrlState(urlStateOf(store.state))).toContain(`=${won.route_id}&seed=40&seeds=4&`);
+    const single = await open({ objective: "distance" }, { portfolio: 3 });
+    expect(single.state.settings.portfolio).toBe(1);
+    expect(statLines(single.state)[3]).not.toContain("best of");
   });
 });
 

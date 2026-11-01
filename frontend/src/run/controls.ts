@@ -1,33 +1,34 @@
 // Running a job (docs/reference/frontend.md, **Run**): `JobRunner`, a job's lifecycle, which the
 // tests drive without a DOM, and `mountRunControls`, the Go, Cancel, Reroll and Make it worse
-// buttons and the live stat line (ratio, length, drive time, attempts, elapsed; the drive and
-// the delays under the slowest time, the items collected, a pilgrimage's visits, an alphabet
-// route's letters, the turns; once stored, its arrival,
-// the towns and states it passes through, its extra fuel and its share of the roads within
-// reach).
+// buttons and the live stat line (ratio, length, drive time, attempts, elapsed, a portfolio's seeds
+// and its leader's seed; the drive and the delays under the slowest time, the items collected, a
+// pilgrimage's visits, an alphabet route's letters, the turns; once stored, its arrival, the towns
+// and states it passes through, its extra fuel and its share of the roads within reach).
 //
 // Go posts the stops (each stop along the way labelled as its marker is numbered, "Stop 2") and
 // settings (the target, the objective with its item or brand, the turn constraints and hard mode,
-// the worst order when ticked but not under the alphabet route, the vehicle and the departure, now
-// when none is set, among them) to the region trips run on (the server's pick for the stops, or the
-// one pinned: stops/pick.ts; Go and Reroll wait for it), and Reroll the same without a seed, so the
-// server picks one; the 202's seed goes into the settings. Make it worse posts the shown route as
-// `base_route_id` to the route's own region, with the seed after the last one tried on it (its own
-// at first), the base route giving the stops, tier and leash and its recorded request the objective
-// with its item or brand (a brand's id is its build's), the panel the rest; the settings' seed
-// follows the route shown, so it changes only when a worse route is found. Then the job's events:
-// `snapped` says where the stops went and in what order the route visits them (its `order`, through
-// the base route's for a continuation: the run's `order` is the list's index of each stop visited,
-// and the stop list says "visited 3rd"; under the worst order it comes once the server has tried
-// every order, the stat line saying "Trying every order…" until then), `baseline` draws the
-// sensible route, each `snapshot` replaces the route and each `progress` applies its splices in
-// order (the alphabet route sends each better route as a snapshot, then a progress without
-// splices), and while a run's best route so far scores above its current one (an annealing run
-// takes shorter splices too) the stat line gives the best's ratio beside it, "best 31.0×"; `done`
-// shows the stored route whole (the best), and for a ratio or duration target what it achieved;
-// `error` shows its code and message. The stat line follows the run's own objective and
-// constraints, or a stored route's request. A refusal under strict, or under hard mode, can be
-// sent again without it.
+// the worst order when ticked and the seeds when more than one, neither under the alphabet route,
+// the vehicle and the departure, now when none is set, among them) to the region trips run on (the
+// server's pick for the stops, or the one pinned: stops/pick.ts; Go and Reroll wait for it), and
+// Reroll the same without a seed, so the server picks one; the 202's seed goes into the settings,
+// and a seed the user gave stays there once the route is stored, whatever record the store kept.
+// Make it worse posts the shown route as `base_route_id` to the route's own region, with the seed
+// after the last one tried on it (its own at first), the base route giving the stops, tier and
+// leash and its recorded request the objective with its item or brand (a brand's id is its
+// build's), the panel the rest; the settings' seed follows the route shown, so it changes only when
+// a worse route is found. Then the job's events: `snapped` says where the stops went and in what
+// order the route visits them (its `order`, through the base route's for a continuation: the run's
+// `order` is the list's index of each stop visited, and the stop list says "visited 3rd"; under the
+// worst order it comes once the server has tried every order, the stat line saying "Trying every
+// order…" until then), `baseline` draws the sensible route, each `snapshot` replaces the route and
+// each `progress` applies its splices in order (the alphabet route sends each better route as a
+// snapshot, then a progress without splices; a portfolio's snapshot when another search takes the
+// lead, its progress naming the leader, whose seed the stat line shows), and while a run's best
+// route so far scores above its current one (an annealing run takes shorter splices too) the stat
+// line gives the best's ratio beside it, "best 31.0×"; `done` shows the stored route whole (the
+// best), and for a ratio or duration target what it achieved; `error` shows its code and message.
+// The stat line follows the run's own objective and constraints, or a stored route's request. A
+// refusal under strict, or under hard mode, can be sent again without it.
 // Cancel sends DELETE, and the stream then ends with `done` (the route so far, stored) or
 // `error`. Every error ends the run with its code in the banner and the controls unlocked: the
 // API's, or CLIENT_ERROR for one of the app's own (a running job is then cancelled). Leaving the
@@ -110,6 +111,9 @@ function jobRequest(state: Readonly<AppState>, seed: number | null): RouteReques
     departure: departureOf(settings),
   };
   if (settings.reorder && settings.objective !== "alphabet") request.reorder = true;
+  if (settings.portfolio > 1 && settings.objective !== "alphabet") {
+    request.portfolio = settings.portfolio;
+  }
   if (seed !== null) request.seed = seed;
   return request;
 }
@@ -151,9 +155,12 @@ function modeOfRequest({ objective, item, brand, constraints }: RouteRequest): R
 }
 
 /** What is shown with a route: its baseline, a note, the run's target and what it achieved,
- * its mode (by default the route's own request's), and the list's index of each stop it visits,
- * in that order (by default the list's own: a stored route opens with its stops in its order). */
+ * its mode (by default the route's own request's), the list's index of each stop it visits, in
+ * that order (by default the list's own: a stored route opens with its stops in its order), and
+ * the request of the Go or Reroll that made it (a route's id is its content's, so its document
+ * can be an earlier run's record: the run's own seed and seeds are shown then). */
 interface Shown {
+  made?: RouteRequest;
   baseline?: LineString | null;
   note?: string | null;
   goal?: Target | null;
@@ -239,20 +246,28 @@ export class JobRunner {
     if (phase === "starting") this.#leaving = true;
   }
 
-  /** Show a stored route: its whole geometry, its numbers, and the baseline when given. */
+  /** Show a stored route: its whole geometry, its numbers, and the baseline when given. The
+   * settings' seed becomes its request's, a portfolio's first, so Go plans its seeds again. */
   showRoute(route: RouteDocument, shown: Shown = {}): void {
     const { baseline, note = null } = shown;
     if (baseline !== undefined) this.#view.setBaseline(baseline);
     this.#view.setFinal(route.geometry);
     const { length_m, time_s, ratio, items, time_ratio, delay_s, turns, brand, alphabet } =
       route.metrics;
-    this.#store.updateSettings({ seed: route.seed });
+    const { portfolio } = route.run;
+    const { made } = shown;
+    const asked = made === undefined ? (portfolio?.k ?? 1) : (made.portfolio ?? 1);
+    // a seed the user gave stays the panel's; else the route's, a portfolio's first
+    const given = made?.seed ?? undefined;
+    const first = portfolio ? (route.request.seed ?? route.seed) : route.seed;
+    this.#store.updateSettings({ seed: given ?? first });
     this.#store.update({
       route,
       run: {
         ...IDLE_RUN,
         phase: "done",
-        seed: route.seed,
+        seed: asked === 1 ? (given ?? route.seed) : route.seed, // a portfolio's winner's
+        portfolio: asked,
         iteration: route.run.attempts,
         elapsedS: route.run.elapsed_s,
         metrics: { length_m, time_s, ratio, items, time_ratio, delay_s, turns, brand, alphabet },
@@ -282,7 +297,12 @@ export class JobRunner {
     try {
       created = await createJob(request);
     } catch (error) {
-      store.update({ error: errorBody(error), run: before });
+      const body = errorBody(error);
+      // more seeds than the server runs (a link's, before GET /config said): its most, next time
+      if (body.code === "PORTFOLIO_TOO_LARGE" && typeof body.max === "number") {
+        store.updateSettings({ portfolio: body.max });
+      }
+      store.update({ error: body, run: before });
       return;
     }
     const { job_id: jobId, seed } = created;
@@ -295,9 +315,10 @@ export class JobRunner {
     const goal = goalOf(request.target);
     const mode = modeOfRequest(request);
     const reorder = request.reorder === true;
+    const portfolio = request.portfolio ?? 1;
     store.update({
       route: null,
-      run: { ...IDLE_RUN, phase: "running", jobId, seed, goal, mode, reorder },
+      run: { ...IDLE_RUN, phase: "running", jobId, seed, goal, mode, reorder, portfolio },
     });
     // An error of the app's own while following the job ends the run, and the job with it.
     const guard =
@@ -349,9 +370,10 @@ export class JobRunner {
             data.best_score !== undefined && data.best_score > data.score
               ? (data.best_metrics?.ratio ?? null)
               : null,
+          leader: data.portfolio?.leader ?? store.state.run.leader,
         });
       }),
-      done: guard((data) => void this.#finish(data, base, seed, { goal, mode })),
+      done: guard((data) => void this.#finish(data, base, seed, { goal, mode, request })),
       error: guard((data) => this.#fail(data)),
       connection: guard((state) => {
         store.updateRun({ connection: state });
@@ -369,7 +391,7 @@ export class JobRunner {
     done: Done,
     base: RouteDocument | null,
     seed: number,
-    { goal, mode }: { goal: Target | null; mode: RequestMode },
+    { goal, mode, request }: { goal: Target | null; mode: RequestMode; request: RouteRequest },
   ): Promise<void> {
     const outcome = done.metrics.target ?? null;
     const { order } = this.#store.state.run;
@@ -384,7 +406,8 @@ export class JobRunner {
         }
         this.showRoute(base, { note, goal, outcome, mode, order });
       } else {
-        this.showRoute(await getRoute(done.route_id), { goal, outcome, mode, order });
+        const made = base === null ? request : undefined; // a Go's or a Reroll's
+        this.showRoute(await getRoute(done.route_id), { goal, outcome, mode, order, made });
       }
     } catch (error) {
       this.#fail(errorBody(error));
@@ -527,7 +550,8 @@ export function countsTitle({ run }: Readonly<AppState>): string {
 type StatLines = [string, string, string, string, string, string, string];
 
 /** The stat line's rows: the ratio (under the slowest time, of experienced times once stored);
- * the length and drive time; the target; the run; and, shown between the second and the third,
+ * the length and drive time; the target; the run (for a portfolio, "best of 4 seeds" and the
+ * seed of its leader, or once stored of its winner); and, shown between the second and the third,
  * the drive and the delays (the slowest time, live from each progress event, then the stored
  * route's), the objective's counter (live: the items collected, a pilgrimage's visits, an
  * alphabet route's letters), and the turns (once stored). */
@@ -565,7 +589,8 @@ export function statLines(state: Readonly<AppState>): StatLines {
   }
   if (run.phase === "failed") parts.push("failed");
   if (run.stoppedBecause) parts.push(STOPPED[run.stoppedBecause] ?? run.stoppedBecause);
-  if (run.seed !== null) parts.push(`seed ${run.seed}`);
+  if (run.portfolio > 1) parts.push(`best of ${run.portfolio} seeds`);
+  if (run.seed !== null) parts.push(`seed ${run.seed + run.leader}`); // a portfolio's leader's
   if (run.note) parts.push(run.note);
   return [
     slowest && typeof time_ratio === "number"

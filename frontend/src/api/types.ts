@@ -57,10 +57,10 @@ export interface Constraints {
   hard?: boolean;
 }
 
-/** `POST /jobs`; a route document's `request` has every field but `portfolio` at 1. `reorder` visits
- * the stops between the first and the last in the worst order (a route document's request then has
- * its stops in the order the route visits them); `portfolio` runs that many seeds at once, from
- * `seed`, and keeps the best. */
+/** `POST /jobs`; a route document's `request` has every field but a `portfolio` of 1. `reorder`
+ * visits the stops between the first and the last in the worst order (a route document's request
+ * then has its stops in the order the route visits them); `portfolio` runs that many seeds at once,
+ * from `seed`, and keeps the best. */
 export interface RouteRequest {
   region: string;
   stops?: StopIn[] | null;

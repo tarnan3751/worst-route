@@ -1,8 +1,17 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { json, settle, stubFetch } from "../__fixtures__/http";
 import { DEFAULT_SETTINGS, IDLE_RUN, Store } from "../state";
 import type { Region } from "../api/types";
-import { brandOptions, followBrands, loadBrands, regionOptions } from "./panel";
+import {
+  brandOptions,
+  followBrands,
+  followPortfolioMax,
+  loadBrands,
+  regionOptions,
+  seedOptions,
+  seedsWithin,
+} from "./panel";
 
 // The first of /brands?region=portland on build ffe2e7c881ca, as the API orders them.
 const BRANDS = [
@@ -102,6 +111,41 @@ describe("the brand picker", () => {
     const moved = store(null, oregon); // the region trips run on is now Oregon
     expect(await loadBrands(moved, "portland")).toEqual(BRANDS);
     expect([moved.state.brands, moved.state.settings.brand]).toEqual([null, null]);
+  });
+});
+
+describe("the seeds picker", () => {
+  it("offers one seed up to the most the server runs, never more than four", () => {
+    expect(seedOptions(2)).toEqual([
+      ["1", "1", true],
+      ["2", "2", true],
+    ]);
+    expect(seedOptions(8).map(([value]) => value)).toEqual(["1", "2", "3", "4"]);
+    expect(seedOptions(1)).toEqual([["1", "1", true]]); // the row is hidden then
+  });
+
+  it("lowers seeds above the server's most to it, a link's four to a public server's two", () => {
+    expect(seedsWithin(4, 2)).toBe(2);
+    expect(seedsWithin(3, 4)).toBe(3);
+    expect(seedsWithin(4, 1)).toBe(1); // a server older than portfolios runs one
+  });
+
+  it("keeps the seeds within the server's most once it has said, raised later or not", async () => {
+    const s = store(null);
+    s.updateSettings({ portfolio: 4 }); // a link's, before GET /config answered
+    expect(s.state.settings.portfolio).toBe(4);
+    expect(await followPortfolioMax(s, Promise.resolve(2))).toBe(2);
+    expect(s.state.settings.portfolio).toBe(2);
+    s.updateSettings({ portfolio: 4 }); // a route of four seeds opened by link
+    expect(s.state.settings.portfolio).toBe(2);
+    s.updateSettings({ portfolio: 1 });
+    expect(s.state.settings.portfolio).toBe(1);
+  });
+
+  it("hides its row, as the region's, when the panel says so: `hidden` beats `display: grid`", () => {
+    // the row is a `.field`, whose `display: grid` would show it hidden or not (no DOM here)
+    const css = readFileSync(new URL("../style.css", import.meta.url), "utf8");
+    expect(css).toMatch(/\.field\[hidden\]\s*\{\s*display:\s*none;\s*\}/);
   });
 });
 

@@ -11,7 +11,7 @@
 // one back and Esc leaves; changing the stops forgets a drawing; leaving the page cancels a running
 // job, and a drawing's par.
 // The basemap the server names (GET /config) goes under the route's layers once the map has
-// loaded (OpenFreeMap's once its style has).
+// loaded (OpenFreeMap's once its style has); the most seeds a job runs there goes to the settings.
 import "./style.css";
 import { API_BASE, errorBody, getConfig, getRegions } from "./api/client";
 import { mountBanner } from "./banner";
@@ -77,7 +77,9 @@ const placeSearch = document.createElement("div");
 const place = (lat: number, lon: number): boolean => placeStop(store, edit, lat, lon);
 mountPlaceSearch(placeSearch, store, new PlaceSearch(store, place));
 mountStopList(byId("stops"), store, edit, placeSearch);
-mountSettings(byId("settings"), store);
+// the most seeds a job runs here (none above 1 from a server older than portfolios)
+const portfolioMax = config.then(({ limits }) => limits.portfolio_max ?? 1).catch(() => 1);
+mountSettings(byId("settings"), store, portfolioMax);
 mountShare(byId("share"), store);
 const toasts = new Toasts(store);
 mountToasts(byId("toasts"), toasts);

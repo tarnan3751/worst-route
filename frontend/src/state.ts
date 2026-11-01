@@ -45,6 +45,7 @@ export const BUDGET_MAX_S = 120; // BUDGET_TOO_LARGE above
 export const LEASH_MAX_KM = 150;
 export const TARGET_TOLERANCE = 0.02; // a target is reached within ±2 %
 export const TARGET_MAX_DURATION_S = 7 * 24 * 3600;
+export const MAX_PORTFOLIO = 4; // the most seeds a job runs on any server (GET /config: this one's)
 export const MODES = ["distance", "time", "collect", "brand", "alphabet"] as const; // the objectives built
 export const ITEMS: readonly CollectItem[] = [
   "toll_booth",
@@ -74,7 +75,8 @@ export type TurnSetting = "any" | "no_left" | "no_right";
  * chosen, and `brand` (a brand's id from GET /brands, null until the region's brands are known)
  * what `brand` visits, kept the same way; `strict` counts only with a side to avoid, and `hard`
  * (hard mode: each road in one stretch) with or without one. `reorder` visits the stops between
- * the start and the end in the worst order (not under the alphabet route). `mpg` and
+ * the start and the end in the worst order (not under the alphabet route), and `portfolio` runs
+ * that many seeds at once and keeps the best (not under the alphabet route either). `mpg` and
  * `gasPriceUsd` are the vehicle, for the route's extra fuel and its cost; `departure` an ISO 8601
  * time with its offset, null for now. */
 export interface Settings {
@@ -93,6 +95,7 @@ export interface Settings {
   strict: boolean;
   hard: boolean;
   reorder: boolean;
+  portfolio: number;
   mpg: number;
   gasPriceUsd: number;
   departure: string | null;
@@ -115,6 +118,7 @@ export const DEFAULT_SETTINGS: Settings = {
   strict: false,
   hard: false,
   reorder: false,
+  portfolio: 1,
   mpg: 24,
   gasPriceUsd: 3.89,
   departure: null,
@@ -184,7 +188,7 @@ export type RunMetrics = Pick<Metrics, "length_m" | "time_s" | "ratio" | "items"
 export interface RunView {
   phase: Phase;
   jobId: string | null;
-  seed: number | null; // the job's, then the shown route's
+  seed: number | null; // the job's (a portfolio's first), then the shown route's
   iteration: number; // the attempt of the last splice; a finished route's attempts
   elapsedS: number;
   metrics: RunMetrics | null;
@@ -195,6 +199,8 @@ export interface RunView {
   outcome: TargetMetrics | null; // what it achieved, once done
   mode: RequestMode; // the run's objective, item, brand and constraints
   reorder: boolean; // the run asked for the worst order
+  portfolio: number; // the seeds it runs, or the shown route's portfolio ran; 1 for one search
+  leader: number; // the index of a portfolio's leading search, whose seed is `seed` plus it
   order: number[] | null; // the list's index of each stop, in the order visited; null: the list's
   connection: "open" | "reconnecting" | "lost";
   note: string | null;
@@ -214,6 +220,8 @@ export const IDLE_RUN: RunView = {
   outcome: null,
   mode: {},
   reorder: false,
+  portfolio: 1,
+  leader: 0,
   order: null,
   connection: "open",
   note: null,

@@ -941,6 +941,135 @@ describe("a route drawn by hand", () => {
   });
 });
 
+describe("a portfolio", () => {
+  it("is sent above one seed, never under the alphabet route", async () => {
+    const calls = stubFetch((call) => created(call, "jp"));
+    const s = store();
+    const runner = new JobRunner(s, fakeView(), () => {});
+    const sent = async (patch: Partial<Settings>): Promise<RouteRequest> => {
+      s.update({ run: IDLE_RUN });
+      s.updateSettings(patch);
+      await runner.go();
+      return calls.at(-1)!.body as RouteRequest;
+    };
+    expect(await sent({})).not.toHaveProperty("portfolio");
+    expect(await sent({ portfolio: 3 })).toMatchObject({ portfolio: 3 });
+    expect(await sent({ objective: "alphabet" })).not.toHaveProperty("portfolio");
+  });
+
+  it("lowers the seeds to the server's most when it runs fewer, for the next Go", async () => {
+    const refusal = {
+      code: "PORTFOLIO_TOO_LARGE",
+      message: "a portfolio of 4 seeds is over the 2 this server runs",
+      max: 2,
+    };
+    const calls = stubFetch((call) =>
+      call.body && (call.body as RouteRequest).portfolio === 4
+        ? json(refusal, 422)
+        : created(call, "jm"),
+    );
+    const s = store();
+    s.updateSettings({ portfolio: 4 }); // a link's, before GET /config answered
+    const runner = new JobRunner(s, fakeView(), () => {});
+    await runner.go();
+    expect(s.state.error).toEqual(refusal);
+    expect(s.state.settings.portfolio).toBe(2);
+    expect(s.state.run.phase).toBe("idle");
+    await runner.go();
+    expect(calls.at(-1)!.body).toMatchObject({ portfolio: 2 });
+    expect(s.state.run.phase).toBe("running");
+  });
+
+  it("names its leader's seed while it runs, then its winner's, the panel keeping the first", async () => {
+    const won: RouteDocument = {
+      ...fixture.route,
+      route_id: "0123456789ab",
+      seed: 42,
+      request: { ...fixture.route.request, seed: 40, portfolio: 4 },
+      run: { ...fixture.route.run, portfolio: { k: 4, seeds: [40, 41, 42, 43], winner: 2 } },
+    };
+    const calls = stubFetch((call) => (call.method === "POST" ? created(call, "jq") : json(won)));
+    const s = store();
+    s.updateSettings({ seed: 40, portfolio: 4 });
+    const runner = new JobRunner(s, fakeView(), () => {});
+    await runner.go();
+    const metrics = { length_m: 9000, time_s: 900, delay_s: 0, ratio: 3 };
+    const progress = (leader: number) => ({
+      iteration: 12,
+      elapsed_s: 1.5,
+      score: 9000,
+      metrics,
+      splices: [],
+      portfolio: { k: 4, leader, best_ratios: [2.5, 2.8, 3, 2.9] },
+    });
+    sources[0].send("progress", progress(0));
+    expect(statLines(s.state)[3]).toMatch(/getting worse… · best of 4 seeds · seed 40$/);
+    sources[0].send("progress", progress(2));
+    expect(statLines(s.state)[3]).toMatch(/ · best of 4 seeds · seed 42$/);
+    // the leader's best above its current route: its ratio first, then the portfolio's parts
+    const annealing = {
+      ...progress(2),
+      best_score: 9500,
+      best_metrics: { ...metrics, ratio: 3.2 },
+    };
+    sources[0].send("progress", annealing);
+    expect(statLines(s.state)[3]).toMatch(
+      /^attempt 12 · 1\.5 s · best 3\.2× · getting worse… · best of 4 seeds · seed 42$/,
+    );
+    sources[0].send("done", { route_id: won.route_id, stopped_because: "budget", metrics: {} });
+    await settle();
+    expect(calls.at(-1)).toMatchObject({ method: "GET", url: `/api/routes/${won.route_id}` });
+    expect(statLines(s.state)[3]).toMatch(/ · budget · best of 4 seeds · seed 42$/);
+    expect(s.state.settings.seed).toBe(40); // Go plans the same four seeds again
+    await runner.worse(); // a continuation is one search, from the winner's seed
+    expect(calls.at(-1)!.body).toMatchObject({ base_route_id: won.route_id, seed: 43 });
+    expect(calls.at(-1)!.body).not.toHaveProperty("portfolio");
+  });
+});
+
+describe("a route an earlier run stored", () => {
+  // A route's id is its content's, and the store keeps its first record: the route a seed gives
+  // alone may come back with the document of a portfolio that found it first.
+  const portfolios: RouteDocument = {
+    ...fixture.route,
+    route_id: "0123456789ab",
+    seed: 12,
+    request: { ...fixture.route.request, seed: 11, portfolio: 2 },
+    run: { ...fixture.route.run, portfolio: { k: 2, seeds: [11, 12], winner: 1 } },
+  };
+
+  it("keeps a Go's own seed and shows no portfolio it did not ask for", async () => {
+    stubFetch((call) => (call.method === "POST" ? created(call, "jc") : json(portfolios)));
+    const s = store();
+    s.updateSettings({ seed: 12 });
+    await new JobRunner(s, fakeView(), () => {}).go();
+    sources[0].send("done", {
+      route_id: portfolios.route_id,
+      stopped_because: "budget",
+      metrics: {},
+    });
+    await settle();
+    expect(s.state.route?.route_id).toBe(portfolios.route_id);
+    expect(s.state.settings.seed).toBe(12);
+    expect(statLines(s.state)[3]).toMatch(/ · budget · seed 12$/);
+  });
+
+  it("shows a portfolio's own seeds and keeps its first seed in the panel", async () => {
+    stubFetch((call) => (call.method === "POST" ? created(call, "jd") : json(portfolios)));
+    const s = store();
+    s.updateSettings({ seed: 11, portfolio: 2 });
+    await new JobRunner(s, fakeView(), () => {}).go();
+    sources[0].send("done", {
+      route_id: portfolios.route_id,
+      stopped_because: "budget",
+      metrics: {},
+    });
+    await settle();
+    expect(s.state.settings.seed).toBe(11);
+    expect(statLines(s.state)[3]).toMatch(/ · budget · best of 2 seeds · seed 12$/);
+  });
+});
+
 describe("the worst order", () => {
   const four = [
     { lat: 45.5231, lon: -122.6765, snapped: null },

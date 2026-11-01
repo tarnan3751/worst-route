@@ -459,6 +459,11 @@ body {
   margin-bottom: 6px;
 }
 
+/* A row the panel hides (the seeds, the region): `display: grid` would show it. */
+.field[hidden] {
+  display: none;
+}
+
 .field .label {
   color: var(--muted);
 }

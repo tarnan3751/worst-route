@@ -1,11 +1,12 @@
 // Links (docs/reference/frontend.md, **Links**).
 //
 // The request's settings and stops live in the URL
-// (`?seed=&budget=&tier=&leash=&target=&mode=&turns=&strict=&hard=&reorder=` and
+// (`?seed=&seeds=&budget=&tier=&leash=&target=&mode=&turns=&strict=&hard=&reorder=` and
 // `&vehicle=&departure=&stops=`, the target as `max`, `ratio:<x>` or `duration:<seconds>`, the mode
 // as `distance`, `time`, `collect:<item>`, `brand:<id>` or `alphabet` and the turns as `left` or
 // `right`, with `strict=1` (both written only when not the default), hard mode as `hard=1` and the
-// worst order as `reorder=1` (each only when on), the vehicle as `<mpg>,<gas price>` (only when not
+// worst order as `reorder=1` (each only when on), a portfolio's seeds as `seeds=<2-4>` (only above
+// one), the vehicle as `<mpg>,<gas price>` (only when not
 // the default), the departure as an ISO 8601 time with its offset (only when set), the region the
 // settings pin as `region=<id>` (only when pinned: otherwise the server picks it from the stops, as
 // it did), the stops as `lat,lon;lat,lon;...` at 6 decimals, as they were clicked), so a link
@@ -27,6 +28,7 @@ import {
   GAS_PRICE_MIN,
   ITEMS,
   LEASH_MAX_KM,
+  MAX_PORTFOLIO,
   MODES,
   MPG_MAX,
   MPG_MIN,
@@ -60,6 +62,7 @@ export interface UrlState {
   daily: true | null;
   challenge: string | null;
   seed: number | null;
+  seeds: number | null; // a portfolio's, above one
   budgetS: number | null;
   tier: Tier | null;
   leashKm: number | "auto" | null;
@@ -134,6 +137,7 @@ export function decodeUrlState(search: string): UrlState {
   };
   const route = params.get("route");
   const seed = number("seed");
+  const seeds = number("seeds");
   const budget = number("budget");
   const leash = number("leash");
   const stops = params.get("stops");
@@ -148,6 +152,7 @@ export function decodeUrlState(search: string): UrlState {
     daily: params.has("daily") ? true : null,
     challenge: challenge !== null && /^[a-z0-9][a-z0-9-]*$/.test(challenge) ? challenge : null,
     seed: Number.isSafeInteger(seed) && seed >= 0 ? seed : null,
+    seeds: Number.isInteger(seeds) && seeds > 1 && seeds <= MAX_PORTFOLIO ? seeds : null,
     budgetS: inRange(budget, 0, BUDGET_MAX_S) ? budget : null,
     tier: TIERS.find((tier) => tier === params.get("tier")) ?? null,
     leashKm:
@@ -174,6 +179,7 @@ export function encodeUrlState(state: UrlState): string {
   if (state.daily !== null) params.push("daily");
   if (state.challenge !== null) params.push(`challenge=${state.challenge}`);
   if (state.seed !== null) params.push(`seed=${state.seed}`);
+  if (state.seeds !== null) params.push(`seeds=${state.seeds}`);
   if (state.budgetS !== null) params.push(`budget=${state.budgetS}`);
   if (state.tier !== null) params.push(`tier=${state.tier}`);
   if (state.leashKm !== null) params.push(`leash=${state.leashKm}`);
@@ -216,8 +222,8 @@ function urlModeOf({ objective, item, brand }: Settings): UrlMode | null {
 }
 
 /** What the app shows, as a URL carries it: the mode, the turns and the vehicle only when not
- * the default, hard mode and the worst order only when on, the region only when pinned, the
- * challenge only while it is set up. */
+ * the default, hard mode and the worst order only when on, the seeds only above one, the region
+ * only when pinned, the challenge only while it is set up. */
 export function urlStateOf(state: Readonly<AppState>): UrlState {
   const { settings } = state;
   const { turns, mpg, gasPriceUsd } = settings;
@@ -227,6 +233,7 @@ export function urlStateOf(state: Readonly<AppState>): UrlState {
     daily: null, // once opened, today's route is a route like any other
     challenge: state.challenge,
     seed: settings.seed,
+    seeds: settings.portfolio > 1 ? settings.portfolio : null,
     budgetS: settings.budgetS,
     tier: settings.tier,
     leashKm: settings.leashKm,
@@ -259,6 +266,7 @@ export function settingsFrom(url: UrlState, defaults: Settings): Settings {
   return {
     ...defaults,
     seed: url.seed ?? defaults.seed,
+    portfolio: url.seeds ?? defaults.portfolio,
     budgetS: url.budgetS ?? defaults.budgetS,
     tier: url.tier ?? defaults.tier,
     leashKm: url.leashKm ?? defaults.leashKm,
@@ -278,10 +286,10 @@ export function settingsFrom(url: UrlState, defaults: Settings): Settings {
 }
 
 /** Open stored route `routeId`: its stops (in the order its route visits them) and settings (its
- * mode, turns, hard mode, worst order, vehicle and departure among them; the panel's item and brand
- * stay under another objective, its vehicle when it has none, or one outside the panel's limits,
- * and its departure when it has none), the route and its baseline. Whether it opened; when not, the
- * banner says why. */
+ * mode, turns, hard mode, worst order, seeds, vehicle and departure among them; the panel's item
+ * and brand stay under another objective, its vehicle when it has none, or one outside the panel's
+ * limits, and its departure when it has none), the route and its baseline. Whether it opened; when
+ * not, the banner says why. */
 export async function openRoute(
   routeId: string,
   store: Store,
@@ -310,6 +318,7 @@ export async function openRoute(
       strict: constraints?.strict ?? false,
       hard: constraints?.hard ?? false,
       reorder: request.reorder ?? false,
+      portfolio: request.portfolio ?? 1,
       ...(vehicle ? { mpg: vehicle.mpg, gasPriceUsd: vehicle.gas_price_usd } : {}),
       ...(departure ? { departure } : {}),
     });

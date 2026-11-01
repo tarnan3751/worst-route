@@ -1,18 +1,21 @@
 // The settings (docs/reference/frontend.md, **Settings**): the request's seed (empty: random,
-// picked by the server), time budget, tier and leash (empty: auto, with what auto became once a job
-// has said), the region (picked by the server from the stops, or one of those it serves pinned; the
-// row only when it serves several), the mode (the longest, the slowest, collecting an item, picked
-// under it, a brand's pilgrimage, the brand picked under it from the GET /brands of the region
-// trips run on, asked again whenever that region changes, or the alphabet route), the turns (any,
-// or left or right turns avoided, `strict` for none at all; hard mode, each road in one stretch;
-// and the worst order, the stops between the start and the end visited in whatever order is worst,
-// not under the alphabet route), the inefficiency target (as bad as possible, a ratio to the
-// sensible route, or a drive time typed as `9h`, `90m`, `2h30m` or minutes; typing a number picks
-// its kind; no ratio under collect or brand, none under the alphabet route), the vehicle (its mpg
-// and the gas price, for the route's extra fuel and its cost), the departure (empty: now; for the
-// route's arrival), and the units the panel shows. Locked while a job runs, except the units. The
-// setting an error names (`field`: the target, the item, the brand, the constraints, the worst
-// order, the vehicle or the departure) is highlighted.
+// picked by the server), the seeds a job runs at once, keeping the best (1 up to the most the
+// server runs, from GET /config, a setting above it lowered to it; the row hidden when that is 1,
+// and not under the alphabet route), time budget, tier and leash (empty: auto, with what auto
+// became once a job has said), the region (picked by the server from the stops, or one of those it
+// serves pinned; the row only when it serves several), the mode (the longest, the slowest,
+// collecting an item, picked under it, a brand's pilgrimage, the brand picked under it from the
+// GET /brands of the region trips run on, asked again whenever that region changes, or the alphabet
+// route), the turns (any, or left or right turns avoided, `strict` for none at all; hard mode, each
+// road in one stretch; and the worst order, the stops between the start and the end visited in
+// whatever order is worst, not under the alphabet route), the inefficiency target (as bad as
+// possible, a ratio to the sensible route, or a drive time typed as `9h`, `90m`, `2h30m` or
+// minutes; typing a number picks its kind; no ratio under collect or brand, none under the alphabet
+// route), the vehicle (its mpg and the gas price, for the route's extra fuel and its cost), the
+// departure (empty: now; for the route's arrival), and the units the panel shows. Locked while a
+// job runs, except the units. The setting an error names (`field`: the target, the item, the brand,
+// the constraints, the worst order, the seeds, the vehicle or the departure; the seeds for
+// PORTFOLIO_TOO_LARGE too) is highlighted.
 import { errorBody, getBrands } from "../api/client";
 import type { BrandEntry, CollectItem, Region, TargetKind, Tier } from "../api/types";
 import {
@@ -29,6 +32,7 @@ import {
   GAS_PRICE_MIN,
   ITEMS,
   LEASH_MAX_KM,
+  MAX_PORTFOLIO,
   MPG_MAX,
   MPG_MIN,
   TARGET_MAX_DURATION_S,
@@ -71,6 +75,8 @@ const HARD = "each road in one stretch, never driven again once left";
 const REORDER =
   "the stops between the start and the end in whatever order is worst: up to 7 stops, 5 on a " +
   "state's or the national map; the ratio compares against the sensible route in the chosen order";
+const SEEDS = "the best of that many seeds, searched at once; the route drawn is the one ahead";
+const ONE_SEARCH = "the alphabet route runs one search";
 const UNITS: [Units, string][] = [
   ["mi", "Miles"],
   ["km", "Kilometres"],
@@ -141,6 +147,35 @@ export function regionOptions(regions: Region[]): [string, string, boolean][] {
   ];
 }
 
+/** The seeds picker's options: 1 up to `most`, the most this server runs (never above
+ * `MAX_PORTFOLIO`). */
+export function seedOptions(most: number): [string, string, boolean][] {
+  const count = Math.max(1, Math.min(most, MAX_PORTFOLIO));
+  return Array.from({ length: count }, (_, k): [string, string, boolean] => {
+    const seeds = String(k + 1);
+    return [seeds, seeds, true];
+  });
+}
+
+/** The settings' seeds within `most`: lowered to it when above it. */
+export function seedsWithin(portfolio: number, most: number): number {
+  return Math.max(1, Math.min(portfolio, most));
+}
+
+/** Keep the settings' seeds within `portfolioMax`, the most this server runs, once it has said:
+ * lowered then, and whenever a link or a route opened later raises them. Gives the most. */
+export async function followPortfolioMax(
+  store: Store,
+  portfolioMax: Promise<number>,
+): Promise<number> {
+  const most = await portfolioMax;
+  store.watch(["settings"], ({ settings }) => {
+    const within = seedsWithin(settings.portfolio, most);
+    if (within !== settings.portfolio) store.updateSettings({ portfolio: within });
+  });
+  return most;
+}
+
 /** The brand of `brands` that stands for brand id `brand`: when it is one of `previous`, another
  * build's list (a brand's id is its build's), the same brand by its wikidata id, else its name;
  * else the same id; else the first. */
@@ -199,8 +234,17 @@ export function followBrands(store: Store, show: (text: string) => void): void {
   });
 }
 
-export function mountSettings(root: HTMLElement, store: Store): void {
+/** The settings in `root`; `portfolioMax`, the most seeds this server runs (GET /config), shows
+ * the seeds' row once it is more than one. */
+export function mountSettings(
+  root: HTMLElement,
+  store: Store,
+  portfolioMax: Promise<number> = Promise.resolve(1),
+): void {
   const seed = numberInput("random", 0, Number.MAX_SAFE_INTEGER, "1");
+  const seeds = el("select");
+  seeds.ariaLabel = "seeds";
+  const seedsNote = el("span", "resolved", SEEDS);
   const budget = numberInput("", 1, BUDGET_MAX_S, "1");
   const tier = select(TIERS.map((t): [Tier, string, boolean] => [t, t, true]));
   const tierNote = el("span", "resolved");
@@ -266,6 +310,8 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     UNITS.map(([u, text]): [Units, string, boolean] => [u, text, true]),
   );
 
+  const seedsRow = field("Seeds", seeds, seedsNote);
+  seedsRow.hidden = true; // until the server says it runs more than one
   const regionRow = field("Region", region, regionNote);
   const modeRow = field("Mode", mode.group);
   const turnsRow = field("Turns", turns.group, strictNote);
@@ -277,6 +323,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
   root.replaceChildren(
     el("h2", "", "Settings"),
     field("Seed", seed),
+    seedsRow,
     field("Time budget (s)", budget),
     field("Road tier", tier, tierNote),
     field("Leash (km)", leash, leashNote),
@@ -293,6 +340,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
   const render = () => {
     const { settings, brands } = store.state;
     seed.value = settings.seed === null ? "" : String(settings.seed);
+    seeds.value = String(settings.portfolio);
     budget.value = String(settings.budgetS);
     tier.value = settings.tier;
     leash.value = settings.leashKm === "auto" ? "" : String(settings.leashKm);
@@ -321,6 +369,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     if (value === undefined) render();
     else set({ seed: value });
   });
+  seeds.addEventListener("change", () => set({ portfolio: Number(seeds.value) }));
   budget.addEventListener("change", () => {
     const value = typed(budget, 1, BUDGET_MAX_S, false);
     if (value === undefined || value === null) render();
@@ -395,12 +444,13 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     ["brand", modeRow],
     ["constraints", turnsRow],
     ["reorder", turnsRow],
+    ["portfolio", seedsRow],
     ["target", targetRow],
     ["vehicle", vehicleRow],
     ["departure", departureRow],
   ]);
   store.watch(["error"], ({ error }) => {
-    const errored = fieldRows.get(error?.field);
+    const errored = error?.code === "PORTFOLIO_TOO_LARGE" ? seedsRow : fieldRows.get(error?.field);
     for (const row of fieldRows.values()) row.classList.toggle("has-error", row === errored);
   });
   let shown: unknown[] = [];
@@ -409,6 +459,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     const { resolved } = state.run;
     const { brands } = state;
     const { objective, turns: side, hard: hardMode, reorder: reordering } = state.settings;
+    const { portfolio } = state.settings;
     const key = [
       locked,
       resolved,
@@ -418,6 +469,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
       side,
       hardMode,
       reordering,
+      portfolio,
       brands,
     ];
     if (key.every((value, k) => value === shown[k])) return;
@@ -449,6 +501,10 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     reorder.disabled = locked || alphabet;
     reorderLabel.classList.toggle("disabled", alphabet);
     reorderNote.hidden = !reordering || alphabet;
+    // nor does it run more than one search: the seeds keep their number for another mode
+    seeds.disabled = locked || alphabet;
+    seedsNote.textContent = alphabet ? ONE_SEARCH : SEEDS;
+    seedsNote.hidden = portfolio < 2 && !alphabet; // the reason whenever it is disabled
     tierNote.textContent =
       resolved && state.settings.tier === "auto" ? `auto was ${resolved.tier}` : "";
     leashNote.textContent =
@@ -470,4 +526,13 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     regionRow.hidden = (regions?.length ?? 0) < 2;
     render();
   });
+  // The seeds this server runs, once it has said (a link's kept until then, the row hidden).
+  const offer = (most: number) => {
+    seeds.replaceChildren(...select(seedOptions(most)).options);
+    seedsRow.hidden = most < 2;
+    render();
+  };
+  seeds.replaceChildren(...select(seedOptions(MAX_PORTFOLIO)).options);
+  render();
+  void followPortfolioMax(store, portfolioMax).then(offer);
 }

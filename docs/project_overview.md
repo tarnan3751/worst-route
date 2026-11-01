@@ -1203,9 +1203,9 @@ The plan's assumed defaults, each open until the owner confirms (`docs/PLAN.md` 
 - Vehicle stats: MPG and gas price only, or EV too.
 - Public geocoder: self-hosted Photon or a paid provider (the trade-off in
   `docs/reference/hosting.md`, **The geocoder**).
-- Where the public downloads the desktop app from (asked of the owner, 2026-10-31): the
-  repository is private, so its release assets (the installers, the basemap file the app fetches)
-  need a token; the repository made public, or a public repository of releases the workflow
-  publishes to. Until then the workflow makes a draft release here and the app's basemap address
-  is a placeholder (`WORST_ROUTE_BASEMAP_URL` sets it). The cost of a tag's build on a private
-  repository (macOS minutes counted ten times, from memory, unconfirmed) is the owner's to weigh.
+- Where the public downloads the desktop app from (asked of the owner, 2026-10-31; decided
+  2026-11-01): this repository, made public, so its release assets (the installers, the basemap
+  file the app fetches) need no token and a tag's build costs no minutes. The workflow still makes
+  a draft release the owner publishes; the data pack and the basemap file are not uploaded yet, and
+  the app's basemap address stays a placeholder until the first release holds the file
+  (`WORST_ROUTE_BASEMAP_URL` sets it).

@@ -264,10 +264,10 @@ checks) or by hand:
 3. the owner reads the draft and publishes it.
 
 No Intel Mac build: Numba publishes no Intel macOS wheels since 0.63 (the project has 0.68), and
-Intel Macs use the hosted site. The repository is private, so its release assets need a token to
-download; where the public downloads the installers and the basemap's file from is the owner's
-choice (the repository made public, or a public repository of releases, the manifest's basemap
-address then a variable's change).
+Intel Macs use the hosted site. The repository is public (the owner, 2026-11-01), so its release
+assets download without a token: the public downloads the installers and the basemap's file from its
+releases, the manifest's basemap address a variable's change (`WORST_ROUTE_BASEMAP_URL`) once the
+first release holds the file.
 
 ## Opening it the first time
 

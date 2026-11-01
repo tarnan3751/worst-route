@@ -30,6 +30,7 @@ const full: UrlState = {
   turns: null,
   strict: null,
   hard: null,
+  reorder: null,
   vehicle: null,
   departure: null,
   region: null,
@@ -52,6 +53,7 @@ const nothing: UrlState = {
   turns: null,
   strict: null,
   hard: null,
+  reorder: null,
   vehicle: null,
   departure: null,
   region: null,
@@ -458,6 +460,22 @@ describe("the mode and the turns in the URL", () => {
       hard: true,
     });
   });
+
+  it("carries the worst order only when on, as reorder=1, and gives it back", () => {
+    const shown = (patch: Partial<Settings>): AppState => ({
+      ...emptyApp(),
+      settings: { ...DEFAULT_SETTINGS, ...patch },
+    });
+    const worst: Settings = { ...DEFAULT_SETTINGS, reorder: true, hard: true };
+    const query = encodeUrlState(urlStateOf(shown(worst)));
+    expect(query).toMatch(/&target=max&hard=1&reorder=1$/);
+    expect(settingsFrom(decodeUrlState(query), DEFAULT_SETTINGS)).toEqual(worst);
+    expect(encodeUrlState(urlStateOf(shown({})))).not.toContain("reorder");
+    expect(decodeUrlState("?reorder=1").reorder).toBe(true);
+    for (const value of ["true", "0", "yes", ""]) {
+      expect(decodeUrlState(`?reorder=${value}`).reorder).toBeNull();
+    }
+  });
 });
 
 describe("a route of another mode opened by its link", () => {
@@ -583,6 +601,23 @@ describe("a pilgrimage, an alphabet route and a hard-mode route opened by their 
     expect(encodeUrlState(urlStateOf(sided.state))).toContain("&turns=right&hard=1&");
     const without = await open({ objective: "distance" }, { hard: true });
     expect(without.state.settings.hard).toBe(false);
+  });
+
+  it("takes the worst order, the stops in the order the route visits them", async () => {
+    // a stored worst-order route's request has its stops in its route's order, as its stops
+    const visited = route.request.stops ?? [];
+    const store = await open({ objective: "distance", reorder: true });
+    expect(store.state.settings.reorder).toBe(true);
+    expect(store.state.stops.map(({ lat, lon }) => ({ lat, lon }))).toEqual(
+      visited.map(({ lat, lon }) => ({ lat, lon })),
+    );
+    expect(store.state.stops.map(({ snapped }) => snapped?.node)).toEqual(
+      route.stops.map(({ node }) => node),
+    );
+    expect(store.state.run.order).toBeNull(); // the list is in the route's order: no "visited"
+    expect(encodeUrlState(urlStateOf(store.state))).toContain("&reorder=1&stops=");
+    const plain = await open({ objective: "distance" }, { reorder: true });
+    expect(plain.state.settings.reorder).toBe(false);
   });
 });
 

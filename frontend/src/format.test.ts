@@ -10,6 +10,7 @@ import {
   formatFuel,
   formatItems,
   formatLatLon,
+  formatOrdinal,
   formatPercent,
   formatRatio,
   formatStates,
@@ -68,6 +69,14 @@ describe("the other numbers", () => {
     expect(formatItems(0, "toll_booth")).toBe("0 toll booths");
     expect(formatItems(1211, "level_crossing")).toBe("1,211 level crossings");
     expect(formatItems(1, "roundabout")).toBe("1 roundabout");
+  });
+
+  it("writes a place in an order", () => {
+    const places = [1, 2, 3, 4, 7, 11, 12, 13, 21, 22, 23, 101, 111].map(formatOrdinal);
+    expect(places).toEqual([
+      "1st", "2nd", "3rd", "4th", "7th", "11th", "12th", "13th", "21st", "22nd", "23rd",
+      "101st", "111th",
+    ]); // prettier-ignore
   });
 });
 

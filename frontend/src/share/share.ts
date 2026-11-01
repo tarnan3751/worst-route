@@ -1,19 +1,19 @@
 // Links (docs/reference/frontend.md, **Links**).
 //
 // The request's settings and stops live in the URL
-// (`?seed=&budget=&tier=&leash=&target=&mode=&turns=&strict=&hard=&vehicle=&departure=&stops=`,
-// the target as `max`, `ratio:<x>` or `duration:<seconds>`, the mode as `distance`, `time`,
-// `collect:<item>`, `brand:<id>` or `alphabet` and the turns as `left` or `right`, with `strict=1`
-// (both written only when not the default), hard mode as `hard=1` (only when on), the vehicle as
-// `<mpg>,<gas price>` (only when not the default), the departure
-// as an ISO 8601 time with its offset (only when set), the region the settings pin as `region=<id>`
-// (only when pinned: otherwise the server picks it from the stops, as it did), the stops as
-// `lat,lon;lat,lon;...` at 6 decimals, as they were clicked), so a link reproduces a request;
-// `?route=<id>` opens a stored route without running anything, its own request then giving the
-// stops and settings, and `?daily` today's route (daily/panel.ts), once the server has planned
-// it. `UrlSync` keeps the URL in step with what the app shows once it is started, which is after
-// a `?route=` or `?daily` link has been opened, or has failed to open (the parameter then
-// stays). The share section copies a link to the route shown, opens its share image
+// (`?seed=&budget=&tier=&leash=&target=&mode=&turns=&strict=&hard=&reorder=` and
+// `&vehicle=&departure=&stops=`, the target as `max`, `ratio:<x>` or `duration:<seconds>`, the mode
+// as `distance`, `time`, `collect:<item>`, `brand:<id>` or `alphabet` and the turns as `left` or
+// `right`, with `strict=1` (both written only when not the default), hard mode as `hard=1` and the
+// worst order as `reorder=1` (each only when on), the vehicle as `<mpg>,<gas price>` (only when not
+// the default), the departure as an ISO 8601 time with its offset (only when set), the region the
+// settings pin as `region=<id>` (only when pinned: otherwise the server picks it from the stops, as
+// it did), the stops as `lat,lon;lat,lon;...` at 6 decimals, as they were clicked), so a link
+// reproduces a request; `?route=<id>` opens a stored route without running anything, its own
+// request then giving the stops and settings, and `?daily` today's route (daily/panel.ts), once the
+// server has planned it. `UrlSync` keeps the URL in step with what the app shows once it is
+// started, which is after a `?route=` or `?daily` link has been opened, or has failed to open (the
+// parameter then stays). The share section copies a link to the route shown, opens its share image
 // (`GET /routes/{id}/share.png`) in a new tab, and downloads its GeoJSON
 // (`GET /routes/{id}/geojson`).
 import { API_BASE, errorBody, getRoute, getRouteGeojson } from "../api/client";
@@ -65,6 +65,7 @@ export interface UrlState {
   turns: Exclude<TurnSetting, "any"> | null;
   strict: true | null;
   hard: true | null;
+  reorder: true | null;
   vehicle: Vehicle | null;
   departure: string | null;
   region: string | null;
@@ -153,6 +154,7 @@ export function decodeUrlState(search: string): UrlState {
     turns,
     strict: turns !== null && params.get("strict") === "1" ? true : null,
     hard: params.get("hard") === "1" ? true : null,
+    reorder: params.get("reorder") === "1" ? true : null,
     vehicle: parseVehicle(params.get("vehicle")),
     departure: parseIsoTime(params.get("departure") ?? ""),
     region: region !== null && /^[a-z0-9][a-z0-9-]*$/.test(region) ? region : null, // an id
@@ -186,6 +188,7 @@ export function encodeUrlState(state: UrlState): string {
   if (state.turns !== null) params.push(`turns=${state.turns === "no_left" ? "left" : "right"}`);
   if (state.strict !== null) params.push("strict=1");
   if (state.hard !== null) params.push("hard=1");
+  if (state.reorder !== null) params.push("reorder=1");
   if (state.vehicle !== null) {
     params.push(`vehicle=${state.vehicle.mpg},${state.vehicle.gas_price_usd}`);
   }
@@ -207,7 +210,7 @@ function urlModeOf({ objective, item, brand }: Settings): UrlMode | null {
 }
 
 /** What the app shows, as a URL carries it: the mode, the turns and the vehicle only when not
- * the default, hard mode only when on, the region only when pinned. */
+ * the default, hard mode and the worst order only when on, the region only when pinned. */
 export function urlStateOf(state: Readonly<AppState>): UrlState {
   const { settings } = state;
   const { turns, mpg, gasPriceUsd } = settings;
@@ -224,6 +227,7 @@ export function urlStateOf(state: Readonly<AppState>): UrlState {
     turns: turns === "any" ? null : turns,
     strict: turns !== "any" && settings.strict ? true : null,
     hard: settings.hard ? true : null,
+    reorder: settings.reorder ? true : null,
     vehicle: usual ? null : vehicleOf(settings),
     departure: settings.departure,
     region: settings.region,
@@ -257,6 +261,7 @@ export function settingsFrom(url: UrlState, defaults: Settings): Settings {
     turns: url.turns ?? defaults.turns,
     strict: url.strict ?? defaults.strict,
     hard: url.hard ?? defaults.hard,
+    reorder: url.reorder ?? defaults.reorder,
     mpg: url.vehicle?.mpg ?? defaults.mpg,
     gasPriceUsd: url.vehicle?.gas_price_usd ?? defaults.gasPriceUsd,
     departure: url.departure ?? defaults.departure,
@@ -264,10 +269,11 @@ export function settingsFrom(url: UrlState, defaults: Settings): Settings {
   };
 }
 
-/** Open stored route `routeId`: its stops and settings (its mode, turns, hard mode, vehicle and
- * departure among them; the panel's item and brand stay under another objective, its vehicle
- * when it has none, or one outside the panel's limits, and its departure when it has none), the
- * route and its baseline. Whether it opened; when not, the banner says why. */
+/** Open stored route `routeId`: its stops (in the order its route visits them) and settings (its
+ * mode, turns, hard mode, worst order, vehicle and departure among them; the panel's item and brand
+ * stay under another objective, its vehicle when it has none, or one outside the panel's limits,
+ * and its departure when it has none), the route and its baseline. Whether it opened; when not, the
+ * banner says why. */
 export async function openRoute(
   routeId: string,
   store: Store,
@@ -295,6 +301,7 @@ export async function openRoute(
       turns: constraints?.no_left ? "no_left" : constraints?.no_right ? "no_right" : "any",
       strict: constraints?.strict ?? false,
       hard: constraints?.hard ?? false,
+      reorder: request.reorder ?? false,
       ...(vehicle ? { mpg: vehicle.mpg, gasPriceUsd: vehicle.gas_price_usd } : {}),
       ...(departure ? { departure } : {}),
     });

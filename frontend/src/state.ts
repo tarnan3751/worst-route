@@ -73,9 +73,10 @@ export type TurnSetting = "any" | "no_left" | "no_right";
  * while another kind is chosen. `item` is what `collect` collects, kept while another objective is
  * chosen, and `brand` (a brand's id from GET /brands, null until the region's brands are known)
  * what `brand` visits, kept the same way; `strict` counts only with a side to avoid, and `hard`
- * (hard mode: each road in one stretch) with or without one. `mpg` and `gasPriceUsd` are the
- * vehicle, for the route's extra fuel and its cost; `departure` an ISO 8601 time with its offset,
- * null for now. */
+ * (hard mode: each road in one stretch) with or without one. `reorder` visits the stops between
+ * the start and the end in the worst order (not under the alphabet route). `mpg` and
+ * `gasPriceUsd` are the vehicle, for the route's extra fuel and its cost; `departure` an ISO 8601
+ * time with its offset, null for now. */
 export interface Settings {
   seed: number | null;
   region: string | null;
@@ -91,6 +92,7 @@ export interface Settings {
   turns: TurnSetting;
   strict: boolean;
   hard: boolean;
+  reorder: boolean;
   mpg: number;
   gasPriceUsd: number;
   departure: string | null;
@@ -112,6 +114,7 @@ export const DEFAULT_SETTINGS: Settings = {
   turns: "any",
   strict: false,
   hard: false,
+  reorder: false,
   mpg: 24,
   gasPriceUsd: 3.89,
   departure: null,
@@ -190,6 +193,8 @@ export interface RunView {
   goal: Target | null; // the run's target, null for max
   outcome: TargetMetrics | null; // what it achieved, once done
   mode: RequestMode; // the run's objective, item, brand and constraints
+  reorder: boolean; // the run asked for the worst order
+  order: number[] | null; // the list's index of each stop, in the order visited; null: the list's
   connection: "open" | "reconnecting" | "lost";
   note: string | null;
 }
@@ -206,6 +211,8 @@ export const IDLE_RUN: RunView = {
   goal: null,
   outcome: null,
   mode: {},
+  reorder: false,
+  order: null,
   connection: "open",
   note: null,
 };

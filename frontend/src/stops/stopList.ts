@@ -5,11 +5,13 @@
 // inserted before the end (`placeStop`, which a place search's pick goes through too). A stop
 // keeps its coordinates at 6 decimals (util/geo.ts, round6). An edit forgets where the last job
 // snapped the stops; once a job has run, the list shows each stop's node, how far it moved and
-// the API's note. The stop an error names (`stop_index`) is highlighted, here and on the map, and
+// the API's note, and when its route visits them in another order than the list's (the worst
+// order), the place each is visited in ("visited 3rd"), the list keeping its numbering. The stop
+// an error names (`stop_index`) is highlighted, here and on the map, and
 // every stop along the way for an error on `field: "stops"` (the alphabet route takes a start and
 // an end only, which the list's hint says under it). Under the list's heading, the build the stops
 // run on (pick.ts, `pickLine`: "Oregon · all roads", and why), then the place search (search.ts).
-import { formatDistance, formatLatLon, type Units } from "../format";
+import { formatDistance, formatLatLon, formatOrdinal, type Units } from "../format";
 import type { Stop, Store } from "../state";
 import { el } from "../util/dom";
 import { round6 } from "../util/geo";
@@ -84,6 +86,14 @@ export function stopLabel(index: number, count: number): string | null {
   return roleOf(index, count) === "via" ? `${ROLE_NAMES.via} ${index + 1}` : null;
 }
 
+/** The place stop `index` is visited in, "visited 3rd", when the route visits the stops in
+ * another order than the list's (`order`: the list's index of each stop visited) and the stop
+ * has not moved since; else null. */
+export function visitLine(stop: Stop, index: number, order: number[] | null): string | null {
+  const place = order?.indexOf(index) ?? -1;
+  return stop.snapped === null || place < 0 ? null : `visited ${formatOrdinal(place + 1)}`;
+}
+
 function snapLine(stop: Stop, units: Units): string | null {
   if (stop.snapped === null) return null;
   const { node, moved_m, note } = stop.snapped;
@@ -124,7 +134,8 @@ export function mountStopList(
   store.watch(["stops", "error", "run", "settings"], (state) => {
     const locked = busy(store);
     const { units, objective } = state.settings;
-    const key = [state.stops, state.error, locked, units, objective];
+    const { order } = state.run;
+    const key = [state.stops, state.error, locked, units, objective, order];
     if (key.every((value, k) => value === shown[k])) return;
     shown = key;
     ends.hidden = objective !== "alphabet";
@@ -144,6 +155,8 @@ export function mountStopList(
         body.append(title, el("div", "coords", formatLatLon(stop.lat, stop.lon)));
         const snapped = snapLine(stop, state.settings.units);
         if (snapped) body.append(el("div", "snap", snapped));
+        const visited = visitLine(stop, k, order);
+        if (visited) body.append(el("div", "visited", visited));
         item.append(el("span", "badge", String(k + 1)), body);
         return item;
       }),

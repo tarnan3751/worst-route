@@ -4,14 +4,15 @@
 // row only when it serves several), the mode (the longest, the slowest, collecting an item, picked
 // under it, a brand's pilgrimage, the brand picked under it from the GET /brands of the region
 // trips run on, asked again whenever that region changes, or the alphabet route), the turns (any,
-// or left or right turns avoided, `strict` for none at all; and hard mode, each road in one
-// stretch), the inefficiency target (as bad as possible, a ratio to the sensible route, or a drive
-// time typed as `9h`, `90m`, `2h30m` or minutes; typing a number picks its kind; no ratio under
-// collect or brand, none under the alphabet route), the vehicle (its mpg and the gas price, for the
-// route's extra fuel and its cost), the departure (empty: now; for the route's arrival), and the
-// units the panel shows. Locked while a job runs, except the units. The setting an error names
-// (`field`: the target, the item, the brand, the constraints, the vehicle or the departure) is
-// highlighted.
+// or left or right turns avoided, `strict` for none at all; hard mode, each road in one stretch;
+// and the worst order, the stops between the start and the end visited in whatever order is worst,
+// not under the alphabet route), the inefficiency target (as bad as possible, a ratio to the
+// sensible route, or a drive time typed as `9h`, `90m`, `2h30m` or minutes; typing a number picks
+// its kind; no ratio under collect or brand, none under the alphabet route), the vehicle (its mpg
+// and the gas price, for the route's extra fuel and its cost), the departure (empty: now; for the
+// route's arrival), and the units the panel shows. Locked while a job runs, except the units. The
+// setting an error names (`field`: the target, the item, the brand, the constraints, the worst
+// order, the vehicle or the departure) is highlighted.
 import { errorBody, getBrands } from "../api/client";
 import type { BrandEntry, CollectItem, Region, TargetKind, Tier } from "../api/types";
 import {
@@ -67,6 +68,9 @@ const TARGET_NOTES: Partial<Record<Mode, string>> = {
   alphabet: "the alphabet route takes no target",
 };
 const HARD = "each road in one stretch, never driven again once left";
+const REORDER =
+  "the stops between the start and the end in whatever order is worst: up to 7 stops, 5 on a " +
+  "state's or the national map; the ratio compares against the sensible route in the chosen order";
 const UNITS: [Units, string][] = [
   ["mi", "Miles"],
   ["km", "Kilometres"],
@@ -237,6 +241,13 @@ export function mountSettings(root: HTMLElement, store: Store): void {
   hardLabel.title = HARD;
   turns.group.append(hardLabel);
   const hardNote = el("span", "resolved", HARD);
+  const reorder = el("input");
+  reorder.type = "checkbox";
+  const reorderLabel = el("label");
+  reorderLabel.append(reorder, " Worst order");
+  reorderLabel.title = REORDER;
+  turns.group.append(reorderLabel);
+  const reorderNote = el("span", "resolved", REORDER);
   const mpg = numberInput("", MPG_MIN, MPG_MAX, "any");
   mpg.ariaLabel = "miles per gallon";
   const gasPrice = numberInput("", GAS_PRICE_MIN, GAS_PRICE_MAX, "0.01");
@@ -258,7 +269,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
   const regionRow = field("Region", region, regionNote);
   const modeRow = field("Mode", mode.group);
   const turnsRow = field("Turns", turns.group, strictNote);
-  turnsRow.append(hardNote);
+  turnsRow.append(hardNote, reorderNote);
   const targetRow = field("How bad", target.group, targetNote);
   const vehicleRow = field("Vehicle", vehicle);
   const departureRow = field("Departure", departure, departureNote);
@@ -298,6 +309,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     for (const input of turns.inputs) input.checked = input.value === settings.turns;
     strict.checked = settings.strict;
     hard.checked = settings.hard;
+    reorder.checked = settings.reorder;
     mpg.value = String(settings.mpg);
     gasPrice.value = String(settings.gasPriceUsd);
     departure.value = settings.departure?.slice(0, 16) ?? ""; // its clock, at its own offset
@@ -353,6 +365,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
   }
   strict.addEventListener("change", () => set({ strict: strict.checked }));
   hard.addEventListener("change", () => set({ hard: hard.checked }));
+  reorder.addEventListener("change", () => set({ reorder: reorder.checked }));
   mpg.addEventListener("change", () => {
     const value = typed(mpg, MPG_MIN, MPG_MAX, false);
     if (value === undefined || value === null) render();
@@ -381,6 +394,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     ["item", modeRow],
     ["brand", modeRow],
     ["constraints", turnsRow],
+    ["reorder", turnsRow],
     ["target", targetRow],
     ["vehicle", vehicleRow],
     ["departure", departureRow],
@@ -394,7 +408,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     const locked = busy(store);
     const { resolved } = state.run;
     const { brands } = state;
-    const { objective, turns: side, hard: hardMode } = state.settings;
+    const { objective, turns: side, hard: hardMode, reorder: reordering } = state.settings;
     const key = [
       locked,
       resolved,
@@ -403,6 +417,7 @@ export function mountSettings(root: HTMLElement, store: Store): void {
       objective,
       side,
       hardMode,
+      reordering,
       brands,
     ];
     if (key.every((value, k) => value === shown[k])) return;
@@ -428,6 +443,12 @@ export function mountSettings(root: HTMLElement, store: Store): void {
     strictNote.hidden = side === "any";
     hard.disabled = locked;
     hardNote.hidden = !hardMode;
+    // The alphabet route has no stop to reorder: the box keeps its tick, which counts again
+    // under another mode.
+    const alphabet = objective === "alphabet";
+    reorder.disabled = locked || alphabet;
+    reorderLabel.classList.toggle("disabled", alphabet);
+    reorderNote.hidden = !reordering || alphabet;
     tierNote.textContent =
       resolved && state.settings.tier === "auto" ? `auto was ${resolved.tier}` : "";
     leashNote.textContent =

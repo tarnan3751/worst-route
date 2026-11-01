@@ -261,6 +261,11 @@ body {
   color: var(--muted);
 }
 
+.stop .visited {
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .stop .remove {
   border: none;
   background: none;

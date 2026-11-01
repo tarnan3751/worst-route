@@ -7,21 +7,25 @@
 // reach).
 //
 // Go posts the stops (each stop along the way labelled as its marker is numbered, "Stop 2") and
-// settings (the target, the objective with its item or brand, the turn constraints and hard
-// mode, the vehicle and the departure, now when none is set, among them) to the region trips run
-// on (the server's pick for the stops, or the one pinned: stops/pick.ts; Go and Reroll wait for
-// it), and Reroll the same without a seed, so the server picks one; the 202's seed goes into the
-// settings. Make it worse posts the shown route as `base_route_id` to the route's own region, with
-// the seed after the last one tried on it (its own at first), the base route giving the stops,
-// tier and leash and its recorded request the objective with its item or brand (a brand's id is
-// its build's), the panel the rest; the settings' seed follows the route shown, so it changes only
-// when a worse route is found. Then the job's events: `snapped` says where the stops went, `baseline`
-// draws the sensible route, each `snapshot` replaces the route and each `progress` applies its
-// splices in order (the alphabet route sends each better route as a snapshot, then a progress
-// without splices); `done` shows the stored route whole, and for a ratio or duration target
-// what it achieved; `error` shows its code and message. The stat line follows the run's own
-// objective and constraints, or a stored route's request. A refusal under strict, or under hard
-// mode, can be sent again without it.
+// settings (the target, the objective with its item or brand, the turn constraints and hard mode,
+// the worst order when ticked but not under the alphabet route, the vehicle and the departure, now
+// when none is set, among them) to the region trips run on (the server's pick for the stops, or the
+// one pinned: stops/pick.ts; Go and Reroll wait for it), and Reroll the same without a seed, so the
+// server picks one; the 202's seed goes into the settings. Make it worse posts the shown route as
+// `base_route_id` to the route's own region, with the seed after the last one tried on it (its own
+// at first), the base route giving the stops, tier and leash and its recorded request the objective
+// with its item or brand (a brand's id is its build's), the panel the rest; the settings' seed
+// follows the route shown, so it changes only when a worse route is found. Then the job's events:
+// `snapped` says where the stops went and in what order the route visits them (its `order`, through
+// the base route's for a continuation: the run's `order` is the list's index of each stop visited,
+// and the stop list says "visited 3rd"; under the worst order it comes once the server has tried
+// every order, the stat line saying "Trying every order…" until then), `baseline` draws the
+// sensible route, each `snapshot` replaces the route and each `progress` applies its splices in
+// order (the alphabet route sends each better route as a snapshot, then a progress without
+// splices); `done` shows the stored route whole, and for a ratio or duration target what it
+// achieved; `error` shows its code and message. The stat line follows the run's own objective and
+// constraints, or a stored route's request. A refusal under strict, or under hard mode, can be sent
+// again without it.
 // Cancel sends DELETE, and the stream then ends with `done` (the route so far, stored) or
 // `error`. Every error ends the run with its code in the banner and the controls unlocked: the
 // API's, or CLIENT_ERROR for one of the app's own (a running job is then cancelled). Leaving the
@@ -103,6 +107,7 @@ function jobRequest(state: Readonly<AppState>, seed: number | null): RouteReques
     vehicle: vehicleOf(settings),
     departure: departureOf(settings),
   };
+  if (settings.reorder && settings.objective !== "alphabet") request.reorder = true;
   if (seed !== null) request.seed = seed;
   return request;
 }
@@ -144,13 +149,20 @@ function modeOfRequest({ objective, item, brand, constraints }: RouteRequest): R
 }
 
 /** What is shown with a route: its baseline, a note, the run's target and what it achieved,
- * and its mode (by default the route's own request's). */
+ * its mode (by default the route's own request's), and the list's index of each stop it visits,
+ * in that order (by default the list's own: a stored route opens with its stops in its order). */
 interface Shown {
   baseline?: LineString | null;
   note?: string | null;
   goal?: Target | null;
   outcome?: TargetMetrics | null;
   mode?: RequestMode;
+  order?: number[] | null;
+}
+
+/** `order`, or null when it is the list's own. */
+function visitOrder(order: number[]): number[] | null {
+  return order.every((at, k) => at === k) ? null : order;
 }
 
 export class JobRunner {
@@ -247,6 +259,7 @@ export class JobRunner {
         goal: shown.goal !== undefined ? shown.goal : goalOf(route.request.target),
         outcome: shown.outcome !== undefined ? shown.outcome : (route.metrics.target ?? null),
         mode: shown.mode ?? modeOfRequest(route.request),
+        order: shown.order ?? null,
         note,
       },
     });
@@ -257,6 +270,9 @@ export class JobRunner {
   async #start(request: RouteRequest, base: RouteDocument | null): Promise<void> {
     const store = this.#store;
     const before = store.state.run;
+    // A continuation's stops are its base route's, in the order it visits them: the list's index
+    // of each is the base's.
+    const listed = base !== null ? before.order : null;
     this.#sent = { request, base };
     // The last run's numbers are not this one's (the toasts' live ratio reads them).
     store.update({ error: null, run: { ...before, phase: "starting", metrics: null } });
@@ -276,7 +292,11 @@ export class JobRunner {
     if (base === null) store.updateSettings({ seed });
     const goal = goalOf(request.target);
     const mode = modeOfRequest(request);
-    store.update({ route: null, run: { ...IDLE_RUN, phase: "running", jobId, seed, goal, mode } });
+    const reorder = request.reorder === true;
+    store.update({
+      route: null,
+      run: { ...IDLE_RUN, phase: "running", jobId, seed, goal, mode, reorder },
+    });
     // An error of the app's own while following the job ends the run, and the job with it.
     const guard =
       <T>(handle: (data: T) => void) =>
@@ -291,12 +311,18 @@ export class JobRunner {
       };
     const subscription = subscribe(created.events_url, {
       snapped: guard((data) => {
-        const stops = store.state.stops.map((stop, k) => {
-          const { node, lat, lon, moved_m, note } = data.stops[k];
-          return { ...stop, snapped: { node, lat, lon, moved_m, note } };
+        const asked = data.order ?? data.stops.map((_, k) => k); // among the job's stops
+        const order = asked.map((k) => (listed ? listed[k] : k)); // among the list's
+        const stops = [...store.state.stops];
+        data.stops.forEach(({ node, lat, lon, moved_m, note }, k) => {
+          const stop = stops[order[k]];
+          if (stop) stops[order[k]] = { ...stop, snapped: { node, lat, lon, moved_m, note } };
         });
         store.update({ stops });
-        store.updateRun({ resolved: { tier: data.tier, leashKm: data.leash_km } });
+        store.updateRun({
+          resolved: { tier: data.tier, leashKm: data.leash_km },
+          order: visitOrder(order),
+        });
       }),
       baseline: guard((data) => this.#view.setBaseline(data.geometry)),
       snapshot: guard((data) => {
@@ -338,6 +364,7 @@ export class JobRunner {
     { goal, mode }: { goal: Target | null; mode: RequestMode },
   ): Promise<void> {
     const outcome = done.metrics.target ?? null;
+    const { order } = this.#store.state.run;
     try {
       if (base !== null && done.route_id === base.route_id) {
         this.#tried.set(base.route_id, seed);
@@ -347,9 +374,9 @@ export class JobRunner {
             ? "already within the target"
             : `no route nearer the target found with seed ${seed}; try again or Reroll`;
         }
-        this.showRoute(base, { note, goal, outcome, mode });
+        this.showRoute(base, { note, goal, outcome, mode, order });
       } else {
-        this.showRoute(await getRoute(done.route_id), { goal, outcome, mode });
+        this.showRoute(await getRoute(done.route_id), { goal, outcome, mode, order });
       }
     } catch (error) {
       this.#fail(errorBody(error));
@@ -502,7 +529,14 @@ export function statLines(state: Readonly<AppState>): StatLines {
   if (run.phase === "starting") return only("Starting…");
   if (run.phase === "drawing") return only("Drawing by hand: click a highlighted road to take it.");
   if (run.metrics === null) {
-    if (run.phase === "running") return only("Planning the sensible route…");
+    if (run.phase === "running") {
+      // under the worst order, the server tries every order before it says where the stops went
+      return only(
+        run.reorder && run.resolved === null
+          ? "Trying every order…"
+          : "Planning the sensible route…",
+      );
+    }
     if (run.phase === "failed") return only("No route.");
     return only(
       state.stops.length < 2 ? "Click the map to set a start and an end." : "Ready when you are.",

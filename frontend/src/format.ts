@@ -53,6 +53,13 @@ export function formatCount(n: number): string {
   return grouped.format(n);
 }
 
+/** A place in an order: `1st`, `2nd`, `3rd`, `4th`, `11th`, `21st`. */
+export function formatOrdinal(n: number): string {
+  const tens = n % 100;
+  const suffix = tens >= 11 && tens <= 13 ? "th" : (["th", "st", "nd", "rd"][n % 10] ?? "th");
+  return `${formatCount(n)}${suffix}`;
+}
+
 // What a collect run collects, one and many.
 export const ITEM_NAMES: Record<CollectItem, [string, string]> = {
   toll_booth: ["toll booth", "toll booths"],

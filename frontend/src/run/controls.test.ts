@@ -11,7 +11,7 @@ import { loadStream } from "../__fixtures__/stream";
 import type { RouteDocument, RouteRequest } from "../api/types";
 import { isoWithOffset } from "../format";
 import { DEFAULT_SETTINGS, IDLE_RUN, Store, type Settings } from "../state";
-import { busy } from "../stops/stopList";
+import { busy, visitLine } from "../stops/stopList";
 import {
   JobRunner,
   awaitingBrand,
@@ -904,5 +904,88 @@ describe("a route drawn by hand", () => {
     const drawn = { ...fixture.route, run: { ...run, stopped_because: "drawn" as const } };
     new JobRunner(s, fakeView(), () => {}).showRoute({ ...drawn, seed: 1 });
     expect(statLines(s.state)[3]).toBe("25 moves · drawn by hand · seed 1");
+  });
+});
+
+describe("the worst order", () => {
+  const four = [
+    { lat: 45.5231, lon: -122.6765, snapped: null },
+    { lat: 45.5195, lon: -122.6625, snapped: null },
+    { lat: 45.5317, lon: -122.654, snapped: null },
+    { lat: 45.4817, lon: -122.6263, snapped: null },
+  ];
+  const at = (node: number) => ({
+    input: { lat: 45.5, lon: -122.6 },
+    label: null,
+    node,
+    lat: 45.5,
+    lon: -122.6,
+    moved_m: 0,
+    note: null,
+  });
+  const scale = { tier: "T4", leash_km: 3, active_nodes: 100 };
+
+  it("is sent when ticked, never under the alphabet route", async () => {
+    const calls = stubFetch((call) => created(call, "jr"));
+    const s = store();
+    const runner = new JobRunner(s, fakeView(), () => {});
+    const sent = async (patch: Partial<Settings>): Promise<RouteRequest> => {
+      s.update({ run: IDLE_RUN });
+      s.updateSettings(patch);
+      await runner.go();
+      return calls.at(-1)!.body as RouteRequest;
+    };
+    expect(await sent({})).not.toHaveProperty("reorder");
+    expect(await sent({ reorder: true })).toMatchObject({ reorder: true });
+    expect(await sent({ objective: "alphabet" })).not.toHaveProperty("reorder");
+  });
+
+  it("says it tries every order, then where each stop went, kept with the stored route", async () => {
+    const stored = { ...fixture.route, route_id: "0123456789ab" };
+    const calls = stubFetch((call) =>
+      call.method === "POST" ? created(call, `j${calls.length}`) : json(stored),
+    );
+    const s = store();
+    s.update({ stops: four });
+    s.updateSettings({ reorder: true });
+    const runner = new JobRunner(s, fakeView(), () => {});
+    await runner.go();
+    expect(statLines(s.state)[1]).toBe("Trying every order…");
+    // visited 0, 2, 1, 3: the snapped stops come in that order
+    sources[0].send("snapped", { stops: [10, 30, 20, 40].map(at), order: [0, 2, 1, 3], ...scale });
+    expect(s.state.stops.map((stop) => stop.snapped?.node)).toEqual([10, 20, 30, 40]);
+    expect(s.state.run.order).toEqual([0, 2, 1, 3]);
+    expect(statLines(s.state)[1]).toBe("Planning the sensible route…");
+    sources[0].send("done", { route_id: stored.route_id, stopped_because: "budget", metrics: {} });
+    await settle();
+    expect(s.state.route?.route_id).toBe(stored.route_id);
+    expect(s.state.run.order).toEqual([0, 2, 1, 3]);
+
+    // Make it worse: the base's stops in the order it visits them, the order the identity
+    await runner.worse();
+    expect(calls.at(-1)!.body).not.toHaveProperty("reorder");
+    sources[1].send("snapped", { stops: [11, 31, 21, 41].map(at), order: [0, 1, 2, 3], ...scale });
+    expect(s.state.stops.map((stop) => stop.snapped?.node)).toEqual([11, 21, 31, 41]);
+    expect(s.state.run.order).toEqual([0, 2, 1, 3]);
+
+    // a run in the list's own order says nothing of it
+    s.updateSettings({ reorder: false });
+    await settle();
+    s.update({ run: IDLE_RUN });
+    await runner.go();
+    sources[2].send("snapped", { stops: [10, 20, 30, 40].map(at), order: [0, 1, 2, 3], ...scale });
+    expect(s.state.run.order).toBeNull();
+  });
+
+  it("reads a snapped event without an order, an older server's, as the list's own", async () => {
+    stubFetch((call) => created(call, "jo"));
+    const s = store();
+    s.update({ stops: four });
+    await new JobRunner(s, fakeView(), () => {}).go();
+    sources[0].send("snapped", { stops: [10, 20, 30, 40].map(at), ...scale });
+    expect(s.state.stops.map((stop) => stop.snapped?.node)).toEqual([10, 20, 30, 40]);
+    expect(s.state.run.order).toBeNull();
+    const lines = s.state.stops.map((stop, k) => visitLine(stop, k, s.state.run.order));
+    expect(lines).toEqual([null, null, null, null]); // no "visited" places
   });
 });

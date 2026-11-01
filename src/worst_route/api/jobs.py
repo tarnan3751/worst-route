@@ -5,13 +5,34 @@ job exists (the request's masks, a pilgrimage's brand within them, and `resolve_
 brand out of reach or a stop that cannot be snapped or reached is a 422, not a job); the worker
 repeats it, deterministically. `JobManager.submit` makes the job,
 emits its `snapped` event from the pre-flight (each stop's position among those given, `order`,
-the identity), and starts its worker (`api/worker.py`) in a
-spawned process, or queues it when `max_jobs` are running; with `max_queued` waiting too it
-raises `TooManyJobs` (the endpoint's 429). On a public server each job has a client
-(`api/limits.py`), who runs at most `running_per_client` jobs at once: its next waits in the
-queue even while workers are free, and starts when its running one ends, before later jobs of
-other clients only if theirs cannot start; with `queued_per_client` of its own waiting too, its
-next is `TooManyJobs` with its counts.
+the identity), and starts its searches, each a worker (`api/worker.py`) in a spawned process, or
+queues it when `max_jobs` workers are not free for it; with `max_queued` waiting too it raises
+`TooManyJobs` (the endpoint's 429). A running job holds a worker for each search that has not
+ended. The queue starts in order: a job waiting for workers holds up those after it, so none
+starves. On a public server each job has a client (`api/limits.py`), who runs at most
+`running_per_client` jobs at once, whatever their searches: its next waits in the queue even
+while workers are free, and starts when its running one ends, before later jobs of other clients
+only if theirs cannot start; with `queued_per_client` of its own waiting too, its next is
+`TooManyJobs` with its counts.
+
+A job has one search, or for a portfolio one for each of its seeds (`request.seed` and up), each
+with its own worker and its own copy of the route (`Search`). Its clients are shown its leader's:
+the first search to start leads, and after any batch of messages the search whose best route so far
+is strictly better by the goal (`_ahead`) takes the lead, once the leader has led `leader_hold_s`
+(at once when the leader has failed: the hold never keeps a failed leader). Its route is then sent
+as a `snapshot` and its numbers as a `progress` with no splice; only the leader's splices are ever
+sent, and those of an old leader not sent yet are dropped. A portfolio's `progress` events say how
+its searches stand (`PortfolioOut`); while its leader has finished and others still search, a
+`progress` with no splice goes out every `tick_s` (the leader's numbers, the job's elapsed time, how
+the searches stand), so the clients see them move. A search that fails drops out, and the job goes
+on with the others. The job is complete when every search has ended, or as soon as one reaches its
+target (the others are then stopped): the best route they finished with (`_winner`, the first of the
+best) is stored, with its own seed and `run.portfolio`, and a job none of whose searches finished
+ends in the error of the first that failed. A portfolio's searches share their order, stops and
+baseline, which no seed changes, so a later `Started` that differs from the first is a bug that
+fails the job; the check runs for a job of one search too, its `Started` against the pre-flight's
+stops, an invariant that holds by construction, whose breach is worth an error rather than a silent
+continue.
 
 A job with `reorder` has no `snapped` event until its worker's search has chosen the order: the
 pre-flight checked the stops in their given order. On `Started`, which carries the order and the
@@ -21,8 +42,8 @@ the input's stops are put in that order (so the stored route's labels and direct
 the route), and `snapped` is emitted with the order, before `baseline`. A reorder job cancelled
 during the search ends in `error` `CANCELLED`, as any job before its route exists.
 
-While a job runs, its follower task reads the worker's queue (in a thread, so the event loop
-never blocks) and keeps the job's own copy of the route: the route the loop started from
+While a job runs, its follower task reads its workers' queues (each in a thread, so the event
+loop never blocks) and keeps each search's own copy of the route: the route the loop started from
 (`Started`, which emits `baseline` and a `snapshot` of iteration 0), then every accepted splice
 applied in order, as a client would. It also keeps the best route so far apart, by the request's
 goal (`engine.target.Goal`): in a max mode the highest-scoring route, which is the copy until the
@@ -48,7 +69,8 @@ the job has ended, then live events, so its ids rise strictly. A stream ends aft
 killed while writing may leave it corrupt), and the manager's best route so far is validated
 against the pre-flight's stops and masks, stored with `stopped_because: "cancelled"` and
 reported in `done` (its `run.attempts` is the attempt of the last splice applied, so planning
-again with that many attempts gives it back), or `error` `VALIDATION_FAILED` if it fails. A
+again with that many attempts gives it back), or `error` `VALIDATION_FAILED` if it fails; for a
+portfolio the best route so far of the search ahead, with that search's seed and attempts. A
 running job is stopped the same way `kill_grace_s` after its budget, as `"timeout"`
 (`WORKER_TIMEOUT` before its route exists); a reorder job's deadline is `reorder_search_s`
 later until its `Started` (its search for the order runs before the loop) and from then is the
@@ -98,6 +120,8 @@ from worst_route.api.schemas import (
     JobState,
     JobStatus,
     LatLon,
+    PortfolioOut,
+    PortfolioProgress,
     Progress,
     RouteMetrics,
     Snapped,
@@ -124,9 +148,11 @@ from worst_route.config import (
     API_COALESCE_S,
     API_JOB_TTL_S,
     API_KILL_GRACE_S,
+    API_LEADER_HOLD_S,
     API_MAX_JOBS,
     API_MAX_QUEUED,
     API_ORPHAN_S,
+    API_PORTFOLIO_TICK_S,
     API_READ_GRACE_S,
     API_SIMPLIFY_M,
     API_SNAPSHOT_EVERY,
@@ -174,6 +200,8 @@ class JobSettings:
     coalesce_s: float = API_COALESCE_S
     snapshot_every: int = API_SNAPSHOT_EVERY
     simplify_m: float = API_SIMPLIFY_M
+    leader_hold_s: float = API_LEADER_HOLD_S  # a portfolio's lead changes at most once in it
+    tick_s: float = API_PORTFOLIO_TICK_S  # a finished leader's numbers while others search
     kill_grace_s: float = API_KILL_GRACE_S
     reorder_search_s: float = REORDER_SEARCH_MAX_S  # a reorder job's search, before `Started`
     orphan_s: float = API_ORPHAN_S
@@ -315,6 +343,7 @@ class Job:
     orphaned_since: float | None = None
     searches: list[Search] = field(default_factory=list)
     leader: int = 0  # the search its clients are shown
+    led_since: float = 0.0  # when it took the lead
     goal: Goal | None = None
     baseline_length_m: float = 0.0
     baseline_time_s: float = 0.0
@@ -422,9 +451,10 @@ class JobManager:
             *(asyncio.to_thread(worker.close) for worker in workers), return_exceptions=True
         )
 
-    def refusal(self, client: str | None = None) -> TooManyJobs | None:
-        """Why a job submitted now by `client` would be refused, if it would."""
-        if self._may_start(client) or self._may_queue(client):
+    def refusal(self, client: str | None = None, portfolio: int = 1) -> TooManyJobs | None:
+        """Why a job of `portfolio` searches submitted now by `client` would be refused, if it
+        would."""
+        if self._may_start(client, portfolio) or self._may_queue(client):
             return None
         limit = self.settings.queued_per_client
         if client is not None and limit is not None:
@@ -446,12 +476,14 @@ class JobManager:
         input: dict[str, Any],
         base: RouteArrays | None = None,
         client: str | None = None,
+        portfolio: int = 1,
     ) -> Job:
-        """Make a job for a prepared request (by `client`), emit `snapped`, and start or queue
-        it."""
-        refused = self.refusal(client)
+        """Make a job for a prepared request (by `client`), of `portfolio` searches (seeds
+        `request.seed` and up), emit `snapped`, and start or queue it."""
+        refused = self.refusal(client, portfolio)
         if refused is not None:
             raise refused
+        seed = prepared.request.seed
         job = Job(
             id=secrets.token_hex(6),
             loaded=loaded,
@@ -464,7 +496,7 @@ class JobManager:
             order=tuple(range(len(prepared.request.stops))),
             request_id=logs.request_id.get(),
             client=client,
-            searches=[Search(prepared.request.seed)],
+            searches=[Search(seed + k) for k in range(portfolio)],
         )
         self.jobs[job.id] = job
         if not prepared.request.reorder:  # else once the worker has chosen the order
@@ -562,8 +594,11 @@ class JobManager:
                 request=job.request.model_copy(update={"seed": search.seed}),
                 base=job.base,
             )
+            name = f"worst-route job {job.id}"
+            if len(job.searches) > 1:
+                name += f" seed {search.seed}"
             try:
-                search.worker = kind(spec, f"worst-route job {job.id}")
+                search.worker = kind(spec, name)
             except Exception as error:
                 log.exception("job %s: its worker did not start", job.id, extra=_fields(job))
                 message = f"the worker did not start: {type(error).__name__}: {error}"
@@ -603,24 +638,30 @@ class JobManager:
                 for (search, _), (messages, _) in zip(live, drained, strict=True):
                     for message in messages:
                         if isinstance(message, Started):
-                            if job.request.reorder:
+                            if job.goal is None and job.request.reorder:  # the job's first
                                 await self._reordered(job, message)
                                 if job.closing:
                                     return
                                 # the search has ended: the budget and the grace run from here
                                 deadline = time.monotonic() + job.request.budget_s + s.kill_grace_s
+                            elif (message.order, message.snaps) != (job.order, job.snaps):
+                                raise RuntimeError(  # a bug: no seed changes the order or stops
+                                    f"seed {search.seed} visits the stops {list(message.order)} "
+                                    f"at {[x.node for x in message.snaps]}, the job "
+                                    f"{list(job.order)} at {[x.node for x in job.snaps]}"
+                                )
                             self._started(job, search, message)
                         elif isinstance(message, Spliced):
                             self._spliced(job, search, message)
                         elif isinstance(message, Improved):
                             self._improved(job, search, message)
                         else:
-                            self._flush(job)
-                            if isinstance(message, Finished):
-                                await self._finished(job, search, message)
-                            else:
-                                await self._failed(job, search, message)
-                            return
+                            await self._ended(job, search, message)
+                            if job.closing:
+                                return
+                            break
+                self._elect(job)
+                self._tick(job)
                 if job.pending and time.monotonic() - job.last_flush >= s.coalesce_s:
                     self._flush(job)
                 if time.monotonic() >= deadline:
@@ -629,9 +670,11 @@ class JobManager:
                 for (search, _), was_alive, (messages, closed) in zip(
                     live, alive, drained, strict=True
                 ):
-                    if closed or (not messages and not was_alive):
+                    if not search.ended and (closed or (not messages and not was_alive)):
                         lost = Failed("WORKER_FAILED", "the worker stopped without a result")
-                        await self._failed(job, search, lost)
+                        await self._ended(job, search, lost)
+                        if job.closing:
+                            return
         except Exception as error:
             log.exception("job %s: following its worker failed", job.id, extra=_fields(job))
             await self._fail_unended(job, error)
@@ -651,7 +694,14 @@ class JobManager:
         self._emit(job, "snapped", self._snapped(job, masks))
 
     def _started(self, job: Job, search: Search, m: Started) -> None:
+        """A search's route to start from. The job's first also gives its baseline and goal,
+        sent as `baseline`, and leads, its route sent as a `snapshot`: a portfolio's searches
+        share their baseline (and their seed route, but for a round trip's without legs)."""
         search.route, search.score = m.route, m.score
+        if job.goal is not None:  # a portfolio's: the job has started
+            search.best, search.best_value = m.route, job.goal.value(m.score, m.route.metrics)
+            search.best_score = m.score
+            return
         job.baseline_length_m, job.baseline_time_s = m.baseline_length_m, m.baseline_time_s
         job.baseline_edges, job.baseline_delay_s = m.baseline_edges, m.baseline_delay_s
         data = job.loaded.data
@@ -668,6 +718,7 @@ class JobManager:
                 data, job.loaded.geometry, m.baseline_length_m, m.baseline_time_s, m.baseline_edges
             ),
         )
+        job.leader, job.led_since = job.searches.index(search), time.monotonic()
         self._emit(job, "snapshot", self._snapshot(job))
         job.last_flush = time.monotonic()
 
@@ -686,9 +737,10 @@ class JobManager:
         if goal.better(value, search.best_value):
             search.best, search.best_value, search.best_score = route, value, m.score
         search.accepted += 1
-        job.pending.append(
-            sse.splice_out(job.loaded.data, job.loaded.geometry, m.i, m.j, m.nodes, m.edges)
-        )
+        if search is job.lead:  # the others' splices are never drawn
+            job.pending.append(
+                sse.splice_out(job.loaded.data, job.loaded.geometry, m.i, m.j, m.nodes, m.edges)
+            )
 
     def _improved(self, job: Job, search: Search, m: Improved) -> None:
         """A better alphabet route: the search's route and its best, sent as a `snapshot` and
@@ -704,6 +756,36 @@ class JobManager:
         self._emit(job, "progress", self._progress(job, []))
         job.last_flush = time.monotonic()
 
+    def _elect(self, job: Job, *, now: bool = False) -> None:
+        """Hand a portfolio's lead to the search ahead (`_ahead`) once its leader has led
+        `leader_hold_s`, or at once when `now` or when the leader has failed (the hold never keeps a
+        failed leader). Its route is sent as a `snapshot`, then its numbers in a `progress` with no
+        splice; the old leader's splices not sent yet are dropped, the snapshot replacing them."""
+        if len(job.searches) == 1:
+            return
+        held = time.monotonic() - job.led_since < self.settings.leader_hold_s
+        if held and not now and job.lead.failure is None:  # never holds a failed leader
+            return
+        ahead = _ahead(job)
+        if ahead is None or ahead is job.lead:
+            return
+        job.pending = []
+        job.leader, job.led_since = job.searches.index(ahead), time.monotonic()
+        self._emit(job, "snapshot", self._snapshot(job))
+        self._emit(job, "progress", self._progress(job, []))
+        job.last_flush = time.monotonic()
+
+    def _tick(self, job: Job) -> None:
+        """While a portfolio's leader has finished and other searches go on behind it, send a
+        `progress` with no splice every `tick_s`: the leader's numbers, the job's elapsed time and
+        how the searches stand."""
+        if job.lead.route is None or not job.lead.ended or all(s.ended for s in job.searches):
+            return
+        now = time.monotonic()
+        if now - job.last_flush >= self.settings.tick_s:
+            self._emit(job, "progress", self._progress(job, [], elapsed_s=now - job.started_at))
+            job.last_flush = now
+
     def _flush(self, job: Job) -> None:
         """Send the splices not sent yet, and a snapshot every `snapshot_every` sends."""
         if not job.pending:
@@ -716,24 +798,84 @@ class JobManager:
         if job.progress_count % self.settings.snapshot_every == 0:
             self._emit(job, "snapshot", self._snapshot(job))
 
-    async def _finished(self, job: Job, search: Search, m: Finished) -> None:
-        job.closing = True
-        rid = await asyncio.to_thread(
-            self.store.put, m.document, input=job.input, baseline_edges=m.baseline_edges
-        )
-        doc = m.document
-        metrics = Metrics(float(doc["metrics"]["length_m"]), float(doc["metrics"]["time_s"]))
-        nodes, edges = (np.array(doc[k], dtype=np.int32) for k in ("nodes", "edges"))
-        stored = RouteArrays(nodes, edges, tuple(doc["stop_idx"]), metrics)
-        if not _same_route(job.route, stored):
-            self._show(job, search, stored)
-        await self._done(job, rid, doc["run"]["stopped_because"], _done_metrics(doc))
+    async def _ended(self, job: Job, search: Search, m: Finished | Failed) -> None:
+        """A search has ended, with its route or without it (`Failed`, logged): the job is
+        complete once every search has ended, or as soon as one has reached its target, the
+        others then stopped. Until then the search's worker is free for another job, and one
+        that failed while it led hands the lead on at once."""
+        search.ended = True
+        if isinstance(m, Finished):
+            search.finished = m
+        else:
+            search.failure = ErrorBody(code=m.code, message=m.message, **m.fields)
+            if m.trace:
+                log.error("job %s failed: %s\n%s", job.id, m.message, m.trace, extra=_fields(job))
+            if len(job.searches) > 1:
+                log.warning(
+                    "job %s: seed %d failed: %s %s",
+                    job.id,
+                    search.seed,
+                    m.code,
+                    m.message,
+                    extra=_fields(job),
+                )
+        reached = search.finished is not None and _stopped(search.finished) == "target"
+        if reached or all(s.ended for s in job.searches):
+            await self._complete(job)
+            return
+        self._advance()
+        if search.failure is not None and search is job.lead:
+            self._elect(job, now=True)
 
-    async def _failed(self, job: Job, search: Search, m: Failed) -> None:
+    async def _complete(self, job: Job) -> None:
+        """Store the best route the searches finished with (`_winner`), sent as a snapshot when
+        the clients have drawn another, and send `done`; with none, the error of the first
+        search's failure."""
         job.closing = True
-        if m.trace:
-            log.error("job %s failed: %s\n%s", job.id, m.message, m.trace, extra=_fields(job))
-        await self._error(job, ErrorBody(code=m.code, message=m.message, **m.fields))
+        for search in job.searches:
+            if not search.ended and search.worker is not None:  # beaten to the target
+                search.worker.stop()
+        self._flush(job)
+        winner = self._winner(job)
+        if winner is None:
+            failures = [s.failure for s in job.searches if s.failure is not None]
+            await self._error(job, failures[0])
+            return
+        m = winner.finished
+        assert m is not None
+        doc = m.document
+        if len(job.searches) > 1:
+            doc = {**doc, "run": {**doc["run"], "portfolio": _portfolio_run(job, winner)}}
+        rid = await asyncio.to_thread(
+            self.store.put, doc, input=job.input, baseline_edges=m.baseline_edges
+        )
+        nodes, edges = (np.array(doc[k], dtype=np.int32) for k in ("nodes", "edges"))
+        stored = RouteArrays(nodes, edges, tuple(doc["stop_idx"]), m.metrics)
+        drawn = job.route
+        job.leader = job.searches.index(winner)
+        if not _same_route(drawn, stored):
+            self._show(job, winner, stored)
+        await self._done(job, rid, _stopped(m), _done_metrics(doc))
+
+    def _winner(self, job: Job) -> Search | None:
+        """The search whose finished route is the best by the goal, the first of the best; None
+        when none finished with a route."""
+        finished = [s for s in job.searches if s.finished is not None]
+        if len(finished) < 2:
+            return finished[0] if finished else None
+        goal = job.goal
+        assert goal is not None  # a route comes after the start
+
+        def value(search: Search) -> float:
+            assert search.finished is not None
+            return goal.value(search.finished.score, search.finished.metrics)
+
+        values = [value(s) for s in finished]
+        best = 0
+        for k, v in enumerate(values):
+            if _strictly_better(goal, v, values[best]):
+                best = k
+        return finished[best]
 
     async def _end_early(self, job: Job, reason: StopReason) -> None:
         """Cancel or time out `job`: store its route so far if it has one."""
@@ -747,9 +889,10 @@ class JobManager:
             return
         self._stop_workers(job)
         self._flush(job)
-        search = job.lead
-        route, masks = search.best, job.masks
-        if route is None or masks is None:
+        search = _ahead(job)
+        route = search.best if search is not None else None
+        masks = job.masks
+        if search is None or route is None or masks is None:
             if reason == "timeout":
                 body = ErrorBody(code="WORKER_TIMEOUT", message="no route before the time limit")
             else:
@@ -779,7 +922,9 @@ class JobManager:
         rid = await asyncio.to_thread(
             self.store.put, document, input=job.input, baseline_edges=job.baseline_edges
         )
-        if not _same_route(job.route, route):
+        drawn = job.route
+        job.leader = job.searches.index(search)
+        if not _same_route(drawn, route):
             self._show(job, search, route)
         await self._done(job, rid, reason, _done_metrics(document))
 
@@ -916,18 +1061,32 @@ class JobManager:
         metrics = job.route.metrics if job.route is not None else Metrics(0.0, 0.0)
         return sse.route_metrics(metrics, job.baseline_length_m)
 
-    def _progress(self, job: Job, splices: list[SpliceOut]) -> Progress:
-        """A `progress` event with these splices, the route's numbers and the best route's."""
+    def _progress(
+        self, job: Job, splices: list[SpliceOut], elapsed_s: float | None = None
+    ) -> Progress:
+        """A `progress` event with these splices, the route's numbers and the best route's: the
+        leader's (its elapsed time unless `elapsed_s`), and for a portfolio how each of its
+        searches stands too."""
         best = job.best.metrics if job.best is not None else Metrics(0.0, 0.0)
-        return Progress(
+        progress = Progress(
             iteration=job.iteration,
-            elapsed_s=job.elapsed_s,
+            elapsed_s=job.elapsed_s if elapsed_s is None else elapsed_s,
             score=job.score,
             metrics=self._metrics(job),
             splices=splices,
             best_score=job.best_score,
             best_metrics=sse.route_metrics(best, job.baseline_length_m),
         )
+        if len(job.searches) == 1:
+            return progress
+        ratios = [
+            None
+            if s.best is None or s.failure is not None
+            else sse.route_metrics(s.best.metrics, job.baseline_length_m).ratio
+            for s in job.searches
+        ]
+        portfolio = PortfolioOut(k=len(job.searches), leader=job.leader, best_ratios=ratios)
+        return PortfolioProgress(**dict(progress), portfolio=portfolio)
 
     def _snapshot(self, job: Job) -> Snapshot:
         route = job.route
@@ -988,6 +1147,7 @@ class JobManager:
                 "stopped_because": reason,
                 "elapsed_s": search.elapsed_s,
                 "backend": job.loaded.backend.name,
+                **({"portfolio": _portfolio_run(job, search)} if len(job.searches) > 1 else {}),
             },
         }
 
@@ -1017,6 +1177,39 @@ def _same_route(drawn: RouteArrays | None, stored: RouteArrays) -> bool:
     """Whether the route clients have drawn is the stored one: the same edges (two routes
     through the same nodes may differ by a parallel edge)."""
     return drawn is not None and drawn.edges.tobytes() == stored.edges.tobytes()
+
+
+def _strictly_better(goal: Goal, a: float, b: float) -> bool:
+    """Whether a route of value a is better than one of value b, and not merely as good."""
+    return goal.better(a, b) and not goal.better(b, a)
+
+
+def _ahead(job: Job) -> Search | None:
+    """The search whose best route so far is the best by the goal: the leader, unless another's
+    is strictly better (then the first of the best); never one that failed; None while none has
+    a route."""
+    goal = job.goal
+    racing = [s for s in job.searches if s.best is not None and s.failure is None]
+    if goal is None or not racing:
+        return None
+    ahead = job.lead if job.lead in racing else racing[0]
+    for search in racing:
+        if _strictly_better(goal, search.best_value, ahead.best_value):
+            ahead = search
+    return ahead
+
+
+def _stopped(m: Finished) -> StopReason:
+    """Why a finished search's run stopped."""
+    reason: StopReason = m.document["run"]["stopped_because"]
+    return reason
+
+
+def _portfolio_run(job: Job, search: Search) -> dict[str, Any]:
+    """A portfolio route's `run.portfolio`: how many searches, their seeds, and the index of the
+    one whose route it is."""
+    seeds = [s.seed for s in job.searches]
+    return {"k": len(seeds), "seeds": seeds, "winner": job.searches.index(search)}
 
 
 def _drain(worker: _Worker, wait: float) -> tuple[list[Message], bool]:

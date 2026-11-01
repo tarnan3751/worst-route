@@ -1,6 +1,7 @@
-"""Jobs in real spawned worker processes: one run to its end, one cancelled, one killed; a worker
-that dies partway through a message; a worker whose API process dies; a worker that plans on a
-build whose geometry is gone, never importing the code that draws routes."""
+"""Jobs in real spawned worker processes: one run to its end, one cancelled, one killed; a
+portfolio's two searches; a worker that dies partway through a message; a worker whose API process
+dies; a worker that plans on a build whose geometry is gone, never importing the code that draws
+routes."""
 
 import asyncio
 import json
@@ -19,6 +20,7 @@ import pytest
 from worst_route.api import jobs as jobs_module
 from worst_route.api.jobs import _ProcessWorker
 from worst_route.api.worker import JobSpec
+from worst_route.engine.plan import plan_route
 
 from ..engine.graphs import lattice
 from .support import GRID, collect, loaded, manager, request, save_build, submit, until
@@ -61,6 +63,31 @@ async def test_jobs_run_cancel_and_die_in_spawned_processes(data: Path) -> None:
         late = await collect(m.subscribe(killed))
         ids = [e.id for e in late]
         assert ids == sorted(set(ids)) and late[-1].name == "error" and ids[-1] == killed.last_id
+
+
+@pytest.mark.anyio
+async def test_a_portfolio_s_searches_run_in_spawned_processes(data: Path) -> None:
+    build = loaded(data)
+    req = request(GRID, [0, 45, 99], max_iterations=300)
+    plans = [
+        plan_route(
+            build.data,
+            req.model_copy(update={"seed": seed}),
+            backend=build.backend,
+            spatial=build.spatial,
+        )
+        for seed in (3, 4)
+    ]
+    best = max(plans, key=lambda p: p.route.score)  # the first of the best
+    async with manager(data, inline_workers=False) as m:
+        job = submit(m, build, req, portfolio=2)
+        workers = [s.worker for s in job.searches]
+        assert all(isinstance(w, _ProcessWorker) for w in workers)
+        events = await collect(m.subscribe(job))
+        stored = m.store.get(json.loads(events[-1].data)["route_id"])
+        assert stored is not None and stored.nodes.tobytes() == best.route.nodes.tobytes()
+        assert stored.seed == best.request.seed and stored.run["portfolio"]["seeds"] == [3, 4]
+        await until(lambda: not any(w is not None and w.alive() for w in workers), timeout=10)
 
 
 def mid_write_then_die(spec: JobSpec, conn: Connection) -> None:

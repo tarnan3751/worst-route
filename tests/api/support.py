@@ -60,12 +60,13 @@ def request(g: GraphData, stops: list[int], seed: int = 3, **fields: Any) -> Rou
     return RouteRequest(stops=[at_node(g, v) for v in stops], seed=seed, **values)
 
 
-def api_input(req: RouteRequest) -> dict[str, Any]:
+def api_input(req: RouteRequest, portfolio: int = 1) -> dict[str, Any]:
     """The API request a test job stands for."""
     stops = [
         {"lat": lat, "lon": lon, "label": f"stop {k}"} for k, (lat, lon) in enumerate(req.stops)
     ]
-    return {"region": "portland", "stops": stops, "seed": req.seed}
+    asked: dict[str, Any] = {"region": "portland", "stops": stops, "seed": req.seed}
+    return asked if portfolio == 1 else {**asked, "portfolio": portfolio}
 
 
 @asynccontextmanager
@@ -86,8 +87,17 @@ def loaded(data: Path, build_id: str = "grid") -> Loaded:
     return load_build(data, "portland", build_id, backend="python")
 
 
-def submit(m: JobManager, build: Loaded, req: RouteRequest, base: RouteArrays | None = None) -> Job:
-    return m.submit(build, prepare(build, req), input=api_input(req), base=base)
+def submit(
+    m: JobManager,
+    build: Loaded,
+    req: RouteRequest,
+    base: RouteArrays | None = None,
+    portfolio: int = 1,
+    client: str | None = None,
+) -> Job:
+    prepared = prepare(build, req)
+    asked = api_input(req, portfolio)
+    return m.submit(build, prepared, input=asked, base=base, portfolio=portfolio, client=client)
 
 
 async def collect(subscription: Subscription, timeout: float = 60.0) -> list[Event]:

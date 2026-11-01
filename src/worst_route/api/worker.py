@@ -10,9 +10,9 @@ request with `plan_route` (from `spec.base` for "make it worse") and puts on `ou
   route's attempt count, elapsed time, score and metrics after it; for the alphabet route,
   `Improved` instead, for every better route its search finds: the whole route, its restart
   count, elapsed time, score and metrics;
-- then `Finished` (the validated route as its `route.json` document, and the baseline's edges)
-  or `Failed` (an error code, a one-line message, the error's fields and a traceback for the
-  log).
+- then `Finished` (the validated route as its `route.json` document, the baseline's edges, and
+  the route's score and metrics) or `Failed` (an error code, a one-line message, the error's
+  fields and a traceback for the log).
 
 The job manager runs it in a spawned process through `run_in_process(spec, conn)`, which sends
 the messages down `conn`, the write end of a one-way pipe (the API process holds the read end
@@ -110,6 +110,8 @@ class Improved:
 class Finished:
     document: dict[str, Any]
     baseline_edges: IntArray
+    score: float  # the route's, which its document does not carry
+    metrics: Metrics  # the route's, its objective's counters and delays among them
 
 
 @dataclass(frozen=True, eq=False)
@@ -253,4 +255,6 @@ def run_job(
         message = f"{type(error).__name__}: {error}"
         out.put(Failed("WORKER_FAILED", message, {}, traceback.format_exc()))
     else:
-        out.put(Finished(route_document(loaded.data, result), result.baseline.edges))
+        document = route_document(loaded.data, result)
+        route = result.route
+        out.put(Finished(document, result.baseline.edges, route.score, route.metrics))

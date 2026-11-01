@@ -498,8 +498,12 @@ TIER_MIN_RETAINED = 0.95
 # every tier TIER_MIN_RETAINED of its own.
 QA_TWIN_COVERAGE_MIN = 0.95
 
-# The API (`docs/reference/api.md`). At most API_MAX_JOBS jobs run at once, each in a worker
-# process, and API_MAX_QUEUED wait; a running job is killed API_KILL_GRACE_S after its budget. A
+# The API (`docs/reference/api.md`). At most API_MAX_JOBS workers run at once, each in a process
+# of its own, one for each search of a running job (one, or one a seed for a portfolio), and
+# API_MAX_QUEUED jobs wait; a running job is killed API_KILL_GRACE_S after its budget. A
+# portfolio's clients are shown its leading search, the lead passing to another search at most
+# once in API_LEADER_HOLD_S, and while its leader has finished and others still search they get
+# its numbers every API_PORTFOLIO_TICK_S. A
 # job asking for the worst order searches for it in its worker before its loop (`reorder`,
 # `engine/seed_route.py`, `choose_order`; 12-14 s for 7 stops on Portland's build at a load of
 # 7-12, past 30 s beside another job and a browser): until the search ends, its deadline is
@@ -523,6 +527,8 @@ API_READ_GRACE_S = 0.1
 API_COALESCE_S = 0.1
 API_SNAPSHOT_EVERY = 50
 API_SIMPLIFY_M = 1.0
+API_LEADER_HOLD_S = 2.0
+API_PORTFOLIO_TICK_S = 1.0
 API_DEFAULT_MAX_ITERATIONS = 1_000_000
 
 # A route drawn by hand (`docs/reference/api.md`, **Drawing a route**): a path holds at most

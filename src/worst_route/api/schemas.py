@@ -25,9 +25,9 @@ stored route's other metrics (its item counts, a collecting route's item, a pilg
 an alphabet route's letters) as extra fields.
 A route document and the `snapped` event carry `order`, each stop's position among the stops
 the job was given, in the order the route visits them (the identity without `reorder`).
-The SSE events' payloads are `Snapped`, `BaselineOut`, `Progress` (with `SpliceOut`s),
-`Snapshot`, `Done` and `ErrorBody`. Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in
-requests; every number is metric.
+The SSE events' payloads are `Snapped`, `BaselineOut`, `Progress` (with `SpliceOut`s; for a
+portfolio `PortfolioProgress`, with its `PortfolioOut`), `Snapshot`, `Done` and `ErrorBody`.
+Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in requests; every number is metric.
 
 `GeocodeOut`, with its `GeocodeCandidateOut`s, answers `GET /geocode`, and `DirectionsOut`
 `GET /routes/{id}/directions`; `RegionPickIn` is the body of `POST /regions/pick`, which
@@ -314,6 +314,22 @@ class Progress(_Out):
     splices: list[SpliceOut]
     best_score: float
     best_metrics: RouteMetrics
+
+
+class PortfolioOut(_Out):
+    """How a portfolio's searches stand: how many (`k`), which one the clients are shown
+    (`leader`, its index; its seed is the job's seed plus it) and each one's best route so far,
+    by its ratio to the baseline (null with no route yet, after a failure, or for a round trip)."""
+
+    k: int
+    leader: int
+    best_ratios: list[float | None]
+
+
+class PortfolioProgress(Progress):
+    """A portfolio's `progress` event: its leader's, with how its searches stand."""
+
+    portfolio: PortfolioOut
 
 
 class Snapshot(_Out):

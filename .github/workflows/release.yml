@@ -78,8 +78,9 @@ jobs:
           BASEMAP_URL: ${{ vars.WORST_ROUTE_BASEMAP_URL }}
           CONTACT: ${{ vars.WORST_ROUTE_CONTACT }}
         run: |
+          # tr drops the CR Windows' Python ends the line with, which read would keep in sha256.
           read -r tag asset sha256 < <(uv run --no-sync python -c \
-            'import json; d = json.load(open("packaging/desktop/data.json")); print(d["tag"], d["asset"], d["sha256"])')
+            'import json; d = json.load(open("packaging/desktop/data.json")); print(d["tag"], d["asset"], d["sha256"])' | tr -d '\r')
           if [ "$tag" = None ]; then
             echo "packaging/desktop/data.json names no data release yet" >&2
             exit 1

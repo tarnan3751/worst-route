@@ -2,7 +2,8 @@
 
 `Limits` is what a server allows: `LOCAL`, the CLI's and a local server's (a budget up to
 `BUDGET_MAX_S`, nothing per client), or `PUBLIC`, a server run with `serve --public` (the
-`config.PUBLIC_*` numbers: a budget up to 60 s, one job running and three waiting a client, ten
+`config.PUBLIC_*` numbers: a budget up to 60 s, one job running and three waiting a client, a
+job of at most two seeds against `MAX_PORTFOLIO`'s four (a portfolio, each seed a worker), ten
 place searches, sixty picks of a build (`POST /regions/pick`) and 240 steps of a drawing (`POST
 /draw` and `POST /draw/finish`), ten of them finishes, a minute a client). A request's
 own leash is `LEASH_MAX_KM` at most in both, as the request's schema has it; the automatic leash
@@ -35,10 +36,12 @@ from starlette.types import Scope
 from worst_route.config import (
     BUDGET_MAX_S,
     LEASH_MAX_KM,
+    MAX_PORTFOLIO,
     PUBLIC_BUDGET_MAX_S,
     PUBLIC_DRAW_PER_MINUTE,
     PUBLIC_FINISH_PER_MINUTE,
     PUBLIC_GEOCODE_PER_MINUTE,
+    PUBLIC_MAX_PORTFOLIO,
     PUBLIC_PICK_PER_MINUTE,
     PUBLIC_QUEUED_PER_CLIENT,
     PUBLIC_RUNNING_PER_CLIENT,
@@ -54,6 +57,7 @@ class Limits:
 
     budget_max_s: float
     leash_max_km: float
+    portfolio_max: int  # a job's seeds, each a worker
     running_per_client: int | None
     queued_per_client: int | None
     geocode_per_minute: int | None
@@ -62,10 +66,11 @@ class Limits:
     finish_per_minute: int | None
 
 
-LOCAL = Limits(BUDGET_MAX_S, LEASH_MAX_KM, None, None, None, None, None, None)
+LOCAL = Limits(BUDGET_MAX_S, LEASH_MAX_KM, MAX_PORTFOLIO, None, None, None, None, None, None)
 PUBLIC = Limits(
     PUBLIC_BUDGET_MAX_S,
     LEASH_MAX_KM,
+    PUBLIC_MAX_PORTFOLIO,
     PUBLIC_RUNNING_PER_CLIENT,
     PUBLIC_QUEUED_PER_CLIENT,
     PUBLIC_GEOCODE_PER_MINUTE,

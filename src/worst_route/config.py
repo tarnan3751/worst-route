@@ -503,7 +503,8 @@ QA_TWIN_COVERAGE_MIN = 0.95
 # API_MAX_QUEUED jobs wait; a running job is killed API_KILL_GRACE_S after its budget. A
 # portfolio's clients are shown its leading search, the lead passing to another search at most
 # once in API_LEADER_HOLD_S, and while its leader has finished and others still search they get
-# its numbers every API_PORTFOLIO_TICK_S. A
+# its numbers every API_PORTFOLIO_TICK_S; a request asks for at most MAX_PORTFOLIO seeds, and never
+# more than the server's workers. A
 # job asking for the worst order searches for it in its worker before its loop (`reorder`,
 # `engine/seed_route.py`, `choose_order`; 12-14 s for 7 stops on Portland's build at a load of
 # 7-12, past 30 s beside another job and a browser): until the search ends, its deadline is
@@ -529,6 +530,7 @@ API_SNAPSHOT_EVERY = 50
 API_SIMPLIFY_M = 1.0
 API_LEADER_HOLD_S = 2.0
 API_PORTFOLIO_TICK_S = 1.0
+MAX_PORTFOLIO = 4
 API_DEFAULT_MAX_ITERATIONS = 1_000_000
 
 # A route drawn by hand (`docs/reference/api.md`, **Drawing a route**): a path holds at most
@@ -581,8 +583,9 @@ GEOCODE_MAX_QUERY_CHARS = 200
 
 # Public hosting (`docs/reference/api.md`, **Public limits**; `docs/reference/hosting.md`), only
 # with `serve --public`: a client (`api/limits.py`) runs at most PUBLIC_RUNNING_PER_CLIENT jobs at
-# once and has at most PUBLIC_QUEUED_PER_CLIENT more waiting, a budget is at most
-# PUBLIC_BUDGET_MAX_S (BUDGET_MAX_S otherwise), a client searches places at most
+# once and has at most PUBLIC_QUEUED_PER_CLIENT more waiting, a job runs at most
+# PUBLIC_MAX_PORTFOLIO seeds (MAX_PORTFOLIO otherwise), each a worker of the server's, a budget is
+# at most PUBLIC_BUDGET_MAX_S (BUDGET_MAX_S otherwise), a client searches places at most
 # PUBLIC_GEOCODE_PER_MINUTE times in any minute and asks which build its stops run on
 # (`POST /regions/pick`, once a change of its stops) at most PUBLIC_PICK_PER_MINUTE times, and
 # draws (`POST /draw` and `POST /draw/finish` together) at most PUBLIC_DRAW_PER_MINUTE steps, of
@@ -592,6 +595,7 @@ GEOCODE_MAX_QUERY_CHARS = 200
 # bounds the job.
 PUBLIC_RUNNING_PER_CLIENT = 1
 PUBLIC_QUEUED_PER_CLIENT = 3
+PUBLIC_MAX_PORTFOLIO = 2
 PUBLIC_BUDGET_MAX_S = 60.0
 PUBLIC_GEOCODE_PER_MINUTE = 10
 PUBLIC_PICK_PER_MINUTE = 60

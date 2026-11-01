@@ -35,6 +35,8 @@ import type {
   Leg,
   LineString,
   Metrics,
+  Portfolio,
+  PortfolioRun,
   Progress,
   Region,
   RegionPick,
@@ -234,6 +236,7 @@ const routeRequest = object<RouteRequest>({
   vehicle: optional(nullable(vehicle)),
   departure: optional(nullable("string")),
   base_route_id: optional(nullable("string")),
+  portfolio: optional("integer"),
 });
 
 const region = object<Region>({
@@ -284,6 +287,13 @@ const progress = object<Progress>({
   splices: array(splice),
   best_score: optional("number"), // the recordings predate the best route's numbers
   best_metrics: optional(metrics),
+  portfolio: optional(
+    object<Portfolio>({
+      k: "integer",
+      leader: "integer",
+      best_ratios: array(nullable("number")),
+    }),
+  ),
 });
 const snapshot = object<Snapshot>({
   iteration: "integer",
@@ -387,6 +397,9 @@ const routeDocument = object<RouteDocument>({
     stopped_because: stopReason,
     elapsed_s: "number",
     backend: "string",
+    portfolio: optional(
+      object<PortfolioRun>({ k: "integer", seeds: array("integer"), winner: "integer" }),
+    ),
   }),
   validation: object<Validation>({ ok: "boolean", checked_at: "string" }),
   directions: optional(array(directionStep)),
@@ -415,7 +428,11 @@ const serverConfig = object<ServerConfig>({
     sprite: nullable("string"),
     style: nullable("string"),
   }),
-  limits: object<ServerLimits>({ budget_max_s: "number", leash_max_km: "number" }),
+  limits: object<ServerLimits>({
+    budget_max_s: "number",
+    leash_max_km: "number",
+    portfolio_max: optional("integer"),
+  }),
 });
 
 const brandList = object<BrandList>({

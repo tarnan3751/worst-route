@@ -23,7 +23,7 @@ else: every route it returns has passed the validator.
 | `static.py` | `create_site`: the frontend's build at `/` and the API under `/api` (`serve --frontend`) |
 | `limits.py` | `Limits` (`LOCAL`, `PUBLIC`), `GeocodeQuota`, `client_of` (who a client is), `client_hash` (**Public limits**, **Logs**) |
 | `schemas.py` | the request and response models (pydantic), the SSE payloads |
-| `jobs.py` | `JobManager`, `JobSettings`, `Job`, `Subscription`, `prepare`, `TooManyJobs` |
+| `jobs.py` | `JobManager`, `JobSettings`, `Job`, `Search`, `Subscription`, `prepare`, `TooManyJobs` |
 | `worker.py` | `run_job` (what a worker process runs), `JobSpec`, `RouteArrays`, the worker's messages |
 | `sse.py` | `Event`, `path_points`, the payload builders, `server_sent` |
 | `store.py` | `RouteStore`, `StoredRoute`, `route_id`; the daily route's rows, `DailyRow` |
@@ -55,8 +55,9 @@ loads each region's build (`--build-id` names the first region's; the others, an
 without it, serve their `latest`) and its geometry before it listens, so a missing build, one saved before an array of the format existed
 (`docs/reference/graph.md`, **The build format**), or one without its geometry (the `save
 --force` that writes it again) is one line on stderr and exit 1. Then uvicorn serves one process. The jobs live
-in that process's memory, and each runs in a worker process of its own, `--workers` at once
-(default `API_MAX_JOBS`, cores − 2). The routes go to `--store`, by default
+in that process's memory, and each search of a job (one, or one a seed for a portfolio:
+**Portfolios**) runs in a worker process of its own, `--workers` at once (default
+`API_MAX_JOBS`, cores − 2). The routes go to `--store`, by default
 `<WORST_ROUTE_DATA>/routes.sqlite`; a lane that reads the main tree's builds through
 `WORST_ROUTE_DATA` points `--store` into its own tree, and runs with `--geocoder none` or
 `--nominatim-url` pointed at a stub of its own (no agent calls Nominatim). The share images are
@@ -132,7 +133,7 @@ what the API and the presentation need:
  "target": {"kind": "max"},
  "vehicle": {"mpg": 24, "gas_price_usd": 3.89},
  "departure": "2026-10-31T09:00:00-07:00",
- "base_route_id": null}
+ "base_route_id": null, "portfolio": 1}
 ```
 
 - `stops`: at least two, in order; the same point first and last makes a round trip. `label` is
@@ -205,6 +206,17 @@ what the API and the presentation need:
   has no ratio target: its baseline is 0 m", field: "target"}`, before any other check.
 - `vehicle` and `departure` are kept with the route; `departure` gives the document's `arrival`.
 - `base_route_id`: "make it worse" (**Make it worse**).
+- `portfolio`: 1 by default (and left out of the request as stored then); from 2 up, that many
+  searches of the request at once, seeds `seed` to `seed + portfolio − 1`, each in a worker of
+  its own, the best of them kept (**Portfolios**). At most `MAX_PORTFOLIO` (4; more is
+  `INVALID_REQUEST` on `field: "portfolio"`), 2 on a public server (**Public limits**), and
+  never more than the server's workers (`--workers`): more is `PORTFOLIO_TOO_LARGE` with `max`,
+  the most this server runs, which `GET /config` gives as `limits.portfolio_max`. The alphabet
+  route and a continuation run one search: `portfolio` above 1 with `objective: "alphabet"` or
+  a `base_route_id` is `INVALID_REQUEST` on `field: "portfolio"` ("a continuation runs one
+  search: no portfolio"), and so is a drawing's (**Drawing a route**). `seed + portfolio − 1`
+  must stay within 2⁶³ − 1. With `reorder`, every search visits the stops in the same order:
+  the worst order does not depend on the seed.
 - An unknown field is refused.
 
 **Every error** answers `{code, message}` and the error's own fields, at the top level (not
@@ -213,7 +225,7 @@ FastAPI's `detail`), but for the basemap's files' range errors: `/basemap/` answ
 
 | Status | Code | When |
 |---|---|---|
-| 422 | `INVALID_REQUEST` (+ `errors`, pydantic's without their `input`, and `field` when every error lies in one field of the body; or + `field`) | a drawing's request asking for an objective but `distance`, a target but `max`, the worst order or a base route (`field` `objective`, `target`, `reorder`, `base_route_id`), its path over `MAX_DRAW_EDGES` edges or with an id that is not a whole number in [0, 2³¹) (`field: "path"`; **Drawing a route**); a body or field that does not parse (a seed beyond 2⁶³ − 1 included, `Infinity` or `NaN` for a number), an unknown objective, a target out of bounds, a ratio target for a round trip (`field: "target"`), `collect` without an item or an item for another objective, or an unknown item (`field: "item"`), a ratio target under `collect` or `brand` (`field: "target"`), `brand` without a brand, a brand for another objective, one the build does not have or one the request's area does not hold (`field: "brand"`), `alphabet` with a stop between its ends (`field: "stops"`), a target (`field: "target"`), a base route (`field: "base_route_id"`) or `reorder` (`field: "reorder"`), both turn constraints or `strict` without one (`field: "constraints"`); a place search's query empty or over 200 characters once normalised (`field: "q"`); `/brands` without a region |
+| 422 | `INVALID_REQUEST` (+ `errors`, pydantic's without their `input`, and `field` when every error lies in one field of the body; or + `field`) | a drawing's request asking for an objective but `distance`, a target but `max`, the worst order, a base route or a portfolio (`field` `objective`, `target`, `reorder`, `base_route_id`, `portfolio`), its path over `MAX_DRAW_EDGES` edges or with an id that is not a whole number in [0, 2³¹) (`field: "path"`; **Drawing a route**); a body or field that does not parse (a seed beyond 2⁶³ − 1 included, or a portfolio's last seed, `Infinity` or `NaN` for a number, a portfolio above 4 on `field: "portfolio"`), an unknown objective, a target out of bounds, a ratio target for a round trip (`field: "target"`), `collect` without an item or an item for another objective, or an unknown item (`field: "item"`), a ratio target under `collect` or `brand` (`field: "target"`), `brand` without a brand, a brand for another objective, one the build does not have or one the request's area does not hold (`field: "brand"`), `alphabet` with a stop between its ends (`field: "stops"`), a target (`field: "target"`), a base route (`field: "base_route_id"`) or `reorder` (`field: "reorder"`), a portfolio above 1 under `alphabet` or with a base route (`field: "portfolio"`), both turn constraints or `strict` without one (`field: "constraints"`); a place search's query empty or over 200 characters once normalised (`field: "q"`); `/brands` without a region |
 | 422 | `UNKNOWN_REGION` | a region this server does not serve |
 | 422 | `STOP_OUTSIDE_REGION` (+ `stop_index`) | outside the region's bbox: the build's `params.bbox`, else its nodes' extent; for `POST /regions/pick`, a stop no served region's bbox holds with the others (**Picking a build**) |
 | 422 | `NO_NODE_NEAR` (+ `stop_index`, null when no single stop is to blame) | no node within 5 km can play the stop's role |
@@ -221,6 +233,7 @@ FastAPI's `detail`), but for the basemap's files' range errors: `/basemap/` answ
 | 422 | `INFEASIBLE_TURN_CONSTRAINT` (+ `leg`, `stop_index`, `constraint`) | under a strict turn constraint (`constraint`: `no_left` or `no_right`), no route covers the leg without repeating a road or turning that way, after the re-snap fallback, while the seed's legs can be built without the constraint (one more build, on failure only; under hard mode too, when they can be built under hard mode alone); the message ends "under the strict no-left constraint; try without strict" |
 | 422 | `TOO_MANY_STOPS_TO_REORDER` (+ `max_stops`) | `reorder` with more stops than the region's build takes: 7, or 5 on a build of more than 100,000 nodes; checked after the objective, before the budget |
 | 422 | `BUDGET_TOO_LARGE` (+ `max_s`) | `budget_s` over 120, or over 60 on a public server |
+| 422 | `PORTFOLIO_TOO_LARGE` (+ `max`) | `portfolio` over the most this server runs: 4, 2 on a public server, and never more than its workers (`--workers`); checked after the budget |
 | 422 | `UNKNOWN_ROUTE` (+ `base_route_id`) | a base route that is not stored |
 | 422 | `BUILD_MISMATCH` | a base route planned on another region, `graph_version` or engine version; `/validate` on a route another engine version made (its stops could be re-derived differently: re-plan it), as `worst-route validate` refuses one |
 | 422 | `BASE_ROUTE_MISMATCH` (+ `field`) | stops, tier or leash given that differ from the base route's; or a base route `plan.check_base` refuses under its request's resolved stops and masks (`field` `stops`: its stops are not where they resolve now; `route`: a node outside the area, an edge the request bans, a turn its strict constraint refuses, or under hard mode a road it comes back to) |
@@ -241,15 +254,17 @@ FastAPI's `detail`), but for the basemap's files' range errors: `/basemap/` answ
 The SSE `error` event uses the same body, with the codes above that a worker can meet, and:
 `CANCELLED` (cancelled while queued or before its route existed), `VALIDATION_FAILED` (a route
 the validator refused: an engine bug, never stored), `WORKER_FAILED` (an exception, a worker
-that did not start, or one that died without a result, partway through a message included) and
+that did not start, or one that died without a result, partway through a message included; for
+a portfolio, an error ends the job only once every search has failed: **Portfolios**) and
 `WORKER_TIMEOUT` (still running `API_KILL_GRACE_S` after its budget, with no route yet; a
 reorder job still searching `REORDER_SEARCH_MAX_S` beyond that).
 
 `POST /jobs` refuses before a job exists, in this order: the body (the target's bounds
 included), a ratio target for a round trip, the region, the objective (and whether its item,
-brand and target fit it, and the brand is the build's), the worst order's stops
-(`TOO_MANY_STOPS_TO_REORDER`, against the region's build), the budget, the job limit (429), the
-base route, each stop against the bbox, then the **pre-flight** (`jobs.prepare`): the request's
+brand and target fit it, and the brand is the build's; a portfolio under the alphabet route or
+with a base route), the worst order's stops (`TOO_MANY_STOPS_TO_REORDER`, against the region's
+build), the budget, the portfolio (`PORTFOLIO_TOO_LARGE`), the job limit (429, a portfolio's
+workers counted), the base route, each stop against the bbox, then the **pre-flight** (`jobs.prepare`): the request's
 masks, a pilgrimage's brand within them, and `resolve_stops` (snapping and the re-snap
 fallback), in a worker thread, and for a base route `plan.check_base`. The worker repeats
 them, deterministically, so a request that passes the pre-flight is not refused for its stops
@@ -263,7 +278,7 @@ state build, since every failing seed search looks again for a node-simple path
 |---|---|---|
 | GET | `/health` | `{status: "ok", builds: [{region, build_id, graph_version}]}` |
 | GET | `/ready` | `{status: "ready"\|"not_ready", checks: [{name, ok, detail}]}`: 200 when every check passes, else 503 (below) |
-| GET | `/config` | `{public, basemap: {kind, tiles, glyphs, sprite, style}, limits: {budget_max_s, leash_max_km}}` (**Basemap**) |
+| GET | `/config` | `{public, basemap: {kind, tiles, glyphs, sprite, style}, limits: {budget_max_s, leash_max_km, portfolio_max}}` (**Basemap**) |
 | GET, HEAD | `/basemap/{path}` | the files under the basemap's directory (`<WORST_ROUTE_DATA>/basemap/`, or `ApiSettings.basemap_dir`), with byte ranges (**Basemap**) |
 | GET | `/regions` | `[{region, name, build_id, graph_version, bbox: [w, s, e, n], counts, tiers: [{tier, nodes, edges}]}]`, in the order served; `name` is what the frontend calls the region (`config.Region.display`: "Oregon", "United States"; the id for a region `config.REGIONS` does not name) |
 | POST | `/regions/pick` | `{stops: [{lat, lon}]}` (one or more) → `{region, build_id, reason}`: the served region a trip with those stops runs on (**Picking a build**) |
@@ -320,7 +335,8 @@ of the last splice applied; `elapsed_s` the wall time since it started.
 {route_id, created, graph_version, engine_version, region, build_id, seed,
  request:    the API request as planned (seed filled in; for "make it worse", base_route_id
              and the base route's stops, tier and leash; with reorder, its stops and their
-             labels in the order the route visits them),
+             labels in the order the route visits them; for a portfolio, its first seed and
+             portfolio, the document's seed being the winner's),
  stops:      [{label, node, lat, lon, moved_m, note, route_index}],
  order:      [each stop's position among those asked for] (the stops, like the request's,
              in the order the route visits them; the identity without reorder, and for a
@@ -334,7 +350,8 @@ of the last splice applied; `elapsed_s` the wall time since it started.
               brand: {id, name, visits, of},
               alphabet: {letters, sequence, roads, alpha_from, free_from},
               extra_fuel_gal, extra_cost_usd, states, towns, towns_n, network_fraction},
- run:        {attempts, accepted, stopped_because, elapsed_s, backend},
+ run:        {attempts, accepted, stopped_because, elapsed_s, backend,
+              portfolio: {k, seeds, winner}},
  validation: {ok: true, checked_at},
  directions: [{step, text, distance_m, time_s, edge_range: [a, b], kind}],
  toasts:     [text]}
@@ -369,7 +386,10 @@ edge letters, worked out once per build and kept by `graph_version`), null for e
 objective;
 `stopped_because` is `target` (within it),
 `budget`, `converged`, `cancelled` or `timeout`, and `drawn` for a route drawn by hand, whose
-`backend` is `human` (**Drawing a route**).
+`backend` is `human` (**Drawing a route**). `run.portfolio` is a portfolio's (**Portfolios**),
+absent for one search: how many searches, their seeds, and `winner`, the index of the one whose
+route it is, so `seeds[winner]` is the document's `seed` and `run.attempts` and `accepted` are
+that search's own; the document's `request.seed` is the first of the seeds.
 
 The presentation's fields (`docs/reference/presentation.md`, **Directions**, **Jokes**, **Stats and
 toasts**) are worked out again from the build on every request (`presentation.document.present`),
@@ -446,8 +466,8 @@ Each event has an `id`, counting up per job, an `event` name and a JSON `data`:
 |---|---|---|
 | `snapped` | at the job's creation (from the pre-flight); with `reorder`, once the worker has chosen the order, just before `baseline` | `{stops: [{input: {lat, lon}, label, node, lat, lon, moved_m, note}], order, tier, leash_km, active_nodes}`: the stops in the order the route visits them, `order` each one's position among those given (`[0, 1, 3, 2, 4]`; the identity without `reorder`), the tier and leash those of that order |
 | `baseline` | when the worker has built the route the loop starts from | `{length_m, time_s, geometry}` (null for a round trip) |
-| `snapshot` | right after `baseline` (iteration 0: the seed, or the base route), after every 50th `progress`, on every better alphabet route (just before its `progress`), just before `done` when the stored route is not the one the splices drew (**Jobs**), and first on every (re)connect once the route exists | `{iteration, elapsed_s, node_count, stop_idx, geometry, node_index, metrics}` |
-| `progress` | at most every 0.1 s while splices are accepted; for the alphabet route, once per better route, right after its `snapshot`, with no splice | `{iteration, elapsed_s, score, metrics: {length_m, time_s, delay_s, ratio, item, items, brand: {id, name, visits, of}, alphabet: {letters, sequence, roads, alpha_from, free_from}}, splices: [{i, j, node_count, coords, node_index}], best_score, best_metrics: {length_m, time_s, delay_s, ratio, item, items, brand: {id, name, visits, of}, alphabet: {letters, sequence, roads, alpha_from, free_from}}}`: `delay_s` the waiting at the route's signals and stop signs so far, as in a `snapshot`'s metrics and the job status's; `item` and `items` only for `collect`, `brand` (its visits as the route grows) only for `brand`, `alphabet` (its letters) only for `alphabet`, whose `iteration` counts restarts; `best_score` and `best_metrics` the best route's so far by the request's goal (the highest score for max, the closest to a target), which is the one stored: a max run that anneals (engine version 6, `docs/reference/engine.md`, **The loop**) takes shorter splices too, so `score` and `metrics`, the route the splices draw, may be below them |
+| `snapshot` | right after `baseline` (iteration 0: the seed, or the base route), after every 50th `progress`, on every better alphabet route (just before its `progress`), when another of a portfolio's searches takes the lead (its route, just before its `progress`; **Portfolios**), just before `done` when the stored route is not the one the splices drew (**Jobs**), and first on every (re)connect once the route exists | `{iteration, elapsed_s, node_count, stop_idx, geometry, node_index, metrics}` |
+| `progress` | at most every 0.1 s while splices are accepted; for the alphabet route, once per better route, right after its `snapshot`, with no splice; for a portfolio, the leader's splices only, and when another search takes the lead, once right after its `snapshot`, with no splice, and while its leader has finished and others still search, one with no splice every second | `{iteration, elapsed_s, score, metrics: {length_m, time_s, delay_s, ratio, item, items, brand: {id, name, visits, of}, alphabet: {letters, sequence, roads, alpha_from, free_from}}, splices: [{i, j, node_count, coords, node_index}], best_score, best_metrics: {length_m, time_s, delay_s, ratio, item, items, brand: {id, name, visits, of}, alphabet: {letters, sequence, roads, alpha_from, free_from}}, portfolio: {k, leader, best_ratios}}`: a portfolio's numbers its leader's, `portfolio` only for a portfolio (**Portfolios**); `delay_s` the waiting at the route's signals and stop signs so far, as in a `snapshot`'s metrics and the job status's; `item` and `items` only for `collect`, `brand` (its visits as the route grows) only for `brand`, `alphabet` (its letters) only for `alphabet`, whose `iteration` counts restarts; `best_score` and `best_metrics` the best route's so far by the request's goal (the highest score for max, the closest to a target), which is the one stored: a max run that anneals (engine version 6, `docs/reference/engine.md`, **The loop**) takes shorter splices too, so `score` and `metrics`, the route the splices draw, may be below them |
 | `done` | the route is stored (or was already: its existing id, **The store**) | `{route_id, stopped_because, metrics}`: the stored route's `{length_m, time_s, ratio, time_ratio, target, delay_s, turns: {left, right, straight, u_turn}, items: {toll_booth, level_crossing, roundabout, bridge}, item, brand: {id, name, visits, of}, alphabet: {letters, sequence, roads, alpha_from, free_from}}`, as in the document (`target` null for `max`; `item` only for `collect`, `brand` only for `brand`, `alphabet` only for `alphabet`) |
 | `error` | the job ended without a route | `{code, message, ...}` |
 
@@ -497,8 +517,11 @@ missed, then 39, 40, ...; and a client that comes after a job's end gets its `sn
 ## Jobs
 
 A job plans one request. `JobManager.submit` makes it after the pre-flight, emits `snapped`, and
-starts its worker, or queues it (FIFO) when `API_MAX_JOBS` are running; with `API_MAX_QUEUED`
-(8) waiting too, `TOO_MANY_JOBS`.
+starts its worker (a portfolio's workers, one a search), or queues it (FIFO) when the workers it
+needs are not free: at most `API_MAX_JOBS` workers run at once, a running job holding one for
+each of its searches that has not ended, and a job waiting for workers holds up the jobs queued
+after it, so none starves (one waiting only for its own client's running job, on a public server,
+does not); with `API_MAX_QUEUED` (8) waiting too, `TOO_MANY_JOBS`.
 
 A job with `reorder` emits no `snapped` at its creation: the pre-flight checked its stops in the
 given order, and the worker's `plan_route` chooses the order. Its `Started` message carries the
@@ -516,6 +539,47 @@ job as `WORKER_TIMEOUT`, with no route, as any job whose route does not exist by
 The caps on its stops keep the search to seconds (12–14 s for 7 stops on Portland's build at a
 load of 7–12), but beside another job and a browser rendering the map it took over 30 s.
 
+**Portfolios.** A job with `portfolio` K above 1 runs K searches of its request, seeds `seed`
+to `seed + K − 1` (`Search`: each with its own worker, its own copy of the route and its best so
+far by the goal), and its clients see one route, its leader's. The first search to start leads.
+After each batch of messages, a search whose best route so far is strictly better by the goal
+takes the lead (the first of the best among several; a tie keeps the leader), once the leader
+has led `API_LEADER_HOLD_S` (2 s), or at once when the leader has failed (the hold never keeps a
+failed leader: the first search to have a route after it takes the lead): its route is sent as a
+`snapshot`, then its numbers as a `progress` with no splice. Only the leader's splices are ever
+sent, and an old leader's not sent yet are dropped, the snapshot replacing them, so a client
+applying the stream as for one search draws the leader. The hold keeps a long route's snapshot
+(3.5 MB of JSON and a quarter of a second of the API's time for a 33,710-node route on `us-t3`)
+from going out several times a second while two searches run neck and neck. A portfolio's
+`progress` events carry `portfolio: {k, leader, best_ratios}`: how many searches, the leader's
+index (its seed is the job's `seed` plus it) and each search's best route so far as the ratio a
+`progress` event's `metrics.ratio` gives (null with no route yet, after a failure, or for a round
+trip). While the leader has finished and other searches still run behind it, a `progress` with no
+splice comes every `API_PORTFOLIO_TICK_S` (1 s), the leader's last numbers with the job's elapsed
+time and the `portfolio` block, so the stat line and the ratios keep moving. The searches share the job's baseline and, but for a round trip without legs, their seed
+route, which no seed changes; so the first `snapshot` is the same whichever starts first.
+
+A search that fails (its worker's `Failed`, or a worker gone) drops out, logged with its seed:
+it no longer leads, and its route counts for nothing; the job goes on with the others, and ends
+in the error of the first search's failure (by index) only when every search has failed. Each
+search's worker is free for another job as soon as its search ends. The job is complete once
+every search has ended, or as soon as one reaches its target (`stopped_because: "target"`), the
+others then stopped: the best route the searches finished with, by the goal (the first of the
+best), is stored, its document its search's own (its seed, its engine request's seed, its
+attempts and accepted splices) with `run.portfolio = {k, seeds, winner}`, and sent as a
+`snapshot` before `done` when it is not the route the clients have drawn, whatever the hold. A
+portfolio's route therefore reproduces from the winner's seed: `worst-route plan --seed
+<winner's seed>` with the same request plans it (with `--max-iterations` its `run.attempts` when
+time ended its run, as for any route), and so does a job of that seed alone. Which
+search wins is deterministic when every search ends on its iterations or by converging; when a
+target or the budget ends them, which seed wins the race depends on timing, each winner still
+reproducing from its own seed. A cancel or the time limit stores the best route so far of the
+search ahead (**Ending early**). With `reorder` each search's worker runs the same search for
+the order, which does not depend on the seed (`docs/reference/engine.md`, **Planning**): the
+manager reorders the job on the first `Started`, and a later one whose order or stops differ is a
+bug that ends the job in `WORKER_FAILED`. The job status (`GET /jobs/{id}`) gives the leader's
+numbers and the job's `seed`, the first.
+
 **The worker** (`worker.run_in_process`, around `worker.run_job`) runs in a `multiprocessing`
 process started with `spawn`. It loads the build memory-mapped (`graph/loader.py`, so workers
 share the OS page cache), calls `plan_route` with its `on_start` and `on_progress` hooks (and
@@ -524,7 +588,7 @@ share the OS page cache), calls `plan_route` with its `on_start` and `on_progres
 started, so the worker holds the only one): `Started` (the route the loop starts from, the
 baseline, and the order of the stops with the stops resolved in it), `Spliced` per accepted splice (for the alphabet route, `Improved` per better route
 instead: the whole route, its restart count, score and metrics), then `Finished` (the validated
-route as its `route.json` document) or `Failed`. A send blocks while the pipe is full, so a slow reader slows
+route as its `route.json` document, with its score and metrics) or `Failed`. A send blocks while the pipe is full, so a slow reader slows
 the search but never loses a message. On start and at every accepted splice the worker checks
 that the API process is alive (`multiprocessing.parent_process()`); when it is not, or the pipe
 has no reader left, it closes its end and exits (`os._exit`), so a crashed API never leaves
@@ -534,14 +598,14 @@ and the graph package (shapely, scipy); never FastAPI, uvicorn or sse-starlette,
 the python backend. Its own imports take about 0.4 s; on the csr backend, the default, loading
 numba and the cached kernels adds about 0.3 s.
 
-**The follower**, an asyncio task per running job, reads that pipe in a thread (`poll` for at
-most `API_READ_GRACE_S`, 0.1 s, then `recv`) and keeps the job's own copy of the route: the
-starting route, then each splice applied in order, as a client would. It keeps the best route
-so far apart, by the request's goal (`engine.target.Goal`, on each splice's score and metrics):
-in a max mode the highest score, which is the copy until the run converges and anneals
-(engine version 6: its reheats take shorter splices too, `docs/reference/engine.md`,
-**Annealing**) and may be an earlier route after; a target run's best is the route closest to
-its target, which after an overshoot that shrinking could not bring back is an earlier one
+**The follower**, an asyncio task per running job, reads its workers' pipes, each in a thread
+(`poll` for at most `API_READ_GRACE_S`, 0.1 s, then `recv`), and keeps each search's own copy of the
+route: the starting route, then each splice applied in order, as a client would. It keeps the best
+route so far apart, by the request's goal (`engine.target.Goal`, on each splice's score and
+metrics): in a max mode the highest score, which is the copy until the run converges and anneals
+(engine version 6: its reheats take shorter splices too, `docs/reference/engine.md`, **Annealing**)
+and may be an earlier route after; a target run's best is the route closest to its target, which
+after an overshoot that shrinking could not bring back is an earlier one
 (`docs/reference/engine.md`, **Targets**). It coalesces splices into `progress` events
 (`API_COALESCE_S`, 0.1 s), each with the best route's score and metrics (`best_score`,
 `best_metrics`), with a `snapshot` every `API_SNAPSHOT_EVERY` (50).
@@ -562,6 +626,10 @@ route.
   `stopped_because: "cancelled"` and reported in `done`, or ends in `VALIDATION_FAILED`. Its
   `run.attempts` is the attempt of the last splice applied, so planning the same request with that many attempts
   gives it back byte for byte (the prefix property, `docs/reference/engine.md`, **The loop**).
+  A portfolio's workers are all stopped, and the route stored is the best route so far of the
+  search ahead (the leader, unless another's best is strictly better; never one that failed),
+  with that search's seed, attempts and accepted splices and `run.portfolio`, sent as a
+  `snapshot` before `done` when the clients have drawn another.
 - **Time limit**: a job still running `API_KILL_GRACE_S` (30 s) after its budget is ended the
   same way, as `"timeout"` (`WORKER_TIMEOUT` before its route exists); for a reorder job the
   budget and the grace run from the end of its search, which may take `REORDER_SEARCH_MAX_S`
@@ -626,8 +694,9 @@ routes(id, created, region, build_id, graph_version, engine_version, seed,
        baseline_edges (blob), metrics_json, run_json, order_json (route.json's order))
 ```
 
-A route planned with `reorder` keeps its API request with the stops in the order the route visits
-them, as its engine request and its stops are; `order_json` keeps how they map to the stops asked
+A portfolio's route keeps its winner's document, `run.portfolio` in its `run_json`, and its API
+request as asked (the first seed and `portfolio`). A route planned with `reorder` keeps its API
+request with the stops in the order the route visits them, as its engine request and its stops are; `order_json` keeps how they map to the stops asked
 for. A store opened by a server from before the worst order gains `order_json` when it opens
 (`ALTER TABLE`, the check and the change under one write lock, `BEGIN IMMEDIATE`, so servers
 opening it at once add it once; a column found added all the same counts as there); its rows, and
@@ -1106,6 +1175,46 @@ machine, with curl:
   beyond the sensible route's and an arrival on 2026-11-05, from a departure of
   2026-10-31T22:12:35Z; a `DELETE` of its job answered 409 `DAILY_JOB`; its share image drew in
   1.1 s (357 kB).
+- **Portfolios** (`serve --region portland --region us-t3 --port 0 --geocoder none`, csr,
+  engine version 5, 2026-11-01, builds 0b72253e5e8a and 6adae6917be1, a store of the lane's own,
+  ten cores; at version 6 seed 3 alone at 60,000 attempts plans the same route, 63.01×, those runs
+  ending on their attempts before any reheat; another
+  lane's jobs and an emulator beside it, the load average 7.6–15, the machine's swap 12.2–12.9 GB
+  used of 13.3–14.3 GB and under 0.6 GB free).
+  - **Powell's → Reed, K = 4, seeds 1–4, 60,000 attempts, a 30 s budget** (load 9.5–11): `done`
+    after 14.5 s, each search 13.5 s, every one ended by its attempts; the winner seed 3, 63.01×
+    (486.2 km), `run.portfolio {k: 4, seeds: [1, 2, 3, 4], winner: 2}`. The four seeds as plain jobs
+    at the same 60,000 attempts: 59.43×, 61.14×, 63.01× and 62.32×, 8.1–8.2 s each, seed 3's the
+    same route (`913698e28e0f`, its `done` the portfolio's stored id), so the portfolio is their
+    best, in 14.5 s against 35 s for the four one after another. The lead: seed 1 at 0.9 s, then
+    seed 3 at 2.8 s, seed 1 at 4.9 s, seed 4 at 6.9 s and seed 3 at 8.9 s, at least the hold's 2 s
+    apart; seven snapshots in 142 events, the first 3.3 kB, those of a new leader 116–175 kB, two
+    every 50th `progress` (157 and 184 kB); 699 splices sent of the leaders', 132 `progress` events.
+    At 15,000 attempts: 5.1 s, seed 4 at 50.93×, one change of leader.
+  - **New York → Los Angeles on `us-t3`, a 60 s budget** (budget-bound, load 7.6–12): seed 1 alone
+    made 1,593 attempts, 3.81×, twice the same route; seeds 1 and 2 as two plain jobs at once, 287
+    and 97 attempts, 3.79× and 4.12×; K = 2, seeds 1 and 2, twice: seed 1 the winner at 3.51× (57
+    attempts; seed 2's best 3.27×), then seed 2 at 4.12× (112 attempts; seed 1's 3.81×), the lead
+    changing six and seven times, its snapshots 0.44–2.04 MB. Two `us-t3` workers at once, a
+    portfolio's or two jobs', each ran at a fifth of one alone or less on this machine at that
+    time, both near a whole core (94–95 %): so a portfolio on the national build needs memory for
+    its workers to beat one seed in the same seconds, and here it did not.
+  - **The follower's reads** (load 7.0–7.9; `serve --region portland`, a fresh store): it waits
+    on every live worker's pipe at once each round, at most `API_READ_GRACE_S`, so a quiet search
+    could hold up a splicing one whose pipe is full. Powell's → Reed at 15,000 attempts, a
+    portfolio against plain jobs at the same seeds started together, four rounds alternating which
+    went first: K = 2 3.26–3.54 s a search (a mean 3.27 s) against 2.92–3.59 s (3.33 s), K = 4
+    3.58–3.72 s against 3.65–3.94 s, each search's own time from its worker, so about 4,000–5,300
+    attempts a second either way: no throttling.
+  - **Workers' resident memory** (each process's, the build's mapped pages counted in each):
+    183–187 MB a Portland search (four at once); on `us-t3` 855–874 MB alone, 816–846 MB two plain
+    jobs at once, 621–651 MB a portfolio's two.
+  - **A public server** (`--public --trust-proxy --workers 3`): `/config`'s `portfolio_max` 2; a
+    portfolio of 3 refused `PORTFOLIO_TOO_LARGE` with `max: 2`, one of 5 `INVALID_REQUEST` on
+    `field: "portfolio"`; one client's two-seed job running, another client's two-seed job queued
+    with one worker free, the first client's next queued on its own and the second's next behind
+    its first; the first client's portfolio cancelled, the second's portfolio and the first's next
+    started together on the three workers, the second's next still queued.
 
 ## Basemap
 
@@ -1127,11 +1236,12 @@ one file, a national extract, may serve every build.
  "basemap": {"kind": "pmtiles", "tiles": "/basemap/portland.pmtiles",
              "glyphs": "/basemap/fonts/{fontstack}/{range}.pbf",
              "sprite": "/basemap/sprites/grayscale", "style": null},
- "limits": {"budget_max_s": 120.0, "leash_max_km": 150.0}}
+ "limits": {"budget_max_s": 120.0, "leash_max_km": 150.0, "portfolio_max": 4}}
 ```
 
-`public` is `--public`'s, `limits` the budget and leash a request may ask for (**Public
-limits**); an auto leash on a trip of more than 750 km is longer than `leash_max_km`.
+`public` is `--public`'s, `limits` the budget, leash and portfolio a request may ask for
+(**Public limits**; `portfolio_max` is `MAX_PORTFOLIO`, 2 on a public server, and never more
+than the server's workers, so a server with one worker runs no portfolio); an auto leash on a trip of more than 750 km is longer than `leash_max_km`.
 `basemap.kind` is `raster`, `openfreemap` or `pmtiles`; with `raster` the other four are null,
 and with `openfreemap` all but `style`, the style's URL
 (`https://tiles.openfreemap.org/styles/positron`), which the frontend fetches. With `pmtiles`,
@@ -1178,15 +1288,20 @@ and a local server have always had them. Off by default.
   from the end of that search (**Jobs**): a public job is killed at most 90 s after its start, or
   150 s while a worst-order job still searches and 90 s after its search ends, 240 s in all at
   the very worst.
+- **A portfolio of at most two seeds** (`PUBLIC_MAX_PORTFOLIO`, against `MAX_PORTFOLIO`'s
+  four): more is `PORTFOLIO_TOO_LARGE` with `max: 2` (**Portfolios**). Each seed is one of the
+  server's workers (`API_MAX_JOBS`), while a client's share below counts jobs: a client running
+  a job of two seeds runs one job, on two workers.
 - **Each client's share of the jobs**: a client (`limits.client_of`: the peer, or behind a
   trusted proxy the last address of `X-Forwarded-For`, an IPv6 one by its /64; **Logs**) runs at
   most one job at once (`PUBLIC_RUNNING_PER_CLIENT`) and has at most three more waiting
   (`PUBLIC_QUEUED_PER_CLIENT`). Its next job waits in the queue even while workers are free, and
   starts once its running one ends; when a worker frees, the first job in the queue whose client
-  may run one starts, so a job waiting on its own client's never holds up another client's. A
+  may run one starts once its workers are free (a job waiting for workers holds up those after
+  it, **Jobs**), so a job waiting on its own client's never holds up another client's. A
   fifth is `TOO_MANY_JOBS` with the client's counts, `{code: "TOO_MANY_JOBS", message: "your jobs
   fill your share: 1 running and 3 waiting; wait for one to end", running: 1, queued: 3}`. The
-  server's own limits stay (`API_MAX_JOBS` running, `API_MAX_QUEUED` waiting): a job refused for
+  server's own limits stay (`API_MAX_JOBS` workers running, `API_MAX_QUEUED` jobs waiting): a job refused for
   them is `TOO_MANY_JOBS` without counts. The job manager counts each client's jobs
   (`JobSettings.running_per_client`, `queued_per_client`); a job's client is in its log lines,
   hashed.
@@ -1267,8 +1382,8 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 |---|---|
 | `test_schemas.py` | the request mirrors the engine's (a pilgrimage's brand included), its defaults, the seed's bounds, stops left out only with a base, malformed requests refused (both turn constraints at once, an unknown one); the target as the engine's, each kind with its own number and within its bounds; `done`'s time ratio, target, delays and turns typed |
 | `test_logs.py` | who a client is (the peer; the last `X-Forwarded-For` address only when trusted, without a port; IPv6 by its /64), its hash; a request id and one access line per request, without the address or the query; a proxy's request id kept only when trusted and well formed; a job's end line with its id, outcome and route and the id of the request that started it; a queued job's lines with its own request's id, not the one that freed its slot; an unhandled error's 500 `INTERNAL_ERROR` with the request's id, logged with it; a JSON line's fields and traceback |
-| `test_limits.py` | each client's searches on a fake clock (ten in any minute, `retry_after_s`, other clients apart, idle ones forgotten); the manager's per-client jobs (one running and three waiting while workers are free, the fifth refused with its counts, another client and a job without a client unaffected, the next of a client starting in order when its running one ends, a waiting job whose client is busy letting the next one start, a full server's refusal without counts); over HTTP the public budget (and 120 s otherwise), a client's share of the jobs from one peer and behind a trusted proxy (the last forwarded address counting, an untrusted header ignored), a client's eleventh search refused, cached answers counted, none of it when not public |
-| `test_basemap_api.py` | `/config` for each basemap (OpenFreeMap's with its style, and `/ready` passing it), with and without the labels' assets, and its public flag and limits; the basemap's file: whole, its first 127 bytes, a suffix, a range running past the end (cut), one starting past it (416 with the length), `If-Range` current and stale, `HEAD`, the media types and caching; a font; a missing file, a missing directory and a path leaving it, 404; a linked file served and ready, and a small one's first 16 kB read whole; a basemap directory of its own (`basemap_dir`), the data's ignored; `/ready`'s basemap check, failing without the file (no path in its detail) and naming the labels; one file named for every build served, by `basemap_name` or the first region |
+| `test_limits.py` | each client's searches on a fake clock (ten in any minute, `retry_after_s`, other clients apart, idle ones forgotten); the manager's per-client jobs (one running and three waiting while workers are free, the fifth refused with its counts, another client and a job without a client unaffected, the next of a client starting in order when its running one ends, a waiting job whose client is busy letting the next one start, a full server's refusal without counts); over HTTP the public budget (and 120 s otherwise), a client's share of the jobs from one peer and behind a trusted proxy (the last forwarded address counting, an untrusted header ignored), a client's eleventh search refused, cached answers counted, none of it when not public; a public portfolio of at most two seeds (`PORTFOLIO_TOO_LARGE` with `max: 2`), each a worker: one client's two-seed job running, another's waiting for two workers with one free, the first client's next waiting on its own |
+| `test_basemap_api.py` | `/config` for each basemap (OpenFreeMap's with its style, and `/ready` passing it), with and without the labels' assets, and its public flag and limits (the most seeds a job runs: 4, 2 when public, never more than the workers); the basemap's file: whole, its first 127 bytes, a suffix, a range running past the end (cut), one starting past it (416 with the length), `If-Range` current and stale, `HEAD`, the media types and caching; a font; a missing file, a missing directory and a path leaving it, 404; a linked file served and ready, and a small one's first 16 kB read whole; a basemap directory of its own (`basemap_dir`), the data's ignored; `/ready`'s basemap check, failing without the file (no path in its detail) and naming the labels; one file named for every build served, by `basemap_name` or the first region |
 | `test_several_builds.py` | two regions served at once (`lands` in `conftest.py`: one fake state's region and one of two, `config.REGIONS` and `STATES` given them): `/regions` (in the order served, each with its `name`; a region config does not name by its id), `/health` and `/ready`'s build check over both, `UNKNOWN_REGION` naming them; a job on each build, its document, `/validate` and the stored route's build the served one; a stop beyond one build's bbox; a stored route's document and share image after a restart serving the regions the other way round, and serving only another region (its build read from disk, its places from a covering index); a region without its own places index taking a covering one (`/ready`'s detail saying so), then its own; a region clipped to a bbox covering no other but covered by a whole state's |
 | `test_pick_api.py` | `POST /regions/pick` on the same regions: stops in one state (whatever the order served, one stop too), in both, in both with only the one-state region served (by bounding box), a stop in no state, no places index; a region clipped to a bbox first, the smallest first, passed over for a stop in a state it does not name while a places index is loaded, by its bbox alone without one; the reason naming a stop beyond the smaller build; a tie to the region served first; a public server's sixty picks a minute a client, apart from its searches; `STOP_OUTSIDE_REGION` for a stop outside every region and for one outside the region holding the most; the body's refusals (no stop, a bad one, an unknown field); a job planned on the region picked |
 | `test_pick_data.py` (`data`) | the pick with Portland's, Oregon's and the national T1 build served from `WORST_ROUTE_DATA` with their places indexes: Powell's → Reed on `portland`, Portland → Bend on `oregon` ("all stops in Oregon"), Portland → Chicago, Portland → Bend → Vancouver (WA) and Portland → Vancouver (both in Portland's bbox) on `us-t1`, Honolulu refused |
@@ -1276,15 +1391,17 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 | `test_static.py` | the site: the build at `/` and its caching, a module's media type, `/health` not at the root, the API under `/api` with its errors, a job run to its end through it (the lifespan ran), the access lines' whole paths |
 | `test_store.py` | the round trip (the stored route validates), unknown ids, the first record kept, what the id covers; a day's row, its graph_version's (the same build id at another one has another), replaced in place; a route's order kept, and a store from before the worst order gaining `order_json`, its rows the identity, once however often it is opened, a column another server added meanwhile counting as there and any other error raised |
 | `test_daily_api.py` | the daily route on the 20 × 20 lattice with a places index of towns placed on it, the day fixed: the draw (every trip within the band, two towns closer than its lower bound never drawn, between incorporated places of the kinds drawn, inside the build's bbox, never a town without a node within 5 km; the same seed the same trips; none when nothing fits), the region with the most states; `GET /daily` planning, then done with the stored route's ratio, stop and attempts, the same answer call after call, the route's labels, seed, attempts, budget, default vehicle and departure (UTC, to the second), with its fuel and arrival, its `/validate` ok; two servers on two stores answering alike, the iterations having ended the run; concurrent first calls planning once; a failed job recorded and submitted again, the day drawn once; a trip the pre-flight refuses giving way to the next, and a day whose ten trips it refuses failed and answered so again without a pre-flight; a full server answering 429 `TOO_MANY_JOBS` with nothing drawn or recorded until a slot frees; a client's `DELETE` refused with `DAILY_JOB` while the job runs, and only reporting it once ended; a job the server cancels failing the day, then planned again; the job outliving a viewer that leaves (no orphan); a call after the job's end recording it before its follower, and a follower never overwriting a later plan; a planning row of a restarted server planned again; a build replaced under its id (`save --force`) planned again on its own row, its route served, the old row kept; a public server's job without a client, at its budget; an index without incorporated places, and no places index, 404 |
-| `test_draw_api.py` | `POST /draw` and `POST /draw/finish` on the drawing board (`tests/engine/graphs.py`): an empty path the start with its legal ways out (the out-edges by hand: a one-way's absent), their names, lengths and shapes; steps with their turns, the stop a move reaches, done with its ratio and line; each refusal with its code and first illegal edge (a node passed, a twin, a turn the straight-only junction forbids, the end before a via, a one-way taken from its head, past the end, an id outside the graph, a strict turn, a road again under hard mode), the path before it drawn, a soft constraint's left turn taken; a finished drawing stored under its content hash with its run drawn by a human, its seed and labels, its document, directions, share image and `/validate`, the same id when finished again, and continued by make it worse; a round trip finished with a seed drawn for it and no ratio; an unfinished drawing and an illegal one refused at finish; the stops those a job's `snapped` event gives; the refusals of the request (an objective, a target, the worst order, a base route, an item), an unknown region, a stop outside the bbox, a path over the cap and a negative id; a public server's 240 steps a minute over both endpoints and its ten finished drawings a minute (the same drawing the same route, steps going on); a request's context worked out once whatever the seed and the path, and the last ones kept |
+| `test_draw_api.py` | `POST /draw` and `POST /draw/finish` on the drawing board (`tests/engine/graphs.py`): an empty path the start with its legal ways out (the out-edges by hand: a one-way's absent), their names, lengths and shapes; steps with their turns, the stop a move reaches, done with its ratio and line; each refusal with its code and first illegal edge (a node passed, a twin, a turn the straight-only junction forbids, the end before a via, a one-way taken from its head, past the end, an id outside the graph, a strict turn, a road again under hard mode), the path before it drawn, a soft constraint's left turn taken; a finished drawing stored under its content hash with its run drawn by a human, its seed and labels, its document, directions, share image and `/validate`, the same id when finished again, and continued by make it worse; a round trip finished with a seed drawn for it and no ratio; an unfinished drawing and an illegal one refused at finish; the stops those a job's `snapped` event gives; the refusals of the request (an objective, a target, the worst order, a base route, a portfolio, an item), an unknown region, a stop outside the bbox, a path over the cap and a negative id; a public server's 240 steps a minute over both endpoints and its ten finished drawings a minute (the same drawing the same route, steps going on); a request's context worked out once whatever the seed and the path, and the last ones kept |
 | `test_draw_data.py` (`data`) | on Portland's build, a route drawn by hand from Powell's round a few blocks to Pioneer Courthouse Square from the moves the server offers (backing up from dead ends), more than twice the sensible route, finished, stored, validated, its share image rendered |
 | `test_sse.py` | path points and node indices along a bent geometry, the per-edge simplification keeping nodes and original values, splices, metrics, the event encoding |
 | `test_jobs.py` | the manager with inline workers: event order and ids, a client replay equal to the stored route, late subscribers (after a worker that died with splices waiting too: they come before its `error`, ids rising strictly), `Last-Event-ID` resync, cancel (validated, stored, reproduced by its attempts), the queue and its limit, cancel before the route exists, continuations, the time limit, orphans running and queued, a worker that raises, a worker refusing a brand its request's area does not hold (`INVALID_REQUEST`), a store failure while cancelling (by hand and by the sweep, which goes on), a worker that does not start (the queue moves on), the TTL; a target run whose best is not its last route (an overshoot on a 5 × 5 lattice): a snapshot of the stored route before `done`, for live and late clients, and a cancel after the overshoot storing the closest route, reproduced by its attempts; a reorder job's `snapped` only once its worker has chosen the order (a plain job's at once, its order the identity), its stops, labels and inputs in that order and the stored route's request and input with them, a reorder job cancelled during its search ending `CANCELLED` and one cancelled while it runs storing its route validated in its order; a reorder job whose search outlasts its budget and grace finishing on its own budget, counted from `Started`, past the search's allowance, and one whose search outlasts the allowance too ending `WORKER_TIMEOUT`; an annealing job on a town of uneven streets: the best route's score and metrics in every `progress`, never falling, the current route ending below them, and the best sent as the snapshot before `done` |
-| `test_worker_process.py` (`slow`) | real spawned workers: a run to `done`, a cancel mid-run, a worker killed from outside (`WORKER_FAILED`), a fake worker that dies 60 kB into a 2 MB message (`WORKER_FAILED`, then a clean `stop()`), a worker whose API process (a probe) is killed exiting within 3 s, and a worker run alone in a fresh interpreter on a build without its geometry, planning and never importing the geometry's or the GeoJSON's module; about 5 s |
+| `test_portfolio.py` | portfolios in the manager, with fed workers replaying real runs' messages when the test hands them over: the lead passing to the search ahead (a tie keeping it), its `snapshot` then a `progress` with no splice, only the leader's splices sent, the replay equal to the stored winner, its seed, request, attempts and `run.portfolio`; the hold keeping the leader while another is ahead, the winner still sent as a `snapshot` before `done`; a failing leader handing the lead on at once, its ratio null, the job going on; every search failing, the first's error; a cancel storing the best route so far of the search ahead, reproduced by its seed and attempts; the first search to reach its target ending the job and stopping the other; with inline workers, the best of three seeds' runs stored, one search's events and run without `portfolio`; a portfolio in the worst order choosing it once, and a search that chose another order failing the job; the workers each search holds, freed as it ends, the queue in order (a job waiting for two workers holding up one behind it); a client running one job whatever its searches; a full server refusing a portfolio it cannot queue |
+| `test_portfolio_data.py` (`data`) | on Portland's build, Powell's → Reed with seeds 1 and 2 at 1,500 attempts in spawned workers: the route stored is the better of `plan_route`'s two for those seeds, under its seed, validated |
+| `test_worker_process.py` (`slow`) | real spawned workers: a run to `done`, a cancel mid-run, a worker killed from outside (`WORKER_FAILED`), a portfolio's two searches in two processes (the better route stored), a fake worker that dies 60 kB into a 2 MB message (`WORKER_FAILED`, then a clean `stop()`), a worker whose API process (a probe) is killed exiting within 3 s, and a worker run alone in a fresh interpreter on a build without its geometry, planning and never importing the geometry's or the GeoJSON's module; about 5 s |
 | `test_geocode_api.py` | `GET /geocode` with a `FakeGeocoder`: the answer's shape, at most five candidates, the cache across casing and spacing (one upstream call), each refusal (an empty, blank, missing or too long query; a missing or unknown region; `RATE_LIMITED` from a full queue with its `retry_after_s`, a cached query still answered; `GEOCODER_ERROR`; a 429 upstream, on an `httpx.MockTransport`, pausing the geocoder, the next search refused without a request; `GEOCODER_DISABLED`, with no cache file); the default service, its client on a `MockTransport` (`offline_clients`): Nominatim at its URL with the User-Agent and contact (and an embedding's own User-Agent with the contact), the cache beside the store, the limits and the pause, its client closed by the lifespan. The other API tests serve with `geocoder="none"`, so they build no geocoder |
 | `test_directions_api.py` | the document's directions (numbered, the stops' labels, the arrival's empty range at the end, the distances adding up), toasts (the ratio first, six to twelve), the fuel from the request's vehicle and the states and towns from the census fixture's index, all null without them, and the network fraction; `/directions` the document's directions, twice the same, jokes included; a route stored before them (its stored metrics without them, and one without its delays and turns) getting them; unknown routes 404 and a route whose build is gone 409 on both |
 | `test_share_api.py` | `GET /routes/{id}/share.png` with and without a places index: a 1200 × 630 `image/png` with its Cache-Control, two concurrent first requests rendering once (a counted render) and getting the same bytes, one file, no lock left, a later request served from the file; `HEAD` first (it renders), its headers a GET's with no body; unknown and malformed ids (404, no file); a route whose build is gone (409, no lock left); a render that fails (no file, no lock, the next request draws it); two servers on one store rendering the same route at once, each part written before either rename (a barrier in `os.replace`), leaving one file and no part; on a lattice with signals, a slowest-time route's image headed by its document's `time_ratio`, "slower than the sensible route", and a distance route's by its `ratio`; `import worst_route.api.app` in a fresh interpreter leaving matplotlib out of `sys.modules` |
-| `test_routes_api.py` | every endpoint over `httpx.AsyncClient` in-process, every refusal code, a stored route drawn along its build's bent geometry (its document, GeoJSON and share image) and `BUILD_UNAVAILABLE` for a build without one, cancel over HTTP, a closed stream cancelling its job, a stream that subscribes only once it runs, make it worse and its mismatches (a base outside its request's masks included), a continuation that changes nothing reporting the stored route; ratio and duration jobs ending `target` with the target in `done` and the document (none for max), a target out of bounds or a ratio for a round trip refused, make it worse with a smaller target shrinking; a stored route differing from the drawn one by a parallel edge sent as a snapshot before `done`, with `GET /jobs/{id}` agreeing; a ratio target for a round trip refused before anything else, for a base route too; `Infinity` and `NaN` in a body refused; a slowest-time job under a soft no-left constraint, its turns and delays in `done` and the document; a strict constraint refusing a base route that turns left, a soft one taking it; a leg a strict constraint cannot drive answered `INFEASIBLE_TURN_CONSTRAINT` with its leg and constraint, one no route covers without it either (two one-way rings) `STOP_UNREACHABLE_WITHOUT_REPEAT` with strict set too; a body cut short refused without a `field`; `strict` alone and both constraints refused on `field: "constraints"`; on a lattice with signals, the document's `time_ratio`, `done`'s, and `arrival` counting the delays, the route's and the baseline's, for a route stored before the documents carried `baseline_delay_s` too; a collect job counting its bridges in every `progress` and in `done`, the document's `items` agreeing (a distance job's too), and the item and target refusals naming their field; `/brands` (its order, an unknown or missing region), a pilgrimage counting its visits in every `progress` and in `done`, the document's `brand` agreeing and a distance route's null, and the brand refusals (missing, misplaced, a ratio, unknown, out of reach) naming their field; an alphabet job sending each better route as a `snapshot` then a `progress` without splices, its letters and score rising, `done` and the document's `alphabet` agreeing (a distance route's null), `/validate` ending with its `alphabet` check, the build's letters worked out once over two document requests; cancelling one, its best route so far stored and validated; the alphabet refusals (a via, a target, a base route) naming their field; a reorder job's stream and document in the order it visits the stops (its `order`, its request's stops and labels, its stops, the directions' arrivals; a plain job's order the identity), make it worse continuing a reordered route in its order with `reorder` off (the stops asked for in their own order a mismatch), `TOO_MANY_STOPS_TO_REORDER` with the build's `max_stops` (7, and 5 on a large build) and `reorder` under the alphabet route refused on its field |
+| `test_routes_api.py` | every endpoint over `httpx.AsyncClient` in-process, every refusal code, a stored route drawn along its build's bent geometry (its document, GeoJSON and share image) and `BUILD_UNAVAILABLE` for a build without one, cancel over HTTP, a closed stream cancelling its job, a stream that subscribes only once it runs, make it worse and its mismatches (a base outside its request's masks included), a continuation that changes nothing reporting the stored route; ratio and duration jobs ending `target` with the target in `done` and the document (none for max), a target out of bounds or a ratio for a round trip refused, make it worse with a smaller target shrinking; a stored route differing from the drawn one by a parallel edge sent as a snapshot before `done`, with `GET /jobs/{id}` agreeing; a ratio target for a round trip refused before anything else, for a base route too; `Infinity` and `NaN` in a body refused; a slowest-time job under a soft no-left constraint, its turns and delays in `done` and the document; a strict constraint refusing a base route that turns left, a soft one taking it; a leg a strict constraint cannot drive answered `INFEASIBLE_TURN_CONSTRAINT` with its leg and constraint, one no route covers without it either (two one-way rings) `STOP_UNREACHABLE_WITHOUT_REPEAT` with strict set too; a body cut short refused without a `field`; `strict` alone and both constraints refused on `field: "constraints"`; on a lattice with signals, the document's `time_ratio`, `done`'s, and `arrival` counting the delays, the route's and the baseline's, for a route stored before the documents carried `baseline_delay_s` too; a collect job counting its bridges in every `progress` and in `done`, the document's `items` agreeing (a distance job's too), and the item and target refusals naming their field; `/brands` (its order, an unknown or missing region), a pilgrimage counting its visits in every `progress` and in `done`, the document's `brand` agreeing and a distance route's null, and the brand refusals (missing, misplaced, a ratio, unknown, out of reach) naming their field; an alphabet job sending each better route as a `snapshot` then a `progress` without splices, its letters and score rising, `done` and the document's `alphabet` agreeing (a distance route's null), `/validate` ending with its `alphabet` check, the build's letters worked out once over two document requests; cancelling one, its best route so far stored and validated; the alphabet refusals (a via, a target, a base route) naming their field; a reorder job's stream and document in the order it visits the stops (its `order`, its request's stops and labels, its stops, the directions' arrivals; a plain job's order the identity), make it worse continuing a reordered route in its order with `reorder` off (the stops asked for in their own order a mismatch), `TOO_MANY_STOPS_TO_REORDER` with the build's `max_stops` (7, and 5 on a large build) and `reorder` under the alphabet route refused on its field; a portfolio job's `progress` events with their `portfolio`, its document with the winner's seed, the first in its request with `portfolio`, and `run.portfolio`, the winner's seed alone planning the same route (already stored), a one-search route's request and run without `portfolio`; a portfolio above 4, under the alphabet route or with a base route refused on `field: "portfolio"`, one whose last seed passes 2⁶³ − 1 refused, `PORTFOLIO_TOO_LARGE` beyond the server's workers; a portfolio in the worst order with one `snapped`, its document in that order |
 
 `tests/engine/test_plan.py` covers `plan_route`'s hooks, `tests/graph/test_loader.py` the loader,
 and `tests/unit/test_cli.py` `serve`'s errors, options (the geocoder's included, with the line

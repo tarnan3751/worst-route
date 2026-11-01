@@ -15,27 +15,27 @@
 `POST /jobs` refuses before a job exists: a ratio target for a round trip first, then the
 objective (an unknown one; the alphabet route to continue from a base route; one whose item,
 brand, target, stops or worst order do not fit it: `request.objective_problem`; a brand the build
-does not have), the worst order's stops (more than the region's build takes,
-`request.reorder_problem`: 422 `TOO_MANY_STOPS_TO_REORDER` with `max_stops`) and the budget (at
-most `Limits.budget_max_s`: 120 s, or 60 s on a public server; the target's bounds are the
-body's), then the job limit (on a public server the client's own too,
-`limits.client_of`), then for "make it worse" (`base_route_id`) the base route (its build,
-engine and stops, in the order it visits them, tier and leash, which the request may leave out,
-and `reorder` off; a ratio target for a base round trip too),
-then each stop against the region's bbox (`meta.params.bbox`, else the nodes' extent), then the
-pre-flight (`jobs.prepare`: a pilgrimage's brand within the request's area, snapping and the
-re-snap fallback, in a worker thread), and for a
-base route `plan.check_base` on the pre-flight's stops and masks (`BASE_ROUTE_MISMATCH`). The
-errors are
+does not have; a portfolio under the alphabet route or with a base route), the worst order's
+stops (more than the region's build takes, `request.reorder_problem`: 422
+`TOO_MANY_STOPS_TO_REORDER` with `max_stops`), the budget (at most `Limits.budget_max_s`: 120 s,
+or 60 s on a public server; the target's bounds are the body's) and the portfolio (at most
+`portfolio_max`: `Limits.portfolio_max`, 4 or 2 on a public server, and never more than the
+server's workers: 422 `PORTFOLIO_TOO_LARGE` with `max`), then the job limit (counting a
+portfolio's workers; on a public server the client's own too, `limits.client_of`), then for "make it
+worse" (`base_route_id`) the base route (its build, engine and stops, in the order it visits them,
+tier and leash, which the request may leave out, and `reorder` off; a ratio target for a base round
+trip too), then each stop against the region's bbox (`meta.params.bbox`, else the nodes' extent),
+then the pre-flight (`jobs.prepare`: a pilgrimage's brand within the request's area, snapping and
+the re-snap fallback, in a worker thread), and for a base route `plan.check_base` on the
+pre-flight's stops and masks (`BASE_ROUTE_MISMATCH`). The errors are
 `ApiError`s, answered as `ErrorBody`: 422 `INVALID_REQUEST`, `UNKNOWN_REGION`,
 `STOP_OUTSIDE_REGION`, `NO_NODE_NEAR`, `STOP_UNREACHABLE_WITHOUT_REPEAT`,
 `INFEASIBLE_TURN_CONSTRAINT`, `TOO_MANY_STOPS_TO_REORDER`, `BUDGET_TOO_LARGE`,
-`UNKNOWN_ROUTE`, `BUILD_MISMATCH` (also `/validate` on a route another engine version
-made), `BASE_ROUTE_MISMATCH`; 429 `TOO_MANY_JOBS` (+ `running`, `queued`: the client's own jobs,
-when they are why); 404
-`NOT_FOUND`; 409 `BUILD_UNAVAILABLE` (a stored route whose build is no longer on disk at its
-graph_version), and `DAILY_JOB` for `DELETE /jobs/{id}` on the daily route's job while it runs
-(`daily_api`: the server's own).
+`PORTFOLIO_TOO_LARGE`, `UNKNOWN_ROUTE`, `BUILD_MISMATCH` (also `/validate` on a route another engine
+version made), `BASE_ROUTE_MISMATCH`; 429 `TOO_MANY_JOBS` (+ `running`, `queued`: the client's own
+jobs, when they are why); 404 `NOT_FOUND`; 409 `BUILD_UNAVAILABLE` (a stored route whose build is no
+longer on disk at its graph_version), and `DAILY_JOB` for `DELETE /jobs/{id}` on the daily route's
+job while it runs (`daily_api`: the server's own).
 
 A route's document carries its `order` (each stop's position among those asked for; a route
 stored before the worst order has the identity), and its request's stops are in the order the
@@ -142,6 +142,12 @@ def api_of(request: Request) -> "Api":
     """The application's state."""
     api: Api = request.app.state.api
     return api
+
+
+def portfolio_max(api: "Api") -> int:
+    """The most seeds a job may run here: the server's limit (`Limits.portfolio_max`), and
+    never more than its workers."""
+    return min(api.limits.portfolio_max, api.jobs.settings.max_jobs)
 
 
 def region_of(api: "Api", region: str) -> Loaded:
@@ -337,6 +343,12 @@ async def create_job(body: RouteRequestIn, request: Request) -> JobCreated:
     if body.brand is not None and (unknown := brand_problem(loaded.data, body.brand)) is not None:
         message = f"{unknown}; GET /brands?region={body.region} lists the brands"
         raise ApiError(422, "INVALID_REQUEST", message, field="brand")
+    if body.portfolio > 1 and body.objective == "alphabet":
+        message = "the alphabet route runs one search: no portfolio"
+        raise ApiError(422, "INVALID_REQUEST", message, field="portfolio")
+    if body.portfolio > 1 and body.base_route_id is not None:
+        message = "a continuation runs one search: no portfolio"
+        raise ApiError(422, "INVALID_REQUEST", message, field="portfolio")
     reordering = body.reorder and body.base_route_id is None  # a continuation keeps its order
     if reordering and (too_many := reorder_problem(count, loaded.data)) is not None:
         cap = max_reorder_stops(loaded.data)
@@ -345,8 +357,11 @@ async def create_job(body: RouteRequestIn, request: Request) -> JobCreated:
     if body.budget_s > budget_max_s:
         message = f"a budget of {body.budget_s:g} s is over the {budget_max_s:g} s allowed"
         raise ApiError(422, "BUDGET_TOO_LARGE", message, max_s=budget_max_s)
+    if body.portfolio > (most := portfolio_max(api)):
+        message = f"a portfolio of {body.portfolio} seeds is over the {most} this server runs"
+        raise ApiError(422, "PORTFOLIO_TOO_LARGE", message, max=most)
     client = client_of(request.scope, api.settings.trust_proxy)
-    refused = api.jobs.refusal(client)
+    refused = api.jobs.refusal(client, body.portfolio)
     if refused is not None:
         raise _too_many(refused)
     seed = body.seed if body.seed is not None else secrets.randbelow(2**31)
@@ -381,7 +396,9 @@ async def create_job(body: RouteRequestIn, request: Request) -> JobCreated:
         arrays = RouteArrays(base.nodes, base.edges, base.stop_idx, base.metrics)
     asked = planned.model_dump(mode="json")
     try:
-        job = api.jobs.submit(loaded, prepared, input=asked, base=arrays, client=client)
+        job = api.jobs.submit(
+            loaded, prepared, input=asked, base=arrays, client=client, portfolio=body.portfolio
+        )
     except TooManyJobs as full:
         raise _too_many(full) from None
     return JobCreated(job_id=job.id, events_url=f"/jobs/{job.id}/events", seed=seed)

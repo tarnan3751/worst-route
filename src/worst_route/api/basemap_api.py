@@ -36,7 +36,7 @@ from starlette.responses import FileResponse, Response
 from starlette.staticfiles import StaticFiles
 from starlette.types import Scope
 
-from worst_route.api.routes_api import api_of
+from worst_route.api.routes_api import api_of, portfolio_max
 from worst_route.api.schemas import BasemapOut, ConfigOut, LimitsOut
 from worst_route.config import OPENFREEMAP_STYLE
 
@@ -91,7 +91,11 @@ def client_config(request: Request) -> ConfigOut:
     return ConfigOut(
         public=api.settings.public,
         basemap=basemap_of(api),
-        limits=LimitsOut(budget_max_s=limits.budget_max_s, leash_max_km=limits.leash_max_km),
+        limits=LimitsOut(
+            budget_max_s=limits.budget_max_s,
+            leash_max_km=limits.leash_max_km,
+            portfolio_max=portfolio_max(api),
+        ),
     )
 
 

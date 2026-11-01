@@ -7,14 +7,17 @@ objects, the target as
 `{kind: "max"}`, `{kind: "ratio", value}` or `{kind: "duration", seconds}` (the engine's
 `Target`, whose bounds it checks), the turn constraints as the engine's
 `{no_left, no_right, strict}` and `reorder` (the stops between the ends in the worst order), plus
-`region`, `vehicle` and `departure` (kept with the route for the presentation) and
-`base_route_id` ("make it worse": the stops, in the order that route visits them, tier and leash
-then come from that route, so `stops` may be left out, and `reorder` is off).
-`engine_request(seed)` is the engine's request. `SnapIn` is the body of `POST /snap`.
+`region`, `vehicle` and `departure` (kept with the route for the presentation), `base_route_id`
+("make it worse": the stops, in the order that route visits them, tier and leash then come from
+that route, so `stops` may be left out, and `reorder` is off) and `portfolio` (that many searches
+at once, seeds `seed` and up; 1, the default, is left out of the request as stored).
+`engine_request(seed)` is the engine's request, which has no portfolio. `SnapIn` is the body of
+`POST /snap`.
 
 The responses: `Health`, `RegionOut`, `SnapOut`, `JobCreated`, `JobStatus`, `RouteDocument`
 (its metrics with `TargetMetrics` for a ratio or duration target, `ItemCounts`, the route's
-collectibles, `BrandVisits` for a pilgrimage and `AlphabetLetters` for an alphabet route),
+collectibles, `BrandVisits` for a pilgrimage and `AlphabetLetters` for an alphabet route, and
+its run with `PortfolioRun` for a portfolio's),
 `ValidationOut`, `BrandsOut` (`GET /brands`, with its `BrandOut`s), and `ErrorBody` (`{code,
 message}` and the error's own fields) for every error. The document's metrics count the route's
 turns (`Turns`), its delays and its collectibles, and with the presentation's numbers (fuel,
@@ -48,6 +51,7 @@ from worst_route.config import (
     DEFAULT_BUDGET_S,
     LEASH_MAX_KM,
     MAX_DRAW_EDGES,
+    MAX_PORTFOLIO,
 )
 from worst_route.engine.constraints import NO_CONSTRAINTS, Constraints
 from worst_route.engine.objectives.collect import CollectItem
@@ -126,11 +130,14 @@ class RouteRequestIn(_In):
     vehicle: Vehicle | None = None
     departure: datetime | None = None
     base_route_id: str | None = None
+    portfolio: int = Field(default=1, ge=1, le=MAX_PORTFOLIO, exclude_if=lambda k: k == 1)
 
     @model_validator(mode="after")
     def _stops_or_base(self) -> "RouteRequestIn":
         if self.stops is None and self.base_route_id is None:
             raise ValueError("stops are needed unless base_route_id names the route to continue")
+        if self.seed is not None and self.seed + self.portfolio - 1 > 2**63 - 1:
+            raise ValueError("a portfolio's seeds, seed and up, must stay below 2**63")
         return self
 
     def engine_request(self, seed: int) -> RouteRequest:
@@ -446,12 +453,23 @@ class DocumentMetrics(_Out):
     network_fraction: float
 
 
+class PortfolioRun(_Out):
+    """A portfolio route's searches: how many, their seeds, and the index of the one whose route
+    it is (`seeds[winner]` is the document's `seed`)."""
+
+    k: int
+    seeds: list[int]
+    winner: int
+
+
 class Run(_Out):
     attempts: int
     accepted: int
     stopped_because: StopReason
     elapsed_s: float
     backend: str
+    # a portfolio's; absent for one search
+    portfolio: PortfolioRun | None = Field(default=None, exclude_if=lambda p: p is None)
 
 
 class Validation(_Out):
@@ -591,10 +609,12 @@ class BasemapOut(_Out):
 
 
 class LimitsOut(_Out):
-    """The limits a request meets on this server."""
+    """The limits a request meets on this server: `portfolio_max` is the most seeds a job runs
+    (`PORTFOLIO_TOO_LARGE` above it)."""
 
     budget_max_s: float
     leash_max_km: float
+    portfolio_max: int
 
 
 class ConfigOut(_Out):

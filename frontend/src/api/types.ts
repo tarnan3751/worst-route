@@ -57,9 +57,10 @@ export interface Constraints {
   hard?: boolean;
 }
 
-/** `POST /jobs`; a route document's `request` has every field. `reorder` visits the stops between
- * the first and the last in the worst order (a route document's request then has its stops in the
- * order the route visits them). */
+/** `POST /jobs`; a route document's `request` has every field but `portfolio` at 1. `reorder` visits
+ * the stops between the first and the last in the worst order (a route document's request then has
+ * its stops in the order the route visits them); `portfolio` runs that many seeds at once, from
+ * `seed`, and keeps the best. */
 export interface RouteRequest {
   region: string;
   stops?: StopIn[] | null;
@@ -77,6 +78,7 @@ export interface RouteRequest {
   vehicle?: Vehicle | null;
   departure?: string | null;
   base_route_id?: string | null;
+  portfolio?: number;
 }
 
 // --- Responses --------------------------------------------------------------------------
@@ -260,12 +262,21 @@ export interface DirectionStep {
   kind: StepKind;
 }
 
+/** A portfolio route's searches: how many, their seeds, and the index of the one whose route it
+ * is (`seeds[winner]` is the document's `seed`). */
+export interface PortfolioRun {
+  k: number;
+  seeds: number[];
+  winner: number;
+}
+
 export interface Run {
   attempts: number;
   accepted: number;
   stopped_because: StopReason;
   elapsed_s: number;
   backend: string;
+  portfolio?: PortfolioRun; // a portfolio's only
 }
 
 export interface Validation {
@@ -350,6 +361,15 @@ export interface Splice {
   node_index: number[];
 }
 
+/** How a portfolio's searches stand: how many, the index of the leader (whose seed is the job's
+ * plus it) and each one's best ratio so far (null with none, or after a failure). */
+export interface Portfolio {
+  k: number;
+  leader: number;
+  best_ratios: (number | null)[];
+}
+
+/** A portfolio's numbers are its leader's, and it says how its searches stand. */
 export interface Progress {
   iteration: number;
   elapsed_s: number;
@@ -360,6 +380,7 @@ export interface Progress {
    * the streams recorded before the API sent them. */
   best_score?: number;
   best_metrics?: Metrics;
+  portfolio?: Portfolio;
 }
 
 /** The whole route; `node_index[k]` is the index in `geometry` of route node k. */
@@ -428,10 +449,12 @@ export interface BasemapConfig {
   style: string | null;
 }
 
-/** The limits a request meets on this server (`BUDGET_TOO_LARGE` above `budget_max_s`). */
+/** The limits a request meets on this server (`BUDGET_TOO_LARGE` above `budget_max_s`,
+ * `PORTFOLIO_TOO_LARGE` above `portfolio_max`, which servers older than portfolios leave out). */
 export interface ServerLimits {
   budget_max_s: number;
   leash_max_km: number;
+  portfolio_max?: number;
 }
 
 /** `GET /config`: whether the server is public, its basemap and its limits. */

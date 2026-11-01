@@ -1084,3 +1084,62 @@ async def test_too_many_stops_to_reorder_names_the_build_s_cap(
         r = await client.post("/jobs", json=alphabet)
         assert r.status_code == 422 and r.json()["code"] == "INVALID_REQUEST"
         assert r.json()["field"] == "reorder"
+
+
+async def test_a_portfolio_job_stores_the_best_of_its_seeds_which_the_winner_s_reproduces(
+    data: Path,
+) -> None:
+    async with serving(data, leader_hold_s=0.0) as (client, _):
+        job_id, events = await finished(client, job_body(portfolio=3))
+        progress = [e["data"] for e in events if e["event"] == "progress"]
+        assert progress and all(p["portfolio"]["k"] == 3 for p in progress)
+        assert (await client.get(f"/jobs/{job_id}")).json()["seed"] == 3
+        route_id = events[-1]["data"]["route_id"]
+        doc = (await client.get(f"/routes/{route_id}")).json()
+        winner = doc["run"]["portfolio"]["winner"]
+        assert doc["run"]["portfolio"] == {"k": 3, "seeds": [3, 4, 5], "winner": winner}
+        assert doc["seed"] == 3 + winner and doc["request"]["seed"] == 3
+        assert doc["request"]["portfolio"] == 3
+        assert (await client.post(f"/routes/{route_id}/validate")).json()["ok"] is True
+        # the winner's seed alone plans the same route, already stored
+        _, alone = await finished(client, job_body(seed=doc["seed"]))
+        assert alone[-1]["data"]["route_id"] == route_id
+        # one search: neither its request nor its run says portfolio
+        _, plain = await finished(client, job_body(seed=99))
+        assert all("portfolio" not in e["data"] for e in plain if e["event"] == "progress")
+        doc = (await client.get(f"/routes/{plain[-1]['data']['route_id']}")).json()
+        assert "portfolio" not in doc["request"] and "portfolio" not in doc["run"]
+
+
+async def test_a_portfolio_is_refused_where_it_cannot_run(data: Path) -> None:
+    async with serving(data, max_jobs=3) as (client, _):
+        _, events = await finished(client, job_body(max_iterations=20))
+        base_id = events[-1]["data"]["route_id"]
+        for body in [
+            job_body(portfolio=5),  # the schema's most, 4
+            job_body(stops=[stop(0), stop(99)], objective="alphabet", portfolio=2),
+            {"region": "portland", "base_route_id": base_id, "portfolio": 2},
+        ]:
+            r = await client.post("/jobs", json=body)
+            assert r.status_code == 422, body
+            assert (r.json()["code"], r.json()["field"]) == ("INVALID_REQUEST", "portfolio")
+        r = await client.post("/jobs", json=job_body(seed=2**63 - 1, portfolio=2))
+        assert r.status_code == 422 and r.json()["code"] == "INVALID_REQUEST"
+        r = await client.post("/jobs", json=job_body(portfolio=4))  # three workers here
+        assert r.status_code == 422 and r.json() == {
+            "code": "PORTFOLIO_TOO_LARGE",
+            "message": "a portfolio of 4 seeds is over the 3 this server runs",
+            "max": 3,
+        }
+        assert (await client.post("/jobs", json=job_body(portfolio=3))).status_code == 202
+
+
+async def test_a_portfolio_in_the_worst_order_follows_the_order_chosen(data: Path) -> None:
+    async with serving(data) as (client, _):
+        _, events = await finished(client, reordering(portfolio=2))
+        assert [e["event"] for e in events].count("snapped") == 1
+        assert events[0]["data"]["order"] == [0, 1, 3, 2, 4]
+        doc = (await client.get(f"/routes/{events[-1]['data']['route_id']}")).json()
+        assert doc["order"] == [0, 1, 3, 2, 4] and doc["request"]["reorder"] is True
+        assert [s["label"] for s in doc["request"]["stops"]] == ["home", "A", "C", "B", "work"]
+        assert (await client.post(f"/routes/{doc['route_id']}/validate")).json()["ok"] is True

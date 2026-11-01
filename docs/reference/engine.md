@@ -1088,6 +1088,12 @@ report, backend, goal, order)` runs a request end to end. It searches with `back
 `PlanResult.request` is the request as planned: with `reorder`, its stops in the order the route
 visits them, which is what the route file records and `validate` re-derives the stops from.
 
+Only the loop depends on the seed: the masks, the worst order (`choose_order` draws nothing), the
+resolved stops, the baseline and the seed route (but a round trip's without legs, whose waypoint
+is drawn from the rng) are the same for every seed of a request. The API's portfolios rest on it
+(`docs/reference/api.md`, **Portfolios**): the K seeds of one request, each planned by
+`plan_route` as it is, share their order, stops and baseline, and differ only in their loops.
+
 An alphabet route cannot be continued: `base` with `objective: "alphabet"` is a `ValueError`
 ("the alphabet route cannot be continued"), which the CLI and the API refuse first.
 

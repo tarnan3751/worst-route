@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from worst_route.config import API_MAX_JOBS, MAX_PORTFOLIO
+
 from .hosting import hosted
 
 pytestmark = pytest.mark.anyio
@@ -41,7 +43,11 @@ async def test_config_names_the_basemap_and_the_limits(data: Path) -> None:
                 "sprite": None,
                 "style": None,
             },
-            "limits": {"budget_max_s": 120.0, "leash_max_km": 150.0},
+            "limits": {
+                "budget_max_s": 120.0,
+                "leash_max_km": 150.0,
+                "portfolio_max": min(MAX_PORTFOLIO, API_MAX_JOBS),
+            },
         }
     async with hosted(data, public=True, basemap="pmtiles") as (http, _):
         config = (await http.get("/config")).json()
@@ -57,6 +63,15 @@ async def test_config_names_the_basemap_and_the_limits(data: Path) -> None:
         basemap = (await http.get("/config")).json()["basemap"]
         assert basemap["glyphs"] == "/basemap/fonts/{fontstack}/{range}.pbf"
         assert basemap["sprite"] == "/basemap/sprites/grayscale"
+
+
+async def test_config_names_the_most_seeds_a_job_runs(data: Path) -> None:
+    async with hosted(data, jobs={"max_jobs": 8}) as (http, _):
+        assert (await http.get("/config")).json()["limits"]["portfolio_max"] == 4
+    async with hosted(data, public=True, jobs={"max_jobs": 8}) as (http, _):
+        assert (await http.get("/config")).json()["limits"]["portfolio_max"] == 2
+    async with hosted(data, jobs={"max_jobs": 3}) as (http, _):  # never more than its workers
+        assert (await http.get("/config")).json()["limits"]["portfolio_max"] == 3
 
 
 async def test_openfreemap_names_its_style(data: Path) -> None:

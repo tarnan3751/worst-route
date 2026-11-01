@@ -55,7 +55,8 @@ imports) and print the one used, which changes only the speed; `csr` when numba 
 is one line and exit 1.
 
 `serve` runs the API (`docs/reference/api.md`) with uvicorn, in one process (jobs live in its
-memory; each runs in a worker process of its own, `--workers` at once): it loads each region's
+memory; each search of a job, one or one a seed for a portfolio, runs in a worker process of its
+own, `--workers` at once): it loads each region's
 build first (`--region` repeated serves several, the first the default; `--build-id` names the
 first one's, the others serve their latest), so a missing one is one line and exit 1, and keeps
 its routes in `--store`
@@ -1485,7 +1486,10 @@ def serve(
     host: Annotated[str, typer.Option(help="Address to bind.")] = "127.0.0.1",
     port: Annotated[int, typer.Option(help="Port to bind (0: a free one).")] = 8000,
     workers: Annotated[
-        int, typer.Option(min=1, help="Jobs running at once, each in a worker process.")
+        int,
+        typer.Option(
+            min=1, help="Searches running at once, each in a worker process (a job's, or a seed's)."
+        ),
     ] = API_MAX_JOBS,
     backend: BackendOption = DEFAULT_BACKEND,
     store: Annotated[

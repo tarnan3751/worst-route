@@ -250,6 +250,7 @@ async def test_what_a_drawing_cannot_ask_is_refused(drawn: Path) -> None:
             ({"target": {"kind": "ratio", "value": 5}}, "target"),
             ({"reorder": True}, "reorder"),
             ({"base_route_id": "abcdefabcdef"}, "base_route_id"),
+            ({"portfolio": 2}, "portfolio"),
             ({"item": "bridge"}, "item"),
         ]:
             body = await refused(client, request(0, 24, **fields), [])

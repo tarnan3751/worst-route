@@ -7,12 +7,12 @@
 Both take the request drawn on as `POST /jobs` takes it (its region among its fields) and the path
 drawn, its edges in order from the start, and answer from the path alone: nothing of a drawing is
 kept between calls. A drawing is the longest route with no target (`draw.drawing_problem`: another
-objective or target is `INVALID_REQUEST` on its field), drawn from its stops (a `base_route_id` is
-refused too). The request is refused as `POST /jobs` refuses it (its objective's misfits, each stop
-outside the region's bbox, then the pre-flight's snapping and re-snap fallback,
-`routes_api.preflight`), and the path then by `draw.check_drawing`: an illegal one is 422
-`ILLEGAL_PATH` with `refusal`, the check's code, and `index`, its first illegal edge (`path[:index]`
-is legal).
+objective or target is `INVALID_REQUEST` on its field), drawn from its stops, one route (a
+`base_route_id` or a portfolio is refused too). The request is refused as `POST /jobs` refuses it
+(its objective's misfits, each stop outside the region's bbox, then the pre-flight's snapping and
+re-snap fallback, `routes_api.preflight`), and the path then by `draw.check_drawing`: an illegal one
+is 422 `ILLEGAL_PATH` with `refusal`, the check's code, and `index`, its first illegal edge
+(`path[:index]` is legal).
 
 What every step on one request needs (its rules: the resolved stops, the active nodes and banned
 edges, the constraints; the snapped stops; the baseline; the radius bound) is kept for the last
@@ -251,6 +251,9 @@ def _drawn_on(
     if asked.base_route_id is not None:
         message = "a drawing starts from its stops, not from a route"
         raise ApiError(422, "INVALID_REQUEST", message, field="base_route_id")
+    if asked.portfolio > 1:
+        message = "a drawing is drawn by hand: no portfolio"
+        raise ApiError(422, "INVALID_REQUEST", message, field="portfolio")
     stops = asked.stops or []
     count = len(stops)
     problem = objective_problem(asked.objective, asked.item, asked.target.kind, asked.brand, count)

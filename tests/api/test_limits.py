@@ -166,6 +166,33 @@ async def test_a_public_server_shares_its_jobs_between_clients(
         assert statuses == [202] * 4 + [429]
 
 
+async def test_a_public_portfolio_runs_two_seeds_each_a_worker_of_the_server_s(
+    data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    slow_splices(monkeypatch, 0.05)
+    settings: dict[str, Any] = {"public": True, "trust_proxy": True, "jobs": {"max_jobs": 3}}
+    async with hosted(data, client=("127.0.0.1", 1), **settings) as (http, app):
+        one, two = {"X-Forwarded-For": "198.51.100.1"}, {"X-Forwarded-For": "198.51.100.2"}
+        r = await http.post("/jobs", json={**running_body(), "portfolio": 3}, headers=one)
+        assert r.status_code == 422 and r.json() == {
+            "code": "PORTFOLIO_TOO_LARGE",
+            "message": "a portfolio of 3 seeds is over the 2 this server runs",
+            "max": 2,
+        }
+        ids = []
+        for body, headers in [
+            ({**running_body(3), "portfolio": 2}, one),  # its two workers of the three
+            ({**running_body(5), "portfolio": 2}, two),  # waits: one worker is free, not two
+            (running_body(7), one),  # waits: its client's job runs
+        ]:
+            r = await http.post("/jobs", json=body, headers=headers)
+            assert r.status_code == 202
+            ids.append(r.json()["job_id"])
+        jobs = app.state.api.jobs
+        assert [jobs.jobs[k].status for k in ids] == ["running", "queued", "queued"]
+        assert jobs.client_jobs("198.51.100.1") == (1, 1) and jobs._free() == 1
+
+
 async def test_a_public_server_counts_each_client_s_searches(data: Path, tmp_path: Path) -> None:
     home = Candidate("Home", *at_node(GRID, 0), "building/house")
 

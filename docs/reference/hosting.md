@@ -222,8 +222,10 @@ it but no proxy, a visitor could name any address. The API's stream already send
   locally), a request's own leash at most 150 km as everywhere (the automatic leash follows the
   trip, a fifth of it beyond 750 km, and the budget bounds the job's loop; a worst-order job's
   search runs before it for up to 60 s more, so a job is killed at most 90 s after its start, or
-  240 s for a worst-order job at the very worst), and for each client one job
-  running and three waiting (`TOO_MANY_JOBS` with its counts), ten place searches, sixty picks
+  240 s for a worst-order job at the very worst), a portfolio of at most two seeds
+  (`PORTFOLIO_TOO_LARGE`), each seed one of the server's workers (`--workers`), and for each client
+  one job running, whatever its seeds, and three waiting (`TOO_MANY_JOBS` with its counts), ten
+  place searches, sixty picks
   of a build (`POST /regions/pick`), 240 steps of a drawing (`POST /draw`, `POST /draw/finish`)
   and ten finished drawings a minute (`RATE_LIMITED` with `retry_after_s`). They are per process
   and per address; there is no authentication.
@@ -253,7 +255,8 @@ Measured so far (2026-10-31), on the dev machine (Apple M5, 10 cores, 24 GB):
   volume as with one kept.
 
 So a server needs about 0.5 GB for the API, 0.2–0.4 GB a running worker (`--workers`, by default
-the cores less two: in a container that is the host's or the VM's cores), and room in the page
+the cores less two: in a container that is the host's or the VM's cores; a portfolio's job runs
+one worker a seed), and room in the page
 cache for the build (and for the basemap file, which is read a range at a time). The plan's
 targets for the national step stand as estimates (`docs/PLAN.md` §7 M5.4): an 8–16 GB VPS for a
 T3 national build, 32 GB for all roads. Both are shrinking: the compact build format (format 4,

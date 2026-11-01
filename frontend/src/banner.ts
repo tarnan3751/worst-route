@@ -2,8 +2,10 @@
 // sentence (`sentence`), its code in the banner's tooltip, over the map, until closed or the next
 // action; never modal. A strict turn constraint that finds no route (INFEASIBLE_TURN_CONSTRAINT)
 // offers to try again without strict, and a refusal hard mode is why without hard mode: a leg the
-// seed cannot build under it (STOP_UNREACHABLE_WITHOUT_REPEAT, "under hard mode"), or a base route
-// that comes back to a road (BASE_ROUTE_MISMATCH, "which hard mode refuses").
+// seed cannot build under it (STOP_UNREACHABLE_WITHOUT_REPEAT, its message ending "Try without
+// it."), or a base route that comes back to a road (BASE_ROUTE_MISMATCH, "which hard mode
+// refuses"). The API's errors carry no field that says hard mode is why, so the messages' stable
+// endings do.
 import type { ErrorBody } from "./api/types";
 import type { Store } from "./state";
 import { el } from "./util/dom";
@@ -12,7 +14,7 @@ import { el } from "./util/dom";
 export function retryOf(error: ErrorBody): "strict" | "hard" | null {
   if (error.code === "INFEASIBLE_TURN_CONSTRAINT") return "strict";
   const { code, message } = error;
-  if (code === "STOP_UNREACHABLE_WITHOUT_REPEAT" && message.includes("under hard mode")) {
+  if (code === "STOP_UNREACHABLE_WITHOUT_REPEAT" && message.endsWith("Try without it.")) {
     return "hard";
   }
   return code === "BASE_ROUTE_MISMATCH" && message.includes("hard mode") ? "hard" : null;

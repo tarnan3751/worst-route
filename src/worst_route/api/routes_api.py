@@ -32,7 +32,8 @@ then the pre-flight (`jobs.prepare`: a pilgrimage's brand within the request's a
 the re-snap fallback, a certified route's leash and area, in a worker thread), and for a base
 route `plan.check_base` on the pre-flight's stops and masks (`BASE_ROUTE_MISMATCH`). The errors are
 `ApiError`s, answered as `ErrorBody`: 422 `INVALID_REQUEST`, `UNKNOWN_REGION`,
-`STOP_OUTSIDE_REGION`, `NO_NODE_NEAR`, `STOP_UNREACHABLE_WITHOUT_REPEAT`,
+`STOP_OUTSIDE_REGION` (+ the stop's `lat` and `lon`, kept out of its sentence, which says where
+the server's maps are: `outside_sentence`), `NO_NODE_NEAR`, `STOP_UNREACHABLE_WITHOUT_REPEAT`,
 `INFEASIBLE_TURN_CONSTRAINT`, `AREA_TOO_LARGE_TO_CERTIFY` (+ `nodes`, `edges`, `max_nodes`,
 `max_edges`, `leash_m`, `field: "leash"`), `TOO_MANY_STOPS_TO_REORDER`, `BUDGET_TOO_LARGE`,
 `PORTFOLIO_TOO_LARGE`, `UNKNOWN_ROUTE`, `BUILD_MISMATCH` (also `/validate` on a route another engine
@@ -58,7 +59,7 @@ and re-snaps, is the authority.
 """
 
 import secrets
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from datetime import timedelta
 from itertools import pairwise
 from typing import TYPE_CHECKING, Any
@@ -184,13 +185,25 @@ def display_of(region: str) -> str:
     return region if known is None else known.display
 
 
-def check_inside(loaded: Loaded, lat: float, lon: float, **fields: Any) -> None:
-    """STOP_OUTSIDE_REGION, with `fields`, unless the region's bbox holds (lat, lon)."""
+def outside_sentence(served: Iterable[str]) -> str:
+    """STOP_OUTSIDE_REGION's sentence, for the person who placed the stop, by the regions served:
+    the lower 48 when one of them holds every contiguous state (`us`'s), else their names
+    ("Oregon or Portland"). The stop's coordinates are the error's fields, not the sentence's."""
+    contiguous = set(REGIONS["us"].states)
+    known = [REGIONS[region] for region in served if region in REGIONS]
+    if any(contiguous <= set(region.states) for region in known):
+        where = "the lower 48"
+    else:
+        names = list(dict.fromkeys(display_of(region) for region in served))
+        where = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} or {names[-1]}"
+    return f"That stop is outside the map. Try somewhere in {where}."
+
+
+def check_inside(api: "Api", loaded: Loaded, lat: float, lon: float, **fields: Any) -> None:
+    """STOP_OUTSIDE_REGION, with (lat, lon) and `fields`, unless the region's bbox holds it."""
     if not holds(loaded, lat, lon):
-        west, south, east, north = bbox_of(loaded)
-        region = loaded.data.meta["region"]
-        message = f"({lat}, {lon}) is outside {region} ({west}, {south}, {east}, {north})"
-        raise ApiError(422, "STOP_OUTSIDE_REGION", message, **fields)
+        message = outside_sentence(api.builds)
+        raise ApiError(422, "STOP_OUTSIDE_REGION", message, lat=lat, lon=lon, **fields)
 
 
 def _job(api: "Api", job_id: str) -> Job:
@@ -314,8 +327,9 @@ def regions(request: Request) -> list[RegionOut]:
 @router.post("/snap")
 def snap(body: SnapIn, request: Request) -> SnapOut:
     """Where a stop at (lat, lon) would go, in its role."""
-    loaded = region_of(api_of(request), body.region)
-    check_inside(loaded, body.lat, body.lon)
+    api = api_of(request)
+    loaded = region_of(api, body.region)
+    check_inside(api, loaded, body.lat, body.lon)
     data, spatial = loaded.data, loaded.spatial
     tier = 4 if body.tier == "auto" else int(body.tier[1])
     xy = np.array([spatial.project(body.lat, body.lon)])
@@ -363,10 +377,10 @@ async def create_job(body: RouteRequestIn, request: Request) -> JobCreated:
         raise ApiError(422, "TOO_MANY_STOPS_TO_REORDER", too_many, max_stops=cap)
     budget_max_s = api.limits.budget_max_s
     if body.budget_s > budget_max_s:
-        message = f"a budget of {body.budget_s:g} s is over the {budget_max_s:g} s allowed"
+        message = f"The time budget is at most {budget_max_s:g} s."
         raise ApiError(422, "BUDGET_TOO_LARGE", message, max_s=budget_max_s)
     if body.portfolio > (most := portfolio_max(api)):
-        message = f"a portfolio of {body.portfolio} seeds is over the {most} this server runs"
+        message = f"At most {most} runs at once on this server."
         raise ApiError(422, "PORTFOLIO_TOO_LARGE", message, max=most)
     client = client_of(request.scope, api.settings.trust_proxy)
     refused = api.jobs.refusal(client, body.portfolio)
@@ -383,7 +397,7 @@ async def create_job(body: RouteRequestIn, request: Request) -> JobCreated:
         planned = _continuing(loaded, body, base, seed)
     stops = planned.stops or []
     for k, stop in enumerate(stops):
-        check_inside(loaded, stop.lat, stop.lon, stop_index=k)
+        check_inside(api, loaded, stop.lat, stop.lon, stop_index=k)
     try:
         engine_request = planned.engine_request(seed)
     except ValidationError as error:
@@ -429,11 +443,8 @@ def _check_certified(body: RouteRequestIn) -> None:
 def _too_many(refused: TooManyJobs) -> ApiError:
     """TOO_MANY_JOBS: the server's, or the client's own, with its counts."""
     if refused.running is None:
-        return ApiError(429, "TOO_MANY_JOBS", "every worker is busy and the queue is full")
-    message = (
-        f"your jobs fill your share: {refused.running} running and {refused.queued} waiting; "
-        "wait for one to end"
-    )
+        return ApiError(429, "TOO_MANY_JOBS", "The server is busy. Try again in a minute.")
+    message = "You already have a route planning. Wait for it to finish."
     return ApiError(429, "TOO_MANY_JOBS", message, running=refused.running, queued=refused.queued)
 
 
@@ -471,7 +482,7 @@ def _continuing(
 def _check_round_trip(body: RouteRequestIn, stops: list[tuple[float, float]]) -> None:
     """Refuse a ratio target for a round trip, whose baseline is 0 m."""
     if body.target.kind == "ratio" and is_round_trip(stops):
-        message = "a round trip has no ratio target: its baseline is 0 m"
+        message = "A round trip has no ratio to aim for. Set the goal to a drive time."
         raise ApiError(422, "INVALID_REQUEST", message, field="target")
 
 

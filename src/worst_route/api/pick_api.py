@@ -14,8 +14,11 @@ states holds them but its bbox misses a stop, the reason says so ("all stops in 
 Oregon's build"). A stop in no state, or a server without any places index, leaves no region of
 whole states holding the stops. Failing those, the region with the most states among those whose
 bbox holds every stop (the national one), else 422 `STOP_OUTSIDE_REGION` with the first stop
-outside the region whose bbox holds the most stops (`stop_index`). A tie goes to the region served
-first. `reason` says why in a few words, for the UI: "all stops in Oregon", "stops in Oregon and
+outside the region whose bbox holds the most stops (`stop_index`, and its `lat` and `lon`): in the
+sentence `POST /jobs` gives (`routes_api.outside_sentence`) when no served region holds the stop,
+else "These stops are on different maps. Keep them on one map." A tie goes to the region served
+first.
+`reason` says why in a few words, for the UI: "all stops in Oregon", "stops in Oregon and
 Illinois", "stops in 3 states", "all stops within Portland", "a stop in no state". On a public
 server a client picks at most `PUBLIC_PICK_PER_MINUTE` times in any minute (429 `RATE_LIMITED`, +
 `retry_after_s`, as for the place search). `POST /jobs` still names its region: the client sends
@@ -29,7 +32,14 @@ from fastapi import APIRouter, Request
 from numpy.typing import NDArray
 
 from worst_route.api.limits import client_of
-from worst_route.api.routes_api import ApiError, api_of, bbox_of, display_of, holds
+from worst_route.api.routes_api import (
+    ApiError,
+    api_of,
+    bbox_of,
+    display_of,
+    holds,
+    outside_sentence,
+)
 from worst_route.api.schemas import RegionPickIn, RegionPickOut
 from worst_route.config import REGIONS
 from worst_route.presentation.places import State
@@ -134,17 +144,14 @@ def _in_states(states: list[State]) -> str:
 
 
 def _outside(api: "Api", stops: list[tuple[float, float]]) -> ApiError:
-    """STOP_OUTSIDE_REGION for the first stop outside the region whose bbox holds the most."""
+    """STOP_OUTSIDE_REGION for the first stop outside the region whose bbox holds the most: outside
+    every map, or on another map than the others."""
     held = {r: [holds(b, lat, lon) for lat, lon in stops] for r, b in api.builds.items()}
     most = max(held, key=lambda r: sum(held[r]))
     k = held[most].index(False)
     lat, lon = stops[k]
-    if not any(inside[k] for inside in held.values()):
-        served = ", ".join(api.builds)
-        message = f"stop {k} ({lat}, {lon}) is outside every region served here ({served})"
+    if any(inside[k] for inside in held.values()):
+        message = "These stops are on different maps. Keep them on one map."
     else:
-        message = (
-            f"no region served here holds every stop: stop {k} ({lat}, {lon}) is outside "
-            f"{most}, which holds the most of them"
-        )
-    return ApiError(422, "STOP_OUTSIDE_REGION", message, stop_index=k)
+        message = outside_sentence(api.builds)
+    return ApiError(422, "STOP_OUTSIDE_REGION", message, stop_index=k, lat=lat, lon=lon)

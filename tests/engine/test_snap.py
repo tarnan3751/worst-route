@@ -96,11 +96,11 @@ def test_resnap_takes_the_next_candidate_and_says_why() -> None:
 
 
 def test_stop_unreachable_names_the_leg() -> None:
-    error = StopUnreachable((1, 2), "after moving stop 1 and stop 2 up to 10 times each")
+    error = StopUnreachable((1, 2), "after moving stop 2 and stop 3 up to 10 times each")
     assert error.leg == (1, 2) and error.stop_index == 2
-    assert str(error) == (
-        "no route from stop 1 to stop 2 without repeating a road, "
-        "after moving stop 1 and stop 2 up to 10 times each"
+    assert str(error) == (  # stops from 1, as the app's markers are
+        "No route from stop 2 to stop 3 without repeating a road, "
+        "after moving stop 2 and stop 3 up to 10 times each."
     )
     with pytest.raises(StopUnreachable):
         raise error

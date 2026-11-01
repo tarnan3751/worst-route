@@ -20,9 +20,9 @@ node, edge or global terms (`TurnConstraint`) about two turn classes (`engine/tu
   every search for the route refuses (`graph/backend.py`): the seed's legs, the round-trip loop
   and every detour strategy; `feasible_pair` and `feasible_window` (the turns at the window's
   two boundaries included) refuse them too, as the safety net. A leg that cannot be built, but
-  can without the constraint, is `InfeasibleTurnConstraint` (`unreachable`), its message ending
-  with `note` ("under the strict no-left constraint"; the seed asks, `seed_route`); `strict`
-  without a constraint is refused. On a street grid this is
+  can without the constraint, is `InfeasibleTurnConstraint` (`unreachable`), its message saying
+  what the route had to keep to (`terms`, "with no left turns"; the seed asks, `seed_route`);
+  `strict` without a constraint is refused. On a street grid this is
   rarely satisfiable together with the rule that no junction repeats: a net left turn without
   left turns is three rights round a block, which comes back through the junction it left
   (`docs/reference/engine.md`, **Constraints**).
@@ -48,9 +48,9 @@ window drawn inside one stretch out to the stretch's ends, no farther than the s
 side, so the loop tries a window a detour can leave the road from rather than one only that
 road could replace. `stretches` and `returning` read the rule off a route's edges for the seed
 and the base route. The seed keeps the rule itself (`seed_route`, a heuristic), refusing a leg
-it found no way to build under it, but can build without it, with `InfeasibleHardMode` ("the seed
-found no way from stop 0 to stop 1 under hard mode": a legal route may exist); a base route that
-breaks it is refused (`plan.check_base`).
+it found no way to build under it, but can build without it, with `InfeasibleHardMode` ("No route
+from stop 1 to stop 2 without repeating a road and with no road twice.": a legal route may still
+exist); a base route that breaks it is refused (`plan.check_base`).
 """
 
 from bisect import bisect_left, bisect_right
@@ -301,15 +301,22 @@ class Constraints(BaseModel):
         parts += [f"the strict {kinds[0].label} constraint"] if kinds and self.strict else []
         return f"under {' and '.join(parts)}" if parts else ""
 
+    @property
+    def terms(self) -> str:
+        """What a strict refusal says the route had to keep to: "with no left turns", "with no
+        road twice and no left turns"."""
+        parts = ["no road twice"] if self.hard else []
+        parts += [f"no {kind.label.removeprefix('no-')} turns" for kind in self.kinds]
+        return f"with {' and '.join(parts)}"
+
     def unreachable(self, leg: tuple[int, int], detail: str = "") -> StopUnreachable:
         """The error for a leg no route covers under these constraints: `InfeasibleTurnConstraint`
-        under a strict one (its message ending with `note`), else `InfeasibleHardMode` under
-        hard mode ("the seed found no way from stop 0 to stop 1 under hard mode"), else
+        under a strict one ("… without repeating a road and with no left turns", `terms`), else
+        `InfeasibleHardMode` under hard mode ("… and with no road twice"), else
         `StopUnreachable`. The seed asks it of the constraints to blame, once the leg is known
         to be buildable without them (`seed_route`)."""
         if self.strict:
-            message = ", ".join(filter(None, [detail, self.note]))
-            return InfeasibleTurnConstraint(leg, message, self.kinds[0].key)
+            return InfeasibleTurnConstraint(leg, detail, self.kinds[0].key, self.terms)
         if self.hard:
             return InfeasibleHardMode(leg, detail)
         return StopUnreachable(leg, detail)

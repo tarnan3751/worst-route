@@ -121,7 +121,10 @@ class Area:
 
 class AreaTooLarge(ValueError):  # noqa: N818 (the API error it becomes)
     """A request's area holds more than a certificate allows: its counts, the leash it was
-    found at, and the caps; `field` is `"leash"`, the setting to change."""
+    found at, and the caps; `field` is `"leash"`, the setting to change. Its message is the app's
+    ("This area is too big to prove. It holds 1,132 junctions and 3,865 roads; a proof allows 300
+    and 1,000. Shorten the corridor or bring the stops closer."), which `plan --certified` prints
+    too: the leash a corridor, the nodes junctions and the edges roads."""
 
     field = "leash"
 
@@ -130,16 +133,18 @@ class AreaTooLarge(ValueError):  # noqa: N818 (the API error it becomes)
         self.max_nodes, self.max_edges = CERTIFIED_MAX_NODES, CERTIFIED_MAX_EDGES
         leash = f"{leash_m:.0f} m" if leash_m < 1000 else f"{leash_m / 1000:g} km"
         where = (
-            f"the narrowest leash that joins the stops, {leash}, makes an area of"
+            f"Even the narrowest corridor that joins the stops, {leash}, holds"
             if narrowest
-            else f"the area within a {leash} leash holds"
+            else "It holds"
         )
         remedy = (
-            "bring the stops closer" if narrowest else "tighten the leash or bring the stops closer"
+            "Bring the stops closer."
+            if narrowest
+            else "Shorten the corridor or bring the stops closer."
         )
         super().__init__(
-            f"{where} {nodes:,} nodes and {edges:,} edges, over the {self.max_nodes:,} and "
-            f"{self.max_edges:,} a certificate allows: {remedy}"
+            f"This area is too big to prove. {where} {nodes:,} junctions and {edges:,} roads; a "
+            f"proof allows {self.max_nodes:,} and {self.max_edges:,}. {remedy}"
         )
 
 

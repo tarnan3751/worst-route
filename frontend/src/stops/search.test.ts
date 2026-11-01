@@ -38,7 +38,7 @@ const ANSWER: GeocodeResult = {
 };
 const BUSY = {
   code: "RATE_LIMITED",
-  message: "the geocoder is busy, try again in a few seconds",
+  message: "Place search is busy. Try again in a few seconds.",
   retry_after_s: 2,
 };
 

@@ -13,9 +13,12 @@ the stop is snapped again with the nodes already tried excluded, and its note sa
 moved ("nearer nodes cannot be reached without repeating one", or under the strict no-left
 constraint; under hard mode "the seed found no way to nearer nodes under hard mode").
 `StopUnreachable` names the leg (k, k + 1) no route covers without repeating a road; its
-`stop_index` is the leg's later stop, the stop the API's error names. `InfeasibleTurnConstraint`,
-a `StopUnreachable`, says a strict turn constraint is why (`constraint`: its key), and
-`InfeasibleHardMode` that hard mode is.
+`stop_index` is the leg's later stop, the stop the API's error names. Its message is one sentence
+for people, the stops numbered from 1 as the app's markers are: "No route from stop 1 to stop 2
+without repeating a road, after moving stop 2 up to 10 times." `InfeasibleTurnConstraint`, a
+`StopUnreachable`, says a strict turn constraint is why (`constraint`: its key; "… without
+repeating a road and with no left turns …"), and `InfeasibleHardMode` that hard mode is ("… and
+with no road twice …").
 """
 
 from collections.abc import Sequence
@@ -29,13 +32,17 @@ from worst_route.graph.spatial import Role, Snap, SpatialIndex
 
 
 class StopUnreachable(Exception):  # noqa: N818 (the name the design uses)
-    """No route covers the leg `leg` without repeating a road; `stop_index` is its later stop."""
+    """No route covers the leg `leg` without repeating a road; `stop_index` is its later stop.
+    `under` is what else the route had to keep to ("with no left turns"), `detail` what was
+    tried."""
 
-    def __init__(self, leg: tuple[int, int], detail: str = "") -> None:
+    def __init__(self, leg: tuple[int, int], detail: str = "", under: str = "") -> None:
+        terms = f" and {under}" if under else ""
         reason = f", {detail}" if detail else ""
         start, end = leg
         super().__init__(
-            f"no route from stop {start} to stop {end} without repeating a road{reason}"
+            f"No route from stop {start + 1} to stop {end + 1} without repeating a road"
+            f"{terms}{reason}."
         )
         self.leg = leg
         self.stop_index = end
@@ -45,23 +52,18 @@ class InfeasibleTurnConstraint(StopUnreachable):
     """A leg no route covers without repeating a road under a strict turn constraint;
     `constraint` is its key, `"no_left"` or `"no_right"`."""
 
-    def __init__(self, leg: tuple[int, int], detail: str, constraint: str) -> None:
-        super().__init__(leg, detail)
+    def __init__(self, leg: tuple[int, int], detail: str, constraint: str, under: str) -> None:
+        super().__init__(leg, detail, under)
         self.constraint = constraint
 
 
 class InfeasibleHardMode(StopUnreachable):
-    """A leg the seed found no way to build under hard mode, while it can without it. The seed
-    is a heuristic, so a route under hard mode may still exist; the message says so: "the seed
-    found no way from stop 0 to stop 1 under hard mode"."""
+    """A leg the seed found no way to build under hard mode, while it can without it ("No route
+    from stop 1 to stop 2 without repeating a road and with no road twice."). The seed is a
+    heuristic, so a route under hard mode may still exist."""
 
     def __init__(self, leg: tuple[int, int], detail: str = "") -> None:
-        super().__init__(leg, detail)
-        reason = f", {detail}" if detail else ""
-        start, end = leg
-        self.args = (
-            f"the seed found no way from stop {start} to stop {end} under hard mode{reason}",
-        )
+        super().__init__(leg, detail, "with no road twice")
 
 
 def role_of(k: int, count: int) -> Role:

@@ -316,7 +316,9 @@ def test_a_leg_only_a_left_turn_reaches_is_unreachable_under_strict_no_left() ->
     assert seeded(g, [0, 2], SOFT_LEFT).nodes.tolist() == [0, 1, 2]
     with pytest.raises(InfeasibleTurnConstraint) as caught:
         seeded(g, [0, 2], STRICT_LEFT)
-    assert str(caught.value).endswith(", under the strict no-left constraint")
+    assert str(caught.value) == (
+        "No route from stop 1 to stop 2 without repeating a road and with no left turns."
+    )
     assert (caught.value.leg, caught.value.stop_index, caught.value.constraint) == (
         (0, 1),
         1,
@@ -330,7 +332,7 @@ def test_a_leg_no_route_covers_even_without_the_constraint_is_plainly_unreachabl
     with pytest.raises(StopUnreachable) as refused:
         seeded(g, [0, 12], STRICT_LEFT)
     assert not isinstance(refused.value, InfeasibleTurnConstraint)
-    assert str(refused.value) == "no route from stop 0 to stop 1 without repeating a road"
+    assert str(refused.value) == "No route from stop 1 to stop 2 without repeating a road."
 
 
 def test_a_strict_round_trip_loop_keeps_the_constraint() -> None:

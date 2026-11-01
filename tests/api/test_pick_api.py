@@ -3,8 +3,8 @@ with Eastland), over httpx in process: stops in one state, in both, in no state,
 places index, outside every region and outside any one region; a region clipped to a bbox first,
 the smallest bbox first, which must name the stops' states when a places index is loaded; the
 reason when a smaller build's bbox misses a stop in its state; ties to the region served first;
-the body's refusals; each client's picks counted on a public server; and a job planned on the
-region picked."""
+the body's refusals; each client's picks counted on a public server; a job planned on the region
+picked; and the refusal's sentence, naming the lower 48 or the regions served."""
 
 from pathlib import Path
 from typing import Any
@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 import pytest
 
+from worst_route.api.routes_api import outside_sentence
 from worst_route.config import REGIONS, Region
 from worst_route.graph.data import GraphData
 
@@ -176,6 +177,22 @@ async def test_a_tie_goes_to_the_region_served_first(
             assert (await picked(http, ACROSS))["region"] == first
 
 
+def test_the_refusal_says_where_the_maps_are() -> None:
+    def where(*served: str) -> str:
+        sentence = outside_sentence(served)
+        return sentence.removeprefix("That stop is outside the map. Try somewhere in ")
+
+    # a national build served: the lower 48, whatever else is
+    for served in (("us-t3",), ("oregon", "us-t3", "portland"), ("us-t1",), ("us",)):
+        assert where(*served) == "the lower 48."
+    # else the regions served, by their names, in the order served, each name once
+    assert where("portland") == "Portland."
+    assert where("oregon", "portland") == "Oregon or Portland."
+    assert where("west-coast", "oregon", "portland") == "West Coast, Oregon or Portland."
+    assert where("somewhere") == "somewhere."  # a region config does not name: its id
+    assert where("oregon-washington", "oregon-washington-t1") == "Oregon and Washington."
+
+
 async def test_a_stop_no_region_holds_is_named(
     lands: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -185,9 +202,10 @@ async def test_a_stop_no_region_holds_is_named(
         assert outside.status_code == 422
         assert outside.json() == {
             "code": "STOP_OUTSIDE_REGION",
-            "message": "stop 2 (40.0, -100.0) is outside every region served here "
-            "(westland, lands)",
+            "message": "That stop is outside the map. Try somewhere in Westland or Lands.",
             "stop_index": 2,
+            "lat": 40.0,
+            "lon": -100.0,
         }
     # Each stop in some region, none holding all: the stop outside the one holding the most.
     far = Region(name="portland", states=("oregon",), bbox=(-101, 39, -99, 41), crs_epsg=32610)
@@ -198,9 +216,10 @@ async def test_a_stop_no_region_holds_is_named(
         assert split.status_code == 422
         assert split.json() == {
             "code": "STOP_OUTSIDE_REGION",
-            "message": "no region served here holds every stop: stop 1 (40.0, -100.0) is outside "
-            "westland, which holds the most of them",
+            "message": "These stops are on different maps. Keep them on one map.",
             "stop_index": 1,
+            "lat": 40.0,
+            "lon": -100.0,
         }
 
 

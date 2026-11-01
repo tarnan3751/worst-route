@@ -198,8 +198,8 @@ def test_a_strict_constraint_no_route_keeps_is_stop_unreachable_with_its_note() 
     with pytest.raises(StopUnreachable) as refused:
         plan_route(g, strict, backend=PythonBackend(g))
     assert str(refused.value) == (
-        "no route from stop 0 to stop 1 without repeating a road, after moving stop 1 up to 10 "
-        "times, under the strict no-left constraint"
+        "No route from stop 1 to stop 2 without repeating a road and with no left turns, after "
+        "moving stop 2 up to 10 times."
     )
 
 
@@ -217,8 +217,8 @@ def test_a_strict_request_no_route_keeps_even_without_it_is_plainly_unreachable(
         errors[0]
         == errors[1]
         == (
-            "no route from stop 0 to stop 1 without repeating a road, after moving stop 1 up to 10 "
-            "times"
+            "No route from stop 1 to stop 2 without repeating a road, after moving stop 2 up to 10 "
+            "times."
         )
     )
 

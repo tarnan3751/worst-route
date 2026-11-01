@@ -169,15 +169,15 @@ class _Orphaned(Exception):  # noqa: N818 (not an error: the API process is gone
 
 def unreachable(error: StopUnreachable) -> tuple[str, str, dict[str, Any]]:
     """The API's (code, message, fields) for a leg no route covers: `INFEASIBLE_TURN_CONSTRAINT`
-    when a strict turn constraint is why (its message suggesting to drop `strict`), else
-    `STOP_UNREACHABLE_WITHOUT_REPEAT` (its message suggesting to drop `hard` when hard mode is
-    why)."""
+    when a strict turn constraint is why (its message ending "Try without strict."), else
+    `STOP_UNREACHABLE_WITHOUT_REPEAT` (its message ending "Try without it." when hard mode is
+    why: the frontend's banner offers to drop it on that ending)."""
     fields: dict[str, Any] = {"leg": list(error.leg), "stop_index": error.stop_index}
     if isinstance(error, InfeasibleTurnConstraint):
-        message = f"{error}; try without strict"
+        message = f"{error} Try without strict."
         return "INFEASIBLE_TURN_CONSTRAINT", message, {**fields, "constraint": error.constraint}
     if isinstance(error, InfeasibleHardMode):
-        return "STOP_UNREACHABLE_WITHOUT_REPEAT", f"{error}; try without hard", fields
+        return "STOP_UNREACHABLE_WITHOUT_REPEAT", f"{error} Try without it.", fields
     return "STOP_UNREACHABLE_WITHOUT_REPEAT", str(error), fields
 
 

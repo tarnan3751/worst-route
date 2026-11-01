@@ -132,7 +132,8 @@ async def test_an_area_too_large_to_certify_names_the_leash(
         assert body["code"] == "AREA_TOO_LARGE_TO_CERTIFY" and body["field"] == "leash"
         assert (body["nodes"], body["max_nodes"], body["max_edges"]) == (100, 300, 50)
         assert body["edges"] > 50 and body["leash_m"] == 1000.0
-        assert "tighten the leash" in body["message"]
+        assert body["message"].startswith("This area is too big to prove. It holds 100 junctions")
+        assert body["message"].endswith("Shorten the corridor or bring the stops closer.")
         assert not app.state.api.jobs.jobs  # refused before a job existed
 
 

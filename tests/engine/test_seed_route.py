@@ -145,7 +145,7 @@ def test_the_baseline_respects_the_request_masks() -> None:
         mask[[1, 4, 7]] = False
         baseline_route(PythonBackend(g), g, [0, 2], mask, np.zeros(g.m, bool))
     assert caught.value.leg == (0, 1) and caught.value.stop_index == 1
-    assert str(caught.value).endswith("nor any route in the request's area")
+    assert str(caught.value).endswith("nor any route in the request's area.")
 
 
 def test_the_seed_respects_the_request_bans() -> None:
@@ -208,8 +208,8 @@ def test_a_stop_nothing_reaches_is_named() -> None:
         plan_seed(g, [at_node(g, 0), at_node(g, 3)])
     assert caught.value.leg == (0, 1) and caught.value.stop_index == 1
     assert str(caught.value) == (
-        "no route from stop 0 to stop 1 without repeating a road, "
-        "after moving stop 1 up to 10 times"
+        "No route from stop 1 to stop 2 without repeating a road, "
+        "after moving stop 2 up to 10 times."
     )
 
 
@@ -222,7 +222,7 @@ def test_a_point_to_point_trip_never_collapses_onto_the_start() -> None:
     with pytest.raises(StopUnreachable) as caught:
         plan_seed(g, [at_node(g, 2), at_node(g, 0)])
     assert caught.value.leg == (0, 1)
-    assert str(caught.value).endswith("after moving stop 1 up to 10 times")
+    assert str(caught.value).endswith("after moving stop 2 up to 10 times.")
 
 
 def test_a_leg_between_two_stops_on_one_node_is_a_failed_leg() -> None:
@@ -245,8 +245,8 @@ def test_a_leg_nothing_covers_names_both_ends() -> None:
         plan_seed(g, [at_node(g, 0), at_node(g, 1), at_node(g, 4)])
     assert caught.value.leg == (1, 2) and caught.value.stop_index == 2
     assert str(caught.value) == (
-        "no route from stop 1 to stop 2 without repeating a road, "
-        "after moving stop 1 and stop 2 up to 10 times each"
+        "No route from stop 2 to stop 3 without repeating a road, "
+        "after moving stop 2 and stop 3 up to 10 times each."
     )
 
 
@@ -375,8 +375,8 @@ def test_a_round_trip_with_no_loop_is_unreachable() -> None:
         plan_seed(g, [at_node(g, 3), at_node(g, 3)])
     assert caught.value.leg == (0, 1) and caught.value.stop_index == 1
     assert str(caught.value) == (
-        "no route from stop 0 to stop 1 without repeating a road, "
-        "after 20 tries at a loop through a waypoint"
+        "No route from stop 1 to stop 2 without repeating a road, "
+        "after 20 tries at a loop through a waypoint."
     )
 
 

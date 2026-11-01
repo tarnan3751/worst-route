@@ -263,7 +263,7 @@ def _drawn_on(
     if problem is not None:
         raise ApiError(422, "INVALID_REQUEST", problem[1], field=problem[0])
     for k, stop in enumerate(stops):
-        check_inside(loaded, stop.lat, stop.lon, stop_index=k)
+        check_inside(api, loaded, stop.lat, stop.lon, stop_index=k)
     try:
         engine_request = asked.engine_request(seed)
     except ValidationError as error:

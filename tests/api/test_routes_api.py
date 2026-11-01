@@ -310,7 +310,7 @@ async def test_a_ratio_target_for_a_round_trip_is_refused_first(data: Path) -> N
             r = await client.post("/jobs", json=body)
             assert r.status_code == 422 and r.json() == {
                 "code": "INVALID_REQUEST",
-                "message": "a round trip has no ratio target: its baseline is 0 m",
+                "message": "A round trip has no ratio to aim for. Set the goal to a drive time.",
                 "field": "target",
             }
         _, events = await finished(client, job_body(stops=loop))
@@ -647,7 +647,13 @@ async def test_stops_outside_the_region_or_far_from_roads_are_named(data: Path) 
         lat, lon = at_node(GRID, 0)
         outside = job_body(stops=[stop(0), {"lat": GRID_BBOX[3] + 0.01, "lon": lon}])
         r = await client.post("/jobs", json=outside)
-        assert r.json()["code"] == "STOP_OUTSIDE_REGION" and r.json()["stop_index"] == 1
+        assert r.json() == {
+            "code": "STOP_OUTSIDE_REGION",
+            "message": "That stop is outside the map. Try somewhere in Portland.",
+            "stop_index": 1,
+            "lat": GRID_BBOX[3] + 0.01,
+            "lon": lon,
+        }  # the coordinates in the fields, not the sentence
         far = job_body(stops=[stop(0), {"lat": GRID_BBOX[3] - 0.01, "lon": lon}])
         r = await client.post("/jobs", json=far)
         assert (
@@ -661,7 +667,7 @@ async def test_an_unreachable_stop_names_its_leg(
     data: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def unreachable(*args: object) -> None:
-        raise StopUnreachable((1, 2), "after moving stop 1 and stop 2 up to 10 times each")
+        raise StopUnreachable((1, 2), "after moving stop 2 and stop 3 up to 10 times each")
 
     monkeypatch.setattr(routes_api, "prepare", unreachable)
     async with serving(data) as (client, _):
@@ -679,15 +685,15 @@ async def test_a_leg_a_strict_constraint_cannot_drive_names_the_constraint(
 ) -> None:
     def infeasible(*args: object) -> None:
         strict = Constraints(no_left=True, strict=True)
-        raise strict.unreachable((0, 1), "after moving stop 1 up to 10 times")
+        raise strict.unreachable((0, 1), "after moving stop 2 up to 10 times")
 
     monkeypatch.setattr(routes_api, "prepare", infeasible)
     async with serving(data) as (client, _):
         r = await client.post("/jobs", json=job_body(constraints={"no_left": True, "strict": True}))
         assert r.status_code == 422 and r.json() == {
             "code": "INFEASIBLE_TURN_CONSTRAINT",
-            "message": "no route from stop 0 to stop 1 without repeating a road, after moving "
-            "stop 1 up to 10 times, under the strict no-left constraint; try without strict",
+            "message": "No route from stop 1 to stop 2 without repeating a road and with no left "
+            "turns, after moving stop 2 up to 10 times. Try without strict.",
             "leg": [0, 1],
             "stop_index": 1,
             "constraint": "no_left",
@@ -994,15 +1000,15 @@ async def test_a_leg_hard_mode_cannot_drive_says_so(
     data: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def infeasible(*args: object) -> None:
-        raise Constraints(hard=True).unreachable((0, 1), "after moving stop 1 up to 10 times")
+        raise Constraints(hard=True).unreachable((0, 1), "after moving stop 2 up to 10 times")
 
     monkeypatch.setattr(routes_api, "prepare", infeasible)
     async with serving(data) as (client, _):
         r = await client.post("/jobs", json=job_body(constraints={"hard": True}))
         assert r.status_code == 422 and r.json() == {
             "code": "STOP_UNREACHABLE_WITHOUT_REPEAT",
-            "message": "the seed found no way from stop 0 to stop 1 under hard mode, after "
-            "moving stop 1 up to 10 times; try without hard",
+            "message": "No route from stop 1 to stop 2 without repeating a road and with no road "
+            "twice, after moving stop 2 up to 10 times. Try without it.",
             "leg": [0, 1],
             "stop_index": 1,
         }
@@ -1128,7 +1134,7 @@ async def test_a_portfolio_is_refused_where_it_cannot_run(data: Path) -> None:
         r = await client.post("/jobs", json=job_body(portfolio=4))  # three workers here
         assert r.status_code == 422 and r.json() == {
             "code": "PORTFOLIO_TOO_LARGE",
-            "message": "a portfolio of 4 seeds is over the 3 this server runs",
+            "message": "At most 3 runs at once on this server.",
             "max": 3,
         }
         assert (await client.post("/jobs", json=job_body(portfolio=3))).status_code == 202

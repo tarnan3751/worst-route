@@ -247,8 +247,8 @@ def test_an_explicit_leash_over_the_caps_is_refused_with_the_counts(
     assert (error.nodes, error.edges, error.max_edges, error.leash_m) == (36, 116, 40, 1000.0)
     assert error.field == "leash" and error.max_nodes == exact.CERTIFIED_MAX_NODES
     assert str(error) == (
-        "the area within a 1 km leash holds 36 nodes and 116 edges, over the 300 and 40 a "
-        "certificate allows: tighten the leash or bring the stops closer"
+        "This area is too big to prove. It holds 36 junctions and 116 roads; a proof allows 300 "
+        "and 40. Shorten the corridor or bring the stops closer."
     )
 
 
@@ -294,7 +294,7 @@ def test_with_no_small_area_joining_the_stops_the_narrowest_within_the_caps_is_t
     assert area is not None
     assert certified_area(g, request_masks(spatial, g, narrower), [0, 99]) is None
     monkeypatch.setattr(exact, "CERTIFIED_MAX_EDGES", area.edge_count - 1)
-    with pytest.raises(AreaTooLarge, match="the narrowest leash that joins the stops"):
+    with pytest.raises(AreaTooLarge, match="Even the narrowest corridor that joins the stops"):
         certified_request(g, spatial, request)
 
 

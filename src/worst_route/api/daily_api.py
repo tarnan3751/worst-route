@@ -276,8 +276,7 @@ def _lock(api: "Api", day: str, region: str) -> asyncio.Lock:
 
 def _busy() -> ApiError:
     """TOO_MANY_JOBS for the day's job, the server's: no client's counts."""
-    message = "every worker is busy and the queue is full; today's route is planned once one frees"
-    return ApiError(429, "TOO_MANY_JOBS", message)
+    return ApiError(429, "TOO_MANY_JOBS", "The server is busy. Try again in a minute.")
 
 
 def _events_url(job: Job) -> str:

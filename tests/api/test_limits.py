@@ -109,7 +109,7 @@ async def test_a_public_budget_is_at_most_a_minute(data: Path) -> None:
         assert r.status_code == 422
         assert r.json() == {
             "code": "BUDGET_TOO_LARGE",
-            "message": "a budget of 61 s is over the 60 s allowed",
+            "message": "The time budget is at most 60 s.",
             "max_s": 60.0,
         }
         assert (await http.post("/jobs", json=job_body(budget_s=60))).status_code == 202
@@ -142,7 +142,7 @@ async def test_a_public_server_shares_its_jobs_between_clients(
         assert refused.status_code == 429
         assert refused.json() == {
             "code": "TOO_MANY_JOBS",
-            "message": "your jobs fill your share: 1 running and 3 waiting; wait for one to end",
+            "message": "You already have a route planning. Wait for it to finish.",
             "running": 1,
             "queued": 3,
         }
@@ -176,7 +176,7 @@ async def test_a_public_portfolio_runs_two_seeds_each_a_worker_of_the_server_s(
         r = await http.post("/jobs", json={**running_body(), "portfolio": 3}, headers=one)
         assert r.status_code == 422 and r.json() == {
             "code": "PORTFOLIO_TOO_LARGE",
-            "message": "a portfolio of 3 seeds is over the 2 this server runs",
+            "message": "At most 2 runs at once on this server.",
             "max": 2,
         }
         ids = []

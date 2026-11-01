@@ -32,9 +32,9 @@ asks for. It is a heuristic: it may fail where a legal route exists. A leg that 
 that would not move (two stops on one node), a road neither leg can drop, or an assembled route
 `check_route` refuses names the leg: `StopUnreachable`, unless a constraint that shapes the seed is
 to blame, found with at most two more builds, on failure only (`_unreachable`): under a strict turn
-constraint, `InfeasibleTurnConstraint` ("under the strict no-left constraint") when the seed can be
-built without it; under hard mode, `InfeasibleHardMode` ("the seed found no way from stop 0 to stop
-1 under hard mode") when it can be built without that; under both, the first when hard mode alone
+constraint, `InfeasibleTurnConstraint` ("… and with no left turns") when the seed can be built
+without it; under hard mode, `InfeasibleHardMode` ("… and with no road twice") when it can be built
+without that; under both, the first when hard mode alone
 builds it, the second when the strict constraint alone does; else the plain `StopUnreachable`.
 
 `resolve_stops(data, spatial, backend, request, masks)` settles where the stops go before the
@@ -291,7 +291,7 @@ def _settle(
             except _LegError:
                 continue
         snaps[stop] = original
-    names = " and ".join(f"stop {k}" for k in moved)
+    names = " and ".join(f"stop {k + 1}" for k in moved)  # from 1, as the error's message counts
     each = " each" if len(moved) > 1 else ""
     after = f"after moving {names} up to {SNAP_FALLBACK_CANDIDATES} times{each}"
 

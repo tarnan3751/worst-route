@@ -1340,9 +1340,9 @@ def plan(
             data, request, backend=engine, base=saved, on_progress=progress, on_bound=bound
         )
     except InfeasibleTurnConstraint as error:
-        _fail(f"cannot plan: {error}; try without --strict")
+        _fail(f"cannot plan: {error} Try without --strict.")
     except InfeasibleHardMode as error:
-        _fail(f"cannot plan: {error}; try without --hard")
+        _fail(f"cannot plan: {error} Try without --hard.")
     except BrandRefused as error:
         _fail(f"invalid --brand: {error}", code=2)
     except AreaTooLarge as error:

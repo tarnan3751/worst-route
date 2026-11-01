@@ -4,7 +4,7 @@
 // rate-limits. Up to five places are listed under the field; picking one places the next stop
 // as a click on the map does (the `place` it is given: stopList.ts, placeStop), then clears the
 // field. An error goes to the banner like every API error (RATE_LIMITED's message is the
-// server's: "the geocoder is busy, try again in a few seconds"), and a search closes the banner
+// server's: "Place search is busy. Try again in a few seconds."), and a search closes the banner
 // first. It searches in the region pinned in the settings, else in the served region with the
 // largest bbox (`searchRegion`: the national one, which holds the others when it is served), not
 // the one the stops so far are picked onto: a stop searched for may take the trip beyond it.

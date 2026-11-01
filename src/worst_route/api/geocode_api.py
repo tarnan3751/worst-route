@@ -28,7 +28,7 @@ from worst_route.geocode.limiter import RateLimited
 
 router = APIRouter()
 
-BUSY = "the geocoder is busy, try again in a few seconds"
+BUSY = "Place search is busy. Try again in a few seconds."
 
 
 @router.get("/geocode")

@@ -322,7 +322,7 @@ async def test_a_trip_the_pre_flight_refuses_gives_way_to_the_next(
     def first_unreachable(loaded: Loaded, request: Any) -> Any:
         tried.append(request.stops)
         if len(tried) == 1:
-            raise StopUnreachable((0, 1), "after moving stop 1 up to 10 times")
+            raise StopUnreachable((0, 1), "after moving stop 2 up to 10 times")
         return real(loaded, request)
 
     monkeypatch.setattr(daily_api, "prepare", first_unreachable)
@@ -343,7 +343,7 @@ async def test_a_day_whose_trips_the_pre_flight_refuses_is_failed_and_stays_so(
 
     def unreachable(loaded: Loaded, request: Any) -> None:
         tried.append(request.stops)
-        raise StopUnreachable((0, 1), "after moving stop 1 up to 10 times")
+        raise StopUnreachable((0, 1), "after moving stop 2 up to 10 times")
 
     monkeypatch.setattr(daily_api, "prepare", unreachable)
     async with hosted(served, builds=SERVED) as (http, app):

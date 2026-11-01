@@ -352,11 +352,13 @@ def test_what_an_unreachable_leg_blames() -> None:
     for constraints in (HARD, Constraints(no_left=True, strict=True, hard=True)):
         with pytest.raises(InfeasibleHardMode) as refused:
             seeded(main, [0, 4], constraints)
-        assert str(refused.value) == "the seed found no way from stop 0 to stop 1 under hard mode"
+        assert str(refused.value) == (
+            "No route from stop 1 to stop 2 without repeating a road and with no road twice."
+        )
     # a left turn the only way, no names: hard mode alone plans, the strict constraint is why
     with pytest.raises(InfeasibleTurnConstraint) as turned:
         seeded(left_only(), [0, 14], Constraints(no_left=True, strict=True, hard=True))
-    assert str(turned.value).endswith(", under the strict no-left constraint")
+    assert str(turned.value).endswith(" without repeating a road and with no left turns.")
     # no route at all: nothing to blame
     for constraints in (HARD, Constraints(no_left=True, strict=True, hard=True)):
         with pytest.raises(StopUnreachable) as plain:
@@ -531,6 +533,6 @@ def test_a_trip_hard_mode_cannot_drive_is_one_line(data_dir: Path) -> None:
     assert plan(*trip, "--hard") == (
         1,
         "",
-        "cannot plan: the seed found no way from stop 0 to stop 1 under hard mode, after moving "
-        "stop 1 up to 10 times; try without --hard\n",
+        "cannot plan: No route from stop 1 to stop 2 without repeating a road and with no road "
+        "twice, after moving stop 2 up to 10 times. Try without --hard.\n",
     )

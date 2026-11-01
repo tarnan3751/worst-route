@@ -144,7 +144,7 @@ async def test_a_full_queue_is_rate_limited_and_the_cache_still_answers(
         cached = await client.get("/geocode", params={"q": "HOME", "region": "portland"})
         assert cached.json()["cached"] is True  # the cache needs no turn
     assert fake.calls == []
-    assert BUSY == "the geocoder is busy, try again in a few seconds"
+    assert BUSY == "Place search is busy. Try again in a few seconds."
 
 
 async def test_a_refusal_upstream_pauses_the_geocoder(data: Path, tmp_path: Path) -> None:

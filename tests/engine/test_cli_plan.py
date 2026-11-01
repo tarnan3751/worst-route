@@ -347,8 +347,8 @@ def test_a_stop_off_the_map_or_out_of_reach_is_one_line(data_dir: Path) -> None:
     code, _, stderr = plan("--from", latlon(islands, 0), "--to", f"{lat},{lon}", "--leash-km", "20")
     assert code == 1
     assert stderr == (
-        "cannot plan: no route from stop 0 to stop 1 without repeating a road, "
-        "after moving stop 1 up to 10 times\n"
+        "cannot plan: No route from stop 1 to stop 2 without repeating a road, "
+        "after moving stop 2 up to 10 times.\n"
     )
 
 
@@ -768,8 +768,8 @@ def test_a_strict_constraint_no_route_keeps_is_one_line(data_dir: Path) -> None:
     assert plan(*trip, "--no-left", "--strict") == (
         1,
         "",
-        "cannot plan: no route from stop 0 to stop 1 without repeating a road, after moving "
-        "stop 1 up to 10 times, under the strict no-left constraint; try without --strict\n",
+        "cannot plan: No route from stop 1 to stop 2 without repeating a road and with no left "
+        "turns, after moving stop 2 up to 10 times. Try without --strict.\n",
     )
 
 
@@ -979,7 +979,9 @@ def test_the_certified_route_s_refusals_are_one_line(
     monkeypatch.setattr(exact, "CERTIFIED_MAX_EDGES", 20)
     code, stdout, stderr = plan(*ends, "--leash-km", "1")
     assert code == 1 and stdout == ""
-    assert stderr.startswith("cannot certify: the area within a 1 km leash holds 100 nodes and")
+    assert stderr.startswith(
+        "cannot certify: This area is too big to prove. It holds 100 junctions and"
+    )
     out = tmp_path / "route.json"
     assert plan("--from", latlon(GRID, 0), "--to", latlon(GRID, 9), "--out", str(out))[0] == 0
     refused = plan("--base", str(out), "--certified")

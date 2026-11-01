@@ -217,21 +217,51 @@ each platform builds on its own. The spec:
   analysis alone would miss its native libraries), for the certified worst
   (`docs/reference/engine.md`, **Certified worst**): its modules (protobuf's `_pb2` ones and
   `ortools.sat.python.cp_model_helper` among its 151 hidden imports), its data and the 99 native
-  libraries in `ortools/.libs`, 52.8 MB on macOS arm64 (`libortools` and what it links:
-  COIN-OR's Cbc, Clp, Cgl, Osi and CoinUtils, SCIP, HiGHS, Abseil, Protocol Buffers and RE2 for
-  C++, utf8_range, zlib and bzip2), measured with `collect_all` on the dev machine; the frozen app
-  with it is built and checked (**Measured**);
-- the data, the frontend's build, and `THIRD-PARTY-LICENSES.txt`: the licence of every
-  distribution the app ships (those whose top-level packages PyInstaller's analysis collected, by
-  `importlib.metadata.packages_distributions`, and PyInstaller, whose bootloader it runs; OR-Tools,
-  absl-py, protobuf and immutabledict among them), the notice of the libraries OR-Tools' wheel
-  bundles (`BUNDLED`: each by its licence, COIN-OR's under the EPL-2.0, and where their sources
-  are, which no distribution's metadata names; the notices page carries the same) and Python's;
+  libraries in `ortools/.libs`, 52.8 MB on macOS arm64 (`libortools`, Eigen compiled into it,
+  and what it links: COIN-OR's Cbc, Clp, Cgl, Osi and CoinUtils, SCIP with SoPlex inside it,
+  HiGHS, Abseil, Protocol Buffers and RE2 for C++, utf8_range, zlib and bzip2; pybind11 is in
+  the extension modules, with pybind11_abseil and pybind11_protobuf in MathOpt's), measured with
+  `collect_all` on the dev machine; the frozen app with it is built and checked (**Measured**);
+- the data, the frontend's build, and `THIRD-PARTY-LICENSES.txt`, which the spec's
+  `write_licenses` assembles at each build, written in UTF-8 whatever the platform's encoding
+  (Windows' cp1252 could not write a replacement character): the licence of every distribution
+  the app ships (those whose top-level packages PyInstaller's analysis collected, by
+  `importlib.metadata.packages_distributions`, and PyInstaller, whose bootloader it runs;
+  OR-Tools, absl-py, protobuf and immutabledict among them), then the libraries OR-Tools' wheel
+  bundles, which no distribution's metadata names: the list `BUNDLED` (each entry its libraries
+  and licence) as the section's heading, each one's licence text after it from
+  `packaging/desktop/licenses/` (**The bundled libraries' licences**; the notices page names the
+  same), and Python's;
 - on macOS `Worst Route.app` (bundle identifier `io.github.tarnan3751.worst-route`, macOS 12 at
   least), signed ad hoc by PyInstaller, or by `MACOS_SIGNING_IDENTITY` with the hardened runtime's
   exceptions Numba needs (`entitlements.plist`: JIT, unsigned executable memory, library
   validation off); on Windows a windowed executable, signed with `WINDOWS_CERTIFICATE` when there
   is one; on Linux a console one.
+
+**The bundled libraries' licences.** `packaging/desktop/licenses/` holds a text file per entry of
+`BUNDLED`, in its order (by file name), one per library or per text several libraries share byte
+for byte (COIN-OR's five, SCIP's and SoPlex's, pybind11_abseil's and pybind11_protobuf's): a header
+(`Library`, `Version`, `Licence` by its SPDX id, or the nearest one with the difference named,
+`Copyright`, `Source`), a blank line, and the licence text as the project's repository holds it at
+the version OR-Tools v9.15 pins (`cmake/dependencies/CMakeLists.txt`, which the wheel's libraries
+confirm), unedited (Eigen's `COPYING.README` and `COPYING.MPL2` one after the other), which
+`.editorconfig` keeps from an editor's trimming (the EPL's and the MPL's trailing spaces, the
+Apache and EPL texts' last blank lines). What each licence asks of the app, a binary distribution:
+BSD-3-Clause (RE2, Protocol Buffers, pybind11, and pybind11_abseil and pybind11_protobuf, whose
+text adds a paragraph on contributed Enhancements, the difference their `Licence` names) and MIT
+(HiGHS, utf8_range), the copyright notice and the licence reproduced in what ships with it;
+Apache-2.0 (Abseil, SCIP, SoPlex), a copy of the licence (§4(a)) and a NOTICE file's attributions
+(§4(d)), which neither project has; EPL-2.0 (COIN-OR's), a statement that the source code is
+available under the EPL and how to obtain it (§3.1(a)), which their header's `Source` makes;
+MPL-2.0 (Eigen), telling the recipients how to obtain the source code (§3.2(a)), its header's
+`Source` again; zlib's and bzip2's, nothing of a binary but that its origin not be misrepresented
+(an acknowledgment is appreciated), and their texts ship all the same. Eigen and pybind11 were
+found in the macOS wheel's binaries with `nm` and `strings`: Eigen's matrices, sparse matrices and
+thread pool in `libortools` (889 symbols), pybind11 in every extension module, pybind11_abseil and
+pybind11_protobuf in `ortools/math_opt/core/python/solver`. `tests/unit/test_desktop_licenses.py`
+checks every entry of `BUNDLED` has its file, in order, under the same libraries and licence, and
+every file its header and a text; the gate never sees the wheel, so an OR-Tools that bundles
+another library or version needs its entry and its file by hand.
 
 **Its data.** `tools/desktop_data.py pack OUT.tar.gz [--basemap FILE --basemap-url URL]`, run
 by a person on the machine with the builds, writes what the app serves of each region's latest

@@ -303,10 +303,13 @@ the search off, and `--nominatim-url` points the proxy at a self-hosted Nominati
   1.1), MapLibre GL JS and `pmtiles` (BSD-3-Clause), and the desktop app's pywebview
   (BSD-3-Clause), PyInstaller's bootloader (GPL-2.0-or-later with its exception), OR-Tools
   (Apache-2.0, the certified worst's solver) with its Python dependencies absl-py (Apache-2.0),
-  protobuf (BSD-3-Clause) and immutabledict (MIT) and the libraries its native library bundles
-  (COIN-OR's Cbc, Clp, Cgl, Osi and CoinUtils under the EPL-2.0, SCIP, HiGHS, RE2, Abseil and
-  Protocol Buffers for C++, utf8_range, zlib, bzip2, with where their sources are), and Python
-  with its libraries (each its own licence, in the app's `THIRD-PARTY-LICENSES.txt`).
+  protobuf (BSD-3-Clause) and immutabledict (MIT) and the libraries its native library and its
+  Python modules bundle (COIN-OR's Cbc, Clp, Cgl, Osi and CoinUtils under the EPL-2.0, SCIP and
+  SoPlex, HiGHS, RE2, Abseil and Protocol Buffers for C++, utf8_range, Eigen under the MPL-2.0,
+  pybind11 with pybind11_abseil and pybind11_protobuf, zlib, bzip2, with where their sources are;
+  their texts in the app's `THIRD-PARTY-LICENSES.txt`, `docs/reference/desktop.md`, **The bundled
+  libraries' licences**), and Python with its libraries (each its own licence, in the app's
+  `THIRD-PARTY-LICENSES.txt`).
   It is the "(more)" the Protomaps maintainer suggests for the credits the attribution control
   has no room for.
 - **The land cover is not drawn**: `@protomaps/basemaps` 5.7's grayscale flavor has no

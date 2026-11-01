@@ -16,8 +16,8 @@
 #   driver imports (`engine/exact.py`).
 # - The data (`data/`), the frontend's build (`frontend/`), and THIRD-PARTY-LICENSES.txt: the
 #   licence of every distribution the app ships (those whose top-level packages the analysis
-#   collected, and PyInstaller, whose bootloader the app runs), the notice of the libraries
-#   OR-Tools' wheel bundles (BUNDLED) and Python's.
+#   collected, and PyInstaller, whose bootloader the app runs), the list of the libraries
+#   OR-Tools' wheel bundles (BUNDLED) with each one's licence text (licenses/), and Python's.
 # - macOS: `Worst Route.app`, its executable `Worst Route`, ad-hoc signed by PyInstaller, or by
 #   the identity MACOS_SIGNING_IDENTITY names (the release workflow's, when its secrets exist), with
 #   the hardened runtime's exceptions in entitlements.plist; Windows and Linux: a folder
@@ -43,22 +43,37 @@ for needed in (DATA / "desktop.json", FRONTEND / "index.html"):
         raise SystemExit(f"{needed} is missing: stage the data and build the frontend first")
 
 
-# The libraries OR-Tools' wheel carries inside `ortools/.libs`, which no distribution's metadata
-# names: the same entry as the notices page's (frontend/public/notices.html).
+# The libraries OR-Tools' wheel carries in `ortools/.libs` and its extension modules, which no
+# distribution's metadata names: the same as the notices page's entry
+# (frontend/public/notices.html). Each entry has its file in licenses/, whose header names its
+# libraries and licence alike (tests/unit/test_desktop_licenses.py); the texts follow this.
+LICENSE_TEXTS = ROOT / "packaging" / "desktop" / "licenses"
 BUNDLED = """\
-Libraries bundled in OR-Tools' native library (ortools/.libs), built by the OR-Tools project:
-COIN-OR Cbc, Clp, Cgl, Osi and CoinUtils (Eclipse Public License 2.0; sources at
-https://github.com/coin-or), SCIP (Apache License 2.0), HiGHS (MIT License), RE2 (BSD-3-Clause),
-Abseil (Apache License 2.0) and Protocol Buffers (BSD-3-Clause) for C++, its UTF-8 validation
-utf8_range (libutf8_validity; MIT License, Copyright (c) 2019 Yibo Cai; sources at
-https://github.com/protocolbuffers/utf8_range), zlib (zlib License) and bzip2 (bzip2 License).
-The sources of every one, and how OR-Tools builds them, are at https://github.com/google/or-tools.
+Libraries bundled in OR-Tools' wheel: its native library and those beside it (ortools/.libs) and
+its Python extension modules, built by the OR-Tools project by the recipe at
+https://github.com/google/or-tools/tree/v9.15 (cmake/dependencies). Each one's licence text
+follows in this order, under a header naming its version, copyright and source:
+- Abseil: Apache-2.0
+- bzip2: bzip2-1.0.6
+- COIN-OR CoinUtils, Osi, Clp, Cgl and Cbc: EPL-2.0
+- Eigen: MPL-2.0
+- HiGHS: MIT
+- Protocol Buffers: BSD-3-Clause
+- pybind11: BSD-3-Clause
+- pybind11_abseil and pybind11_protobuf: BSD-3-Clause with its Enhancements paragraph
+- RE2: BSD-3-Clause
+- SCIP and SoPlex: Apache-2.0
+- utf8_range: MIT
+- zlib: Zlib
 """
 
 
-def write_licenses(path: Path, shipped: set[str], extra: str = "") -> Path:
+def write_licenses(
+    path: Path, shipped: set[str], extra: str = "", folder: Path | None = None
+) -> Path:
     """The name, version, licence and licence files of each distribution `shipped` names (by
-    its normalised name), then `extra`, then Python's."""
+    its normalised name), then `extra` and the `.txt` files in `folder` (by name), then
+    Python's."""
     parts = []
     dists = [d for d in metadata.distributions() if normal(d.metadata["Name"]) in shipped]
     for dist in sorted(dists, key=lambda d: d.metadata["Name"].lower()):
@@ -77,6 +92,8 @@ def write_licenses(path: Path, shipped: set[str], extra: str = "") -> Path:
         parts.append(f"{'=' * 78}\n{name} {version}: {licence}\n{'=' * 78}\n" + "\n".join(texts))
     if extra:
         parts.append(f"{'=' * 78}\n{extra}")
+    for text in sorted(folder.glob("*.txt")) if folder else []:
+        parts.append(f"{'-' * 78}\n" + text.read_text(encoding="utf-8"))
     python = Path(sys.base_prefix) / "lib" / f"python{sys.version_info[0]}.{sys.version_info[1]}"
     for candidate in (python / "LICENSE.txt", Path(sys.base_prefix) / "LICENSE.txt"):
         if candidate.is_file():
@@ -84,7 +101,7 @@ def write_licenses(path: Path, shipped: set[str], extra: str = "") -> Path:
             parts.append(candidate.read_text(errors="replace"))
             break
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(parts))
+    path.write_text("\n".join(parts), encoding="utf-8")
     return path
 
 
@@ -123,7 +140,7 @@ a = Analysis(
     module_collection_mode={"worst_route.graph.kernels": "py"},
 )
 LICENSES = Path(workpath) / "THIRD-PARTY-LICENSES.txt"
-write_licenses(LICENSES, shipped_distributions(a.pure + a.binaries), BUNDLED)
+write_licenses(LICENSES, shipped_distributions(a.pure + a.binaries), BUNDLED, LICENSE_TEXTS)
 a.datas += [("THIRD-PARTY-LICENSES.txt", str(LICENSES), "DATA")]
 pyz = PYZ(a.pure)
 exe = EXE(

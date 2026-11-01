@@ -11,7 +11,8 @@ instead of reaching a server (`MockTransport` and `ASGITransport` are untouched)
 with the config and CLI tests (typer's `CliRunner`) and the desktop app's (`test_desktop.py`,
 whose server, started in a thread, and `worst-route-desktop --headless`, started as a process
 until its SIGTERM, it asks over the loopback with the standard library's `http.client`, and
-`test_desktop_basemap.py`, the basemap's download on a `MockTransport`;
+`test_desktop_basemap.py`, the basemap's download on a `MockTransport`, and
+`test_desktop_licenses.py`, the bundled libraries' licence texts against the spec's `BUNDLED`;
 `docs/reference/desktop.md`); `tests/pipeline/`, with the pipeline step
 tests and a `conftest.py` whose autouse fixture also refuses `httpx.stream` and whose
 `data_dir` fixture points `WORST_ROUTE_DATA` at a temporary directory; `tests/graph/`, the graph

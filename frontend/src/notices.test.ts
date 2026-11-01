@@ -79,6 +79,24 @@ describe("the data sources and notices", () => {
       expect(entries[k]).toContain(`<span class="licence">${licence}</span>`);
       expect(entries[k]).toContain(`href="${href}"`);
     });
+    // Each library the grouped entry covers named (prettier may rewrap it), Eigen's source linked.
+    const bundled = entries
+      .find((e) => e.includes("<strong>Libraries in OR-Tools' native library"))
+      ?.replace(/\s+/g, " ");
+    const names = [
+      "COIN-OR Cbc, Clp, Cgl, Osi and CoinUtils",
+      "SCIP and SoPlex",
+      "HiGHS",
+      "RE2",
+      "Abseil",
+      "Protocol Buffers",
+      "utf8_range (MIT, Copyright (c) 2019 Yibo Cai, Copyright 2022 Google LLC;",
+      "Eigen (MPL-2.0;",
+      "pybind11 with pybind11_abseil and pybind11_protobuf (BSD-3-Clause)",
+      "zlib and bzip2",
+    ];
+    for (const name of names) expect(bundled).toContain(name);
+    expect(bundled).toContain('href="https://gitlab.com/libeigen/eigen"');
     // Back to the map, relatively too.
     expect(page).toContain('<a href="./">Back to the map</a>');
   });

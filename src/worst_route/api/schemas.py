@@ -303,13 +303,17 @@ class SpliceOut(_Out):
 
 
 class Progress(_Out):
-    """The `progress` event: every splice accepted since the last one, in order."""
+    """The `progress` event: every splice accepted since the last one, in order, and the best
+    route's score and numbers so far (a max run that anneals takes shorter splices too, so its
+    current route may be below its best)."""
 
     iteration: int
     elapsed_s: float
     score: float
     metrics: RouteMetrics
     splices: list[SpliceOut]
+    best_score: float
+    best_metrics: RouteMetrics
 
 
 class Snapshot(_Out):

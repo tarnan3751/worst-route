@@ -25,15 +25,16 @@ While a job runs, its follower task reads the worker's queue (in a thread, so th
 never blocks) and keeps the job's own copy of the route: the route the loop started from
 (`Started`, which emits `baseline` and a `snapshot` of iteration 0), then every accepted splice
 applied in order, as a client would. It also keeps the best route so far apart, by the request's
-goal (`engine.target.Goal`): in a max mode every accepted splice raises the score, so the best
-is the copy; a target run's best is the route closest to its target, which after an overshoot
-may be an earlier one. Splices are sent as `progress` events at most once per `coalesce_s`,
-every `snapshot_every`-th followed by a `snapshot`. The alphabet route's worker sends each
-better route whole (`Improved`) instead: it becomes the job's route and its best, sent at once
-as a `snapshot` and then a `progress` with its numbers and no splice. `Finished` stores the
-worker's validated route (the engine's best) and emits `done`; `Failed` emits `error`. Whenever
-the route a job stores is not the copy its clients have drawn, a `snapshot` of it comes just
-before `done`.
+goal (`engine.target.Goal`): in a max mode the highest-scoring route, which is the copy until the
+run converges and anneals (`engine/worsen.py`: shorter splices taken too), and may be an earlier
+one after; a target run's best is the route closest to its target, which after an overshoot
+may be an earlier one. Splices are sent as `progress` events at most once per `coalesce_s`, each
+with the best route's score and metrics, every `snapshot_every`-th followed by a `snapshot`. The
+alphabet route's worker sends each better route whole (`Improved`) instead: it becomes the job's
+route and its best, sent at once as a `snapshot` and then a `progress` with its numbers and no
+splice. `Finished` stores the worker's validated route (the engine's best) and emits `done`;
+`Failed` emits `error`. Whenever the route a job stores is not the copy its clients have drawn,
+a `snapshot` of it comes just before `done`.
 
 Event ids count up per job. A subscriber (`subscribe`, the SSE endpoint's) first gets the
 stored `snapped` and `baseline` events it has not seen (those after `Last-Event-ID`), then, once
@@ -296,6 +297,7 @@ class Job:
     goal: Goal | None = None
     best: RouteArrays | None = None  # the best route so far, by the goal: often `route` itself
     best_value: float = 0.0
+    best_score: float = 0.0
     iteration: int = 0
     accepted: int = 0
     elapsed_s: float = 0.0
@@ -587,6 +589,7 @@ class JobManager:
         primary = OBJECTIVES.get(job.request.objective, Distance).primary
         job.goal = Goal(job.request.target, data, primary=primary, baseline=baseline)
         job.best, job.best_value = m.route, job.goal.value(m.score, m.route.metrics)
+        job.best_score = m.score
         self._emit(
             job,
             "baseline",
@@ -609,7 +612,7 @@ class JobManager:
         job.score, job.iteration, job.elapsed_s = m.score, m.iteration, m.elapsed_s
         value = goal.value(m.score, m.metrics)
         if goal.better(value, job.best_value):
-            job.best, job.best_value = job.route, value
+            job.best, job.best_value, job.best_score = job.route, value, m.score
         job.accepted += 1
         job.pending.append(
             sse.splice_out(job.loaded.data, job.loaded.geometry, m.i, m.j, m.nodes, m.edges)
@@ -623,30 +626,17 @@ class JobManager:
             raise RuntimeError("a better route before the start")
         job.route = job.best = m.route
         job.score, job.iteration, job.elapsed_s = m.score, m.iteration, m.elapsed_s
-        job.best_value = goal.value(m.score, m.route.metrics)
+        job.best_value, job.best_score = goal.value(m.score, m.route.metrics), m.score
         job.accepted += 1
         self._emit(job, "snapshot", self._snapshot(job))
-        progress = Progress(
-            iteration=job.iteration,
-            elapsed_s=job.elapsed_s,
-            score=job.score,
-            metrics=self._metrics(job),
-            splices=[],
-        )
-        self._emit(job, "progress", progress)
+        self._emit(job, "progress", self._progress(job, []))
         job.last_flush = time.monotonic()
 
     def _flush(self, job: Job) -> None:
         """Send the splices not sent yet, and a snapshot every `snapshot_every` sends."""
         if not job.pending:
             return
-        progress = Progress(
-            iteration=job.iteration,
-            elapsed_s=job.elapsed_s,
-            score=job.score,
-            metrics=self._metrics(job),
-            splices=job.pending,
-        )
+        progress = self._progress(job, job.pending)
         job.pending = []
         job.last_flush = time.monotonic()
         self._emit(job, "progress", progress)
@@ -841,6 +831,19 @@ class JobManager:
     def _metrics(self, job: Job) -> RouteMetrics:
         metrics = job.route.metrics if job.route is not None else Metrics(0.0, 0.0)
         return sse.route_metrics(metrics, job.baseline_length_m)
+
+    def _progress(self, job: Job, splices: list[SpliceOut]) -> Progress:
+        """A `progress` event with these splices, the route's numbers and the best route's."""
+        best = job.best.metrics if job.best is not None else Metrics(0.0, 0.0)
+        return Progress(
+            iteration=job.iteration,
+            elapsed_s=job.elapsed_s,
+            score=job.score,
+            metrics=self._metrics(job),
+            splices=splices,
+            best_score=job.best_score,
+            best_metrics=sse.route_metrics(best, job.baseline_length_m),
+        )
 
     def _snapshot(self, job: Job) -> Snapshot:
         route = job.route

@@ -282,6 +282,8 @@ const progress = object<Progress>({
   score: "number",
   metrics,
   splices: array(splice),
+  best_score: optional("number"), // the recordings predate the best route's numbers
+  best_metrics: optional(metrics),
 });
 const snapshot = object<Snapshot>({
   iteration: "integer",

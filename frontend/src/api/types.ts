@@ -356,6 +356,10 @@ export interface Progress {
   score: number;
   metrics: Metrics;
   splices: Splice[];
+  /** The best route's so far: an annealing run's current route may be below it. Optional for
+   * the streams recorded before the API sent them. */
+  best_score?: number;
+  best_metrics?: Metrics;
 }
 
 /** The whole route; `node_index[k]` is the index in `geometry` of route node k. */

@@ -19,7 +19,7 @@ from worst_route.engine.request import request_masks
 from worst_route.engine.target import Target
 from worst_route.engine.validator import validate_route
 
-from ..engine.graphs import lattice
+from ..engine.graphs import lattice, uneven_lattice
 from .support import (
     BIG,
     GRID,
@@ -609,3 +609,28 @@ async def test_a_reorder_job_whose_search_outlasts_its_allowance_times_out(
         events = await collect(m.subscribe(job))
         assert names(events) == ["error"] and job.route_id is None
         assert json.loads(events[0].data)["code"] == "WORKER_TIMEOUT"
+
+
+# Seed 3 on this town of uneven streets: the run converges, reheats, takes shorter splices and ends
+# a little below its best (4,295 m against 4,309 m).
+UNEVEN_TOWN = uneven_lattice(6, 6, 0)
+
+
+async def test_an_annealing_job_sends_its_best_in_every_progress_and_ends_on_it(data: Path) -> None:
+    save_build(data, UNEVEN_TOWN, "uneven", latest=False)
+    async with manager(data) as m:
+        build = loaded(data, "uneven")
+        job = submit(m, build, request(UNEVEN_TOWN, [0, 35], seed=3, max_iterations=10**6))
+        events = await collect(m.subscribe(job))
+        done = json.loads(events[-1].data)
+        assert done["stopped_because"] == "converged"
+        progress = [json.loads(e.data) for e in events if e.name == "progress"]
+        best = [p["best_score"] for p in progress]
+        assert best == sorted(best) and all(p["score"] <= p["best_score"] for p in progress)
+        assert progress[-1]["score"] < best[-1]  # the current route ended below the best
+        assert names(events)[-3:] == ["progress", "snapshot", "done"]
+        shown = json.loads(events[-2].data)["metrics"]
+        last = progress[-1]["best_metrics"]
+        assert shown["length_m"] == last["length_m"] == done["metrics"]["length_m"] == best[-1]
+        assert last["ratio"] == done["metrics"]["ratio"]
+        validated(m, data, done["route_id"], "uneven")

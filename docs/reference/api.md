@@ -840,8 +840,9 @@ the one a user planning the trip at the automatic tier gets.
 ## Drawing a route
 
 A player draws a route junction by junction on the map, under the engine's rules, against the
-engine's own route for the same stops (the frontend starts a normal `POST /jobs` with the same
-request, the par: `docs/reference/frontend.md`, **Drawing**). The server keeps the drawing legal and
+engine's route for the same stops (the frontend starts a normal `POST /jobs` with the same request
+and the target `{kind: "ratio", value: 10}`, a round trip's as it is, the par:
+`docs/reference/frontend.md`, **Drawing**). The server keeps the drawing legal and
 holds nothing of it: each call sends the request and the whole path (`api/draw_api.py`; the
 checks are the engine's, `docs/reference/engine.md`, **Drawing**).
 

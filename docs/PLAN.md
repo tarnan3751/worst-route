@@ -859,8 +859,8 @@ The game loop's second piece is built (2026-10-31; `docs/reference/api.md`, **Dr
 `docs/reference/engine.md`, **Drawing**; `docs/reference/frontend.md`, **Drawing**): beat the
 engine. The player draws a route junction by junction on the map, under the engine's rules (no
 intersection twice, no road twice, twins included, the one-ways and the turn tables, the stops in
-order, a strict turn constraint and hard mode), against the engine's own route for the same stops,
-the par, a normal job started with the drawing. The server holds nothing of a drawing: each `POST
+order, a strict turn constraint and hard mode), against the engine's route for the same stops
+aiming at 10×, the par, a normal job started with the drawing. The server holds nothing of a drawing: each `POST
 /draw` sends the request and the whole path and is answered with the drawing so far and its legal
 next moves (each with its road, length, turn and shape), or refused with `ILLEGAL_PATH`, the code
 of the rule broken and the first illegal edge. The path is checked by `route.check_route`, the one
@@ -873,7 +873,7 @@ step on a request needs (its masks, stops and baseline) is kept for the last eig
 on, so a step costs 8–11 ms at 2,000 edges on `us-t3` (27–41 ms at 10,000), 37–148 ms when it
 is worked out again. The frontend's "Draw it" shows the moves as highlighted roads, takes the one clicked,
 undoes with Backspace, leaves with Esc, finishes with the longest move to the end, and gives the
-verdict against the par: "You 14.3× · the engine 37.5×: the engine wins." Scoring across players,
+verdict against the par: "You 14.3× · the engine 9.9×: you beat the engine." Scoring across players,
 accounts and leaderboards come next.
 
 The game loop's third piece is built (2026-10-31; `docs/reference/frontend.md`, **Challenges**):

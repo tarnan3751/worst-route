@@ -2,8 +2,10 @@
 
 A job plans one request. `prepare(loaded, request)` is the pre-flight the endpoint runs before a
 job exists (the request's masks, a pilgrimage's brand within them, and `resolve_stops`, so a
-brand out of reach or a stop that cannot be snapped or reached is a 422, not a job); the worker
-repeats it, deterministically. `JobManager.submit` makes the job,
+brand out of reach or a stop that cannot be snapped or reached is a 422, not a job; for a
+certified route first its leash, `exact.certified_request`, so the request it gives the job
+carries the leash as a number, and after the stops its area, refused over the caps as
+`exact.AreaTooLarge`); the worker repeats it, deterministically. `JobManager.submit` makes the job,
 emits its `snapped` event from the pre-flight (each stop's position among those given, `order`,
 the identity), and starts its searches, each a worker (`api/worker.py`) in a spawned process, or
 queues it when `max_jobs` workers are not free for it; with `max_queued` waiting too it raises
@@ -53,9 +55,12 @@ may be an earlier one. Splices are sent as `progress` events at most once per `c
 with the best route's score and metrics, every `snapshot_every`-th followed by a `snapshot`. The
 alphabet route's worker sends each better route whole (`Improved`) instead: it becomes the job's
 route and its best, sent at once as a `snapshot` and then a `progress` with its numbers and no
-splice. `Finished` stores the worker's validated route (the engine's best) and emits `done`;
-`Failed` emits `error`. Whenever the route a job stores is not the copy its clients have drawn,
-a `snapshot` of it comes just before `done`.
+splice; so does a certified route's, whose `Improved` carries the solver's bound and gap, and
+whose `Bounded`, between better routes, is sent as a `progress` with no splice; every `progress`
+of a certified job carries the latest bound and gap (`certified`). `Finished` stores the
+worker's validated route (the engine's best) and emits `done`; `Failed` emits `error`. Whenever
+the route a job stores is not the copy its clients have drawn, a `snapshot` of it comes just
+before `done`.
 
 Event ids count up per job. A subscriber (`subscribe`, the SSE endpoint's) first gets the
 stored `snapped` and `baseline` events it has not seen (those after `Last-Event-ID`), then, once
@@ -70,7 +75,9 @@ killed while writing may leave it corrupt), and the manager's best route so far 
 against the pre-flight's stops and masks, stored with `stopped_because: "cancelled"` and
 reported in `done` (its `run.attempts` is the attempt of the last splice applied, so planning
 again with that many attempts gives it back), or `error` `VALIDATION_FAILED` if it fails; for a
-portfolio the best route so far of the search ahead, with that search's seed and attempts. A
+portfolio the best route so far of the search ahead, with that search's seed and attempts; for a
+certified route its last better route, its `run.certified` `feasible` with the last bound and gap
+the solver sent (null when it sent none) and the pre-flight's area. A
 running job is stopped the same way `kill_grace_s` after its budget, as `"timeout"`
 (`WORKER_TIMEOUT` before its route exists); a reorder job's deadline is `reorder_search_s`
 later until its `Started` (its search for the order runs before the loop) and from then is the
@@ -114,6 +121,7 @@ from pydantic import BaseModel
 from worst_route.api import logs, sse
 from worst_route.api.limits import client_hash
 from worst_route.api.schemas import (
+    CertifiedProgress,
     Done,
     DoneMetrics,
     ErrorBody,
@@ -133,6 +141,7 @@ from worst_route.api.schemas import (
 from worst_route.api.sse import Event
 from worst_route.api.store import RouteStore
 from worst_route.api.worker import (
+    Bounded,
     Failed,
     Finished,
     Improved,
@@ -157,10 +166,12 @@ from worst_route.config import (
     API_SIMPLIFY_M,
     API_SNAPSHOT_EVERY,
     API_SWEEP_S,
+    CERTIFIED_WORKERS,
     REORDER_SEARCH_MAX_S,
     BackendName,
 )
 from worst_route.engine import ENGINE_VERSION
+from worst_route.engine.exact import certified_area, certified_request, too_large
 from worst_route.engine.objectives import OBJECTIVES
 from worst_route.engine.objectives.brand import BrandRefused, brand_problem
 from worst_route.engine.objectives.collect import count_items
@@ -214,23 +225,35 @@ class JobSettings:
 
 @dataclass(frozen=True, eq=False)
 class Prepared:
-    """A request's masks and resolved stops, worked out before its job exists."""
+    """A request's masks and resolved stops, worked out before its job exists (for a certified
+    route, the request with its leash, and its area's nodes and edges)."""
 
     request: RouteRequest
     masks: RequestMasks
     snaps: tuple[Snap, ...]
+    area: tuple[int, int] | None = None
 
 
 def prepare(loaded: Loaded, request: RouteRequest) -> Prepared:
-    """The pre-flight: raises `BrandRefused`, `SnapError` or `StopUnreachable` as the worker
-    would."""
-    masks = request_masks(loaded.spatial, loaded.data, request)
+    """The pre-flight: raises `BrandRefused`, `SnapError`, `StopUnreachable` or `AreaTooLarge`
+    as the worker would."""
+    data, spatial = loaded.data, loaded.spatial
+    if request.certified:
+        request = certified_request(data, spatial, request)
+    masks = request_masks(spatial, data, request)
     if request.brand is not None:
-        problem = brand_problem(loaded.data, request.brand, masks.active)
+        problem = brand_problem(data, request.brand, masks.active)
         if problem is not None:
             raise BrandRefused(problem)
-    snaps = resolve_stops(loaded.data, loaded.spatial, loaded.backend, request, masks)
-    return Prepared(request, masks, tuple(snaps))
+    snaps = resolve_stops(data, spatial, loaded.backend, request, masks)
+    if not request.certified:
+        return Prepared(request, masks, tuple(snaps))
+    area = certified_area(data, masks, [s.node for s in snaps])
+    assert area is not None  # the stops resolve, so a walk joins each to the next
+    refused = too_large(area, round(masks.leash_m, 1))
+    if refused is not None:
+        raise refused
+    return Prepared(request, masks, tuple(snaps), (area.node_count, area.edge_count))
 
 
 class _Worker(Protocol):
@@ -312,6 +335,7 @@ class Search:
     finished: Finished | None = None  # its validated route, once its worker has sent it
     failure: ErrorBody | None = None  # why it ended without one
     ended: bool = False  # its worker is no longer read, and holds no slot
+    certified: CertifiedProgress | None = None  # a certified route's last bound and gap
 
 
 @dataclass(eq=False)
@@ -328,6 +352,7 @@ class Job:
     base: RouteArrays | None
     created: datetime
     order: tuple[int, ...]  # each stop's position among those of the request as submitted
+    area: tuple[int, int] | None = None  # a certified route's nodes and edges (the pre-flight's)
     request_id: str | None = None  # the request that submitted it (`logs.request_id`)
     client: str | None = None  # who asked for it (`limits.client_of`), on a public server
     status: JobState = "queued"
@@ -494,6 +519,7 @@ class JobManager:
             base=base,
             created=datetime.now(UTC),
             order=tuple(range(len(prepared.request.stops))),
+            area=prepared.area,
             request_id=logs.request_id.get(),
             client=client,
             searches=[Search(seed + k) for k in range(portfolio)],
@@ -655,6 +681,8 @@ class JobManager:
                             self._spliced(job, search, message)
                         elif isinstance(message, Improved):
                             self._improved(job, search, message)
+                        elif isinstance(message, Bounded):
+                            self._bounded(job, search, message)
                         else:
                             await self._ended(job, search, message)
                             if job.closing:
@@ -743,8 +771,9 @@ class JobManager:
             )
 
     def _improved(self, job: Job, search: Search, m: Improved) -> None:
-        """A better alphabet route: the search's route and its best, sent as a `snapshot` and
-        then a `progress` with its numbers and no splice."""
+        """A better alphabet or certified route: the search's route and its best (and a certified
+        route's bound and gap), sent as a `snapshot` and then a `progress` with its numbers and no
+        splice."""
         goal = job.goal
         if search.route is None or goal is None:
             raise RuntimeError("a better route before the start")
@@ -752,7 +781,19 @@ class JobManager:
         search.score, search.iteration, search.elapsed_s = m.score, m.iteration, m.elapsed_s
         search.best_value, search.best_score = goal.value(m.score, m.route.metrics), m.score
         search.accepted += 1
+        if m.certified is not None:
+            search.certified = CertifiedProgress(bound_m=m.certified[0], gap=m.certified[1])
         self._emit(job, "snapshot", self._snapshot(job))
+        self._emit(job, "progress", self._progress(job, []))
+        job.last_flush = time.monotonic()
+
+    def _bounded(self, job: Job, search: Search, m: Bounded) -> None:
+        """A certified route's bound and gap between better routes, and the time the solver
+        reached them, the search's elapsed time since: sent as a `progress` with no splice."""
+        if search.route is None:
+            raise RuntimeError("a bound before the start")
+        search.certified = CertifiedProgress(bound_m=m.bound_m, gap=m.gap)
+        search.elapsed_s = m.elapsed_s
         self._emit(job, "progress", self._progress(job, []))
         job.last_flush = time.monotonic()
 
@@ -1076,6 +1117,7 @@ class JobManager:
             splices=splices,
             best_score=job.best_score,
             best_metrics=sse.route_metrics(best, job.baseline_length_m),
+            certified=job.lead.certified,
         )
         if len(job.searches) == 1:
             return progress
@@ -1148,6 +1190,7 @@ class JobManager:
                 "elapsed_s": search.elapsed_s,
                 "backend": job.loaded.backend.name,
                 **({"portfolio": _portfolio_run(job, search)} if len(job.searches) > 1 else {}),
+                **({"certified": _certified_run(job, search)} if job.area is not None else {}),
             },
         }
 
@@ -1210,6 +1253,23 @@ def _portfolio_run(job: Job, search: Search) -> dict[str, Any]:
     one whose route it is."""
     seeds = [s.seed for s in job.searches]
     return {"k": len(seeds), "seeds": seeds, "winner": job.searches.index(search)}
+
+
+def _certified_run(job: Job, search: Search) -> dict[str, Any]:
+    """A certified route's `run.certified` when its job ended early: not proven, with the last
+    bound and gap its search sent (null when none) and the pre-flight's area and leash."""
+    assert job.area is not None and job.masks is not None
+    last = search.certified
+    return {
+        "status": "feasible",
+        "bound_m": last.bound_m if last is not None else None,
+        "gap": last.gap if last is not None else None,
+        "nodes": job.area[0],
+        "edges": job.area[1],
+        "leash_m": round(job.masks.leash_m, 1),
+        "solve_s": search.elapsed_s,
+        "workers": CERTIFIED_WORKERS,
+    }
 
 
 def _drain(worker: _Worker, wait: float) -> tuple[list[Message], bool]:

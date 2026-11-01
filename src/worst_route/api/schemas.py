@@ -6,7 +6,9 @@ item `collect` collects and the brand `brand` visits), with the stops as `{lat, 
 objects, the target as
 `{kind: "max"}`, `{kind: "ratio", value}` or `{kind: "duration", seconds}` (the engine's
 `Target`, whose bounds it checks), the turn constraints as the engine's
-`{no_left, no_right, strict}` and `reorder` (the stops between the ends in the worst order), plus
+`{no_left, no_right, strict}`, `reorder` (the stops between the ends in the worst order) and
+`certified` (the provably longest route in a small area; false, the default, is left out of the
+request as stored), plus
 `region`, `vehicle` and `departure` (kept with the route for the presentation), `base_route_id`
 ("make it worse": the stops, in the order that route visits them, tier and leash then come from
 that route, so `stops` may be left out, and `reorder` is off) and `portfolio` (that many searches
@@ -17,7 +19,7 @@ at once, seeds `seed` and up; 1, the default, is left out of the request as stor
 The responses: `Health`, `RegionOut`, `SnapOut`, `JobCreated`, `JobStatus`, `RouteDocument`
 (its metrics with `TargetMetrics` for a ratio or duration target, `ItemCounts`, the route's
 collectibles, `BrandVisits` for a pilgrimage and `AlphabetLetters` for an alphabet route, and
-its run with `PortfolioRun` for a portfolio's),
+its run with `PortfolioRun` for a portfolio's and `CertifiedRun` for a certified route's),
 `ValidationOut`, `BrandsOut` (`GET /brands`, with its `BrandOut`s), and `ErrorBody` (`{code,
 message}` and the error's own fields) for every error. The document's metrics count the route's
 turns (`Turns`), its delays and its collectibles, and with the presentation's numbers (fuel,
@@ -29,7 +31,8 @@ an alphabet route's letters) as extra fields.
 A route document and the `snapped` event carry `order`, each stop's position among the stops
 the job was given, in the order the route visits them (the identity without `reorder`).
 The SSE events' payloads are `Snapped`, `BaselineOut`, `Progress` (with `SpliceOut`s; for a
-portfolio `PortfolioProgress`, with its `PortfolioOut`), `Snapshot`, `Done` and `ErrorBody`.
+portfolio `PortfolioProgress`, with its `PortfolioOut`; for a certified route its
+`CertifiedProgress`, the solver's bound and gap), `Snapshot`, `Done` and `ErrorBody`.
 Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in requests; every number is metric.
 
 `GeocodeOut`, with its `GeocodeCandidateOut`s, answers `GET /geocode`, and `DirectionsOut`
@@ -37,7 +40,8 @@ Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in requests; every numb
 `RegionPickOut` answers, and `DailyOut`, with its `DailyStop`s, answers `GET /daily`; `DrawIn` is
 the body of `POST /draw` and `POST /draw/finish` (a request as `POST /jobs` takes it and the path
 drawn), which `DrawOut` (with `DrawAt` and its `DrawMove`s) and `DrawFinished` answer (at the end
-of the module). A route drawn by hand stops because it was `drawn`, which only its run says.
+of the module). A route drawn by hand stops because it was `drawn`, which only its run says, and a
+certified route the solver proved because it is `optimal`.
 """
 
 from datetime import datetime
@@ -59,7 +63,7 @@ from worst_route.engine.request import ObjectiveKey, RouteRequest, TierChoice
 from worst_route.engine.target import Target as EngineTarget
 from worst_route.presentation.directions import StepKind
 
-StopReason = Literal["budget", "converged", "target", "cancelled", "timeout", "drawn"]
+StopReason = Literal["budget", "converged", "target", "cancelled", "timeout", "drawn", "optimal"]
 TurnName = Literal["left", "right", "straight", "u_turn"]  # `engine.turns.TURN_NAMES`
 JobState = Literal["queued", "running", "done", "error"]
 
@@ -121,6 +125,7 @@ class RouteRequestIn(_In):
     brand: int | None = Field(default=None, ge=0)
     constraints: Constraints = NO_CONSTRAINTS
     reorder: bool = False
+    certified: bool = Field(default=False, exclude_if=lambda c: not c)
     tier: TierChoice = "auto"
     leash_km: Annotated[float, Field(gt=0, le=LEASH_MAX_KM)] | Literal["auto"] = "auto"
     budget_s: float = Field(default=DEFAULT_BUDGET_S, gt=0)
@@ -151,6 +156,7 @@ class RouteRequestIn(_In):
             brand=self.brand,
             constraints=self.constraints,
             reorder=self.reorder,
+            certified=self.certified,
             tier=self.tier,
             leash_km=self.leash_km,
             budget_s=self.budget_s,
@@ -309,10 +315,18 @@ class SpliceOut(_Out):
     node_index: list[int]
 
 
+class CertifiedProgress(_Out):
+    """How a certified route's solve stands: the longest any legal route in the area can be, by
+    the solver's bound so far, and the fraction by which it may exceed the route."""
+
+    bound_m: float
+    gap: float
+
+
 class Progress(_Out):
     """The `progress` event: every splice accepted since the last one, in order, and the best
     route's score and numbers so far (a max run that anneals takes shorter splices too, so its
-    current route may be below its best)."""
+    current route may be below its best); for a certified route, how its solve stands."""
 
     iteration: int
     elapsed_s: float
@@ -321,6 +335,7 @@ class Progress(_Out):
     splices: list[SpliceOut]
     best_score: float
     best_metrics: RouteMetrics
+    certified: CertifiedProgress | None = Field(default=None, exclude_if=lambda c: c is None)
 
 
 class PortfolioOut(_Out):
@@ -462,6 +477,22 @@ class PortfolioRun(_Out):
     winner: int
 
 
+class CertifiedRun(_Out):
+    """A certified route's certificate: `optimal` when the solver proved no legal route in the
+    area is longer, else `feasible`; the bound on the longest one and the gap (null when the
+    solver had none yet), the area's nodes and edges, the leash, the solve's seconds and its
+    threads."""
+
+    status: Literal["optimal", "feasible"]
+    bound_m: float | None
+    gap: float | None
+    nodes: int
+    edges: int
+    leash_m: float
+    solve_s: float
+    workers: int
+
+
 class Run(_Out):
     attempts: int
     accepted: int
@@ -470,6 +501,8 @@ class Run(_Out):
     backend: str
     # a portfolio's; absent for one search
     portfolio: PortfolioRun | None = Field(default=None, exclude_if=lambda p: p is None)
+    # a certified route's; absent for any other
+    certified: CertifiedRun | None = Field(default=None, exclude_if=lambda c: c is None)
 
 
 class Validation(_Out):

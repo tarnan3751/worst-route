@@ -7,9 +7,11 @@ request with `plan_route` (from `spec.base` for "make it worse") and puts on `ou
   route), its score and metrics, the baseline, and the order the stops are visited in with the
   stops resolved in it (with `reorder`, the order the engine's search chose);
 - `Spliced`, for every accepted splice: the window, the detour's nodes and edges, and the
-  route's attempt count, elapsed time, score and metrics after it; for the alphabet route,
-  `Improved` instead, for every better route its search finds: the whole route, its restart
-  count, elapsed time, score and metrics;
+  route's attempt count, elapsed time, score and metrics after it; for the alphabet route and a
+  certified route, `Improved` instead, for every better route its search finds: the whole route
+  with its stops' positions, its restart (or solution) count, elapsed time, score and metrics,
+  and for a certified route the solver's bound and gap; and for a certified route, between them,
+  `Bounded`, the solver's bound and gap at most once a second;
 - then `Finished` (the validated route as its `route.json` document, the baseline's edges, and
   the route's score and metrics) or `Failed` (an error code, a one-line message, the error's
   fields and a traceback for the log).
@@ -19,11 +21,14 @@ the messages down `conn`, the write end of a one-way pipe (the API process holds
 only), and stops it with `terminate()`. In a process, `run_job` also checks on start and at
 every accepted splice that the API process is still alive (`multiprocessing.parent_process()`);
 when it is gone, or the pipe has no reader any more, the worker closes its end and exits at
-once (`os._exit`), so a crashed API never leaves workers searching. With inline workers (tests)
-it runs in a thread on a `queue.Queue`, and `cancel`, an Event, ends it quietly at the next
-accepted splice. A `BaseRouteMismatch` from `plan_route` (a base route the request cannot
-continue) is reported under the API's code for it, and a `BrandRefused` (a brand the build does
-not have or the request's area does not hold) as `INVALID_REQUEST` on the field `brand`. The
+once (`os._exit`), so a crashed API never leaves workers searching (a certified route's solve
+looks at each better route and each bound it reports). With inline workers (tests) it runs in a
+thread on a `queue.Queue`, and `cancel`, an Event, ends it quietly at the next accepted splice
+(or bound). A `BaseRouteMismatch` from `plan_route` (a base route the request cannot continue)
+is reported under the API's code for it, a `BrandRefused` (a brand the build does not have or
+the request's area does not hold) as `INVALID_REQUEST` on the field `brand`, and an
+`AreaTooLarge` (an area too large to certify) as `AREA_TOO_LARGE_TO_CERTIFY` on the field
+`leash`, with its counts and the caps. The
 worker imports the engine and the graph package, never FastAPI, and every message is a small
 picklable dataclass.
 """
@@ -39,6 +44,7 @@ from threading import Event
 from typing import Any, Protocol
 
 from worst_route.config import BackendName
+from worst_route.engine.exact import AreaTooLarge, Incumbent
 from worst_route.engine.io import route_document
 from worst_route.engine.objectives.brand import BrandRefused
 from worst_route.engine.plan import BaseRouteMismatch, plan_route
@@ -104,6 +110,17 @@ class Improved:
     elapsed_s: float
     score: float
     route: RouteArrays
+    certified: tuple[float, float] | None = None  # a certified route's bound and gap
+
+
+@dataclass(frozen=True, eq=False)
+class Bounded:
+    """A certified route's solve between better routes: when (since the solve started), the
+    solver's bound and gap."""
+
+    elapsed_s: float
+    bound_m: float
+    gap: float
 
 
 @dataclass(frozen=True, eq=False)
@@ -122,7 +139,7 @@ class Failed:
     trace: str = ""
 
 
-Message = Started | Spliced | Improved | Finished | Failed
+Message = Started | Spliced | Improved | Bounded | Finished | Failed
 
 
 class Outbox(Protocol):
@@ -161,6 +178,19 @@ def unreachable(error: StopUnreachable) -> tuple[str, str, dict[str, Any]]:
     if isinstance(error, InfeasibleHardMode):
         return "STOP_UNREACHABLE_WITHOUT_REPEAT", f"{error}; try without hard", fields
     return "STOP_UNREACHABLE_WITHOUT_REPEAT", str(error), fields
+
+
+def area_fields(error: AreaTooLarge) -> dict[str, Any]:
+    """The API's fields for an area too large to certify: its counts, the caps, the leash, and
+    the field to change."""
+    return {
+        "nodes": error.nodes,
+        "edges": error.edges,
+        "max_nodes": error.max_nodes,
+        "max_edges": error.max_edges,
+        "leash_m": error.leash_m,
+        "field": error.field,
+    }
 
 
 def run_in_process(spec: JobSpec, conn: Connection) -> None:
@@ -209,6 +239,11 @@ def run_job(
     def progress(event: ProgressEvent, baseline: Baseline) -> None:
         check()
         s = event.splice
+        if isinstance(event, Incumbent):  # a certified route's: whole, with its stops
+            route = RouteArrays(s.nodes, s.edges, event.stop_idx, event.metrics)
+            bound = (event.bound_m, event.gap)
+            out.put(Improved(event.iteration, event.elapsed_s, event.score, route, bound))
+            return
         if spec.request.objective == "alphabet":  # each event a whole better route
             route = RouteArrays(s.nodes, s.edges, (0, len(s.nodes) - 1), event.metrics)
             out.put(Improved(event.iteration, event.elapsed_s, event.score, route))
@@ -226,6 +261,10 @@ def run_job(
             )
         )
 
+    def bound(elapsed_s: float, bound_m: float, gap: float) -> None:
+        check()
+        out.put(Bounded(elapsed_s, bound_m, gap))
+
     try:
         loaded = load_build(spec.data_dir, spec.region, spec.build_id, backend=spec.backend)
         result = plan_route(
@@ -236,6 +275,7 @@ def run_job(
             base=spec.base,
             on_start=start,
             on_progress=progress,
+            on_bound=bound,
         )
     except _Cancelled:
         return
@@ -245,6 +285,8 @@ def run_job(
         out.put(Failed("BASE_ROUTE_MISMATCH", str(error), {"field": error.field}))
     except BrandRefused as error:
         out.put(Failed("INVALID_REQUEST", str(error), {"field": error.field}))
+    except AreaTooLarge as error:
+        out.put(Failed("AREA_TOO_LARGE_TO_CERTIFY", str(error), area_fields(error)))
     except StopUnreachable as error:
         out.put(Failed(*unreachable(error)))
     except SnapError as error:

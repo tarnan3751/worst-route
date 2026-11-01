@@ -15,8 +15,10 @@ export type Tier = "auto" | "T0" | "T1" | "T2" | "T3" | "T4";
 export type Objective = "distance" | "time" | "collect" | "brand" | "alphabet";
 export type CollectItem = "toll_booth" | "level_crossing" | "roundabout" | "bridge";
 export type TargetKind = "max" | "ratio" | "duration";
-/** How a run ended; `drawn`, a route drawn by hand (its run's backend `human`). */
-export type StopReason = "budget" | "converged" | "target" | "cancelled" | "timeout" | "drawn";
+/** How a run ended; `drawn`, a route drawn by hand (its run's backend `human`); `optimal`, a
+ * certified route the solver proved. */
+export type StopReason =
+  "budget" | "converged" | "target" | "cancelled" | "timeout" | "drawn" | "optimal";
 export type JobState = "queued" | "running" | "done" | "error";
 
 /** `{code, message}` and the error's own fields (`stop_index`, `leg`, `field`, `constraint`,
@@ -57,16 +59,19 @@ export interface Constraints {
   hard?: boolean;
 }
 
-/** `POST /jobs`; a route document's `request` has every field but a `portfolio` of 1. `reorder`
- * visits the stops between the first and the last in the worst order (a route document's request
- * then has its stops in the order the route visits them); `portfolio` runs that many seeds at once,
- * from `seed`, and keeps the best. */
+/** `POST /jobs`; a route document's `request` has every field but a `portfolio` of 1 and a
+ * `certified` false. `reorder` visits the stops between the first and the last in the worst order
+ * (a route document's request then has its stops in the order the route visits them); `portfolio`
+ * runs that many seeds at once, from `seed`, and keeps the best; `certified` asks for the provably
+ * longest route in a small area (the distance, no target, no worst order, no turn constraint or
+ * hard mode, one seed, a start that is not the end). */
 export interface RouteRequest {
   region: string;
   stops?: StopIn[] | null;
   objective?: Objective;
   constraints?: Constraints;
   reorder?: boolean;
+  certified?: boolean;
   item?: CollectItem | null; // what `collect` collects; only with it
   brand?: number | null; // the id of the brand `brand` visits (GET /brands); only with it
   tier?: Tier;
@@ -270,6 +275,21 @@ export interface PortfolioRun {
   winner: number;
 }
 
+/** A certified route's certificate: `optimal` when the solver proved no legal route in its area
+ * is longer, else `feasible`, with the bound on the longest one and the gap, the fraction by which
+ * it may exceed the route (null when the solver had none yet); the area's nodes and edges, the
+ * leash used, the solve's seconds and threads. */
+export interface CertifiedRun {
+  status: "optimal" | "feasible";
+  bound_m: number | null;
+  gap: number | null;
+  nodes: number;
+  edges: number;
+  leash_m: number;
+  solve_s: number;
+  workers: number;
+}
+
 export interface Run {
   attempts: number;
   accepted: number;
@@ -277,6 +297,7 @@ export interface Run {
   elapsed_s: number;
   backend: string;
   portfolio?: PortfolioRun; // a portfolio's only
+  certified?: CertifiedRun; // a certified route's only
 }
 
 export interface Validation {
@@ -369,7 +390,15 @@ export interface Portfolio {
   best_ratios: (number | null)[];
 }
 
-/** A portfolio's numbers are its leader's, and it says how its searches stand. */
+/** How a certified route's solve stands: the bound on the longest legal route in the area so far,
+ * and the fraction by which it may exceed the route. */
+export interface CertifiedProgress {
+  bound_m: number;
+  gap: number;
+}
+
+/** A portfolio's numbers are its leader's, and it says how its searches stand; a certified
+ * route's say how its solve stands. */
 export interface Progress {
   iteration: number;
   elapsed_s: number;
@@ -381,6 +410,7 @@ export interface Progress {
   best_score?: number;
   best_metrics?: Metrics;
   portfolio?: Portfolio;
+  certified?: CertifiedProgress;
 }
 
 /** The whole route; `node_index[k]` is the index in `geometry` of route node k. */

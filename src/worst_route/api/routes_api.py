@@ -15,7 +15,10 @@
 `POST /jobs` refuses before a job exists: a ratio target for a round trip first, then the
 objective (an unknown one; the alphabet route to continue from a base route; one whose item,
 brand, target, stops or worst order do not fit it: `request.objective_problem`; a brand the build
-does not have; a portfolio under the alphabet route or with a base route), the worst order's
+does not have; a portfolio under the alphabet route or with a base route), a certified route's
+settings (`request.certified_problem`: another objective, a target, the worst order, a turn
+constraint or hard mode, a round trip; or a portfolio or a base route; all `INVALID_REQUEST` on
+`field: "certified"`), the worst order's
 stops (more than the region's build takes, `request.reorder_problem`: 422
 `TOO_MANY_STOPS_TO_REORDER` with `max_stops`), the budget (at most `Limits.budget_max_s`: 120 s,
 or 60 s on a public server; the target's bounds are the body's) and the portfolio (at most
@@ -26,11 +29,12 @@ worse" (`base_route_id`) the base route (its build, engine and stops, in the ord
 tier and leash, which the request may leave out, and `reorder` off; a ratio target for a base round
 trip too), then each stop against the region's bbox (`meta.params.bbox`, else the nodes' extent),
 then the pre-flight (`jobs.prepare`: a pilgrimage's brand within the request's area, snapping and
-the re-snap fallback, in a worker thread), and for a base route `plan.check_base` on the
-pre-flight's stops and masks (`BASE_ROUTE_MISMATCH`). The errors are
+the re-snap fallback, a certified route's leash and area, in a worker thread), and for a base
+route `plan.check_base` on the pre-flight's stops and masks (`BASE_ROUTE_MISMATCH`). The errors are
 `ApiError`s, answered as `ErrorBody`: 422 `INVALID_REQUEST`, `UNKNOWN_REGION`,
 `STOP_OUTSIDE_REGION`, `NO_NODE_NEAR`, `STOP_UNREACHABLE_WITHOUT_REPEAT`,
-`INFEASIBLE_TURN_CONSTRAINT`, `TOO_MANY_STOPS_TO_REORDER`, `BUDGET_TOO_LARGE`,
+`INFEASIBLE_TURN_CONSTRAINT`, `AREA_TOO_LARGE_TO_CERTIFY` (+ `nodes`, `edges`, `max_nodes`,
+`max_edges`, `leash_m`, `field: "leash"`), `TOO_MANY_STOPS_TO_REORDER`, `BUDGET_TOO_LARGE`,
 `PORTFOLIO_TOO_LARGE`, `UNKNOWN_ROUTE`, `BUILD_MISMATCH` (also `/validate` on a route another engine
 version made), `BASE_ROUTE_MISMATCH`; 429 `TOO_MANY_JOBS` (+ `running`, `queued`: the client's own
 jobs, when they are why); 404 `NOT_FOUND`; 409 `BUILD_UNAVAILABLE` (a stored route whose build is no
@@ -93,10 +97,11 @@ from worst_route.api.schemas import (
 )
 from worst_route.api.sse import server_sent, time_ratio
 from worst_route.api.store import StoredRoute
-from worst_route.api.worker import RouteArrays, unreachable
+from worst_route.api.worker import RouteArrays, area_fields, unreachable
 from worst_route.config import BUBBLE_KM, REGIONS
 from worst_route.engine import ENGINE_VERSION
 from worst_route.engine.alphabet_search import alphabet_counts, edge_letters
+from worst_route.engine.exact import AreaTooLarge
 from worst_route.engine.objectives import OBJECTIVE_KEYS
 from worst_route.engine.objectives.base import route_delay_s
 from worst_route.engine.objectives.brand import BrandRefused, brand_counts, brand_problem
@@ -104,6 +109,7 @@ from worst_route.engine.objectives.collect import count_items
 from worst_route.engine.plan import BaseRouteMismatch, check_base
 from worst_route.engine.request import (
     RouteRequest,
+    certified_problem,
     max_reorder_stops,
     objective_problem,
     reorder_problem,
@@ -349,6 +355,8 @@ async def create_job(body: RouteRequestIn, request: Request) -> JobCreated:
     if body.portfolio > 1 and body.base_route_id is not None:
         message = "a continuation runs one search: no portfolio"
         raise ApiError(422, "INVALID_REQUEST", message, field="portfolio")
+    if body.certified:
+        _check_certified(body)
     reordering = body.reorder and body.base_route_id is None  # a continuation keeps its order
     if reordering and (too_many := reorder_problem(count, loaded.data)) is not None:
         cap = max_reorder_stops(loaded.data)
@@ -402,6 +410,20 @@ async def create_job(body: RouteRequestIn, request: Request) -> JobCreated:
     except TooManyJobs as full:
         raise _too_many(full) from None
     return JobCreated(job_id=job.id, events_url=f"/jobs/{job.id}/events", seed=seed)
+
+
+def _check_certified(body: RouteRequestIn) -> None:
+    """Refuse what a certified route does not take, on `field: "certified"`."""
+    stops = [(s.lat, s.lon) for s in body.stops or []]
+    problem = certified_problem(
+        body.objective, body.target.kind, body.reorder, body.constraints, stops
+    )
+    if problem is None and body.portfolio > 1:
+        problem = "a certified route runs one search: no portfolio"
+    if problem is None and body.base_route_id is not None:
+        problem = "a certified route is planned from its stops: no base route"
+    if problem is not None:
+        raise ApiError(422, "INVALID_REQUEST", problem, field="certified")
 
 
 def _too_many(refused: TooManyJobs) -> ApiError:
@@ -475,6 +497,8 @@ def preflight(loaded: Loaded, request: RouteRequest) -> Prepared:
     except StopUnreachable as error:
         code, message, fields = unreachable(error)
         raise ApiError(422, code, message, **fields) from None
+    except AreaTooLarge as error:
+        raise ApiError(422, "AREA_TOO_LARGE_TO_CERTIFY", str(error), **area_fields(error)) from None
 
 
 def _unsnappable(loaded: Loaded, request: RouteRequest) -> int | None:

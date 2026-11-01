@@ -14,6 +14,8 @@ import type {
   BrandEntry,
   BrandList,
   BrandVisits,
+  CertifiedProgress,
+  CertifiedRun,
   Constraints,
   Daily,
   DailyStop,
@@ -134,7 +136,15 @@ function problems(value: unknown, spec: Spec, path = "$"): string[] {
 const lonLat: Spec = { tuple: ["number", "number"] };
 const lineString = object<LineString>({ type: literal("LineString"), coordinates: array(lonLat) });
 const tier = literal("auto", "T0", "T1", "T2", "T3", "T4");
-const stopReason = literal("budget", "converged", "target", "cancelled", "timeout", "drawn");
+const stopReason = literal(
+  "budget",
+  "converged",
+  "target",
+  "cancelled",
+  "timeout",
+  "drawn",
+  "optimal",
+);
 const errorBody = object<ErrorBody>({ code: "string", message: "string" }, "any");
 const collectItem = literal("toll_booth", "level_crossing", "roundabout", "bridge");
 const itemCounts = object<ItemCounts>({
@@ -225,6 +235,7 @@ const routeRequest = object<RouteRequest>({
   objective: optional(literal("distance", "time", "collect", "brand", "alphabet")),
   constraints: optional(constraints),
   reorder: optional("boolean"),
+  certified: optional("boolean"),
   item: optional(nullable(collectItem)),
   brand: optional(nullable("integer")),
   tier: optional(tier),
@@ -294,6 +305,7 @@ const progress = object<Progress>({
       best_ratios: array(nullable("number")),
     }),
   ),
+  certified: optional(object<CertifiedProgress>({ bound_m: "number", gap: "number" })),
 });
 const snapshot = object<Snapshot>({
   iteration: "integer",
@@ -399,6 +411,18 @@ const routeDocument = object<RouteDocument>({
     backend: "string",
     portfolio: optional(
       object<PortfolioRun>({ k: "integer", seeds: array("integer"), winner: "integer" }),
+    ),
+    certified: optional(
+      object<CertifiedRun>({
+        status: literal("optimal", "feasible"),
+        bound_m: nullable("number"),
+        gap: nullable("number"),
+        nodes: "integer",
+        edges: "integer",
+        leash_m: "number",
+        solve_s: "number",
+        workers: "integer",
+      }),
     ),
   }),
   validation: object<Validation>({ ok: "boolean", checked_at: "string" }),

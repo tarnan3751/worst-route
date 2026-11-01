@@ -219,9 +219,10 @@ it but no proxy, a visitor could name any address. The API's stream already send
 - **The public limits** (`docs/reference/api.md`, **Public limits**): budgets up to 60 s (120
   locally), a request's own leash at most 150 km as everywhere (the automatic leash follows the
   trip, a fifth of it beyond 750 km, and the budget bounds the job), and for each client one job
-  running and three waiting (`TOO_MANY_JOBS` with its counts), ten place searches and sixty picks
-  of a build (`POST /regions/pick`) a minute (`RATE_LIMITED` with `retry_after_s`). They are per
-  process and per address; there is no authentication.
+  running and three waiting (`TOO_MANY_JOBS` with its counts), ten place searches, sixty picks
+  of a build (`POST /regions/pick`), 240 steps of a drawing (`POST /draw`, `POST /draw/finish`)
+  and ten finished drawings a minute (`RATE_LIMITED` with `retry_after_s`). They are per process
+  and per address; there is no authentication.
 - **The logs** (`docs/reference/api.md`, **Logs**): one JSON object a line on stdout (`docker
   compose logs`), each request's line with its id (`X-Request-ID` in the answer), its path
   without the query, its status, its duration and the client's salted hash, never an address

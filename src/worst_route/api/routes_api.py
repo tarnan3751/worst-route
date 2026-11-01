@@ -161,7 +161,8 @@ def display_of(region: str) -> str:
     return region if known is None else known.display
 
 
-def _check_inside(loaded: Loaded, lat: float, lon: float, **fields: Any) -> None:
+def check_inside(loaded: Loaded, lat: float, lon: float, **fields: Any) -> None:
+    """STOP_OUTSIDE_REGION, with `fields`, unless the region's bbox holds (lat, lon)."""
     if not holds(loaded, lat, lon):
         west, south, east, north = bbox_of(loaded)
         region = loaded.data.meta["region"]
@@ -291,7 +292,7 @@ def regions(request: Request) -> list[RegionOut]:
 def snap(body: SnapIn, request: Request) -> SnapOut:
     """Where a stop at (lat, lon) would go, in its role."""
     loaded = region_of(api_of(request), body.region)
-    _check_inside(loaded, body.lat, body.lon)
+    check_inside(loaded, body.lat, body.lon)
     data, spatial = loaded.data, loaded.spatial
     tier = 4 if body.tier == "auto" else int(body.tier[1])
     xy = np.array([spatial.project(body.lat, body.lon)])
@@ -342,12 +343,12 @@ async def create_job(body: RouteRequestIn, request: Request) -> JobCreated:
         planned = _continuing(loaded, body, base, seed)
     stops = planned.stops or []
     for k, stop in enumerate(stops):
-        _check_inside(loaded, stop.lat, stop.lon, stop_index=k)
+        check_inside(loaded, stop.lat, stop.lon, stop_index=k)
     try:
         engine_request = planned.engine_request(seed)
     except ValidationError as error:
         raise ApiError(422, "INVALID_REQUEST", str(error)) from None
-    prepared = await run_in_threadpool(_preflight, loaded, engine_request)
+    prepared = await run_in_threadpool(preflight, loaded, engine_request)
     arrays = None
     if base is not None:
         try:
@@ -426,8 +427,8 @@ def _check_engine(stored: StoredRoute) -> None:
         raise ApiError(422, "BUILD_MISMATCH", message)
 
 
-def _preflight(loaded: Loaded, request: RouteRequest) -> Prepared:
-    """`jobs.prepare`, its errors as the endpoint's."""
+def preflight(loaded: Loaded, request: RouteRequest) -> Prepared:
+    """`jobs.prepare`, its errors as `POST /jobs` answers them (`POST /draw` too)."""
     try:
         return prepare(loaded, request)
     except BrandRefused as error:

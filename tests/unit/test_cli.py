@@ -269,7 +269,8 @@ def test_serve_takes_the_proxy_log_and_public_options(
     assert public.exit_code == 0, public.output
     assert public.stdout.splitlines()[-1] == (
         "public: a client runs 1 job at once with 3 waiting, budgets up to 60 s, "
-        "10 place searches and 60 picks of a build a minute"
+        "10 place searches, 60 picks of a build, 240 drawing steps and 10 finished drawings "
+        "a minute"
     )
     api = ran["app"].state.api
     assert api.settings.public is True and api.limits.budget_max_s == 60

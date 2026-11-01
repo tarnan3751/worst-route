@@ -28,8 +28,10 @@ requests; every number is metric.
 
 `GeocodeOut`, with its `GeocodeCandidateOut`s, answers `GET /geocode`, and `DirectionsOut`
 `GET /routes/{id}/directions`; `RegionPickIn` is the body of `POST /regions/pick`, which
-`RegionPickOut` answers, and `DailyOut`, with its `DailyStop`s, answers `GET /daily` (at the end of
-the module).
+`RegionPickOut` answers, and `DailyOut`, with its `DailyStop`s, answers `GET /daily`; `DrawIn` is
+the body of `POST /draw` and `POST /draw/finish` (a request as `POST /jobs` takes it and the path
+drawn), which `DrawOut` (with `DrawAt` and its `DrawMove`s) and `DrawFinished` answer (at the end
+of the module). A route drawn by hand stops because it was `drawn`, which only its run says.
 """
 
 from datetime import datetime
@@ -38,14 +40,20 @@ from typing import Annotated, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from worst_route.api.store import DailyStatus
-from worst_route.config import API_DEFAULT_MAX_ITERATIONS, DEFAULT_BUDGET_S, LEASH_MAX_KM
+from worst_route.config import (
+    API_DEFAULT_MAX_ITERATIONS,
+    DEFAULT_BUDGET_S,
+    LEASH_MAX_KM,
+    MAX_DRAW_EDGES,
+)
 from worst_route.engine.constraints import NO_CONSTRAINTS, Constraints
 from worst_route.engine.objectives.collect import CollectItem
 from worst_route.engine.request import ObjectiveKey, RouteRequest, TierChoice
 from worst_route.engine.target import Target as EngineTarget
 from worst_route.presentation.directions import StepKind
 
-StopReason = Literal["budget", "converged", "target", "cancelled", "timeout"]
+StopReason = Literal["budget", "converged", "target", "cancelled", "timeout", "drawn"]
+TurnName = Literal["left", "right", "straight", "u_turn"]  # `engine.turns.TURN_NAMES`
 JobState = Literal["queued", "running", "done", "error"]
 
 
@@ -615,3 +623,64 @@ class DailyOut(_Out):
     ratio: float | None = None
     stopped_because: StopReason | None = None
     attempts: int | None = None
+
+
+# --- A route drawn by hand (`POST /draw`, `POST /draw/finish`) --------------------------------
+
+
+class DrawIn(_In):
+    """`POST /draw` and `POST /draw/finish`: the request drawn on, as `POST /jobs` takes it (its
+    region among its fields), and the path drawn, its edges in order from the start (none yet:
+    the start)."""
+
+    request: RouteRequestIn
+    path: list[Annotated[int, Field(ge=0, le=2**31 - 1)]] = Field(max_length=MAX_DRAW_EDGES)
+
+
+class DrawAt(_Out):
+    """The node a drawing is at."""
+
+    node: int
+    lat: float
+    lon: float
+
+
+class DrawMove(_Out):
+    """A legal next move: its edge, the node it leads to, the road's name (else its ref), its
+    length, the turn into it from the last edge (null for the first move), the stop it reaches
+    (its index, or null) and its shape (`[lon, lat]` points, 7 decimals)."""
+
+    edge: int
+    node: int
+    lat: float
+    lon: float
+    name: str | None
+    length_m: float
+    turn: TurnName | None
+    stop: int | None
+    coords: list[list[float]]
+
+
+class DrawOut(_Out):
+    """`POST /draw`: the drawing, always legal (an illegal path is refused): the stops as the
+    engine resolves them, where it is, the positions along it of the stops reached in order, its
+    length against the baseline's, its ratio once done (null before, and for a round trip), its
+    line (null for no edge yet), its legal next moves and whether it has reached the end."""
+
+    stops: list[StopSnapped]
+    at: DrawAt
+    reached: list[int]
+    legal: Literal[True] = True
+    length_m: float
+    baseline_length_m: float
+    ratio: float | None
+    geometry: LineString | None
+    next: list[DrawMove]
+    done: bool
+
+
+class DrawFinished(_Out):
+    """`POST /draw/finish`: the finished drawing stored as a route, and its ratio."""
+
+    route_id: str
+    ratio: float | None

@@ -4,24 +4,25 @@
 geometry, which drawing a route needs, when it is called, so `worst-route serve` fails before it
 listens when a build or its geometry is missing; it opens the route store, builds the geocoding
 service (Nominatim, with its cache `geocode.sqlite` beside the route store; none when the geocoder
-is `none`; a test passes its own), loads each region's places index (`presentation.places`; none
-for a region `worst-route aux places` has not written one for, whose routes then use a served
-region's that covers its states, `routes_api.places_of`) and mounts the endpoints (`routes_api`,
-`pick_api`, which picks the build a trip runs on, `geocode_api`, `share_api`, whose images are
-cached in `share/` beside the route store, `directions_api`, `ready_api` and `daily_api`, the
-daily route). Its lifespan starts and stops the job manager, stops following the daily route's
-jobs, and closes the geocoder's client. `ApiSettings` says which builds (each
+is `none`; a test passes its own), loads each region's places index (`presentation.places`; none for
+a region `worst-route aux places` has not written one for, whose routes then use a served region's
+that covers its states, `routes_api.places_of`) and mounts the endpoints (`routes_api`, `pick_api`,
+which picks the build a trip runs on, `geocode_api`, `share_api`, whose images are cached in
+`share/` beside the route store, `directions_api`, `ready_api`, `daily_api`, the daily route, and
+`draw_api`, a route drawn by hand). Its lifespan starts and stops the job manager, stops following
+the daily route's jobs, and closes the geocoder's client. `ApiSettings` says which builds (each
 region with its build id, the first region the default), which backend, where the store is, the job
 limits, and the geocoder: which, at what URL, with what contact in its User-Agent
 (`geocoder_user_agent`: `user_agent`'s, else the machine's, `config.Settings.user_agent`); whether a
 reverse proxy in front of it is trusted (`trust_proxy`: its `X-Forwarded-For` names the client, its
 `X-Request-ID` the request); and whether it is public (`public`: the limits `limits.PUBLIC`, a
-budget up to 60 s and each client's share of the jobs, the place searches and the picks of a build,
-held as `Api.limits`, the job manager's settings, `Api.quota` and `Api.pick_quota`; else
-`limits.LOCAL`); and the basemap `GET /config` offers the frontend (`basemap`, its file named by
-`basemap_name`, by default the first region), whose files it serves under `/basemap/` from
-`basemap_dir` (by default `<data_dir>/basemap`; `basemap_api`). Every request gets an id and an
-access line (`logs.RequestLog`).
+budget up to 60 s and each client's share of the jobs, the place searches, the picks of a build and
+the drawing's steps and finishes, held as `Api.limits`, the job manager's settings, `Api.quota`,
+`Api.pick_quota`, `Api.draw_quota` and `Api.finish_quota`; else `limits.LOCAL`); and the basemap
+`GET /config` offers the frontend (`basemap`, its file named by `basemap_name`, by default the first
+region), whose files it serves under `/basemap/` from `basemap_dir` (by default
+`<data_dir>/basemap`; `basemap_api`). Every request gets an id and an access line
+(`logs.RequestLog`).
 
 Every error answers an `ErrorBody` (`{code, message, ...}`): an endpoint refuses with
 `routes_api.ApiError(status, code, message, **fields)`, a malformed request is 422
@@ -52,6 +53,7 @@ from worst_route.api import (
     basemap_api,
     daily_api,
     directions_api,
+    draw_api,
     geocode_api,
     pick_api,
     ready_api,
@@ -66,6 +68,7 @@ from worst_route.api.schemas import ErrorBody
 from worst_route.api.store import RouteStore
 from worst_route.config import (
     DEFAULT_BACKEND,
+    DRAW_CONTEXTS,
     NOMINATIM_URL,
     BackendName,
     BasemapName,
@@ -120,6 +123,12 @@ class Api:
     limits: Limits = LOCAL
     quota: GeocodeQuota | None = None  # each client's place searches, on a public server
     pick_quota: GeocodeQuota | None = None  # each client's picks of a build, on a public server
+    draw_quota: GeocodeQuota | None = None  # each client's drawing steps, on a public server
+    finish_quota: GeocodeQuota | None = None  # each client's finished drawings, on a public server
+    # what the last requests drawn on need on every step (`draw_api`), by build and request
+    draw_contexts: draw_api.DrawContexts = field(
+        default_factory=lambda: draw_api.DrawContexts(DRAW_CONTEXTS)
+    )
     # the daily route's (`daily_api`): a lock per (date, region) while its plan is started, the
     # tasks that follow its jobs to their end, the jobs running, which no client may cancel, and
     # the day's request and its pre-flight, by (date, region, graph_version), drawn once
@@ -182,6 +191,8 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
     share_dir = store_path.parent / "share"
     quota = GeocodeQuota(limits.geocode_per_minute) if limits.geocode_per_minute else None
     picks = GeocodeQuota(limits.pick_per_minute) if limits.pick_per_minute else None
+    draws = GeocodeQuota(limits.draw_per_minute) if limits.draw_per_minute else None
+    finishes = GeocodeQuota(limits.finish_per_minute) if limits.finish_per_minute else None
     app.state.api = Api(
         settings,
         builds,
@@ -193,6 +204,8 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
         limits=limits,
         quota=quota,
         pick_quota=picks,
+        draw_quota=draws,
+        finish_quota=finishes,
     )
     app.include_router(routes_api.router)
     app.include_router(pick_api.router)
@@ -201,6 +214,7 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
     app.include_router(directions_api.router)
     app.include_router(ready_api.router)
     app.include_router(daily_api.router)
+    app.include_router(draw_api.router)
     app.include_router(basemap_api.router)
     basemap_api.mount_basemap(app, basemap_api.basemap_dir(settings))
     app.add_middleware(RequestLog, trust_proxy=settings.trust_proxy)

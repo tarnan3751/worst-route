@@ -1496,8 +1496,8 @@ def serve(
         bool,
         typer.Option(
             "--public",
-            help="The public limits: budgets up to 60 s, each client's share of the jobs and "
-            "the place searches.",
+            help="The public limits: budgets up to 60 s, each client's share of the jobs, the "
+            "place searches, the picks of a build, the drawing's steps and finished drawings.",
         ),
     ] = False,
     frontend: Annotated[
@@ -1566,8 +1566,9 @@ def serve(
         typer.echo(
             f"public: a client runs {limits.running_per_client} job at once with "
             f"{limits.queued_per_client} waiting, budgets up to {limits.budget_max_s:g} s, "
-            f"{limits.geocode_per_minute} place searches and {limits.pick_per_minute} picks "
-            "of a build a minute"
+            f"{limits.geocode_per_minute} place searches, {limits.pick_per_minute} picks "
+            f"of a build, {limits.draw_per_minute} drawing steps and "
+            f"{limits.finish_per_minute} finished drawings a minute"
         )
     site: Starlette = application
     if frontend is not None:

@@ -10,12 +10,13 @@ else: every route it returns has passed the validator.
 | Module | What it holds |
 |---|---|
 | `app.py` | `create_app`, `ApiSettings`, `Api` (the app's state), `geocoder_user_agent`, the error handlers |
-| `routes_api.py` | the endpoints, the checks `POST /jobs` makes before a job exists, `ApiError`, `api_of`, `region_of`, `bbox_of`, `holds`, `display_of`, `stored_route`, `build_of`, `places_of`, `stored_delays`, `presentation_of`, `directions_of` |
+| `routes_api.py` | the endpoints, the checks `POST /jobs` makes before a job exists (`check_inside`, `preflight`, which `POST /draw` makes too), `ApiError`, `api_of`, `region_of`, `bbox_of`, `holds`, `display_of`, `stored_route`, `build_of`, `places_of`, `stored_delays`, `presentation_of`, `directions_of` |
 | `pick_api.py` | `POST /regions/pick`, `pick_region` (**Picking a build**) |
 | `geocode_api.py` | `GET /geocode` (**Geocoding**) |
 | `share_api.py` | `GET` and `HEAD /routes/{id}/share.png`, `SHARE_IMAGE_VERSION` (**Share image**) |
 | `daily_api.py` | `GET /daily`, `today`, `daily_seed`, `daily_region`, `draw_trips`, `plannable` (**The daily route**) |
 | `directions_api.py` | `GET /routes/{id}/directions` |
+| `draw_api.py` | `POST /draw`, `POST /draw/finish`, `DrawContexts` (**Drawing a route**) |
 | `ready_api.py` | `GET /ready` (**Endpoints**) |
 | `basemap_api.py` | `GET /config`, the basemap's files under `/basemap/` (`BasemapFiles`), `basemap_of` (**Basemap**) |
 | `logs.py` | `RequestLog` (request ids, access lines), `JsonFormatter`, `ContextFilter`, `json_log_config` (**Logs**) |
@@ -90,7 +91,7 @@ own handling of them (`proxy_headers` off), so the client is always the peer. It
 `--log-format json` logs one JSON object a line on stdout (**Logs**); `text`, the default, is
 uvicorn's format, as before. `--public` applies the public limits (**Public limits**) and prints
 them last: `public: a client runs 1 job at once with 3 waiting, budgets up to 60 s, 10 place
-searches and 60 picks of a build a minute`. The basemap the frontend draws is `WORST_ROUTE_BASEMAP`'s, `raster` (the
+searches, 60 picks of a build, 240 drawing steps and 10 finished drawings a minute`. The basemap the frontend draws is `WORST_ROUTE_BASEMAP`'s, `raster` (the
 default) or `pmtiles` (**Basemap**), and with `pmtiles` `serve` prints the file it serves,
 `basemap: pmtiles <data>/basemap/<name>.pmtiles`, `--basemap-name`'s name, by default the first
 region's, before the proxy's and the public lines.
@@ -196,7 +197,7 @@ FastAPI's `detail`), but for the basemap's files' range errors: `/basemap/` answ
 
 | Status | Code | When |
 |---|---|---|
-| 422 | `INVALID_REQUEST` (+ `errors`, pydantic's without their `input`, and `field` when every error lies in one field of the body; or + `field`) | a body or field that does not parse (a seed beyond 2⁶³ − 1 included, `Infinity` or `NaN` for a number), an unknown objective, a target out of bounds, a ratio target for a round trip (`field: "target"`), `collect` without an item or an item for another objective, or an unknown item (`field: "item"`), a ratio target under `collect` or `brand` (`field: "target"`), `brand` without a brand, a brand for another objective, one the build does not have or one the request's area does not hold (`field: "brand"`), `alphabet` with a stop between its ends (`field: "stops"`), a target (`field: "target"`) or a base route (`field: "base_route_id"`), both turn constraints or `strict` without one (`field: "constraints"`); a place search's query empty or over 200 characters once normalised (`field: "q"`); `/brands` without a region |
+| 422 | `INVALID_REQUEST` (+ `errors`, pydantic's without their `input`, and `field` when every error lies in one field of the body; or + `field`) | a drawing's request asking for an objective but `distance`, a target but `max` or a base route (`field` `objective`, `target`, `base_route_id`), its path over `MAX_DRAW_EDGES` edges or with an id that is not a whole number in [0, 2³¹) (`field: "path"`; **Drawing a route**); a body or field that does not parse (a seed beyond 2⁶³ − 1 included, `Infinity` or `NaN` for a number), an unknown objective, a target out of bounds, a ratio target for a round trip (`field: "target"`), `collect` without an item or an item for another objective, or an unknown item (`field: "item"`), a ratio target under `collect` or `brand` (`field: "target"`), `brand` without a brand, a brand for another objective, one the build does not have or one the request's area does not hold (`field: "brand"`), `alphabet` with a stop between its ends (`field: "stops"`), a target (`field: "target"`) or a base route (`field: "base_route_id"`), both turn constraints or `strict` without one (`field: "constraints"`); a place search's query empty or over 200 characters once normalised (`field: "q"`); `/brands` without a region |
 | 422 | `UNKNOWN_REGION` | a region this server does not serve |
 | 422 | `STOP_OUTSIDE_REGION` (+ `stop_index`) | outside the region's bbox: the build's `params.bbox`, else its nodes' extent; for `POST /regions/pick`, a stop no served region's bbox holds with the others (**Picking a build**) |
 | 422 | `NO_NODE_NEAR` (+ `stop_index`, null when no single stop is to blame) | no node within 5 km can play the stop's role |
@@ -206,8 +207,10 @@ FastAPI's `detail`), but for the basemap's files' range errors: `/basemap/` answ
 | 422 | `UNKNOWN_ROUTE` (+ `base_route_id`) | a base route that is not stored |
 | 422 | `BUILD_MISMATCH` | a base route planned on another region, `graph_version` or engine version; `/validate` on a route another engine version made (its stops could be re-derived differently: re-plan it), as `worst-route validate` refuses one |
 | 422 | `BASE_ROUTE_MISMATCH` (+ `field`) | stops, tier or leash given that differ from the base route's; or a base route `plan.check_base` refuses under its request's resolved stops and masks (`field` `stops`: its stops are not where they resolve now; `route`: a node outside the area, an edge the request bans, a turn its strict constraint refuses, or under hard mode a road it comes back to) |
+| 422 | `ILLEGAL_PATH` (+ `refusal`, `index`) | a drawing's path that is not a legal route's beginning: `refusal` says why (`BROKEN_CHAIN`, `OUTSIDE_AREA`, `NODE_REUSED`, `ROUND_TRIP_START_REUSED`, `EDGE_BANNED`, `TRANSITION_FORBIDDEN`, `STOP_SKIPPED`, `PAST_END`, `TURN_REFUSED`, `ROAD_AGAIN`), `index` is its first illegal edge, the path before it legal (**Drawing a route**) |
+| 422 | `DRAWING_UNFINISHED` (+ `reached`) | `POST /draw/finish` on a legal path that has not reached the end; `reached` counts the stops it has |
 | 429 | `TOO_MANY_JOBS` (+ `running`, `queued` when the client's own jobs are why) | every worker busy and the queue full (for `GET /daily` too, when the day's job is still to submit: **The daily route**); on a public server also a client whose own jobs fill its share, one running and three waiting (**Public limits**): `running` and `queued` are its counts |
-| 429 | `RATE_LIMITED` (+ `retry_after_s`) | a place search that finds the geocoder's queue full: five already queued for a turn (**Geocoding**); the message is "the geocoder is busy, try again in a few seconds"; on a public server also a client's eleventh search within a minute, or its sixty-first pick of a build (`POST /regions/pick`) within a minute (**Public limits**) |
+| 429 | `RATE_LIMITED` (+ `retry_after_s`) | a place search that finds the geocoder's queue full: five already queued for a turn (**Geocoding**); the message is "the geocoder is busy, try again in a few seconds"; on a public server also a client's eleventh search within a minute, its sixty-first pick of a build (`POST /regions/pick`), its 241st drawing step (`POST /draw` and `POST /draw/finish`) or its eleventh finished drawing (`POST /draw/finish`) within a minute (**Public limits**) |
 | 502 | `GEOCODER_ERROR` | Nominatim failed: an error status, a timeout, no connection, an answer that does not parse; or refused (429, 403), which pauses the geocoder 60 s, during which a search the cache cannot answer gets this at once ("the geocoder refused; paused for N s") |
 | 503 | `GEOCODER_DISABLED` | a place search on a server whose geocoder is `none` |
 | 404 | `NOT_FOUND` | an unknown (or expired) job, an unknown route (for a share image, also an id that is not 12 lowercase hex digits), an unknown path; no daily route on this server (its region has no places index, or no two of its towns fit a trip: **The daily route**) |
@@ -215,6 +218,7 @@ FastAPI's `detail`), but for the basemap's files' range errors: `/basemap/` answ
 | 409 | `DAILY_JOB` | `DELETE /jobs/{id}` on the daily route's job while it runs: the server's own, planning today's route for everyone (**The daily route**) |
 | 409 | `BUILD_UNAVAILABLE` | a stored route whose build is no longer on disk at its `graph_version`, or has lost its geometry (`geometry/`, which drawing it needs) |
 | any other | `HTTP_<status>` | any other HTTP error Starlette raises, its status in the code |
+| 500 | `VALIDATION_FAILED` | `POST /draw/finish` on a drawing its checks passed and the validator refuses (a bug; logged, never stored) |
 | 500 | `INTERNAL_ERROR` | an exception nothing else answered (a bug): the message is only "internal error", the traceback goes to the log with the request's id, and the answer carries `X-Request-ID` (**Logs**) |
 
 The SSE `error` event uses the same body, with the codes above that a worker can meet, and:
@@ -257,6 +261,8 @@ state build, since every failing seed search looks again for a node-simple path
 | GET | `/geocode` | `{query, region, candidates: [{label, lat, lon, category}], cached}`, for `?q=&region=` (**Geocoding**) |
 | GET, HEAD | `/routes/{id}/share.png` | the route's share image, a 1200 × 630 PNG (`image/png`), cached; HEAD the same headers without it (**Share image**) |
 | GET | `/daily` | `{date, region, build_id, stops: [{lat, lon, label}], seed, max_iterations, status, route_id, events_url, ratio, stopped_because, attempts}`: today's route, planned on the day's first call (**The daily route**) |
+| POST | `/draw` | `{request, path}` → `{stops, at, reached, legal, length_m, baseline_length_m, ratio, geometry, next, done}`: a route drawn by hand so far, with its legal next moves (**Drawing a route**) |
+| POST | `/draw/finish` | `{request, path}` → `{route_id, ratio}`: the finished drawing, validated and stored (**Drawing a route**) |
 
 **`/ready`** says whether the deployment is whole, where `/health` says only that the process
 lives: `build`, each served build still on disk at the `graph_version` it loaded (a build
@@ -339,7 +345,8 @@ its free last leg starts (`free_from`), recounted on the stored route up to its 
 edge letters, worked out once per build and kept by `graph_version`), null for every other
 objective;
 `stopped_because` is `target` (within it),
-`budget`, `converged`, `cancelled` or `timeout`.
+`budget`, `converged`, `cancelled` or `timeout`, and `drawn` for a route drawn by hand, whose
+`backend` is `human` (**Drawing a route**).
 
 The presentation's fields (`docs/reference/presentation.md`, **Directions**, **Jokes**, **Stats and
 toasts**) are worked out again from the build on every request (`presentation.document.present`),
@@ -702,6 +709,101 @@ attempt took 1.7–3.4 times as long (the first 2,500 attempts in 13.8–61.5 s)
 about 1,000–2,000 attempts to end within the public budget, and the day's route would no longer be
 the one a user planning the trip at the automatic tier gets.
 
+## Drawing a route
+
+A player draws a route junction by junction on the map, under the engine's rules, against the
+engine's own route for the same stops (the frontend starts a normal `POST /jobs` with the same
+request, the par: `docs/reference/frontend.md`, **Drawing**). The server keeps the drawing legal and
+holds nothing of it: each call sends the request and the whole path (`api/draw_api.py`; the
+checks are the engine's, `docs/reference/engine.md`, **Drawing**).
+
+**`POST /draw`**:
+
+```
+{"request": {POST /jobs' body as it is, its region among its fields},
+ "path":    [edge ids in order from the start]}      none yet: the start; at most MAX_DRAW_EDGES (10,000)
+```
+
+answers
+
+```
+{"stops":   [{input, label, node, lat, lon, moved_m, note}],   the stops as a job's `snapped` event has them
+ "at":      {node, lat, lon},                               the node the drawing is at
+ "reached": [0, 17],                                        the positions along the path of the stops reached, in order
+ "legal": true,
+ "length_m": 3120.5, "baseline_length_m": 2210.0,
+ "ratio":   null,                                           the length over the baseline's once done; null before, and for a round trip
+ "geometry": {"type": "LineString", "coordinates": [...]},  the path drawn; null for no edge yet
+ "next":    [{edge, node, lat, lon, name, length_m, turn, stop, coords}],
+ "done":    false}
+```
+
+`next` is the legal next moves, the edges leaving `at` that extend the path legally, ascending
+(none once done; none at a dead end, where the player backs up): the edge, the node it leads to and
+its position, the road's name (else its ref, else null), its length, the turn into it from the
+last edge (`left`, `right`, `straight` or `u_turn`, by the engine's classes; null for the first
+move), the stop it reaches (its index, or null: only the stop due next can be) and its shape as
+`[lon, lat]` points (7 decimals). The stops are those the engine resolves for the request
+(`resolve_stops`), the same as its job's.
+
+A drawing is the longest route as bad as the player makes it: its request takes the objective
+`distance` and the target `max` only (`INVALID_REQUEST` on `objective` or `target`; the item or
+brand of another objective too), and no `base_route_id` (it starts from its stops). It is refused
+as `POST /jobs` refuses it otherwise: `UNKNOWN_REGION`, each stop against the region's bbox
+(`STOP_OUTSIDE_REGION`), then the pre-flight (`NO_NODE_NEAR`, `STOP_UNREACHABLE_WITHOUT_REPEAT`,
+`INFEASIBLE_TURN_CONSTRAINT`); the budget, the vehicle and the departure are kept with a finished
+drawing and change nothing in it. A strict turn constraint and hard mode are rules of the drawing; a
+soft constraint changes nothing in it (it only penalises the par). A path that is not a legal
+route's beginning is 422 `ILLEGAL_PATH`, with `refusal` (why) and `index` (its first illegal edge):
+the path up to `index` is legal, so a client cuts it there.
+
+```json
+{"code": "ILLEGAL_PATH", "refusal": "TRANSITION_FORBIDDEN", "index": 4,
+ "message": "turn 23 → 41 not allowed at node 12 (edge 4 of the path)"}
+```
+
+| `refusal` | When |
+|---|---|
+| `BROKEN_CHAIN` | an id that is no edge of the build, an edge that does not leave the node the path is at (a one-way's only edge taken from its head), a self-loop |
+| `OUTSIDE_AREA` | an edge into a node outside the request's area (its leash, tier and bubbles) |
+| `NODE_REUSED`, `ROUND_TRIP_START_REUSED` | a node the path has passed; a round trip's start only as its end, once every stop between was reached |
+| `EDGE_BANNED` | an edge the request's tier bans, the twin of one the path drives, a two-edge round trip out and back along one road |
+| `TRANSITION_FORBIDDEN` | a turn the junction's transition rows do not list |
+| `STOP_SKIPPED` | a stop reached before the one before it, the end included |
+| `PAST_END` | an edge after the end |
+| `TURN_REFUSED` | a turn the strict turn constraint refuses |
+| `ROAD_AGAIN` | under hard mode, a road the path left and comes back to |
+
+**`POST /draw/finish`**, the same body, answers `{route_id, ratio}` once the path has reached the
+end, every stop on the way in order (else 422 `DRAWING_UNFINISHED`, with the stops `reached`; an
+illegal path is `ILLEGAL_PATH` as above). The drawing becomes a route (`Route.new`, scored as the
+distance objective with the request's constraints), proven by the validator on the real stops (a
+route the validator refuses is a bug: 500 `VALIDATION_FAILED`, logged, never stored), and is
+stored like any other (**The store**): its id the content hash, its `input` the request as asked
+with its seed filled in as `POST /jobs` fills it (a random one below 2³¹ when it has none), its
+baseline's edges the request's. Its run is `{attempts: N, accepted: N, stopped_because: "drawn",
+elapsed_s: 0, backend: "human"}`, N its edges: the document's shape is otherwise every route's, and
+its document, GeoJSON, share image, directions and `/validate` are every route's. Make it worse
+may continue it, as the engine worsening a player's drawing. The same drawing finished twice is the
+same route, the same id.
+
+What every step on one request needs, the request's area and bans, its resolved stops and its
+baseline, is worked out on its first step and kept for the last `DRAW_CONTEXTS` (8) requests drawn
+on (`DrawContexts`, by build and by the request's stops, tier, leash and constraints, under a lock;
+a miss works it out again, so the answers never depend on it): about 6.6 MB a request on the
+national T3 build. Measured on `us-t3` (build 6adae6917be1: 2,154,510 nodes, 4,412,843 edges)
+over HTTP on a lane's server, at load averages of 11–14: a step costs 2 ms with no edge yet, 3–4 ms
+at 200 edges, 8–11 ms at 2,000 (a 145 kB answer) and 27–41 ms at 10,000 (729 kB), most of it the
+line drawn; a request's first step (a miss) 37–100 ms for Powell's → Reed, 58–101 ms for Portland
+→ Seattle and 88–148 ms for Chicago → Denver (a few times that for the first trip into a part of
+the build not read yet), the masks (22–24 ms) and the pre-flight's seed and baseline. On the
+version 7 build at a quieter hour the same were 8 ms and 26 ms a step, and 26, 51–53 and 62–84 ms a
+miss.
+
+On a public server a client takes at most `PUBLIC_DRAW_PER_MINUTE` (240) steps of the two
+endpoints together in any minute, and finishes at most `PUBLIC_FINISH_PER_MINUTE` (10) drawings,
+since each finish may store a route (**Public limits**).
+
 ## Geocoding
 
 The place search's backend (`docs/PLAN.md` §4.4): a place name to at most `GEOCODE_LIMIT` (5)
@@ -1036,6 +1138,16 @@ and a local server have always had them. Off by default.
   take a place search's share); the sixty-first is `RATE_LIMITED` with `retry_after_s` and the
   message "at most 60 picks a minute; try again in N s", checked after the body. The frontend
   asks once a change of the stops, 300 ms after the last.
+- **Each client's drawing steps** (`POST /draw` and `POST /draw/finish` together, **Drawing a
+  route**): at most 240 in any minute (`PUBLIC_DRAW_PER_MINUTE`, a `GeocodeQuota` of its own); the
+  241st is `RATE_LIMITED` with `retry_after_s` and the message "at most 240 drawing steps a minute;
+  try again in N s", counted once the body parses.
+- **Each client's finished drawings** (`POST /draw/finish`): at most ten in any minute
+  (`PUBLIC_FINISH_PER_MINUTE`, a `GeocodeQuota` of its own), since each finish of another path
+  stores another route and the steps' share alone would let a client fill the store far faster
+  than its jobs could; the eleventh is `RATE_LIMITED` with `retry_after_s` and the message "at most
+  10 finished drawings a minute; try again in N s". A finish counts as a step too, the steps'
+  share asked first; both are counted once the body parses, before the drawing is checked.
 
 The daily route's job (**The daily route**) has no client: it takes one of the server's slots,
 never a client's share, and `GET /daily` has no quota of its own.
@@ -1100,6 +1212,8 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 | `test_static.py` | the site: the build at `/` and its caching, a module's media type, `/health` not at the root, the API under `/api` with its errors, a job run to its end through it (the lifespan ran), the access lines' whole paths |
 | `test_store.py` | the round trip (the stored route validates), unknown ids, the first record kept, what the id covers; a day's row, its graph_version's (the same build id at another one has another), replaced in place |
 | `test_daily_api.py` | the daily route on the 20 × 20 lattice with a places index of towns placed on it, the day fixed: the draw (every trip within the band, two towns closer than its lower bound never drawn, between incorporated places of the kinds drawn, inside the build's bbox, never a town without a node within 5 km; the same seed the same trips; none when nothing fits), the region with the most states; `GET /daily` planning, then done with the stored route's ratio, stop and attempts, the same answer call after call, the route's labels, seed, attempts, budget, default vehicle and departure (UTC, to the second), with its fuel and arrival, its `/validate` ok; two servers on two stores answering alike, the iterations having ended the run; concurrent first calls planning once; a failed job recorded and submitted again, the day drawn once; a trip the pre-flight refuses giving way to the next, and a day whose ten trips it refuses failed and answered so again without a pre-flight; a full server answering 429 `TOO_MANY_JOBS` with nothing drawn or recorded until a slot frees; a client's `DELETE` refused with `DAILY_JOB` while the job runs, and only reporting it once ended; a job the server cancels failing the day, then planned again; the job outliving a viewer that leaves (no orphan); a call after the job's end recording it before its follower, and a follower never overwriting a later plan; a planning row of a restarted server planned again; a build replaced under its id (`save --force`) planned again on its own row, its route served, the old row kept; a public server's job without a client, at its budget; an index without incorporated places, and no places index, 404 |
+| `test_draw_api.py` | `POST /draw` and `POST /draw/finish` on the drawing board (`tests/engine/graphs.py`): an empty path the start with its legal ways out (the out-edges by hand: a one-way's absent), their names, lengths and shapes; steps with their turns, the stop a move reaches, done with its ratio and line; each refusal with its code and first illegal edge (a node passed, a twin, a turn the straight-only junction forbids, the end before a via, a one-way taken from its head, past the end, an id outside the graph, a strict turn, a road again under hard mode), the path before it drawn, a soft constraint's left turn taken; a finished drawing stored under its content hash with its run drawn by a human, its seed and labels, its document, directions, share image and `/validate`, the same id when finished again, and continued by make it worse; a round trip finished with a seed drawn for it and no ratio; an unfinished drawing and an illegal one refused at finish; the stops those a job's `snapped` event gives; the refusals of the request (an objective, a target, a base route, an item), an unknown region, a stop outside the bbox, a path over the cap and a negative id; a public server's 240 steps a minute over both endpoints and its ten finished drawings a minute (the same drawing the same route, steps going on); a request's context worked out once whatever the seed and the path, and the last ones kept |
+| `test_draw_data.py` (`data`) | on Portland's build, a route drawn by hand from Powell's round a few blocks to Pioneer Courthouse Square from the moves the server offers (backing up from dead ends), more than twice the sensible route, finished, stored, validated, its share image rendered |
 | `test_sse.py` | path points and node indices along a bent geometry, the per-edge simplification keeping nodes and original values, splices, metrics, the event encoding |
 | `test_jobs.py` | the manager with inline workers: event order and ids, a client replay equal to the stored route, late subscribers (after a worker that died with splices waiting too: they come before its `error`, ids rising strictly), `Last-Event-ID` resync, cancel (validated, stored, reproduced by its attempts), the queue and its limit, cancel before the route exists, continuations, the time limit, orphans running and queued, a worker that raises, a worker refusing a brand its request's area does not hold (`INVALID_REQUEST`), a store failure while cancelling (by hand and by the sweep, which goes on), a worker that does not start (the queue moves on), the TTL; a target run whose best is not its last route (an overshoot on a 5 × 5 lattice): a snapshot of the stored route before `done`, for live and late clients, and a cancel after the overshoot storing the closest route, reproduced by its attempts |
 | `test_worker_process.py` (`slow`) | real spawned workers: a run to `done`, a cancel mid-run, a worker killed from outside (`WORKER_FAILED`), a fake worker that dies 60 kB into a 2 MB message (`WORKER_FAILED`, then a clean `stop()`), a worker whose API process (a probe) is killed exiting within 3 s, and a worker run alone in a fresh interpreter on a build without its geometry, planning and never importing the geometry's or the GeoJSON's module; about 5 s |
@@ -1159,6 +1273,10 @@ limits**: ten searches a minute a client). Nominatim
 - **The daily route is the same everywhere only when the iterations end it**: a run the clock
   ends (a slower or busier machine, one of the band's longest trips on a public server) is that
   server's own, and `attempts` below `max_iterations` says so (**The daily route**, **Measured**).
+- **A drawing's first step pays for its request** (**Drawing a route**): a request not among the
+  last eight drawn on costs its masks and pre-flight again, 37–148 ms on the national T3 build, so a
+  client varying its request on every step (within its 240 steps a minute on a public server) costs
+  the server that much a step.
 - **Share images are kept forever** in `share/`, one per route and drawing version; nothing
   removes them, and an image drawn before the places index was written keeps no outlines until
   `share/` is cleared.

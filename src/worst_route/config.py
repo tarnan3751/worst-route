@@ -492,6 +492,12 @@ API_SNAPSHOT_EVERY = 50
 API_SIMPLIFY_M = 1.0
 API_DEFAULT_MAX_ITERATIONS = 1_000_000
 
+# A route drawn by hand (`docs/reference/api.md`, **Drawing a route**): a path holds at most
+# MAX_DRAW_EDGES edges, and the API keeps what DRAW_CONTEXTS requests drawn on last need on every
+# step (their masks, resolved stops and baseline: about 6.6 MB each on the national T3 build).
+MAX_DRAW_EDGES = 10_000
+DRAW_CONTEXTS = 8
+
 # The daily route (`docs/reference/api.md`, **The daily route**): two incorporated places
 # (DAILY_LSAD: a city, a town or a village) of the server's main build's places index, each
 # inside the build's bbox with a node within DAILY_NEAR_KM that can play its stop's role, whose
@@ -534,8 +540,10 @@ GEOCODE_MAX_QUERY_CHARS = 200
 # once and has at most PUBLIC_QUEUED_PER_CLIENT more waiting, a budget is at most
 # PUBLIC_BUDGET_MAX_S (BUDGET_MAX_S otherwise), a client searches places at most
 # PUBLIC_GEOCODE_PER_MINUTE times in any minute and asks which build its stops run on
-# (`POST /regions/pick`, once a change of its stops) at most PUBLIC_PICK_PER_MINUTE times. A
-# request's own leash stays at most LEASH_MAX_KM;
+# (`POST /regions/pick`, once a change of its stops) at most PUBLIC_PICK_PER_MINUTE times, and
+# draws (`POST /draw` and `POST /draw/finish` together) at most PUBLIC_DRAW_PER_MINUTE steps, of
+# which at most PUBLIC_FINISH_PER_MINUTE finishes (each stores a route). A request's own leash
+# stays at most LEASH_MAX_KM;
 # the automatic leash follows the trip (LEASH_LONG_FACTOR of it beyond 750 km), and the budget
 # bounds the job.
 PUBLIC_RUNNING_PER_CLIENT = 1
@@ -543,6 +551,8 @@ PUBLIC_QUEUED_PER_CLIENT = 3
 PUBLIC_BUDGET_MAX_S = 60.0
 PUBLIC_GEOCODE_PER_MINUTE = 10
 PUBLIC_PICK_PER_MINUTE = 60
+PUBLIC_DRAW_PER_MINUTE = 240
+PUBLIC_FINISH_PER_MINUTE = 10
 
 
 # Census boundaries (`docs/reference/presentation.md`, **Places**). CENSUS_VINTAGE is the year of

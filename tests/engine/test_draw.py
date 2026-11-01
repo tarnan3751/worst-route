@@ -269,3 +269,7 @@ def test_a_drawing_is_the_longest_route_with_no_target() -> None:
         "target",
         "a drawing takes no target: it is as bad as you make it",
     )
+    assert drawing_problem("distance", "max", reorder=True) == (
+        "reorder",
+        "a drawing takes no worst order: you draw the stops in the order given",
+    )

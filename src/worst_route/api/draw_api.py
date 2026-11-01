@@ -245,7 +245,7 @@ def _drawn_on(
     """The build, the engine's request (with `seed`) and the context a drawing on `asked` needs,
     refusing what a drawing may not ask and what `POST /jobs` refuses."""
     loaded = region_of(api, asked.region)
-    problem = drawing_problem(asked.objective, asked.target.kind)
+    problem = drawing_problem(asked.objective, asked.target.kind, asked.reorder)
     if problem is not None:
         raise ApiError(422, "INVALID_REQUEST", problem[1], field=problem[0])
     if asked.base_route_id is not None:

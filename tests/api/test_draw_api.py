@@ -248,6 +248,7 @@ async def test_what_a_drawing_cannot_ask_is_refused(drawn: Path) -> None:
             ({"objective": "time"}, "objective"),
             ({"objective": "nonsense"}, "objective"),
             ({"target": {"kind": "ratio", "value": 5}}, "target"),
+            ({"reorder": True}, "reorder"),
             ({"base_route_id": "abcdefabcdef"}, "base_route_id"),
             ({"item": "bridge"}, "item"),
         ]:

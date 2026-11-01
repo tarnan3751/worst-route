@@ -47,9 +47,10 @@ constraints as `plan_route` scores a seed, then proven by `validate_route` on th
 and returns its `route.json` document (`io.document`), whose run is `{attempts, accepted}` its
 moves, `stopped_because: "drawn"`, `elapsed_s: 0` and `backend: "human"`. A drawing that has not
 reached the end raises `DrawingUnfinished`; a route the validator refuses, `ValidationFailed`.
-`drawing_problem(objective, target_kind)` is what a drawing's request may not ask, as (the
-field, a sentence): a drawing is the longest route, as bad as the player makes it, so the
-objective `distance` and the target `max` only.
+`drawing_problem(objective, target_kind, reorder)` is what a drawing's request may not ask, as
+(the field, a sentence): a drawing is the longest route, as bad as the player makes it, so the
+objective `distance` and the target `max` only, and its stops are drawn in the order given, so no
+worst order (`reorder`: there is no order search).
 """
 
 from collections.abc import Sequence
@@ -155,12 +156,16 @@ class DrawingUnfinished(ValueError):  # noqa: N818 (reads as the condition)
         self.reached = reached
 
 
-def drawing_problem(objective: str, target_kind: str) -> tuple[str, str] | None:
+def drawing_problem(
+    objective: str, target_kind: str, reorder: bool = False
+) -> tuple[str, str] | None:
     """What a drawing's request may not ask, as (the field, a sentence), or None."""
     if objective != "distance":
         return "objective", "a drawing is the longest route: objective distance only"
     if target_kind != "max":
         return "target", "a drawing takes no target: it is as bad as you make it"
+    if reorder:
+        return "reorder", "a drawing takes no worst order: you draw the stops in the order given"
     return None
 
 

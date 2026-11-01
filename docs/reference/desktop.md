@@ -268,8 +268,8 @@ by a person on the machine with the builds, writes what the app serves of each r
 build (not its `qa/` or `stages/`), the places index's files, the basemap's labels and the
 manifest, and prints the pack's sha256; `stage` checks a pack and unpacks it for a build, into a
 directory that is empty or not there (`--replace` deletes what one holds first). The
-pack of `us-t3` (281a455e3d15) and Portland (a453e105582b): 607 MB unpacked, 262 MB packed, in
-26 s. A release's pack is a release asset a person uploads (`gh release create data-<date>
+pack of `us-t3` (6adae6917be1) and Portland (0b72253e5e8a) with the labels: 268 MB packed, in
+62 s. A release's pack is a release asset a person uploads (`gh release create data-<date>
 --prerelease <pack>`; agents never upload), which `packaging/desktop/data.json` names by tag,
 asset and sha256; the basemap's file likewise, cut by `tools/fetch_basemap.sh us --build
 <YYYYMMDD> --region conus.geojson --maxzoom 11 --assets` and named by the pack's `--basemap`.
@@ -306,8 +306,11 @@ checks) or by hand:
 No Intel Mac build: Numba publishes no Intel macOS wheels since 0.63 (the project has 0.68), and
 Intel Macs use the hosted site. The repository is public (the owner, 2026-11-01), so its release
 assets download without a token: the public downloads the installers and the basemap's file from its
-releases, the manifest's basemap address a variable's change (`WORST_ROUTE_BASEMAP_URL`) once the
-first release holds the file.
+releases, the manifest's basemap address a variable's change (`WORST_ROUTE_BASEMAP_URL`). The
+first data release, `data-20261101` (2026-11-01, with the owner's leave), holds that pack and the
+basemap cut from Protomaps' build 20261101 at zoom 11 (684 MB); `packaging/desktop/data.json`
+names it, and the variables are set: the basemap's address on that release, the contact the
+repository's issues page.
 
 ## Opening it the first time
 

@@ -28,8 +28,11 @@ shell that started it ignores, which is how `tools/bench_build.py`'s watchdog st
 `--objective` (distance, time, collect with an `--item`, brand with a `--brand`, an id or a
 name of the build's brand index, or alphabet, from `--from` to `--to` only, without a target or
 a base), with `--no-left` or `--no-right` (such turns cost a kilometre each; none with
-`--strict`) and `--hard` (each road in one stretch): it prints the objective and constraints
-when not the default, the snapped stops, the baseline, the worst route, the ratio and the time
+`--strict`), `--hard` (each road in one stretch) and `--reorder` (the stops between `--from` and
+`--to` in the worst order: at most 7 stops, 5 on a build of more than 100,000 nodes; not with
+`--objective alphabet`): it prints the objective and constraints when not the default, the order
+the stops are visited in (with `--reorder`: each stop's place among those given), the snapped
+stops in that order, the baseline, the worst route, the ratio and the time
 ratio (of the experienced time, with its drive and delays), its turns and delays, the target and
 what was achieved (for `--target ratio:<x>` or `duration:<time>`), an alphabet route's letters
 and first roads, the search, the backend it searched with and the validator's report, with a
@@ -41,8 +44,9 @@ missing build (or one without an array of the format, which names its remedy: th
 `filter` when another pipeline version wrote it, which a plain `save` names too; `validate`,
 `serve` and `qa` say the same), is one line and exit 1, and a route that fails the validator is
 never printed. `--base route.json` continues a saved route ("make it worse", toward the new
-target): its stops, tier, leash, objective and constraints come from the file, which must have
-been planned on the build at its graph_version by this engine version.
+target): its stops (in the order its route visits them, so never with `--reorder`), tier,
+leash, objective and constraints come from the file, which must have been planned on the build
+at its graph_version by this engine version.
 `validate` re-checks a saved `route.json` against the build it names, with its stops re-derived
 from its request (`resolve_stops`), and exits 1 when a check fails; a file made by another
 engine version is one line and exit 1 (its stops could be re-derived differently).
@@ -1104,6 +1108,14 @@ def plan(
         bool,
         typer.Option("--hard", help="Each road in one stretch: once left, never driven again."),
     ] = False,
+    reorder: Annotated[
+        bool,
+        typer.Option(
+            "--reorder",
+            help="Visit the stops between --from and --to in the worst order (at most 7 stops, "
+            "5 on a large build).",
+        ),
+    ] = False,
     base: Annotated[
         Path | None,
         typer.Option(
@@ -1121,7 +1133,7 @@ def plan(
     from worst_route.engine.objectives import OBJECTIVE_KEYS
     from worst_route.engine.objectives.brand import BrandRefused
     from worst_route.engine.plan import BaseRouteMismatch, plan_route
-    from worst_route.engine.request import RouteRequest, objective_problem
+    from worst_route.engine.request import RouteRequest, objective_problem, reorder_problem
     from worst_route.engine.route import IllegalSplice
     from worst_route.engine.seed_route import Baseline
     from worst_route.engine.snap import (
@@ -1144,6 +1156,7 @@ def plan(
         "item": item,
         "brand": None if brand is None else 0,  # resolved once the build is loaded
         "constraints": {"no_left": no_left, "no_right": no_right, "strict": strict, "hard": hard},
+        "reorder": reorder,
     }
     saved: SavedRoute | None = None
     if base is None:
@@ -1158,7 +1171,8 @@ def plan(
         except ValueError as error:
             raise typer.BadParameter(f"--leash-km: {error}") from None
     else:
-        given = [name for name, value in (("--from", from_), ("--to", to), ("--via", via)) if value]
+        stops = (("--from", from_), ("--to", to), ("--via", via), ("--reorder", reorder))
+        given = [name for name, value in stops if value]
         for name in ("tier", "leash_km"):
             source = ctx.get_parameter_source(name)
             if source is not None and source.name != "DEFAULT":
@@ -1213,10 +1227,13 @@ def plan(
         fields["target"]["kind"],
         fields["brand"],
         len(fields["stops"]),
+        fields["reorder"],
     )
     if problem is not None:
         option = "via" if problem[0] == "stops" else problem[0]  # the stops between: --via
         _fail(f"invalid --{option}: {problem[1]}", code=2)
+    if reorder and (refused := reorder_problem(len(fields["stops"]))) is not None:
+        _fail(f"invalid --reorder: {refused}", code=2)
     try:
         request = RouteRequest(**fields)
     except ValidationError as error:
@@ -1225,6 +1242,8 @@ def plan(
     data = _load_build(region, build_id)
     if brand is not None:
         request = request.model_copy(update={"brand": _brand_id(data, brand)})
+    if reorder and (refused := reorder_problem(len(request.stops), data)) is not None:
+        _fail(f"invalid --reorder: {refused}", code=2)
     if saved is not None and data.meta["graph_version"] != saved.graph_version:
         _fail(
             f"{base} was planned on graph_version {saved.graph_version[:12]}, "
@@ -1285,6 +1304,9 @@ def plan(
     )
     if request.objective != "distance" or request.constraints.kinds or request.constraints.hard:
         typer.echo(_mode_line(request))
+    if request.reorder:
+        visited = ", ".join(str(k) for k in result.order)
+        typer.echo(f"order: {visited} (each stop's place among those given, in the order visited)")
     for k, s in enumerate(result.snaps):
         role = "start" if k == 0 else "end" if k == len(result.snaps) - 1 else "via"
         note = f" ({s.note})" if s.note else ""

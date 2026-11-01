@@ -14,6 +14,7 @@ from typer.testing import CliRunner
 from worst_route.cli import _letters_line, _seconds, app
 from worst_route.config import PIPELINE_VERSION
 from worst_route.engine import ENGINE_VERSION
+from worst_route.engine import request as request_module
 from worst_route.graph.data import EdgeFlag, GraphData
 from worst_route.graph.store import write_build
 from worst_route.graph.testing import make_graph
@@ -878,3 +879,63 @@ def test_the_letters_line_names_one_letter_and_laps_past_z() -> None:
     assert line(alphabet + "A").startswith("letters: 27 (A–Z, A): ")
     assert line(alphabet + "ABC").startswith("letters: 29 (A–Z, A–C): ")
     assert line(alphabet * 2 + "AB").startswith("letters: 54 (A–Z, A–Z, A–B): ")
+
+
+def test_the_worst_order_is_planned_printed_recorded_and_continued(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    save(data_dir, GRID, "b1")
+    out, again = tmp_path / "worst.json", tmp_path / "again.json"
+    given = [0, 9, 45, 90, 99]  # visited 0, 9, 90, 45, 99
+    vias = [arg for v in given[1:-1] for arg in ("--via", latlon(GRID, v))]
+    trip = ["--from", latlon(GRID, 0), "--to", latlon(GRID, 99), *vias, "--seed", "3"]
+    code, stdout, stderr = plan(*trip, "--reorder", "--max-iterations", "100", "--out", str(out))
+    assert code == 0, stdout + stderr
+    doc = json.loads(out.read_text())
+    order = doc["order"]
+    assert order == [0, 1, 3, 2, 4]
+    lines = stdout.splitlines()
+    shown = ", ".join(map(str, order))
+    assert lines[2] == f"order: {shown} (each stop's place among those given, in the order visited)"
+    for k, v in enumerate(given[i] for i in order):  # the stops in the order visited
+        assert lines[3 + k].startswith(f"stop {k} (") and f": node {v} at " in lines[3 + k]
+    assert doc["request"]["reorder"] is True
+    assert doc["request"]["stops"] == [list(at_node(GRID, given[i])) for i in order]
+    assert [doc["nodes"][k] for k in doc["stop_idx"]] == [given[i] for i in order]
+    result = runner.invoke(app, ["validate", str(out)])
+    assert result.exit_code == 0 and result.stdout.splitlines()[-1] == "valid", result.output
+
+    # without --reorder, the given order; with --base, the file's order and no search
+    code, stdout, _ = plan(*trip, "--max-iterations", "20")
+    assert code == 0 and not any(line.startswith("order: ") for line in stdout.splitlines())
+    code, stdout, stderr = plan(
+        "--base", str(out), "--seed", "4", "--max-iterations", "50", "--out", str(again)
+    )
+    assert code == 0, stdout + stderr
+    continued = json.loads(again.read_text())
+    assert continued["order"] == [0, 1, 2, 3, 4] and "reorder" not in continued["request"]
+    assert continued["request"]["stops"] == doc["request"]["stops"]
+    refused = plan("--base", str(out), "--reorder")
+    assert refused == (
+        2,
+        "",
+        "--base takes the stops, tier and leash from its route: drop --reorder\n",
+    )
+
+
+def test_the_worst_order_s_refusals_are_one_line(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    save(data_dir, GRID, "b1")
+    ends = ["--from", latlon(GRID, 0), "--to", latlon(GRID, 99), "--reorder"]
+    refused = plan(*ends, "--objective", "alphabet")
+    message = (
+        "invalid --reorder: the alphabet route takes no worst order: it has no stop to reorder\n"
+    )
+    assert refused == (2, "", message)
+    eight = [arg for v in (11, 22, 33, 44, 55, 66) for arg in ("--via", latlon(GRID, v))]
+    refused = plan(*ends, *eight)
+    assert refused == (2, "", "invalid --reorder: the worst order takes at most 7 stops, not 8\n")
+    monkeypatch.setattr(request_module, "REORDER_LARGE_NODES", GRID.n - 1)  # GRID a large build
+    message = "invalid --reorder: the worst order takes at most 5 stops on portland, not 6\n"
+    assert plan(*ends, *eight[:8]) == (2, "", message)

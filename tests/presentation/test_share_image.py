@@ -1,7 +1,9 @@
 """The share image on the API tests' lattice: a 1200 × 630 PNG, the same bytes for the same
-inputs, with and without the places index's outlines, for a round trip, and its network: the
-roads a full decode finds, without decoding them all, thinned when too many would show."""
+inputs, with and without the places index's outlines, for a round trip, in each theme's palette,
+and its network: the roads a full decode finds, without decoding them all, thinned when too many
+would show."""
 
+import io
 import math
 import struct
 from dataclasses import replace
@@ -10,6 +12,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from matplotlib.image import imread
 from numpy.typing import NDArray
 
 from worst_route.graph.data import GraphData
@@ -18,6 +21,7 @@ from worst_route.graph.testing import edge_id, make_graph
 from worst_route.presentation import share_image
 from worst_route.presentation.places import PlaceIndex
 from worst_route.presentation.share_image import headline, render_share_image
+from worst_route.presentation.share_palettes import CLASSIC, PALETTES, SharePalette
 
 from ..engine.graphs import edges_of
 from .support import EAST_THEN_NORTH, EAST_THEN_NORTH_EDGES, GRID, write_fixture_places
@@ -44,7 +48,9 @@ def places(tmp_path: Path) -> PlaceIndex:
     return index
 
 
-def render(places: PlaceIndex | None, **metrics: float | None) -> bytes:
+def render(
+    places: PlaceIndex | None, palette: SharePalette = CLASSIC, **metrics: float | None
+) -> bytes:
     return render_share_image(
         GRID,
         STRAIGHT,
@@ -54,7 +60,15 @@ def render(places: PlaceIndex | None, **metrics: float | None) -> bytes:
         places,
         LINE,
         baseline_edges=BASELINE,
+        palette=palette,
     )
+
+
+def pixels(png: bytes) -> NDArray[np.uint32]:
+    """The image's pixels, each its colour as 0xRRGGBB."""
+    rgb = np.rint(imread(io.BytesIO(png))[..., :3] * 255).astype(np.uint32)
+    packed: NDArray[np.uint32] = (rgb[..., 0] << 16) | (rgb[..., 1] << 8) | rgb[..., 2]
+    return packed
 
 
 def test_the_image_is_a_1200_by_630_png_and_the_same_every_time(places: PlaceIndex) -> None:
@@ -63,6 +77,20 @@ def test_the_image_is_a_1200_by_630_png_and_the_same_every_time(places: PlaceInd
     assert render(None) == plain and render(places) == outlined
     assert outlined != plain  # the border between the fixture's states crosses the map
     assert b"Software" not in plain
+
+
+def test_each_theme_draws_in_its_own_palette(places: PlaceIndex) -> None:
+    assert render(places, PALETTES["classic"]) == render(places)  # classic is the default
+    drawn: set[bytes] = set()
+    for theme, palette in PALETTES.items():
+        png = render(places, palette)
+        assert size_of(png) == (1200, 630) and render(places, palette) == png, theme
+        at = pixels(png)
+        assert at[0, -1] == int(palette.surface[1:], 16), theme  # the map's corner
+        drawn_in = set(np.unique(at).tolist())
+        assert {int(palette.ink[1:], 16), int(palette.route[1:], 16)} <= drawn_in, theme
+        drawn.add(png)
+    assert len(drawn) == len(PALETTES)
 
 
 def test_a_round_trip_shows_its_length(places: PlaceIndex) -> None:

@@ -11,10 +11,11 @@ unit). The map fills the rest, edge to edge, with no basemap: the build's roads 
 build's CRS grown by `NETWORK_MARGIN_M` and then in lon/lat, decoded only where their ends and
 lengths cannot tell; never more than `MAX_NETWORK_EDGES` of them, thinned to T0-T2, T0-T1 or T0
 and then to the longest units of T0 when more would show), the state outlines from the places
-index when there is one, the route in red on a white casing, the baseline dashed over it, a ring
-at the start and a smaller dot at the end (inside the ring, for a round trip). Its extent is the
-route's bbox with `MARGIN` on each side (at least `MIN_SPAN_M` across), widened to the map's
-shape with x scaled by cos(latitude). The attribution sits at the bottom right.
+index when there is one, the route on a casing of the background, the baseline dashed over it, a
+ring at the start and a smaller dot at the end (inside the ring, for a round trip). Its extent is
+the route's bbox with `MARGIN` on each side (at least `MIN_SPAN_M` across), widened to the map's
+shape with x scaled by cos(latitude). The attribution sits at the bottom right. The colours are a
+theme's palette (`share_palettes`), by default classic's: the route in red on white.
 
 It draws on a `Figure` with a `FigureCanvasAgg` of its own (never pyplot, nor any process-wide
 backend), with DejaVu Sans as matplotlib ships it, given by its file's path, and saves without
@@ -51,6 +52,7 @@ from worst_route.graph.geometry import Geometry, edge_points, edge_xy, lonlat_to
 from worst_route.presentation.comparisons import METRES_PER_MILE
 from worst_route.presentation.geojson import line_coordinates
 from worst_route.presentation.places import PlaceIndex
+from worst_route.presentation.share_palettes import CLASSIC, SharePalette
 
 WIDTH_PX, HEIGHT_PX, DPI = 1200, 630, 100
 COLUMN = 0.38  # the text column's share of the width
@@ -61,14 +63,6 @@ METRES_PER_DEGREE = 111_320.0  # of latitude
 MAX_NETWORK_EDGES = 100_000
 NETWORK_MARGIN_M = 50.0  # around the map's extent projected, when finding the roads near it
 THIN_TIER = 2  # the highest tier drawn when the network is thinned, then one lower at a time
-
-SURFACE = "#fcfcfb"
-INK = "#0b0b0b"
-SECONDARY = "#52514e"
-NETWORK = "#dcdbd3"
-OUTLINE = "#b4b2a9"
-BASELINE = "#4b5563"
-ROUTE = "#e8452c"
 
 FOOTER = "worst-route · © OpenStreetMap contributors (ODbL) · Boundaries: U.S. Census Bureau"
 
@@ -92,13 +86,14 @@ def render_share_image(
     *,
     baseline_edges: IntArray | None = None,
     objective: str = "distance",
+    palette: SharePalette = CLASSIC,
 ) -> bytes:
     """The share image of a route (its nodes and edges on `data`, drawn along `geometry`, its
     document's metrics, the objective it was planned for) as PNG bytes, with `comparison` under
-    the headline; `places` gives the state outlines."""
+    the headline, in `palette`'s colours; `places` gives the state outlines."""
     route = np.asarray(line_coordinates(data, geometry, route_edges))
     with _RENDERING:
-        fig = Figure(figsize=(WIDTH_PX / DPI, HEIGHT_PX / DPI), dpi=DPI, facecolor=SURFACE)
+        fig = Figure(figsize=(WIDTH_PX / DPI, HEIGHT_PX / DPI), dpi=DPI, facecolor=palette.surface)
         FigureCanvasAgg(fig)  # the figure's canvas from now on: Agg
         ax = fig.add_axes((COLUMN, 0.0, 1.0 - COLUMN, 1.0))
         ax.set_axis_off()
@@ -107,24 +102,29 @@ def render_share_image(
         ax.set_ylim(south, north)
 
         network = _network(data, geometry, (west, south, east, north))
-        ax.add_collection(LineCollection(network, colors=NETWORK, linewidths=0.6, zorder=1))
+        ax.add_collection(LineCollection(network, colors=palette.network, linewidths=0.6, zorder=1))
         if places is not None:
             outlines = _outlines(places, (west, south, east, north))
-            ax.add_collection(LineCollection(outlines, colors=OUTLINE, linewidths=1.2, zorder=2))
-        ax.plot(*route.T, color=SURFACE, linewidth=4.2, solid_joinstyle="round", zorder=3)
-        ax.plot(*route.T, color=ROUTE, linewidth=2.0, solid_joinstyle="round", zorder=4)
+            ax.add_collection(
+                LineCollection(outlines, colors=palette.outline, linewidths=1.2, zorder=2)
+            )
+        ax.plot(*route.T, color=palette.surface, linewidth=4.2, solid_joinstyle="round", zorder=3)
+        ax.plot(*route.T, color=palette.route, linewidth=2.0, solid_joinstyle="round", zorder=4)
         if baseline_edges is not None and len(baseline_edges) > 0:
             base = np.asarray(line_coordinates(data, geometry, baseline_edges))
             ax.plot(
                 *base.T,
-                color=BASELINE,
+                color=palette.baseline,
                 linewidth=2.0,
                 dashes=(4, 2.5),
                 zorder=5,
-                path_effects=[withStroke(linewidth=4.0, foreground=SURFACE)],
+                path_effects=[withStroke(linewidth=4.0, foreground=palette.surface)],
             )
         # The start a ring, the end a smaller dot on top: a round trip's shows inside its ring.
-        ends = ((route_nodes[0], 10, 2.2, SURFACE, INK), (route_nodes[-1], 6.5, 1.5, INK, SURFACE))
+        ends = (
+            (route_nodes[0], 10, 2.2, palette.surface, palette.ink),
+            (route_nodes[-1], 6.5, 1.5, palette.ink, palette.surface),
+        )
         for node, size, width, face, edge in ends:
             ax.plot(
                 data.node_lon[node],
@@ -137,9 +137,11 @@ def render_share_image(
                 zorder=6,
             )
 
-        _texts(fig, headline(metrics, objective), comparison)
+        _texts(fig, headline(metrics, objective), comparison, palette)
         out = io.BytesIO()
-        fig.savefig(out, format="png", dpi=DPI, facecolor=SURFACE, metadata={"Software": None})
+        fig.savefig(
+            out, format="png", dpi=DPI, facecolor=palette.surface, metadata={"Software": None}
+        )
     return out.getvalue()
 
 
@@ -284,13 +286,19 @@ def headline(metrics: Mapping[str, Any], objective: str) -> tuple[str, str]:
     return f"{ratio:,.1f}×", "less efficient than\nthe sensible route"
 
 
-def _texts(fig: Figure, top: tuple[str, str], comparison: str) -> None:
-    """The headline and its caption, the comparison, the footer."""
+def _texts(fig: Figure, top: tuple[str, str], comparison: str, palette: SharePalette) -> None:
+    """The headline and its caption, the comparison, the footer, in `palette`'s colours."""
     room = COLUMN * WIDTH_PX - 2 * PAD_PX
     x = PAD_PX / WIDTH_PX
     big, caption = top
     number = fig.text(
-        x, 1 - PAD_PX / HEIGHT_PX, big, fontproperties=BOLD, fontsize=110, color=INK, va="top"
+        x,
+        1 - PAD_PX / HEIGHT_PX,
+        big,
+        fontproperties=BOLD,
+        fontsize=110,
+        color=palette.ink,
+        va="top",
     )
     _fit(number, room)
     below = number.get_window_extent().y0 - 10
@@ -300,7 +308,7 @@ def _texts(fig: Figure, top: tuple[str, str], comparison: str) -> None:
         caption,
         fontproperties=REGULAR,
         fontsize=21,
-        color=SECONDARY,
+        color=palette.secondary,
         va="top",
         linespacing=1.3,
     )
@@ -310,7 +318,7 @@ def _texts(fig: Figure, top: tuple[str, str], comparison: str) -> None:
         textwrap.fill(re.sub(r"(\d) (mi|km)\b", "\\1\u00a0\\2", comparison), width=30),
         fontproperties=REGULAR,
         fontsize=17,
-        color=INK,
+        color=palette.ink,
         va="bottom",
         linespacing=1.35,
     )
@@ -321,10 +329,10 @@ def _texts(fig: Figure, top: tuple[str, str], comparison: str) -> None:
         FOOTER,
         fontproperties=REGULAR,
         fontsize=9,
-        color=SECONDARY,
+        color=palette.secondary,
         ha="right",
         va="bottom",
-        path_effects=[withStroke(linewidth=3, foreground=SURFACE)],
+        path_effects=[withStroke(linewidth=3, foreground=palette.surface)],
     )
 
 

@@ -14,7 +14,8 @@ builds and the places index.
 |---|---|
 | `places.py` | `write_places` (the index's writer), `PlaceIndex` (`load`, `states_at`, `town_points`, `states_crossed`, `towns_passed`, `outlines`), `State`, `Town`, `TownPoint`, `PlacesWritten`, `route_line`, `census_dir`, `places_dir`, `state_files`, `place_files` |
 | `comparisons.py` | `COMPARISONS`, `Comparison`, `SHORTER`, `comparison_line`, `distance_text`, `METRES_PER_MILE` |
-| `share_image.py` | `render_share_image`, `headline`, the image's sizes, thresholds and colours (its version, `SHARE_IMAGE_VERSION`, is the endpoint's, in `api/share_api.py`) |
+| `share_image.py` | `render_share_image`, `headline`, the image's sizes and thresholds (its version, `SHARE_IMAGE_VERSION`, is the endpoint's, in `api/share_api.py`) |
+| `share_palettes.py` | `PALETTES` (the image's colours in each of the frontend's themes), `SharePalette`, `CLASSIC` |
 | `directions.py` | `directions`, `Step`, `StepKind`, `road_text`, `compass`, `turn_word`, `numbered` |
 | `jokes.py` | `JOKES`, `inject` |
 | `stats.py` | `stats`, `Stats`, `toasts`, `Vehicle` |
@@ -360,10 +361,11 @@ which is 1.7 mi (2.7 km). It still counts."
 ## Share image
 
 `render_share_image(data, geometry, route_nodes, route_edges, metrics, places, comparison, *,
-baseline_edges=None, objective="distance") -> bytes` draws a route (its nodes and edges on its
-build, along the build's geometry, its document's `metrics`, the objective it was planned for) as a 1200 × 630 PNG, the
-Open Graph size, from our own data only. The API serves it at `GET /routes/{id}/share.png`,
-rendered once and cached (`docs/reference/api.md`, **Share image**).
+baseline_edges=None, objective="distance", palette=CLASSIC) -> bytes` draws a route (its nodes and
+edges on its build, along the build's geometry, its document's `metrics`, the objective it was
+planned for) as a 1200 × 630 PNG, the Open Graph size, in a theme's colours (**Palettes** below),
+from our own data only. The API serves it at `GET /routes/{id}/share.png`, rendered once and
+cached (`docs/reference/api.md`, **Share image**).
 
 - **The text column** (the left 38 %): the headline in bold, as large as fits the column (at
   most 110 pt), its caption under it, and the comparison line at the bottom, wrapped at 30
@@ -386,9 +388,21 @@ rendered once and cached (`docs/reference/api.md`, **Share image**).
   the places index's 20m file in a darker grey (none without an index), the route in red
   (`#e8452c`, the map's) on a white casing, the baseline dashed in grey over it (the sensible
   route through the mess; none for a round trip), a ring at the start and a smaller dot at the
-  end on top (a round trip's shows inside its ring).
+  end on top (a round trip's shows inside its ring). These are classic's colours; a theme's
+  are its own.
 - **The footer**, bottom right: "worst-route · © OpenStreetMap contributors (ODbL) ·
   Boundaries: U.S. Census Bureau".
+
+**Palettes** (`share_palettes.PALETTES`): one per theme of the frontend, ten, by the theme's
+id, classic first, each seven hex colours: the surface (the background, the route's casing, the
+baseline's and the footer's halos), the ink (the headline, the comparison, the start's ring and
+the end's dot), the secondary (the caption, the footer), the network, the outlines, the baseline
+and the route. Classic's (`CLASSIC`, the default) are the image's from before the themes, as
+above, so an image without a theme is the same bytes as before. Every other theme's are its
+preset's (the frontend's `theme/presets/`): the surface its panel, the ink its ink, the secondary
+and the outlines its muted, the network its line (but transit's, `#d4d4d4`, and ledger's,
+`#cfcfcb`, a light grey: their line is black, which would bury the map), the baseline its
+baseline, the route its route's last colour. The fonts stay DejaVu Sans, whatever the theme.
 
 **The network** is found without decoding most of it. A road unit with an end inside the box
 (the outline's in the build's CRS, then the extent in lon/lat) meets it: its ends are points of
@@ -455,7 +469,8 @@ data directory and holds a route over the API tests' 10 × 10 lattice):
 |---|---|
 | `test_places.py` | the index's rows; each town's point inside its polygon, in the towns' order, worked out once; states and towns in route order, the CDP included, and reversed; a route that comes back into a town listed where it first met it; a point repeated (a zero-length segment) met where it is; a route touching nothing; a touch counting; the state each point lies in (one in each, one on the border, a corner, one in neither); places outside the bbox left out; a state the bbox meets without its places file reported missing; the state's bounds when there is no bbox; the files' columns and CRS; no index when a file is missing; `aux places` on the fixture zipped as the Census ships it (shapefiles), with the latest build's bbox and the warning, and its missing state file; `STATES` (51, unique, every region's state) |
 | `test_comparisons.py` | the four lines above; the things in order, each with both lines; a sweep from 0.1 to 500,000 mi reaching every thing, and every "N×" line but those the list makes unreachable (derived from it), deterministic; the boundaries (equal is not longer, 2× exactly, the shorter line); every distance's format |
-| `test_share_image.py` | a 1200 × 630 PNG (its IHDR), the same bytes twice, with and without the index (which differ), no Software stamp; `headline` for each objective and a round trip; a slowest-time route drawing its own headline, a distance route ignoring its time ratio; a round trip; no baseline; the extent's margin and shape, and its minimum; the network one line per road unit, drawn along a bent geometry, only the units near the map; the roads a full decode finds, on the lattice with every road bent over 243 maps in and around it and on a hairpin met only by its tip, and none decoded to tell for a map holding every road or none; under a cap of 10, thinned to T0–T2, T0–T1, T0, then the longest units of T0 (359 of one length: the first ten; among unequal lengths the ten longest, ties to the lower unit id, a long unit outside T0 left out), the same lines twice |
+| `test_share_image.py` | a 1200 × 630 PNG (its IHDR), the same bytes twice, with and without the index (which differ), no Software stamp; each theme's palette: classic's the default, the same bytes twice, the map's corner its surface, its ink and its route among the pixels, ten different images; `headline` for each objective and a round trip; a slowest-time route drawing its own headline, a distance route ignoring its time ratio; a round trip; no baseline; the extent's margin and shape, and its minimum; the network one line per road unit, drawn along a bent geometry, only the units near the map; the roads a full decode finds, on the lattice with every road bent over 243 maps in and around it and on a hairpin met only by its tip, and none decoded to tell for a map holding every road or none; under a cap of 10, thinned to T0–T2, T0–T1, T0, then the longest units of T0 (359 of one length: the first ten; among unequal lengths the ten longest, ties to the lower unit id, a long unit outside T0 left out), the same lines twice |
+| `test_share_palettes.py` | the ten themes, classic first, every colour a lowercase hex string, no two palettes alike; classic's the image's colours from before the themes; night's its preset's; transit's and ledger's networks light grey |
 | `test_share_image_data.py` (`data`) | Portland: on the map of Powell's → Reed and two smaller ones inside it, the network is the roads a full decode finds |
 | `test_fetch_census.py` | the script against a `curl` stand-in on PATH: the URLs and User-Agent, a file without a pinned sum kept with its sum printed, a pinned file whose sum differs deleted (exit 1), a failed fetch leaving no `.part` file and fetching no further (exit 1), a bad FIPS code fetching nothing (exit 2) |
 | `test_directions.py` | each step's words on small named graphs (`streets.py`): the town's turns, an interior stop with and without a label (the road going on as "Continue on"), a round trip's arrival, the turn words at the slight and sharp bands' ends, straight on continuing only on a new road, a turn on the same road its own step ("to stay on"), never "to stay on" an unnamed road, US 26 through downtown (a ref joining a name straight on unannounced, then each turn a step), unnamed roads and an alley in words, a ramp of two links toward the motorway's first ref and one the route ends on, a ramp carrying the ref of the road it joins (US 30) still ending, toward that road, an interchange on the ramp or where it meets the motorway adding no second ramp, an interchange without a link a junction like another and a roundabout node (the same road through it cut too), the diamond and roundabout fixtures through the pipeline; planned lattice routes with signals, a round trip included: the ranges tiling the edges, the distances adding up to the length and the times to the driving and delays; names, refs and the compass, half-way bearings clockwise |

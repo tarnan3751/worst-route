@@ -572,6 +572,8 @@ FastAPI, JSON bodies validated by pydantic. All coordinates are `[lon, lat]` in 
 | GET | `/routes/{route_id}/share.png` | server-rendered share image, 1200 × 630, cached (built, M4) |
 | POST | `/routes/{route_id}/validate` | runs the validator, returns the report (debug/CI) |
 | GET | `/daily` | today's route: one trip a day, the same for everyone on the server, planned once (built, M6) |
+| POST | `/draw` | `{request, path}` → a route drawn by hand so far, its legal next moves (built, M6) |
+| POST | `/draw/finish` | `{request, path}` → `{route_id, ratio}`: the drawing validated and stored as a route (built, M6) |
 
 Every error answers `{code, message, ...}` (the error's own fields beside them), 422 for a request that cannot be planned, 429 when the server is full, 404 for an unknown job or route, 409 for a stored route whose build is gone.
 
@@ -848,7 +850,28 @@ Deliverable: `worst-route plan --region portland --from 45.5231,-122.6765 --to 4
 
 Then: certified-worst mode (CP-SAT); OSM turn restrictions via the transitions table; stop reordering; portfolio runs (K seeds in parallel, stream the best); simulated-annealing acceptance.
 
-The game loop's first piece is built (2026-10-31; `docs/reference/api.md`, **The daily route**; `docs/reference/frontend.md`, **Using it**): the daily worst route. `GET /daily` gives one trip a day, the same for everyone on a server: two incorporated places of the main build's places index (the served region with the most states, the national build when served), drawn from the UTC date as the seed, 15–45 % of the build's bbox diagonal apart (849–2,547 km on `us-t3`), the first such pair the pre-flight accepts; planned once, on the day's first call, through the job manager with no client (which no client may cancel), as the longest route at the automatic tier with 5,000 attempts (`DAILY_MAX_ITERATIONS`), the server's largest budget as a safety net and the frontend's default vehicle and departure, and recorded per date and `graph_version` in the route store's `daily` table (drawn once, a full server answering 429 before any drawing), so every server with the same build plans the same route when the iterations end it. Planning it on all roads (T4) instead is a later option: 17–31× rather than 4–11×, at 1.7–3.4 times the time an attempt. The frontend shows it at the top of the panel ("Today's route": the date, the towns, "planning…" with the ratio so far, then the ratio, the share image and "Open it"), collapsed once the user plans a route of their own, and `?daily` opens it. On `us-t3` on 2026-10-31, Sageville, IA → Acworth, GA planned in 14–32 s to 6.58× (`a076702bbc25`), the same route on four servers. Scoring, accounts, leaderboards and "beat the engine" come next.
+The game loop's first piece is built (2026-10-31; `docs/reference/api.md`, **The daily route**; `docs/reference/frontend.md`, **Using it**): the daily worst route. `GET /daily` gives one trip a day, the same for everyone on a server: two incorporated places of the main build's places index (the served region with the most states, the national build when served), drawn from the UTC date as the seed, 15–45 % of the build's bbox diagonal apart (849–2,547 km on `us-t3`), the first such pair the pre-flight accepts; planned once, on the day's first call, through the job manager with no client (which no client may cancel), as the longest route at the automatic tier with 5,000 attempts (`DAILY_MAX_ITERATIONS`), the server's largest budget as a safety net and the frontend's default vehicle and departure, and recorded per date and `graph_version` in the route store's `daily` table (drawn once, a full server answering 429 before any drawing), so every server with the same build plans the same route when the iterations end it. Planning it on all roads (T4) instead is a later option: 17–31× rather than 4–11×, at 1.7–3.4 times the time an attempt. The frontend shows it at the top of the panel ("Today's route": the date, the towns, "planning…" with the ratio so far, then the ratio, the share image and "Open it"), collapsed once the user plans a route of their own, and `?daily` opens it. On `us-t3` on 2026-10-31, Sageville, IA → Acworth, GA planned in 14–32 s to 6.58× (`a076702bbc25`), the same route on four servers.
+
+The game loop's second piece is built (2026-10-31; `docs/reference/api.md`, **Drawing a route**;
+`docs/reference/engine.md`, **Drawing**; `docs/reference/frontend.md`, **Drawing**): beat the
+engine. The player draws a route junction by junction on the map, under the engine's rules (no
+intersection twice, no road twice, twins included, the one-ways and the turn tables, the stops in
+order, a strict turn constraint and hard mode), against the engine's own route for the same stops,
+the par, a normal job started with the drawing. The server holds nothing of a drawing: each `POST
+/draw` sends the request and the whole path and is answered with the drawing so far and its legal
+next moves (each with its road, length, turn and shape), or refused with `ILLEGAL_PATH`, the code
+of the rule broken and the first illegal edge. The path is checked by `route.check_route`, the one
+place the route rules are written, as a route whose last stop is the node it has reached, and the
+next moves are a filter a test holds to exactly the edges the check takes. `POST /draw/finish`
+makes a drawing that has reached the end a route, proven by the validator on the real stops and
+stored like any other (`run.backend: "human"`, `stopped_because: "drawn"`), with its share image,
+directions, `/validate` and make it worse. A drawing is the longest route with no target. What each
+step on a request needs (its masks, stops and baseline) is kept for the last eight requests drawn
+on, so a step costs 8–11 ms at 2,000 edges on `us-t3` (27–41 ms at 10,000), 37–148 ms when it
+is worked out again. The frontend's "Draw it" shows the moves as highlighted roads, takes the one clicked,
+undoes with Backspace, leaves with Esc, finishes with the longest move to the end, and gives the
+verdict against the par: "You 14.3× · the engine 37.5×: the engine wins." Scoring across players,
+accounts and leaderboards come next.
 
 ---
 

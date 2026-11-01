@@ -93,7 +93,10 @@ the node, its searches growing with the leg (`docs/reference/engine.md`, **Searc
 M6's first piece is built too, the daily worst route: `GET /daily`, one trip a day between two
 towns drawn from the date, planned once on the main build with a fixed number of attempts so every
 server with the build gets the same route, shown as "Today's route" at the top of the panel and
-opened by `?daily` (`docs/reference/api.md`, **The daily route**).
+opened by `?daily` (`docs/reference/api.md`, **The daily route**). So is its second, beat the
+engine: `POST /draw` checks a route drawn by hand from its path on every step and offers its legal
+next moves, `POST /draw/finish` stores it as a validated route, and the frontend's "Draw it" plays
+it against the engine's own route for the same stops (`docs/reference/api.md`, **Drawing a route**).
 OSM's turn restrictions are honoured (M6, pipeline version 8): `filter` keeps them and cleanup
 makes them turn tables at the junctions, which the engine, the splice and the validator read as
 they read a super-junction's (`docs/reference/pipeline.md`, **Turn restrictions**).

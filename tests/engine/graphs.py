@@ -171,3 +171,50 @@ def two_rings(radius_m: float = 300.0, apart_m: float = 2000.0) -> GraphData:
             xy.append((X0 + cx + radius_m * np.cos(angle), Y0 + radius_m * np.sin(angle)))
         edges += [Edge(first + k, first + (k + 1) % 12, None) for k in range(12)]
     return make_graph(xy, edges)
+
+
+def board(*, parallel: bool = False) -> GraphData:
+    """A 5 × 5 lattice 100 m apart, node r * 5 + c, row 0 the southmost, its rows named "Row r"
+    and its columns "Col c"; row 1 one-way east and column 3 one-way north, the rest two-way;
+    16 → 17 and 12 → 11 twins; at node 12 only the straight ways through; with `parallel`, a
+    second road from 0 to 1, longer and of its own name.
+
+        20 21 22 23 24
+        15 16 17 18 19
+        10 11 12 13 14
+         5> 6> 7> 8> 9
+         0  1  2  3  4      (3 ^ 8 ^ 13 ^ 18 ^ 23)
+    """
+    side = 5
+    xy = [(X0 + c * 100.0, Y0 + r * 100.0) for r in range(side) for c in range(side)]
+    edges: list[Edge] = []
+
+    def street(a: int, b: int, oneway: bool, name: str) -> None:
+        edges.append(Edge(a, b, 100.0, name=name))
+        if not oneway:
+            edges.append(Edge(b, a, 100.0, name=name))
+
+    for r in range(side):
+        for c in range(side - 1):
+            street(r * side + c, r * side + c + 1, r == 1, f"Row {r}")
+    for c in range(side):
+        for r in range(side - 1):
+            street(r * side + c, (r + 1) * side + c, c == 3, f"Col {c}")
+    if parallel:
+        edges.append(Edge(0, 1, 140.0, HighwayClass.TERTIARY, name="Bypass"))
+    straight = [((7, 12), (12, 17)), ((17, 12), (12, 7)), ((11, 12), (12, 13))]
+    straight.append(((13, 12), (12, 11)))
+    g = make_graph(xy, edges, twins=[((16, 17), (12, 11))], transitions=straight)
+    # each two-way street one road unit, as a build has it (make_graph gives each edge its own)
+    unit: dict[tuple[int, int, str], int] = {}
+    units = np.array(
+        [
+            unit.setdefault((min(u, v), max(u, v), g.strings.names[name]), e)
+            for e, (u, v, name) in enumerate(zip(g.edge_u, g.edge_v, g.edge_name, strict=True))
+        ],
+        dtype=np.int32,
+    )
+    units.flags.writeable = False
+    g = replace(g, edge_unit=units, meta=dict(g.meta))
+    g.meta["graph_version"] = graph_version(g)
+    return g

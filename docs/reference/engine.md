@@ -28,6 +28,7 @@ routes either way, on every build, transition tables included (**Searches**).
 | `alphabet_search.py` | `alphabet_route`, `edge_letters`, `alphabet_counts`, `alphabet_scored` (**Alphabet**) |
 | `plan.py` | `plan_route`, `PlanResult`, `check_base`, `BaseRouteMismatch` |
 | `io.py` | `route_document`, `document`, `read_route` / `SavedRoute` |
+| `draw.py` | `DrawRules`, `Drawing`, `check_drawing`, `next_moves`, `finish_drawing`, `DrawRefused`, `DrawingUnfinished`, `drawing_problem` (**Drawing**) |
 
 `ENGINE_VERSION` (`engine/__init__.py`) is recorded with every route: bump it when the same
 build, request and seed would give a different route. The engine's numbers (thresholds,
@@ -74,6 +75,72 @@ end there), and the bans that remain.
 A two-edge round trip `[a, x, a]` is the only way a vertex-simple route can drive both
 directions of one two-way road; the `edge_unit` check covers it. Every other road reuse is
 already a repeated node.
+
+### Drawing
+
+A route drawn by hand (`draw.py`; the API's `POST /draw`, `docs/reference/api.md`, **Drawing a
+route**) is a path of edges from the request's start, extended a move at a time and checked
+whole, from the path alone, on every call. `DrawRules` is what it keeps to: the resolved stop
+nodes (`resolve_stops`), the request's `active` nodes and `banned` edges, and the turn classes
+its strict constraint refuses and its hard mode (a soft constraint changes nothing here: it only
+scores). `check_drawing(data, rules, path)` returns a `Drawing` (its nodes and edges, the
+positions of the stops reached in order, the start's 0 first, and whether it has reached the
+end), or raises `DrawRefused(code, index)`, `index` the first edge of the path that is not a
+legal move, so that `path[:index]` is legal:
+
+| Code | When |
+|---|---|
+| `BROKEN_CHAIN` | an id outside the graph, an edge that does not leave the node the path is at (a one-way's only edge taken from its head), a self-loop |
+| `OUTSIDE_AREA` | an edge into a node outside `active` |
+| `NODE_REUSED`, `ROUND_TRIP_START_REUSED` | a node the path has passed; a round trip's start only as its end, once every stop between was reached |
+| `EDGE_BANNED` | an edge `banned` holds, the twin of one the path drives, a two-edge round trip out and back along one road |
+| `TRANSITION_FORBIDDEN` | a turn the node's transition rows do not list |
+| `STOP_SKIPPED` | a stop reached before the one before it, the end included |
+| `PAST_END` | an edge after the end |
+| `TURN_REFUSED` | a turn of a class the strict turn constraint refuses |
+| `ROAD_AGAIN` | under hard mode, a road the path left and comes back to |
+
+The route rules are `check_route`'s, the one place they are written: the path is checked as a
+whole route whose stops are those reached so far and, when its last node is not one of them,
+that node, a stand-in for the stop it is heading to. `check_route` reads its stop positions for
+their shape only (the first 0, the last the last node, rising), so the stand-in masks no rule;
+the stops' order, the end and the request's own rules (the area, strict turns, hard mode, as
+`plan.check_base` reads them) are checked beside it. Each check names the first position it
+fails at, and `check_route` the first of the first rule it finds broken (a node passed is looked
+for before a turn): legality is closed under prefixes, so the earliest refusal found is checked
+again on the path before it until that path passes, which makes it the first illegal edge, and
+the path up to and with that edge is checked once more so that the code is the same whichever
+longer path showed it (on a tie, the stops' walk first, then `check_route`, the area, the turns,
+hard mode). A node passed again is the edge into it, but a round trip's start, which comes back
+as the end: the stops' walk judges it there, and a route that goes on from it goes wrong on the
+edge leaving it (`PAST_END`).
+
+`next_moves(data, rules, drawing)` is the out-edges of the drawing's last node that extend it
+legally, ascending, filtered without a route check per candidate: not in `banned`, the head in
+`active` and not the node itself, the head not on the path (but a round trip's start once every
+stop is reached, and not by the road the path's one edge came along), the head no stop but the
+one due next, not one of the path's edges or their twins, the turn from the last edge listed
+when the node has transition rows, of no refused class, and under hard mode no road the path has
+left. They are exactly the edges e for which `check_drawing` passes `path + [e]`, which
+`tests/engine/test_draw.py` holds on random walks. A dead end has none: the player undoes.
+
+`finish_drawing(data, request, rules, snaps, baseline, path, r_max=...)` makes a drawing that
+has reached the end a route: `Route.new` on it (with the request's bans as `extra_banned`),
+scored by the distance objective with the request's constraints as `plan_route` scores a seed,
+then `validate_route` on the real stops, the masks and the constraints, and returns its
+`route.json` document (`io.document`, **Route files**) with the run `{attempts, accepted}` its
+moves, `stopped_because: "drawn"`, `elapsed_s: 0` and `backend: "human"`. A drawing short of the
+end raises `DrawingUnfinished` (`reached`, the stops it has), a route the validator refuses
+`ValidationFailed`. `drawing_problem(objective, target_kind)` is what a drawing's request may not
+ask: a drawing is the longest route, as bad as the player makes it, so the objective `distance`
+and the target `max` only. Nothing is drawn from an rng: the same build, request and path give
+the same answer.
+
+On `us-t3` (build 6adae6917be1: 2,154,510 nodes, 4,412,843 edges), `check_route` on a path costs
+2.7 ms at 2,000 edges and 8.0 ms at 10,000 (`Route.new`, which also allocates its node and edge
+masks, 3.5 and 9.0 ms); the request's masks cost 22–24 ms and settling its stops and its baseline
+5–123 ms (Powell's → Reed to Chicago → Denver), which the API keeps per request
+(`docs/reference/api.md`, **Drawing a route**).
 
 ## Requests
 
@@ -1780,7 +1847,9 @@ from the line, past the 433 km leash; no turn-blind path lies inside it.
 `tests/engine/` builds its graphs with `worst_route.graph.testing` and the helpers in
 `tests/engine/graphs.py` (`lattice`, with twins and transitions, its positions whole metres
 for stable bytes; `at_node`, a node's lon/lat rounded to 1e-7° as a request's stop, and
-`exactly_at_node`, unrounded, for a stop that must lie on the node itself).
+`exactly_at_node`, unrounded, for a stop that must lie on the node itself; `board`, a 5 × 5
+lattice with one-ways, twins, a straight-only junction, named roads and a road unit for each
+two-way street, which the drawing's tests and the API's draw on).
 
 | Test file | What it covers |
 |---|---|
@@ -1801,6 +1870,7 @@ for stable bytes; `at_node`, a node's lon/lat rounded to 1e-7° as a request's s
 | `test_hard_mode.py` | the rule read off a route's edges (an unnamed edge between two stretches of a road, a round trip coming home on the road it left by); `feasible_window` refusing a splice that splits a stretch or comes back to a road and accepting fresh roads and the neighbours' extended, and agreeing with a full check of the spliced route over every short window of three routes; the bans exact per window (all but the road inside a stretch), a fresh array each time and following the route after a splice; no terms; `window` widening a window inside a stretch, never past a stop, through the composite; `find_detour`'s local-exhaustive path the best hard mode allows; the request's flag (in the JSON only when set, its note, with strict and soft turns); the seed re-solving a leg that comes back to its road, and the earlier leg when the later cannot; round-trip loops; what an unreachable leg blames (hard mode, the strict constraint, nothing); a stop moved for hard mode; `check_base` refusing a base that comes back to a road; the loop with `check_delta` on both backends, alone and with soft no-left, every route along the way one stretch a road; the validator's proof; `plan --hard`, `validate` on a file edited to claim it, `--base` refusing `--hard`, and a trip it cannot drive in one line ending "try without --hard" |
 | `test_detour.py` | each strategy's legal detours and None when none exists, the waypoint's pool (and any node of the ball when it holds none of the pool), the strategy weights, random weight drawing only near the window, the local-exhaustive ranking and the refused-candidate skip, no turn refused on a lattice of straight-only junctions (and many when the searches are made turn-blind); shrinking toward a target, the local-exhaustive path closest to the band first, and never a longer one (a longer, faster path shadowed a shorter one for a duration) |
 | `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, a splice after two empty cycles and the run stopping only after three, the segment bias's rate and its anchors (the edges with the most unused nodes near), the unused-node grid's cap, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, and so do those with turn tables (no turn refused), a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable`; the same-seed test on both backends, and both backends planning the same route, splice for splice, on the grid and on one-way towns with and without turn tables; shrinking toward a target, runs of 6 edges on average and up to 24; the nodes a detour can leave or join (three distinct neighbours over the usable edges, the mask and bans of both directions taking one away), a window widened to them on a lattice whose streets are split in two, never past a stop, and every splice of a run there starting and ending at one or a stop |
+| `test_draw.py` | a drawing on a 5 × 5 lattice with one-ways, twins, a straight-only junction and named roads: an empty path at the start with its legal ways out, the stops reached in order and the end; every refusal at its first illegal edge (a one-way taken from its head, an id outside the graph, a path not from the start among them); of two refusals the earlier, the path before it legal, where the route check finds the later first; a round trip closing at its start only once its stops are reached and not out and back along one road (a road of its own back allowed); on 150 random walks under random stops, round trips, areas, bans, strict turns and hard mode, the next moves exactly the out-edges the check takes, each other refused at the path's end, every code met; on 300 walks that break the rules anywhere, the refusal at an edge whose path before passes and whose path with it is refused alike; a finished drawing's route.json (its run drawn by a human, its ratio), a round trip's without a ratio, an unfinished one refused; the objective and target a drawing takes |
 | `test_io.py` | the route files, the target in the request and, for a target run, in the metrics; the delays and the turns in the metrics, and a saved route's metrics carrying its file's item counts |
 | `test_plan.py` | `plan_route`'s hooks: `on_start` once before the loop with the route it starts from (every splice replays from it to the result), the same route without the hooks, a continuation from `base` that never scores less, is fixed by its seed on both backends, and refuses a base for other stops, one leaving the request's area (before the loop) and, in `check_base`, a node outside the mask or an edge the request bans; a soft constraint starting from the plain seed and keeping left turns rarer than the plain run's, a strict one no route keeps as `InfeasibleTurnConstraint` with its note, one no route keeps without it either (two one-way rings) refused as without it, a stop the strict fallback moves noting why, a base refused for a turn a strict constraint refuses (taken by a soft one); a strict route validated against its constraint |
 | `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32, `--backend` on both commands (the same route.json on both backends but the backend and the time), and the same on a build with turn tables, where `auto` is `csr` too, a file from another engine version refused; `--target` (its line, its parsing, its refusals) and `--base` (a continuation to a smaller target, the options it refuses, a file from another engine version, region or `graph_version`, a truncated or broken route, stops that do not resolve); a ratio target for a round trip, from the stops or the base, refused; an illegal route reported as the base file's fault only with `--base`; `--objective`, `--no-left`, `--no-right` and `--strict` (their lines, the time ratio with its drive and delays, the route.json, `validate`, their refusals, `--strict` alone in one line, a strict refusal in one line ending "try without --strict", `--base` taking them from its file); `validate` failing a soft route's file edited to claim a strict constraint; `--objective collect --item` (the collected line, the items and item in route.json, `--base` keeping them, a distance run's items) and its refusals, each one plain line (an unknown objective before its item); `--objective brand --brand` by name in any case and by id (the visited line, the brand in route.json, `--base` keeping it and refusing `--brand`, `validate` passing it and failing an edited count) and its refusals (the misfits, a name no brand has, one two brands share, an unknown id, a brand out of reach); a brand named "76" in a build whose brand 76 is another (the bare number refused, `"76"` the name, `#76` the id, `77` an id), `#` without a number, `²`; a build missing an array, one line for `plan` and `validate`; `validate` refusing a route.json whose item counts were edited; `--objective alphabet` (its objective and letters lines, the letters line for one letter and past Z, the `alphabet` check in the validator's line, the letters in route.json, `validate` passing it and failing a road edited in it) and its refusals (`--via`, a target, a `--base` file of an alphabet route), each one plain line |

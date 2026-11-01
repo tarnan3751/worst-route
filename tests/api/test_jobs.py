@@ -13,6 +13,7 @@ from worst_route.api import worker as worker_module
 from worst_route.api.jobs import JobManager, TooManyJobs, prepare
 from worst_route.api.sse import Event, path_points
 from worst_route.api.worker import JobSpec, RouteArrays
+from worst_route.engine import plan as plan_module
 from worst_route.engine.plan import plan_route
 from worst_route.engine.request import request_masks
 from worst_route.engine.target import Target
@@ -498,3 +499,113 @@ def test_prepare_resolves_the_stops_as_the_worker_will(data: Path) -> None:
     prepared = prepare(build, req)
     result = plan_route(build.data, req, backend=build.backend, spatial=build.spatial)
     assert prepared.snaps == result.snaps and prepared.masks.tier == result.masks.tier
+
+
+# The worst order: on GRID, (0, 9, 45, 90, 99) is visited 0, 9, 90, 45, 99.
+REORDERED = [0, 9, 45, 90, 99]
+ORDER = [0, 1, 3, 2, 4]
+
+
+async def test_a_reorder_job_says_where_its_stops_went_once_it_has_chosen_their_order(
+    data: Path,
+) -> None:
+    async with manager(data) as m:
+        build = loaded(data)
+        plain = submit(m, build, request(GRID, [0, 45, 99]))
+        assert json.loads(plain.header[0].data)["order"] == [0, 1, 2]  # at once, as given
+        req = request(GRID, REORDERED, reorder=True)
+        job = submit(m, build, req)
+        assert job.header == []  # the pre-flight checked the given order only
+        events = await collect(m.subscribe(job))
+        assert names(events)[:3] == ["snapped", "baseline", "snapshot"]
+        assert names(events).count("snapped") == 1 and names(events)[-1] == "done"
+        snapped = json.loads(events[0].data)
+        assert snapped["order"] == ORDER
+        assert [s["node"] for s in snapped["stops"]] == [REORDERED[k] for k in ORDER]
+        assert [s["label"] for s in snapped["stops"]] == [f"stop {k}" for k in ORDER]
+        given = [{"lat": lat, "lon": lon} for lat, lon in req.stops]
+        assert [s["input"] for s in snapped["stops"]] == [given[k] for k in ORDER]
+        saved = validated(m, data, json.loads(events[-1].data)["route_id"])
+        assert saved.order == tuple(ORDER) and saved.request.reorder
+        assert saved.request.stops == [req.stops[k] for k in ORDER]
+        assert [s["label"] for s in saved.input["stops"]] == [f"stop {k}" for k in ORDER]
+        await until(lambda: plain.end is not None)
+
+
+async def test_a_reorder_job_cancelled_during_its_search_is_an_error(
+    data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = plan_module.choose_order
+
+    def slow(*args: Any, **kwargs: Any) -> Any:
+        time.sleep(0.5)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(plan_module, "choose_order", slow)
+    async with manager(data) as m:
+        job = submit(m, loaded(data), request(GRID, REORDERED, reorder=True))
+        subscription = m.subscribe(job)
+        await m.cancel(job)
+        assert job.status == "error" and job.route_id is None
+        events = await collect(subscription)
+        assert names(events) == ["error"] and json.loads(events[0].data)["code"] == "CANCELLED"
+
+
+async def test_a_reorder_job_cancelled_while_it_runs_stores_its_route_in_its_order(
+    data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the route so far is validated against the masks and stops of the order chosen
+    slow_splices(monkeypatch)
+    async with manager(data) as m:
+        stops, order = [0, 19, 210, 380, 399], [0, 2, 1, 3, 4]  # on BIG
+        req = request(BIG, stops, seed=4, reorder=True, max_iterations=1_000_000)
+        job = submit(m, loaded(data, "big"), req)
+        subscription = m.subscribe(job)
+        await until(lambda: job.accepted >= 10)
+        await m.cancel(job)
+        events = await collect(subscription)
+        done = json.loads(events[-1].data)
+        assert events[-1].name == "done" and done["stopped_because"] == "cancelled"
+        saved = validated(m, data, done["route_id"], "big")
+        assert saved.order == tuple(order) and saved.request.stops == [req.stops[k] for k in order]
+        assert [int(saved.nodes[k]) for k in saved.stop_idx] == [stops[k] for k in order]
+
+
+def slow_search(monkeypatch: pytest.MonkeyPatch, delay_s: float) -> None:
+    """Make the order search take `delay_s` more."""
+    real = plan_module.choose_order
+
+    def slow(*args: Any, **kwargs: Any) -> Any:
+        time.sleep(delay_s)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(plan_module, "choose_order", slow)
+
+
+async def test_a_reorder_job_s_deadline_waits_for_its_search_then_runs_from_it(
+    data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # a 6 s search, past the 3 s budget and the 1.5 s grace: within the 3 s allowance before
+    # `Started`, and the job, its budget run from `Started`, ends past budget + grace + allowance
+    slow_search(monkeypatch, 6.0)
+    slow_splices(monkeypatch, 0.2)  # the loop runs its whole budget
+    async with manager(data, kill_grace_s=1.5, reorder_search_s=3.0) as m:
+        req = request(BIG, [0, 19, 210, 380, 399], seed=4, reorder=True, budget_s=3)
+        job = submit(m, loaded(data, "big"), req.model_copy(update={"max_iterations": 10**6}))
+        events = await collect(m.subscribe(job))
+        done = json.loads(events[-1].data)
+        assert names(events)[:2] == ["snapped", "baseline"] and events[-1].name == "done"
+        assert done["stopped_because"] == "budget"
+        assert job.finished_at - job.started_at > 3.0 + 1.5 + 3.0
+        validated(m, data, done["route_id"], "big")
+
+
+async def test_a_reorder_job_whose_search_outlasts_its_allowance_times_out(
+    data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    slow_search(monkeypatch, 3.0)
+    async with manager(data, kill_grace_s=0.5, reorder_search_s=0.5) as m:
+        job = submit(m, loaded(data), request(GRID, REORDERED, reorder=True, budget_s=1))
+        events = await collect(m.subscribe(job))
+        assert names(events) == ["error"] and job.route_id is None
+        assert json.loads(events[0].data)["code"] == "WORKER_TIMEOUT"

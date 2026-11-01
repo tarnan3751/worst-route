@@ -5,11 +5,12 @@ field under the engine's names (the objective as any string, which the endpoint 
 item `collect` collects and the brand `brand` visits), with the stops as `{lat, lon, label}`
 objects, the target as
 `{kind: "max"}`, `{kind: "ratio", value}` or `{kind: "duration", seconds}` (the engine's
-`Target`, whose bounds it checks) and the turn constraints as the engine's
-`{no_left, no_right, strict}`, plus `region`, `vehicle` and `departure` (kept with the
-route for the presentation) and `base_route_id` ("make it worse": the stops, tier and leash then
-come from that route, so `stops` may be left out). `engine_request(seed)` is the engine's
-request. `SnapIn` is the body of `POST /snap`.
+`Target`, whose bounds it checks), the turn constraints as the engine's
+`{no_left, no_right, strict}` and `reorder` (the stops between the ends in the worst order), plus
+`region`, `vehicle` and `departure` (kept with the route for the presentation) and
+`base_route_id` ("make it worse": the stops, in the order that route visits them, tier and leash
+then come from that route, so `stops` may be left out, and `reorder` is off).
+`engine_request(seed)` is the engine's request. `SnapIn` is the body of `POST /snap`.
 
 The responses: `Health`, `RegionOut`, `SnapOut`, `JobCreated`, `JobStatus`, `RouteDocument`
 (its metrics with `TargetMetrics` for a ratio or duration target, `ItemCounts`, the route's
@@ -22,6 +23,8 @@ toasts; the metrics of a route while it grows (`RouteMetrics`: `progress`, `snap
 status) carry its delays, and `Done`'s (`DoneMetrics`) the target and the turns too, and the
 stored route's other metrics (its item counts, a collecting route's item, a pilgrimage's brand,
 an alphabet route's letters) as extra fields.
+A route document and the `snapped` event carry `order`, each stop's position among the stops
+the job was given, in the order the route visits them (the identity without `reorder`).
 The SSE events' payloads are `Snapped`, `BaselineOut`, `Progress` (with `SpliceOut`s),
 `Snapshot`, `Done` and `ErrorBody`. Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in
 requests; every number is metric.
@@ -113,6 +116,7 @@ class RouteRequestIn(_In):
     item: CollectItem | None = None
     brand: int | None = Field(default=None, ge=0)
     constraints: Constraints = NO_CONSTRAINTS
+    reorder: bool = False
     tier: TierChoice = "auto"
     leash_km: Annotated[float, Field(gt=0, le=LEASH_MAX_KM)] | Literal["auto"] = "auto"
     budget_s: float = Field(default=DEFAULT_BUDGET_S, gt=0)
@@ -139,6 +143,7 @@ class RouteRequestIn(_In):
             item=self.item,
             brand=self.brand,
             constraints=self.constraints,
+            reorder=self.reorder,
             tier=self.tier,
             leash_km=self.leash_km,
             budget_s=self.budget_s,
@@ -268,9 +273,11 @@ class StopSnapped(_Out):
 
 
 class Snapped(_Out):
-    """The `snapped` event: the stops as the job resolved them, and the request's scale."""
+    """The `snapped` event: the stops as the job resolved them, in the order the route visits
+    them, `order` (each one's position among the stops given), and the request's scale."""
 
     stops: list[StopSnapped]
+    order: list[int]
     tier: str
     leash_km: float
     active_nodes: int
@@ -456,6 +463,7 @@ class RouteDocument(_Out):
     seed: int
     request: RouteRequestIn
     stops: list[RouteStop]
+    order: list[int]
     geometry: LineString
     legs: list[Leg]
     metrics: DocumentMetrics

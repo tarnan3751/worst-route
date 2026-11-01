@@ -485,8 +485,12 @@ QA_TWIN_COVERAGE_MIN = 0.95
 
 # The API (`docs/reference/api.md`). At most API_MAX_JOBS jobs run at once, each in a worker
 # process, and API_MAX_QUEUED wait; a running job is killed API_KILL_GRACE_S after its budget. A
-# job's record is kept API_JOB_TTL_S after it ends. A job whose SSE subscribers have all gone
-# for API_ORPHAN_S (once one had connected) is cancelled, or dropped if still queued; the
+# job asking for the worst order searches for it in its worker before its loop (`reorder`,
+# `engine/seed_route.py`, `choose_order`; 12-14 s for 7 stops on Portland's build at a load of
+# 7-12, past 30 s beside another job and a browser): until the search ends, its deadline is
+# REORDER_SEARCH_MAX_S beyond the budget and the grace, and from then the budget and the grace
+# run again. A job's record is kept API_JOB_TTL_S after it ends. A job whose SSE subscribers have
+# all gone for API_ORPHAN_S (once one had connected) is cancelled, or dropped if still queued; the
 # manager looks for those every API_SWEEP_S. A job's follower waits at most API_READ_GRACE_S on
 # its worker's pipe before it looks at the job's time limit and its worker again (a worker that
 # dies, even partway through a message, closes the pipe, which ends the wait at once). Progress
@@ -496,6 +500,7 @@ QA_TWIN_COVERAGE_MIN = 0.95
 API_MAX_JOBS = max(1, (os.cpu_count() or 1) - 2)
 API_MAX_QUEUED = 8
 API_KILL_GRACE_S = 30.0
+REORDER_SEARCH_MAX_S = 60.0
 API_JOB_TTL_S = 3600.0
 API_ORPHAN_S = 15.0
 API_SWEEP_S = 1.0

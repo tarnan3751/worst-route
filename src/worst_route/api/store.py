@@ -13,7 +13,8 @@ stored route has passed the validator. A row holds what `route.json` holds
            stop_idx        JSON list
            baseline_edges  int32 little-endian blob
            metrics_json    route.json's metrics
-           run_json        route.json's run)
+           run_json        route.json's run
+           order_json      route.json's order: each stop's position among those asked for)
 
 The daily route's rows (`api/daily_api.py`) are a second table:
 
@@ -22,6 +23,16 @@ The daily route's rows (`api/daily_api.py`) are a second table:
 one row per UTC date (YYYY-MM-DD), region and `graph_version` (a build replaced under its id by
 `pipeline save --force` has another, and so its own row), `status` planning (`job_id` names its
 job), done (`route_id` its route) or failed; `put_daily` replaces the day's row.
+
+A store made before the worst order gains `order_json` when it is opened (`ALTER TABLE`, the
+check and the change under one write lock, `BEGIN IMMEDIATE`, so servers opening it at once add
+it once; a column found added all the same counts as there); its rows, and a document without
+`order`, read as the identity order. The change is one way: code from before the series stores
+a row by its 16 columns' positions, which a store with 17 refuses ("table routes has 17 columns
+but 16 values were supplied"); the way back is to drop the column (`ALTER TABLE routes DROP
+COLUMN order_json`, SQLite 3.35 and later) or to start a fresh store file. A reordered route's
+`input_json` holds its stops in the order the route visits them, as its `request_json` and
+`stops_json` do.
 
 `route_id(graph_version, nodes, edges, stop_idx)` is the first 12 hex digits of a sha256 over
 the graph_version, the node and edge ids as int32 little-endian bytes and the stop positions as
@@ -66,6 +77,7 @@ _COLUMNS = (
     "baseline_edges",
     "metrics_json",
     "run_json",
+    "order_json",
 )
 _SCHEMA = f"CREATE TABLE IF NOT EXISTS routes ({', '.join(_COLUMNS)}, PRIMARY KEY (id))"
 _DAILY_COLUMNS = ("date", "region", "build_id", "graph_version", "route_id", "status", "job_id")
@@ -98,6 +110,7 @@ class StoredRoute:
     metrics: Metrics
     metrics_json: dict[str, Any]
     run: dict[str, Any]
+    order: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -135,6 +148,23 @@ class RouteStore:
             con.execute("PRAGMA journal_mode=WAL")
             con.execute(_SCHEMA)
             con.execute(_DAILY_SCHEMA)
+        self._add_order_column()
+
+    def _add_order_column(self) -> None:
+        """Give a store from before the worst order its `order_json`: the check and the change
+        under one write lock, so that servers opening it at once add it once; a column another
+        connection added all the same counts as there."""
+        with closing(sqlite3.connect(self.path, isolation_level=None)) as con:
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                if "order_json" not in _columns(con, "routes"):
+                    con.execute("ALTER TABLE routes ADD COLUMN order_json")
+            except sqlite3.OperationalError as error:
+                con.execute("ROLLBACK")
+                if "duplicate column name" not in str(error):
+                    raise
+            else:
+                con.execute("COMMIT")
 
     def put(
         self, document: dict[str, Any], *, input: dict[str, Any], baseline_edges: ArrayLike
@@ -160,10 +190,11 @@ class RouteStore:
             _blob(baseline_edges),
             json.dumps(document["metrics"]),
             json.dumps(document["run"]),
+            json.dumps([int(k) for k in document.get("order", range(len(document["stops"])))]),
         )
-        marks = ", ".join("?" for _ in _COLUMNS)
+        names, marks = ", ".join(_COLUMNS), ", ".join("?" for _ in _COLUMNS)
         with closing(sqlite3.connect(self.path, timeout=10)) as con, con:
-            con.execute(f"INSERT OR IGNORE INTO routes VALUES ({marks})", row)
+            con.execute(f"INSERT OR IGNORE INTO routes ({names}) VALUES ({marks})", row)
         return rid
 
     def get(self, rid: str) -> StoredRoute | None:
@@ -176,6 +207,8 @@ class RouteStore:
             return None
         values = dict(zip(_COLUMNS, row, strict=True))
         metrics = json.loads(values["metrics_json"])
+        stops = tuple(Snap(**s) for s in json.loads(values["stops_json"]))
+        order = values["order_json"]
         return StoredRoute(
             route_id=values["id"],
             created=datetime.fromisoformat(values["created"]),
@@ -186,7 +219,7 @@ class RouteStore:
             seed=int(values["seed"]),
             request=RouteRequest.model_validate_json(values["request_json"]),
             input=json.loads(values["input_json"]),
-            stops=tuple(Snap(**s) for s in json.loads(values["stops_json"])),
+            stops=stops,
             nodes=_ids(values["nodes"]),
             edges=_ids(values["edges"]),
             stop_idx=tuple(json.loads(values["stop_idx"])),
@@ -198,6 +231,7 @@ class RouteStore:
             ),
             metrics_json=metrics,
             run=json.loads(values["run_json"]),
+            order=tuple(json.loads(order)) if order is not None else tuple(range(len(stops))),
         )
 
     def daily(self, date: str, region: str, graph_version: str) -> DailyRow | None:
@@ -216,6 +250,11 @@ class RouteStore:
         marks = ", ".join("?" for _ in _DAILY_COLUMNS)
         with closing(sqlite3.connect(self.path, timeout=10)) as con, con:
             con.execute(f"INSERT OR REPLACE INTO daily VALUES ({marks})", values)
+
+
+def _columns(con: sqlite3.Connection, table: str) -> set[str]:
+    """The names of `table`'s columns."""
+    return {str(row[1]) for row in con.execute(f"PRAGMA table_info({table})")}
 
 
 def _blob(ids: ArrayLike) -> bytes:

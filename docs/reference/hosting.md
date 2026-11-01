@@ -195,6 +195,8 @@ server {
         proxy_set_header X-Request-ID $request_id;
         proxy_buffering off;        # the progress stream (SSE) goes out as it comes
         proxy_read_timeout 300s;    # the stream pings every 15 s; a job runs at most 60 s + 30 s
+                                    # (a worst-order job's search up to 60 s more first: 240 s
+                                    # at the very worst, docs/reference/api.md, Public limits)
     }
 
     # Optional: the basemap's files straight from the disk (byte ranges included).
@@ -218,7 +220,9 @@ it but no proxy, a visitor could name any address. The API's stream already send
 
 - **The public limits** (`docs/reference/api.md`, **Public limits**): budgets up to 60 s (120
   locally), a request's own leash at most 150 km as everywhere (the automatic leash follows the
-  trip, a fifth of it beyond 750 km, and the budget bounds the job), and for each client one job
+  trip, a fifth of it beyond 750 km, and the budget bounds the job's loop; a worst-order job's
+  search runs before it for up to 60 s more, so a job is killed at most 90 s after its start, or
+  240 s for a worst-order job at the very worst), and for each client one job
   running and three waiting (`TOO_MANY_JOBS` with its counts), ten place searches, sixty picks
   of a build (`POST /regions/pick`), 240 steps of a drawing (`POST /draw`, `POST /draw/finish`)
   and ten finished drawings a minute (`RATE_LIMITED` with `retry_after_s`). They are per process

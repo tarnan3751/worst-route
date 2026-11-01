@@ -57,12 +57,15 @@ export interface Constraints {
   hard?: boolean;
 }
 
-/** `POST /jobs`; a route document's `request` has every field. */
+/** `POST /jobs`; a route document's `request` has every field. `reorder` visits the stops between
+ * the first and the last in the worst order (a route document's request then has its stops in the
+ * order the route visits them). */
 export interface RouteRequest {
   region: string;
   stops?: StopIn[] | null;
   objective?: Objective;
   constraints?: Constraints;
+  reorder?: boolean;
   item?: CollectItem | null; // what `collect` collects; only with it
   brand?: number | null; // the id of the brand `brand` visits (GET /brands); only with it
   tier?: Tier;
@@ -281,6 +284,7 @@ export interface RouteDocument {
   seed: number;
   request: RouteRequest;
   stops: RouteStop[];
+  order?: number[]; // each stop's position among those asked for; absent from older servers
   geometry: LineString;
   legs: Leg[];
   metrics: DocumentMetrics;
@@ -320,8 +324,11 @@ export interface SnappedStop {
   note: string | null;
 }
 
+/** `snapped`: the stops in the order the route visits them, `order` each one's position among
+ * those the job was given (the identity without `reorder`; absent from older servers). */
 export interface Snapped {
   stops: SnappedStop[];
+  order?: number[];
   tier: string;
   leash_km: number;
   active_nodes: number;

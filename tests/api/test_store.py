@@ -4,7 +4,9 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pytest
 
+from worst_route.api import store as store_module
 from worst_route.api.store import DailyRow, RouteStore, route_id
 from worst_route.engine.io import route_document
 from worst_route.engine.plan import PlanResult, plan_route
@@ -104,3 +106,67 @@ def test_a_day_s_row_is_its_graph_version_s_and_replaced_in_place(tmp_path: Path
     assert store.daily("2026-11-01", "us-t3", "v1") is None
     with sqlite3.connect(tmp_path / "routes.sqlite") as con:
         assert con.execute("SELECT COUNT(*) FROM daily").fetchone() == (1,)
+
+
+def test_a_route_keeps_its_order_and_a_store_from_before_gains_one(tmp_path: Path) -> None:
+    path = tmp_path / "routes.sqlite"
+    store = RouteStore(path)
+    rid = put(store, planned(), order=[0, 1, 2])
+    reordered = put(store, planned(seed=4), order=[0, 2, 1])  # as if visited in that order
+    orders = [saved.order for saved in map(store.get, (rid, reordered)) if saved is not None]
+    assert orders == [(0, 1, 2), (0, 2, 1)]
+    as_before_the_worst_order(path)
+    reopened = RouteStore(path)
+    with sqlite3.connect(path) as con:
+        assert "order_json" in [row[1] for row in con.execute("PRAGMA table_info(routes)")]
+    old = reopened.get(reordered)
+    assert old is not None and old.order == (0, 1, 2)  # its order not kept: the identity
+    newer = reopened.get(put(reopened, planned(seed=5), order=[0, 2, 1]))
+    assert newer is not None and newer.order == (0, 2, 1)
+
+
+def as_before_the_worst_order(path: Path) -> None:
+    """Make the store at `path` one from before the worst order: its routes table without
+    order_json, its rows without one."""
+    with sqlite3.connect(path) as con:
+        con.execute("CREATE TABLE old AS SELECT * FROM routes")
+        con.execute("ALTER TABLE old DROP COLUMN order_json")
+        con.execute("DROP TABLE routes")
+        con.execute("ALTER TABLE old RENAME TO routes")
+
+
+def columns(path: Path) -> list[str]:
+    with sqlite3.connect(path) as con:
+        return [row[1] for row in con.execute("PRAGMA table_info(routes)")]
+
+
+def test_opening_a_store_from_before_again_and_again_adds_its_order_once(tmp_path: Path) -> None:
+    path = tmp_path / "routes.sqlite"
+    rid = put(RouteStore(path), planned())
+    as_before_the_worst_order(path)
+    for _ in range(3):
+        store = RouteStore(path)
+    assert columns(path).count("order_json") == 1
+    saved = store.get(rid)
+    assert saved is not None and saved.order == (0, 1, 2)
+
+
+def test_an_order_column_another_server_added_meanwhile_counts_as_there(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the column read as missing though it is there, as for a server that looked before another
+    # added it: the change refused as a duplicate, the store opens all the same
+    path = tmp_path / "routes.sqlite"
+    rid = put(RouteStore(path), planned())
+    monkeypatch.setattr(store_module, "_columns", lambda con, table: set())
+    store = RouteStore(path)
+    assert columns(path).count("order_json") == 1
+    saved = store.get(rid)
+    assert saved is not None and saved.order == (0, 1, 2)
+    monkeypatch.setattr(store_module, "_columns", broken)  # any other error is raised
+    with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
+        RouteStore(path)
+
+
+def broken(con: sqlite3.Connection, table: str) -> set[str]:
+    raise sqlite3.OperationalError("disk I/O error")

@@ -4,13 +4,22 @@ A job plans one request. `prepare(loaded, request)` is the pre-flight the endpoi
 job exists (the request's masks, a pilgrimage's brand within them, and `resolve_stops`, so a
 brand out of reach or a stop that cannot be snapped or reached is a 422, not a job); the worker
 repeats it, deterministically. `JobManager.submit` makes the job,
-emits its `snapped` event from the pre-flight, and starts its worker (`api/worker.py`) in a
+emits its `snapped` event from the pre-flight (each stop's position among those given, `order`,
+the identity), and starts its worker (`api/worker.py`) in a
 spawned process, or queues it when `max_jobs` are running; with `max_queued` waiting too it
 raises `TooManyJobs` (the endpoint's 429). On a public server each job has a client
 (`api/limits.py`), who runs at most `running_per_client` jobs at once: its next waits in the
 queue even while workers are free, and starts when its running one ends, before later jobs of
 other clients only if theirs cannot start; with `queued_per_client` of its own waiting too, its
 next is `TooManyJobs` with its counts.
+
+A job with `reorder` has no `snapped` event until its worker's search has chosen the order: the
+pre-flight checked the stops in their given order. On `Started`, which carries the order and the
+stops resolved in it, the manager plans as the worker does: the job's request takes its stops in
+that order, its masks are worked out again for it (in a thread), its stops become the worker's,
+the input's stops are put in that order (so the stored route's labels and directions follow
+the route), and `snapped` is emitted with the order, before `baseline`. A reorder job cancelled
+during the search ends in `error` `CANCELLED`, as any job before its route exists.
 
 While a job runs, its follower task reads the worker's queue (in a thread, so the event loop
 never blocks) and keeps the job's own copy of the route: the route the loop started from
@@ -40,7 +49,9 @@ against the pre-flight's stops and masks, stored with `stopped_because: "cancell
 reported in `done` (its `run.attempts` is the attempt of the last splice applied, so planning
 again with that many attempts gives it back), or `error` `VALIDATION_FAILED` if it fails. A
 running job is stopped the same way `kill_grace_s` after its budget, as `"timeout"`
-(`WORKER_TIMEOUT` before its route exists). A worker that dies without a result is
+(`WORKER_TIMEOUT` before its route exists); a reorder job's deadline is `reorder_search_s`
+later until its `Started` (its search for the order runs before the loop) and from then is the
+budget and the grace again, counted from `Started`. A worker that dies without a result is
 `WORKER_FAILED`: a process worker's messages come down a one-way pipe whose only write end is
 the worker's, so its death ends a read at once (EOF, even partway through a message), and every
 read waits at most `read_grace_s` (`poll`), so no thread is ever left blocked. A worker that
@@ -119,6 +130,7 @@ from worst_route.config import (
     API_SIMPLIFY_M,
     API_SNAPSHOT_EVERY,
     API_SWEEP_S,
+    REORDER_SEARCH_MAX_S,
     BackendName,
 )
 from worst_route.engine import ENGINE_VERSION
@@ -162,6 +174,7 @@ class JobSettings:
     snapshot_every: int = API_SNAPSHOT_EVERY
     simplify_m: float = API_SIMPLIFY_M
     kill_grace_s: float = API_KILL_GRACE_S
+    reorder_search_s: float = REORDER_SEARCH_MAX_S  # a reorder job's search, before `Started`
     orphan_s: float = API_ORPHAN_S
     ttl_s: float = API_JOB_TTL_S
     sweep_s: float = API_SWEEP_S
@@ -261,9 +274,10 @@ class Job:
     request: RouteRequest
     snaps: tuple[Snap, ...]
     masks: RequestMasks | None  # dropped when the job ends
-    input: dict[str, Any]
+    input: dict[str, Any]  # with `reorder`, its stops put in the route's order once known
     base: RouteArrays | None
     created: datetime
+    order: tuple[int, ...]  # each stop's position among those of the request as submitted
     request_id: str | None = None  # the request that submitted it (`logs.request_id`)
     client: str | None = None  # who asked for it (`limits.client_of`), on a public server
     status: JobState = "queued"
@@ -399,11 +413,13 @@ class JobManager:
             input=input,
             base=base,
             created=datetime.now(UTC),
+            order=tuple(range(len(prepared.request.stops))),
             request_id=logs.request_id.get(),
             client=client,
         )
         self.jobs[job.id] = job
-        self._emit(job, "snapped", self._snapped(job, prepared.masks))
+        if not prepared.request.reorder:  # else once the worker has chosen the order
+            self._emit(job, "snapped", self._snapped(job, prepared.masks))
         if self._may_start(client):
             self._start(job)
         else:
@@ -504,6 +520,8 @@ class JobManager:
         """Read the worker's messages until the job ends."""
         s = self.settings
         deadline = job.started_at + job.request.budget_s + s.kill_grace_s
+        if job.request.reorder:  # its search for the order runs before its loop
+            deadline += s.reorder_search_s
         try:
             while not job.closing:
                 alive = worker.alive()
@@ -516,6 +534,12 @@ class JobManager:
                     return
                 for message in messages:
                     if isinstance(message, Started):
+                        if job.request.reorder:
+                            await self._reordered(job, message)
+                            if job.closing:
+                                return
+                            # the search has ended: the budget and the grace run from here
+                            deadline = time.monotonic() + job.request.budget_s + s.kill_grace_s
                         self._started(job, message)
                     elif isinstance(message, Spliced):
                         self._spliced(job, message)
@@ -538,6 +562,20 @@ class JobManager:
         except Exception as error:
             log.exception("job %s: following its worker failed", job.id, extra=_fields(job))
             await self._fail_unended(job, error)
+
+    async def _reordered(self, job: Job, m: Started) -> None:
+        """A reorder job's search has chosen the order: plan as the worker does (the request,
+        its masks and its stops in that order, and the input's stops), and emit `snapped`."""
+        stops = job.request.stops
+        request = job.request.model_copy(update={"stops": [stops[k] for k in m.order]})
+        loaded = job.loaded
+        masks = await asyncio.to_thread(request_masks, loaded.spatial, loaded.data, request)
+        if job.closing:  # cancelled meanwhile
+            return
+        given = job.input.get("stops") or []
+        job.input = {**job.input, "stops": [given[k] for k in m.order]}
+        job.request, job.masks, job.snaps, job.order = request, masks, m.snaps, m.order
+        self._emit(job, "snapped", self._snapped(job, masks))
 
     def _started(self, job: Job, m: Started) -> None:
         job.route, job.score = m.route, m.score
@@ -794,6 +832,7 @@ class JobManager:
         ]
         return Snapped(
             stops=stops,
+            order=list(job.order),
             tier=masks.tier,
             leash_km=masks.leash_m / 1000,
             active_nodes=int(masks.active.sum()),
@@ -835,6 +874,7 @@ class JobManager:
                 {"lat": s.lat, "lon": s.lon, "node": s.node, "moved_m": s.moved_m, "note": s.note}
                 for s in job.snaps
             ],
+            "order": list(job.order),
             "nodes": route.nodes.tolist(),
             "edges": route.edges.tolist(),
             "stop_idx": list(route.stop_idx),

@@ -222,6 +222,7 @@ const routeRequest = object<RouteRequest>({
   stops: optional(nullable(array(stopIn))),
   objective: optional(literal("distance", "time", "collect", "brand", "alphabet")),
   constraints: optional(constraints),
+  reorder: optional("boolean"),
   item: optional(nullable(collectItem)),
   brand: optional(nullable("integer")),
   tier: optional(tier),
@@ -258,6 +259,7 @@ const snappedStop = object<SnappedStop>({
 });
 const snapped = object<Snapped>({
   stops: array(snappedStop),
+  order: optional(array("integer")), // the recordings predate the worst order
   tier: "string",
   leash_km: "number",
   active_nodes: "integer",
@@ -344,6 +346,7 @@ const routeDocument = object<RouteDocument>({
       route_index: "integer",
     }),
   ),
+  order: optional(array("integer")),
   geometry: lineString,
   legs: array(
     object<Leg>({

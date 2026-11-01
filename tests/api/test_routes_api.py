@@ -19,6 +19,7 @@ from fastapi import FastAPI, Request
 from worst_route.api import routes_api
 from worst_route.api.app import Api, ApiSettings, create_app
 from worst_route.api.jobs import JobSettings
+from worst_route.engine import request as request_module
 from worst_route.engine.constraints import Constraints, returning
 from worst_route.engine.snap import StopUnreachable
 from worst_route.graph.data import EdgeFlag
@@ -1005,3 +1006,81 @@ async def test_a_leg_hard_mode_cannot_drive_says_so(
             "leg": [0, 1],
             "stop_index": 1,
         }
+
+
+def reordering(**fields: Any) -> dict[str, Any]:
+    """A job visiting home, A, B, C and work in the worst order: home, A, C, B, work."""
+    stops = [stop(0, "home"), stop(9, "A"), stop(45, "B"), stop(90, "C"), stop(99, "work")]
+    return job_body(stops=stops, reorder=True, **fields)
+
+
+async def test_a_reorder_job_s_stream_and_document_follow_the_order_it_visits_the_stops(
+    data: Path,
+) -> None:
+    async with serving(data) as (client, _):
+        _, plain = await finished(client, job_body(max_iterations=20))
+        assert plain[0]["data"]["order"] == [0, 1, 2]
+        doc = (await client.get(f"/routes/{plain[-1]['data']['route_id']}")).json()
+        assert doc["order"] == [0, 1, 2] and doc["request"]["reorder"] is False
+
+        _, events = await finished(client, reordering())
+        assert [e["event"] for e in events[:3]] == ["snapped", "baseline", "snapshot"]
+        snapped = events[0]["data"]
+        assert snapped["order"] == [0, 1, 3, 2, 4]
+        assert [s["label"] for s in snapped["stops"]] == ["home", "A", "C", "B", "work"]
+        assert [s["node"] for s in snapped["stops"]] == [0, 9, 90, 45, 99]
+        route_id = events[-1]["data"]["route_id"]
+        doc = (await client.get(f"/routes/{route_id}")).json()
+        assert doc["order"] == [0, 1, 3, 2, 4] and doc["request"]["reorder"] is True
+        assert [s["label"] for s in doc["request"]["stops"]] == ["home", "A", "C", "B", "work"]
+        assert [s["label"] for s in doc["stops"]] == ["home", "A", "C", "B", "work"]
+        assert [s["node"] for s in doc["stops"]] == [0, 9, 90, 45, 99]
+        arrivals = [d["text"] for d in doc["directions"] if d["kind"] in ("stop", "arrive")]
+        assert arrivals == ["Arrive at A; continue", "Arrive at C; continue"] + [
+            "Arrive at B; continue",
+            "Arrive at work",
+        ]
+        assert (await client.post(f"/routes/{route_id}/validate")).json()["ok"] is True
+
+
+async def test_make_it_worse_continues_a_reordered_route_in_its_order(data: Path) -> None:
+    async with serving(data) as (client, _):
+        _, events = await finished(client, reordering(max_iterations=60))
+        base_id = events[-1]["data"]["route_id"]
+        base = (await client.get(f"/routes/{base_id}")).json()
+        # a worse route's body may carry the panel's worst order: a continuation keeps its own
+        worse = {"region": "portland", "base_route_id": base_id, "seed": 4, "reorder": True}
+        _, events = await finished(client, {**worse, "max_iterations": 200})
+        assert events[0]["data"]["order"] == [0, 1, 2, 3, 4]
+        assert [s["label"] for s in events[0]["data"]["stops"]] == ["home", "A", "C", "B", "work"]
+        doc = (await client.get(f"/routes/{events[-1]['data']['route_id']}")).json()
+        assert doc["order"] == [0, 1, 2, 3, 4] and doc["request"]["reorder"] is False
+        assert doc["request"]["stops"] == base["request"]["stops"]
+        assert [s["node"] for s in doc["stops"]] == [0, 9, 90, 45, 99]
+        clicked = reordering()["stops"]  # the stops in the order asked for, not the base's
+        r = await client.post("/jobs", json={**worse, "stops": clicked})
+        assert r.status_code == 422 and r.json()["code"] == "BASE_ROUTE_MISMATCH"
+        r = await client.post("/jobs", json={**worse, "stops": base["request"]["stops"]})
+        assert r.status_code == 202
+
+
+async def test_too_many_stops_to_reorder_names_the_build_s_cap(
+    data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with serving(data) as (client, _):
+        eight = [stop(v) for v in (0, 11, 22, 33, 44, 55, 66, 99)]
+        r = await client.post("/jobs", json=job_body(stops=eight, reorder=True))
+        assert r.status_code == 422 and r.json() == {
+            "code": "TOO_MANY_STOPS_TO_REORDER",
+            "message": "the worst order takes at most 7 stops on portland, not 8",
+            "max_stops": 7,
+        }
+        monkeypatch.setattr(request_module, "REORDER_LARGE_NODES", GRID.n - 1)
+        r = await client.post("/jobs", json=job_body(stops=eight[:6], reorder=True))
+        assert r.status_code == 422 and r.json()["max_stops"] == 5
+        assert r.json()["message"] == "the worst order takes at most 5 stops on portland, not 6"
+        assert (await client.post("/jobs", json=job_body(stops=eight[:6]))).status_code == 202
+        alphabet = job_body(stops=[stop(0), stop(99)], objective="alphabet", reorder=True)
+        r = await client.post("/jobs", json=alphabet)
+        assert r.status_code == 422 and r.json()["code"] == "INVALID_REQUEST"
+        assert r.json()["field"] == "reorder"

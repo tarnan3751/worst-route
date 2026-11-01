@@ -4,7 +4,8 @@
 request with `plan_route` (from `spec.base` for "make it worse") and puts on `out`, in order:
 
 - `Started`, once, before the loop: the route the loop starts from (the seed, or the base
-  route), its score and metrics, and the baseline;
+  route), its score and metrics, the baseline, and the order the stops are visited in with the
+  stops resolved in it (with `reorder`, the order the engine's search chose);
 - `Spliced`, for every accepted splice: the window, the detour's nodes and edges, and the
   route's attempt count, elapsed time, score and metrics after it; for the alphabet route,
   `Improved` instead, for every better route its search finds: the whole route, its restart
@@ -81,6 +82,8 @@ class Started:
     baseline_time_s: float
     baseline_edges: IntArray
     baseline_delay_s: float
+    order: tuple[int, ...]  # each stop's position among those of the request
+    snaps: tuple[Snap, ...]
 
 
 @dataclass(frozen=True, eq=False)
@@ -196,6 +199,8 @@ def run_job(
                 baseline.time_s,
                 baseline.edges,
                 baseline.delay_s,
+                order,
+                snaps,
             )
         )
 

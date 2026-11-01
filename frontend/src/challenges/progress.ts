@@ -120,7 +120,7 @@ export function reached(goal: Goal, route: RouteDocument, today: Daily | null): 
 
 /** The toast a challenge completed shows. */
 export function completedLine(challenge: Challenge): string {
-  return `Challenge completed: ${challenge.title}`;
+  return `Challenge done. ${challenge.title}.`;
 }
 
 /** Which challenges are done, each with the day it was (YYYY-MM-DD, the browser's): "change" when

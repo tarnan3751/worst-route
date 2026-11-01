@@ -71,7 +71,7 @@ describe("the challenges listed", () => {
       daily.phase = phase;
       expect(panel.listed.map(({ id }) => id)).toEqual(["us-chicago", "daily-worse"]);
     }
-    expect(panel.refusal(challenge("daily-worse"))).toBe("today's route could not be planned");
+    expect(panel.refusal(challenge("daily-worse"))).toBe("Today's route could not be planned.");
     for (const phase of ["loading", "none"] as const) {
       daily.phase = phase; // not answered yet; a server without a daily route
       expect(panel.listed.map(({ id }) => id)).toEqual(["us-chicago"]);
@@ -83,9 +83,9 @@ describe("the challenges listed", () => {
     expect(panel.refusal(challenge("portland-bridges"))).toBeNull();
     expect(panel.refusal(challenge("daily-worse"))).toBeNull();
     daily.phase = "planning";
-    expect(panel.refusal(challenge("daily-worse"))).toBe("today's route is not planned yet");
+    expect(panel.refusal(challenge("daily-worse"))).toBe("Today's route is not planned yet.");
     store.updateRun({ phase: "running" });
-    expect(panel.refusal(challenge("portland-bridges"))).toBe("a route is being planned or drawn");
+    expect(panel.refusal(challenge("portland-bridges"))).toBe("A route is being planned or drawn.");
     panel.setUp(challenge("portland-bridges"));
     expect(store.state.challenge).toBeNull(); // nothing while busy
   });
@@ -130,8 +130,8 @@ describe("setting a challenge up", () => {
       [west, south],
       [east, north],
     ]);
-    expect(setUpLine(bridges, store.state)).toBe("Set up: press Go.");
-    expect(setUpLine(challenge("portland-draw"), store.state)).toBe("Set up: press Draw it.");
+    expect(setUpLine(bridges, store.state)).toBe("Set up. Press Go.");
+    expect(setUpLine(challenge("portland-draw"), store.state)).toBe("Set up. Press Draw it.");
   });
 
   it("keeps a trip's own stops for any trip in the region when they lie in it, else none", () => {
@@ -153,7 +153,7 @@ describe("setting a challenge up", () => {
     expect(store.state.stops).toEqual([]);
     expect(store.state.settings.hard).toBe(true);
     expect(setUpLine(challenge("portland-hard"), store.state)).toBe(
-      "Set up: place a start and an end, then press Go.",
+      "Set up. Place a start and an end, then press Go.",
     );
   });
 
@@ -214,7 +214,7 @@ describe("setting a challenge up", () => {
     await vi.waitFor(() => expect(store.state.challenge).toBe("daily-worse"));
     expect(hooks.open).toHaveBeenCalledWith(ROUTE.route_id);
     expect(hooks.edit).not.toHaveBeenCalled();
-    expect(setUpLine(worse, store.state)).toBe("Set up: press Make it worse.");
+    expect(setUpLine(worse, store.state)).toBe("Set up. Press Make it worse.");
     const today = { route_id: ROUTE.route_id, ratio: 6.6 } as never;
     expect(stillSetUp(worse, store.state, today, false)).toBe(true);
     store.update({ route: { ...ROUTE, route_id: "0123456789ab" } as RouteDocument });

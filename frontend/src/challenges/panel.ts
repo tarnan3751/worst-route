@@ -134,11 +134,11 @@ export class ChallengePanel extends EventTarget {
 
   /** Why "Set it up" cannot be pressed for `challenge` now, or null. */
   refusal(challenge: Challenge): string | null {
-    if (busy(this.#store)) return "a route is being planned or drawn";
+    if (busy(this.#store)) return "A route is being planned or drawn.";
     if (challenge.goal.kind === "daily_worse" && this.#daily.phase !== "done") {
       return this.#daily.phase === "failed"
-        ? "today's route could not be planned"
-        : "today's route is not planned yet";
+        ? "Today's route could not be planned."
+        : "Today's route is not planned yet.";
     }
     return null;
   }
@@ -218,10 +218,10 @@ export class ChallengePanel extends EventTarget {
 
 /** What to do once `challenge` is set up, under its title. */
 export function setUpLine(challenge: Challenge, state: Readonly<AppState>): string {
-  if (challenge.goal.kind === "daily_worse") return "Set up: press Make it worse.";
-  if (challenge.goal.kind === "drawn") return "Set up: press Draw it.";
-  if (state.stops.length >= 2) return "Set up: press Go.";
-  return "Set up: place a start and an end, then press Go.";
+  if (challenge.goal.kind === "daily_worse") return "Set up. Press Make it worse.";
+  if (challenge.goal.kind === "drawn") return "Set up. Press Draw it.";
+  if (state.stops.length >= 2) return "Set up. Press Go.";
+  return "Set up. Place a start and an end, then press Go.";
 }
 
 /** The challenges' section in `root`, and its link in `header`, which shows it again once

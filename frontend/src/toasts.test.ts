@@ -151,13 +151,13 @@ describe("the toasts", () => {
     const s = store();
     const t = new Toasts(s);
     s.update({ route, run: { ...IDLE_RUN, phase: "done" } });
-    t.notify("Challenge completed: Cross 20 bridges"); // as the route is shown
-    t.notify("Challenge completed: A 30× route in town");
-    expect(t.text).toBe("Challenge completed: Cross 20 bridges");
+    t.notify("Challenge done. Cross 20 bridges."); // as the route is shown
+    t.notify("Challenge done. A 30× route in town.");
+    expect(t.text).toBe("Challenge done. Cross 20 bridges.");
     vi.advanceTimersByTime(TOAST_MS - 1);
-    expect(t.text).toBe("Challenge completed: Cross 20 bridges");
+    expect(t.text).toBe("Challenge done. Cross 20 bridges.");
     vi.advanceTimersByTime(1);
-    expect(t.text).toBe("Challenge completed: A 30× route in town");
+    expect(t.text).toBe("Challenge done. A 30× route in town.");
     t.next(); // a click moves on from a notice too
     expect(t.text).toBe(toasts[0]);
     vi.advanceTimersByTime(TOAST_MS);
@@ -167,8 +167,8 @@ describe("the toasts", () => {
   it("show a notice with nothing else to show, then nothing", () => {
     const s = store();
     const t = new Toasts(s);
-    t.notify("Challenge completed: Beat the engine by hand");
-    expect(t.text).toBe("Challenge completed: Beat the engine by hand");
+    t.notify("Challenge done. Beat the engine by hand.");
+    expect(t.text).toBe("Challenge done. Beat the engine by hand.");
     vi.advanceTimersByTime(TOAST_MS);
     expect(t.text).toBeNull();
     expect(vi.getTimerCount()).toBe(0);

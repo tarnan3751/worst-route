@@ -220,7 +220,7 @@ describe("the completions", () => {
     store.update({ route: ratio25 });
     expect(completed).toEqual([]);
     store.update({ route: max });
-    expect(completed).toEqual(["Challenge completed: A 30× route in town"]);
+    expect(completed).toEqual(["Challenge done. A 30× route in town."]);
     expect(Object.keys(progress.done)).toEqual(["portland-30x"]);
     expect(progress.done["portland-30x"]).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     store.update({ route: null });

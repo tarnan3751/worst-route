@@ -167,7 +167,7 @@ describe("a route drawn by hand", () => {
     expect(calls[2].body).toEqual({ request: drawing.request, path: [first] });
     expect([drawing.path, drawing.answer]).toEqual([[first], NEXT]);
     expect(drawing.canUndo).toBe(true);
-    expect(progressLine(drawing)).toBe("Next: the end.");
+    expect(progressLine(drawing)).toBe("Head for the end.");
     drawing.undo();
     expect([drawing.path, drawing.answer, calls.length]).toEqual([[], START, 3]);
   });
@@ -195,7 +195,7 @@ describe("a route drawn by hand", () => {
     expect(drawing.answer).toEqual(fixture.near_end);
     const final = finalMove(fixture.near_end) as DrawMove;
     expect(final.stop).toBe(1);
-    expect(progressLine(drawing)).toBe("The end is one move away: Finish takes the longest.");
+    expect(progressLine(drawing)).toBe("The end is one move away. Finish takes the longest.");
     expect(drawing.canFinish).toBe(true);
     await drawing.finish();
     const path = [fixture.path[0], NEXT.next[0].edge, final.edge];
@@ -225,14 +225,14 @@ describe("a route drawn by hand", () => {
     expect(verdictLine(drawing, "mi")).toBe(""); // the par still plans
     source.send("done", { route_id: "engine1", metrics: metrics(6880, 10.1) });
     expect(parLine(drawing.par, "mi")).toBe("the engine: 10.1×");
-    expect(verdictLine(drawing, "mi")).toBe("You 14.3× · the engine 10.1×: you beat the engine.");
+    expect(verdictLine(drawing, "mi")).toBe("You 14.3× · the engine 10.1×. You beat the engine.");
     await drawing.show("engine");
     expect(hooks.open).toHaveBeenLastCalledWith("engine1");
     expect(drawing.showing).toBe("engine");
     await drawing.show("mine");
     expect(hooks.open).toHaveBeenLastCalledWith(fixture.finished.route_id);
     drawing.finished = { ...drawing.finished!, lengthM: 4900, ratio: 7.2 };
-    expect(verdictLine(drawing, "mi")).toBe("You 7.2× · the engine 10.1×: the engine wins.");
+    expect(verdictLine(drawing, "mi")).toBe("You 7.2× · the engine 10.1×. The engine wins.");
   });
 
   it("gives the par's ratio where it stopped short of its target", async () => {
@@ -247,6 +247,11 @@ describe("a route drawn by hand", () => {
     await drawing.start();
     sources[0].send("error", { code: "WORKER_FAILED", message: "the worker died" });
     expect(parLine(drawing.par, "mi")).toBe("the engine could not plan it: the worker died");
+    const lost = setup();
+    await lost.drawing.start();
+    lost.sources[0].readyState = 2;
+    lost.sources[0].dispatchEvent(new Event("error")); // the browser gave up reconnecting
+    expect(parLine(lost.drawing.par, "mi")).toBe("the engine lost the connection to the server");
   });
 
   it("leaves drawing mode keeping the drawing, and resumes it without asking again", async () => {
@@ -256,7 +261,7 @@ describe("a route drawn by hand", () => {
     drawing.leave();
     expect([drawing.active, store.state.run.phase, busy(store)]).toEqual([false, "idle", false]);
     expect(shown.at(-1)).toEqual([NEXT, false]); // still drawn, without its moves
-    expect(progressLine(drawing)).toBe("Left drawing mode: Draw it goes on with it.");
+    expect(progressLine(drawing)).toBe("Left drawing mode. Draw it picks up where you left off.");
     await drawing.start();
     expect(calls).toHaveLength(3);
     expect([drawing.active, drawing.path, store.state.run.phase]).toEqual([
@@ -406,10 +411,10 @@ describe("what the panel and the map say", () => {
     const hooks = { clearRoute: () => undefined, open: async () => true };
     const drawing = new Drawing(storeWith(), { show: () => undefined }, hooks);
     Object.assign(drawing, { answers: [fixture.done], active: true, path: [1] });
-    expect(progressLine(drawing)).toBe("Arrived: Finish stores your route.");
+    expect(progressLine(drawing)).toBe("Arrived. Finish stores your route.");
     expect(youLine(drawing, "mi")).toBe("you: 14.3×");
     Object.assign(drawing, { answers: [{ ...NEXT, next: [] }] });
-    expect(progressLine(drawing)).toBe("Dead end: Undo (Backspace) and try another way.");
+    expect(progressLine(drawing)).toBe("Dead end. Undo (Backspace) and try another way.");
   });
 
   it("measures a round trip by its length", () => {

@@ -78,7 +78,7 @@ export const CHALLENGES: readonly Challenge[] = [
   {
     id: "portland-bridges",
     title: "Cross 20 bridges",
-    blurb: "Collect bridges from Powell's Books to Reed College: twenty or more, each a new one.",
+    blurb: "Twenty bridges or more from Powell's Books to Reed College.",
     region: "portland",
     stops: [POWELLS, REED],
     settings: { objective: "collect", item: "bridge" },
@@ -89,7 +89,7 @@ export const CHALLENGES: readonly Challenge[] = [
   {
     id: "portland-roundabouts",
     title: "Go round 40 roundabouts",
-    blurb: "Collect roundabouts from Beaverton to Milwaukie: forty or more, each a new one.",
+    blurb: "Forty roundabouts or more from Beaverton to Milwaukie.",
     region: "portland",
     stops: [BEAVERTON, MILWAUKIE],
     settings: { objective: "collect", item: "roundabout" },
@@ -102,8 +102,8 @@ export const CHALLENGES: readonly Challenge[] = [
     id: "portland-alphabet",
     title: "Drive the alphabet, A to W",
     blurb:
-      "From Powell's Books to the airport on roads named A, B, C… through W, in order. " +
-      "Portland's only X roads are dead ends, so W is as far as the alphabet goes here.",
+      "Powell's Books to the airport on roads named A to W, in order " +
+      "(Portland's only X roads are dead ends).",
     region: "portland",
     stops: [POWELLS, PDX],
     settings: { objective: "alphabet" },
@@ -126,9 +126,7 @@ export const CHALLENGES: readonly Challenge[] = [
   {
     id: "portland-hard",
     title: "Hard mode, 8×",
-    blurb:
-      "Any trip in Portland under hard mode, each road in one stretch: eight times or worse. " +
-      "Downtown to Reed College can do it.",
+    blurb: "Eight times or worse in Portland with no road twice (try Downtown to Reed College).",
     region: "portland",
     stops: null,
     settings: { hard: true },
@@ -141,8 +139,8 @@ export const CHALLENGES: readonly Challenge[] = [
     id: "portland-draw",
     title: "Beat the engine by hand",
     blurb:
-      "Draw a route from Powell's Books to Pioneer Courthouse Square within 300 m of the way, " +
-      "longer than the engine's own.",
+      "Draw a longer route than the engine's from Powell's Books to Pioneer Courthouse Square, " +
+      "within a 300 m corridor.",
     region: "portland",
     stops: [POWELLS, SQUARE],
     settings: { leashKm: 0.3 },
@@ -153,7 +151,7 @@ export const CHALLENGES: readonly Challenge[] = [
   {
     id: "oregon-starbucks",
     title: "Visit 10 Starbucks",
-    blurb: "A pilgrimage anywhere in Oregon past ten Starbucks or more. Portland has plenty.",
+    blurb: "Ten Starbucks or more, anywhere in Oregon (Portland has plenty).",
     region: "oregon",
     stops: null,
     settings: { objective: "brand", brand: { wikidata: "Q37158", name: "Starbucks" } },
@@ -175,7 +173,7 @@ export const CHALLENGES: readonly Challenge[] = [
   {
     id: "us-chicago",
     title: "Portland to Chicago at 4×",
-    blurb: "Cross the country on the national build, four times the sensible drive or worse.",
+    blurb: "Across the country, four times the sensible drive or worse.",
     region: "us-t3",
     stops: [DOWNTOWN, CHICAGO],
     settings: {},

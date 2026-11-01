@@ -53,7 +53,7 @@ export const DRAW_PAR_RATIO = 10;
 
 /** The engine's route for the same request, aiming at `target` (DRAW_PAR_RATIO; null for a round
  * trip's full run): planning (its job's ratio so far, once it has one), done (its stored route) or
- * failed (why). */
+ * failed (why: the API's message, or null when its stream was lost). */
 export interface Par {
   phase: "planning" | "done" | "failed";
   target: number | null;
@@ -400,7 +400,7 @@ export class Drawing extends EventTarget {
         }),
       error: (body) => update({ phase: "failed", note: body.message }),
       connection: (state) => {
-        if (state === "lost") update({ phase: "failed", note: "its event stream was lost" });
+        if (state === "lost") update({ phase: "failed", note: null });
       },
     });
   }
@@ -416,14 +416,14 @@ export function progressLine(drawing: Drawing): string {
   const answer = drawing.answer;
   if (drawing.finished !== null) return "Your route is stored.";
   if (answer === null) return drawing.pending ? "Asking for the start…" : "";
-  if (!drawing.active) return "Left drawing mode: Draw it goes on with it.";
-  if (answer.done) return "Arrived: Finish stores your route.";
-  if (finalMove(answer) !== null) return "The end is one move away: Finish takes the longest.";
-  if (answer.next.length === 0) return "Dead end: Undo (Backspace) and try another way.";
+  if (!drawing.active) return "Left drawing mode. Draw it picks up where you left off.";
+  if (answer.done) return "Arrived. Finish stores your route.";
+  if (finalMove(answer) !== null) return "The end is one move away. Finish takes the longest.";
+  if (answer.next.length === 0) return "Dead end. Undo (Backspace) and try another way.";
   if (drawing.path.length === 0) return "Click a highlighted road to take it.";
   const next = answer.reached.length;
   const last = answer.stops.length - 1;
-  return next === last ? "Next: the end." : `Next: stop ${next + 1}.`;
+  return next === last ? "Head for the end." : `Head for stop ${next + 1}.`;
 }
 
 /** The drawing's numbers: its length and the stops reached as it goes, its ratio once done ("you:
@@ -439,11 +439,16 @@ export function youLine(drawing: Drawing, units: Units): string {
 
 /** The par as it stands: "the engine: aiming for 10×…", "the engine: 7.2× so far, aiming for
  * 10×", "the engine: 10.1×" (where it stopped, short of the target or not), or that it could not
- * plan the route; a round trip's "the engine: planning…", then its ratio, or its length when it
+ * plan the route ("the engine lost the connection to the server" when its stream was lost); a
+ * round trip's "the engine: planning…", then its ratio, or its length when it
  * has no stop between (no ratio). */
 export function parLine(par: Par | null, units: Units): string {
   if (par === null) return "";
-  if (par.phase === "failed") return `the engine could not plan it: ${par.note ?? "it failed"}`;
+  if (par.phase === "failed") {
+    return par.note === null
+      ? "the engine lost the connection to the server"
+      : `the engine could not plan it: ${par.note}`;
+  }
   const aim = par.target === null ? "" : `aiming for ${par.target}×`;
   if (par.lengthM === null) return `the engine: ${aim || "planning"}…`;
   const value = measure(par.ratio, par.lengthM, units);
@@ -464,17 +469,17 @@ export function verdictOf(
   return finished.lengthM > par.lengthM ? "you" : "engine";
 }
 
-const OUTCOMES = { you: "you beat the engine.", engine: "the engine wins.", tie: "a tie." };
+const OUTCOMES = { you: "You beat the engine.", engine: "The engine wins.", tie: "A tie." };
 
 /** The verdict once the drawing is stored and the par done (`verdictOf`): "You 7.2× · the engine
- * 31×: the engine wins." */
+ * 31×. The engine wins." */
 export function verdictLine(drawing: Drawing, units: Units): string {
   const { finished, par } = drawing;
   const verdict = verdictOf(drawing, units);
   if (verdict === null || finished === null || par?.lengthM == null) return "";
   const you = measure(finished.ratio, finished.lengthM, units);
   const engine = measure(par.ratio, par.lengthM, units);
-  return `You ${you} · the engine ${engine}: ${OUTCOMES[verdict]}`;
+  return `You ${you} · the engine ${engine}. ${OUTCOMES[verdict]}`;
 }
 
 /** A ratio, or for a round trip (no ratio) the length. */

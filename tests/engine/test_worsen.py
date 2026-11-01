@@ -1,3 +1,4 @@
+import math
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -6,6 +7,9 @@ import numpy as np
 import pytest
 
 from worst_route.config import (
+    ANNEAL_COOLING,
+    ANNEAL_FREEZE,
+    ANNEAL_REHEATS,
     CONVERGED_EMPTY_CYCLES,
     CONVERGED_FAILS,
     SEGMENT_RUN_MAX,
@@ -18,17 +22,20 @@ from worst_route.engine.objectives import make_objective
 from worst_route.engine.objectives.base import Objective
 from worst_route.engine.plan import plan_route
 from worst_route.engine.request import RequestMasks, RouteRequest, request_masks
-from worst_route.engine.route import IllegalSplice, Route
+from worst_route.engine.route import IllegalSplice, Metrics, Route
 from worst_route.engine.seed_route import baseline_route, resolve_stops, seed_route
 from worst_route.engine.snap import StopUnreachable
+from worst_route.engine.target import Goal, Target
 from worst_route.engine.validator import validate_route
 from worst_route.engine.worsen import (
     Budget,
     ProgressEvent,
     UnusedNodes,
+    WorsenResult,
     detour_ends,
     pick_segment,
     run_worsen,
+    temperature,
     widened,
     worsen,
 )
@@ -39,7 +46,7 @@ from worst_route.graph.python_backend import PythonBackend
 from worst_route.graph.spatial import SpatialIndex
 from worst_route.graph.testing import Edge, EdgePair, edge_id, make_graph
 
-from .graphs import X0, Y0, at_node, lattice, route_on
+from .graphs import X0, Y0, at_node, lattice, route_on, uneven_lattice
 
 GRID = lattice(20, 20)
 BACKEND, SPATIAL = PythonBackend(GRID), SpatialIndex(GRID)
@@ -57,6 +64,7 @@ class Start:
     rng: np.random.Generator
     r_max: float
     stop_nodes: list[int]
+    baseline: Metrics
 
 
 def start(data: GraphData, stops: Sequence[tuple[float, float]], seed: int) -> Start:
@@ -79,12 +87,22 @@ def start(data: GraphData, stops: Sequence[tuple[float, float]], seed: int) -> S
     route = Route.new(
         data, found.nodes, found.edges, found.stop_idx, score=score, metrics=metrics, seed=seed
     )
-    return Start(data, route, objective, masks, rng, r_max, stop_nodes)
+    return Start(data, route, objective, masks, rng, r_max, stop_nodes, baseline.metrics)
 
 
-def run(s: Start, budget: Budget, check_delta: bool = True):
+def run(
+    s: Start,
+    budget: Budget,
+    check_delta: bool = True,
+    *,
+    backend: GraphBackend | None = None,
+    goal: Goal | None = None,
+    anneal_t0: float | None = None,
+) -> WorsenResult:
+    if backend is None:
+        backend = PythonBackend(s.data) if s.data is not GRID else BACKEND
     return run_worsen(
-        PythonBackend(s.data) if s.data is not GRID else BACKEND,
+        backend,
         SpatialIndex(s.data) if s.data is not GRID else SPATIAL,
         s.data,
         s.route,
@@ -94,7 +112,9 @@ def run(s: Start, budget: Budget, check_delta: bool = True):
         s.masks.active,
         r_max=s.r_max,
         banned_edges=s.masks.banned,
+        goal=goal,
         check_delta=check_delta,
+        anneal_t0=anneal_t0,
     )
 
 
@@ -535,3 +555,110 @@ def test_a_seed_refused_unexpectedly_is_one_stop_unreachable(
         plan_route(GRID, RouteRequest(stops=CORNERS, seed=0, max_iterations=5))
     assert caught.value.leg == (0, 1)
     assert "the seed route was refused: boom" in str(caught.value)
+
+
+UNEVEN = uneven_lattice(8, 8, 0)
+UNEVEN_CORNERS = [at_node(UNEVEN, 0), at_node(UNEVEN, 63)]
+HOT = 20.0  # metres: about ANNEAL_T0_FRACTION of UNEVEN's corner-to-corner baseline
+
+
+def splices(result: WorsenResult) -> list[tuple[int, bytes]]:
+    return [(e.iteration, e.splice.edges.tobytes()) for e in result.events]
+
+
+def test_the_temperature_cools_per_accepted_splice_and_freezes() -> None:
+    assert temperature(None, 2, 0) == 0.0  # no annealing
+    assert temperature(100.0, 0, 0) == 0.0  # before the first reheat
+    assert temperature(100.0, 1, 0) == 100.0
+    assert temperature(100.0, 3, 10) == pytest.approx(100.0 * ANNEAL_COOLING**10)
+    frozen = math.ceil(math.log(ANNEAL_FREEZE) / math.log(ANNEAL_COOLING))
+    assert temperature(100.0, 1, frozen - 1) > 0.0 and temperature(100.0, 1, frozen) == 0.0
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_greedy_is_an_exact_prefix_of_an_annealed_run(seed: int) -> None:
+    # draw for draw the same run until greedy stops as converged, where the annealed one reheats
+    greedy = run(start(UNEVEN, UNEVEN_CORNERS, seed), Budget(600, 10**6))
+    hot = run(start(UNEVEN, UNEVEN_CORNERS, seed), Budget(600, 10**6), anneal_t0=HOT)
+    assert greedy.stopped_because == hot.stopped_because == "converged"
+    assert (greedy.reheats, hot.reheats) == (0, ANNEAL_REHEATS)
+    n = len(greedy.events)
+    assert splices(hot)[:n] == splices(greedy)
+    assert hot.events[n].iteration > greedy.attempts  # nothing more until greedy's end
+    assert hot.best.score >= greedy.best.score
+    # it stops after the last reheat as greedy does, its empty cycles after a splice
+    gap = hot.attempts - hot.events[-1].iteration
+    assert gap >= (1 + CONVERGED_EMPTY_CYCLES) * (CONVERGED_FAILS + 1)
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_an_annealed_run_takes_shorter_splices_and_returns_its_best(seed: int) -> None:
+    s = start(UNEVEN, UNEVEN_CORNERS, seed)
+    result = run(s, Budget(600, 10**6), anneal_t0=HOT)  # check_delta on: every splice re-scored
+    scores = [s.route.score] + [e.score for e in result.events]
+    assert any(b < a for a, b in zip(scores, scores[1:], strict=False))  # shorter ones taken
+    routes = [s.route]
+    for event in result.events:
+        sp = event.splice
+        routes.append(
+            routes[-1].splice(
+                UNEVEN, sp.i, sp.j, sp.nodes, sp.edges, score=event.score, metrics=event.metrics
+            )
+        )
+    assert routes[-1].score == scores[-1]  # the events replay to the current route
+    top = scores.index(max(scores))  # the first route of the highest score: the best
+    assert result.best.score == max(scores)
+    assert result.best.edges.tobytes() == routes[top].edges.tobytes()
+    report = validate_route(
+        UNEVEN,
+        result.best,
+        stop_nodes=s.stop_nodes,
+        node_mask=s.masks.active,
+        banned_edges=s.masks.banned,
+    )
+    assert report.ok, report.lines()
+
+
+def test_a_run_that_never_converges_never_anneals() -> None:
+    # greedy converges after 5,062 attempts with seed 1: capped at 2,000, annealing changes nothing
+    greedy = run(start(UNEVEN, UNEVEN_CORNERS, 1), Budget(600, 2000))
+    hot = run(start(UNEVEN, UNEVEN_CORNERS, 1), Budget(600, 2000), anneal_t0=HOT)
+    assert greedy.stopped_because == hot.stopped_because == "budget"
+    assert splices(hot) == splices(greedy) and hot.reheats == 0
+    assert hot.best.edges.tobytes() == greedy.best.edges.tobytes()
+
+
+def test_a_target_goal_never_anneals() -> None:
+    # a ratio no route on UNEVEN reaches: the run converges below it, the same with anneal_t0
+    results = []
+    for anneal_t0 in (None, HOT):
+        s = start(UNEVEN, UNEVEN_CORNERS, 2)
+        goal = Goal(
+            Target(kind="ratio", value=100),
+            UNEVEN,
+            primary=s.objective.primary,
+            baseline=s.baseline,
+        )
+        results.append(run(s, Budget(600, 10**6), goal=goal, anneal_t0=anneal_t0))
+    greedy, hot = results
+    assert greedy.stopped_because == hot.stopped_because == "converged"
+    assert splices(hot) == splices(greedy) and hot.reheats == 0
+
+
+def test_both_backends_anneal_alike_and_the_same_seed_twice_alike() -> None:
+    town = random_town(1, turns=True)
+    scc = np.flatnonzero(PythonBackend(town).largest_scc_mask())
+    cases = [
+        (UNEVEN, UNEVEN_CORNERS, 2, HOT),
+        (town, [at_node(town, int(scc[0])), at_node(town, int(scc[-1]))], 1, 100.0),
+    ]
+    for data, stops, seed, anneal_t0 in cases:
+        one, two, again = (
+            run(start(data, stops, seed), Budget(600, 10**6), backend=b(data), anneal_t0=anneal_t0)
+            for b in (PythonBackend, CsrBackend, CsrBackend)
+        )
+        assert one.reheats == ANNEAL_REHEATS
+        assert splices(one) == splices(two) == splices(again)
+        assert one.best.edges.tobytes() == two.best.edges.tobytes() == again.best.edges.tobytes()
+        scores = [e.score for e in one.events]
+        assert any(b < a for a, b in zip(scores, scores[1:], strict=False))

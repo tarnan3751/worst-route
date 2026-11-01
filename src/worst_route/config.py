@@ -348,6 +348,21 @@ RADIUS_HALVE_EVERY = 20
 RADIUS_MIN_M = 300.0
 CONVERGED_FAILS = 400
 CONVERGED_EMPTY_CYCLES = 3
+# Simulated annealing (a max goal; `engine/worsen.py`): a run that would stop as converged
+# reheats instead, up to ANNEAL_REHEATS times, to T0 = ANNEAL_T0_FRACTION of the objective's
+# primary quantity of the baseline (the start route's for a round trip), and takes a detour that
+# loses with probability exp(delta / T), T cooling ×ANNEAL_COOLING per accepted splice, greedy
+# again once T < ANNEAL_FREEZE × T0. Measured on Portland's acceptance pairs (build 0b72253e5e8a,
+# seed 1, 30 s, 2026-10-31, interleaved with greedy at a load of 7-24): a median of 29.96×
+# (7.11-55.17×) against greedy's 26.05× (6.10-54.05×), every pair at least greedy's, 7 of 20
+# runs converging within the budget; cooling from the first attempt instead made 27.92× (per
+# splice, 3 % of the baseline) and 28.21× (×0.7 per cycle), some pairs 9 % below greedy, and
+# lost on the budget-bound Oregon and national trips, which these settings leave as they were;
+# 100 reheats a few % more than 3 but every run to its budget.
+ANNEAL_T0_FRACTION = 0.01
+ANNEAL_COOLING = 0.99
+ANNEAL_FREEZE = 1e-3
+ANNEAL_REHEATS = 3
 # Targets (`engine/target.py`): a ratio or duration target is reached within ±TARGET_TOLERANCE
 # of its value; a duration target is at most TARGET_MAX_DURATION_S.
 TARGET_TOLERANCE = 0.02

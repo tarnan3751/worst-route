@@ -4,7 +4,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from worst_route.config import COLLECT_ITEM_WEIGHT
+from worst_route.config import ANNEAL_REHEATS, COLLECT_ITEM_WEIGHT
 from worst_route.engine.detour import find_detour
 from worst_route.engine.io import route_document
 from worst_route.engine.objectives.collect import ITEMS, Collect, CollectItem, count_items
@@ -258,6 +258,25 @@ def test_a_run_collects_and_never_gives_an_item_back(item: CollectItem) -> None:
         g, result.best, stop_nodes=[0, 9], node_mask=everything, banned_edges=banned
     )
     assert report.ok
+
+
+@pytest.mark.parametrize("item", ITEMS)
+def test_annealing_gives_back_length_never_an_item(item: CollectItem) -> None:
+    # run to convergence and three reheats, hot enough to take shorter splices: an item
+    # weighs 10**6 in the score, so exp(delta / T) underflows for a splice that would lose one
+    g = sprinkled()
+    objective = Collect(g, item, baseline=Metrics(900.0, 81.0), r_max=2000.0)
+    route = scored(objective, route_on(g, list(range(10))))
+    result = run_worsen(
+        PythonBackend(g), SpatialIndex(g), g, route, objective,
+        Budget(seconds=600, max_iterations=10**6), np.random.Generator(np.random.PCG64(3)),
+        np.ones(g.n, dtype=bool), r_max=2000.0, check_delta=True, anneal_t0=50.0,
+    )  # fmt: skip
+    assert result.reheats == ANNEAL_REHEATS
+    lengths = [route.metrics.length_m] + [e.metrics.length_m for e in result.events]
+    assert any(b < a for a, b in zip(lengths, lengths[1:], strict=False))
+    counts = [0] + [e.metrics.counters["items"][item] for e in result.events]
+    assert all(b >= a for a, b in zip(counts, counts[1:], strict=False))
 
 
 def test_a_request_plans_a_collecting_route_the_same_on_both_backends() -> None:

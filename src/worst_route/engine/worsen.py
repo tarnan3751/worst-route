@@ -7,9 +7,10 @@ the default, the objective's `delta` strictly positive) and the objective's `fea
 agrees; every accepted splice yields a `ProgressEvent` (the attempt number, the elapsed time,
 the new score and metrics, the `Splice` that made it). The generator returns a `WorsenResult`:
 the best route by `goal.better` (for `max` the highest score, for a target the closest),
-every event, the attempts and accepted splices, why it stopped, the time it took, and how many
+every event, the attempts and accepted splices, why it stopped, the time it took, how many
 candidates the splice refused for a turn a transition table forbids (the searches see the
-tables, so this should stay near zero). `run_worsen` drives it to the end.
+tables, so this should stay near zero) and how many times it reheated. `run_worsen` drives it to
+the end.
 
 A target run (ratio or duration) has phases, by the route's value (`Goal.phase`): below the
 band it grows, taking detours that gain without passing the band's top; above it, it shrinks,
@@ -46,6 +47,19 @@ nothing, it is spliced in as one more attempt, and the run goes on shrinking.
   made or `budget.seconds` have passed ("budget"), or when `CONVERGED_EMPTY_CYCLES` cycles in a
   row accept nothing ("converged").
 
+Simulated annealing (`anneal_t0`, given by `plan_route` for a `max` goal only): when the run
+would stop as converged it reheats instead, up to `ANNEAL_REHEATS` times, and stops as converged
+after the last. Until the first reheat the run is the greedy one, draw for draw; a run that never
+converges never draws for it. While heated, a detour the goal refuses is taken anyway when it
+loses (`delta` < 0), adds no penalised turn (`constraint_delta` >= 0) and `feasible_window`
+agrees, with probability exp(delta / T), one `rng.random()` drawn for it, at temperature T =
+`anneal_t0` × `ANNEAL_COOLING`^k after k splices accepted since the reheat, none once T falls
+below `anneal_t0` × `ANNEAL_FREEZE` (`temperature`), so every heat ends greedy. Only a strict
+loss: exp(0) = 1 would take every equal-length alternative whatever T, and on a lattice, where
+every way round a block is as long, a heat then spliced in hundreds of them and took a hundred
+times greedy's attempts. A splice taken so is an accepted splice in every way (its event, the
+radius, the failures, the cycle); the best route moves only by `goal.better`, so it never is one.
+
 Every random choice is `rng`'s, in a fixed order, and candidate lists are sorted arrays, so a
 seed gives the same sequence of splices on any machine. The clock decides only when to stop: a
 run that stops on time is a prefix of that sequence, and one that stops on iterations is
@@ -65,6 +79,9 @@ import numpy as np
 from numpy.typing import NDArray
 
 from worst_route.config import (
+    ANNEAL_COOLING,
+    ANNEAL_FREEZE,
+    ANNEAL_REHEATS,
     CONVERGED_EMPTY_CYCLES,
     CONVERGED_FAILS,
     RADIUS_GROWTH,
@@ -130,6 +147,7 @@ class WorsenResult:
     stopped_because: StopReason
     elapsed_s: float
     refused_transitions: int
+    reheats: int = 0
 
 
 @dataclass(frozen=True, eq=False)
@@ -142,6 +160,16 @@ class _Overshoot:
     gain: float
     value: float
     extra: BoolArray | None
+
+
+def temperature(anneal_t0: float | None, reheats: int, heated: int) -> float:
+    """The annealing temperature after `heated` splices accepted since the last of `reheats`
+    reheats: none (0) without annealing or before the first reheat, `anneal_t0` ×
+    `ANNEAL_COOLING`^heated, none again once that is below `anneal_t0` × `ANNEAL_FREEZE`."""
+    if anneal_t0 is None or reheats == 0:
+        return 0.0
+    t = anneal_t0 * ANNEAL_COOLING**heated
+    return t if t >= anneal_t0 * ANNEAL_FREEZE else 0.0
 
 
 def pick_segment(
@@ -257,12 +285,15 @@ def worsen(
     banned_edges: BoolArray | None = None,
     goal: Goal | None = None,
     check_delta: bool = False,
+    anneal_t0: float | None = None,
 ) -> Generator[ProgressEvent, None, WorsenResult]:
-    """Make `route` worse, one accepted splice per event, toward `goal` (default: max); returns
-    the run's result."""
+    """Make `route` worse, one accepted splice per event, toward `goal` (default: max), annealing
+    from `anneal_t0` (score units) once it converges when given and the goal is max; returns the
+    run's result."""
     start = time.monotonic()
     if goal is None:  # max: the value is the score, and the baseline is not read
         goal = Goal(Target(), data, primary=objective.primary, baseline=Metrics(0.0, 0.0))
+    t0 = anneal_t0 if goal.maximise else None
     r_min = min(RADIUS_MIN_M, r_max)
     value = goal.value(route.score, route.metrics)
     shrinking = goal.phase(value) == "shrink"
@@ -271,6 +302,7 @@ def worsen(
     attempts = accepted = fails = 0
     cycle_accepted = False
     empty_cycles = 0
+    reheats = heat_from = 0  # annealing: the reheats so far, the splices accepted before the last
     # growing toward a target: the smallest detour past the band's top since the last splice
     overshoot: _Overshoot | None = None
     unused = UnusedNodes(data, node_mask)
@@ -294,8 +326,10 @@ def worsen(
             else:
                 empty_cycles = 0 if cycle_accepted else empty_cycles + 1
                 if empty_cycles == CONVERGED_EMPTY_CYCLES:
-                    stopped = "converged"
-                    break
+                    if t0 is None or reheats == ANNEAL_REHEATS:
+                        stopped = "converged"
+                        break
+                    reheats, heat_from, empty_cycles = reheats + 1, accepted, 0
                 radius = r_min if shrinking else objective.initial_radius(route)
                 fails, cycle_accepted = 0, False
         attempts += 1
@@ -333,11 +367,19 @@ def worsen(
                 gain = objective.delta(route, i, j, *detour)
                 held = objective.constraint_delta(route, i, j, *detour)
                 after = goal.candidate(route, i, j, detour[1], gain)
-            if (
-                detour is None
-                or not goal.accepts(value, gain, after, held)
-                or not objective.feasible_window(data, route, i, j, *detour)
-            ):
+            accept = (
+                detour is not None
+                and goal.accepts(value, gain, after, held)
+                and objective.feasible_window(data, route, i, j, *detour)
+            )
+            if not accept and detour is not None and gain < 0 and held >= 0:
+                t = temperature(t0, reheats, accepted - heat_from)
+                accept = (
+                    t > 0
+                    and objective.feasible_window(data, route, i, j, *detour)
+                    and rng.random() < math.exp(gain / t)
+                )
+            if not accept or detour is None:
                 if (
                     detour is not None
                     and goal.overshoots(value, gain, after)
@@ -376,7 +418,14 @@ def worsen(
         yield event
     elapsed = time.monotonic() - start
     return WorsenResult(
-        best, tuple(events), attempts, accepted, stopped, elapsed, refused[TransitionForbidden]
+        best,
+        tuple(events),
+        attempts,
+        accepted,
+        stopped,
+        elapsed,
+        refused[TransitionForbidden],
+        reheats,
     )
 
 
@@ -395,6 +444,7 @@ def run_worsen(
     goal: Goal | None = None,
     check_delta: bool = False,
     on_event: Callable[[ProgressEvent], None] | None = None,
+    anneal_t0: float | None = None,
 ) -> WorsenResult:
     """Run `worsen` to the end, handing each event to `on_event`; return its result."""
     run = worsen(
@@ -410,6 +460,7 @@ def run_worsen(
         banned_edges=banned_edges,
         goal=goal,
         check_delta=check_delta,
+        anneal_t0=anneal_t0,
     )
     while True:
         try:

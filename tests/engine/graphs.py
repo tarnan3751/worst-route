@@ -88,6 +88,21 @@ TREES = (
 # fmt: on
 
 
+def uneven_lattice(rows: int, cols: int, seed: int) -> GraphData:
+    """A two-way lattice of junctions 100 m apart (node r * cols + c) whose streets are 100-149 m
+    long, whole metres drawn from `seed`, so two ways round a block are seldom as long: on
+    `lattice`, where they always are, no detour loses less than 200 m."""
+    rng = np.random.default_rng(seed)
+    xy = [(X0 + 100.0 * c, Y0 + 100.0 * r) for r in range(rows) for c in range(cols)]
+    streets = [(a, a + 1) for a in range(rows * cols) if (a + 1) % cols]
+    streets += [(a, a + cols) for a in range((rows - 1) * cols)]
+    edges = []
+    for a, b in streets:
+        length = 100.0 + float(rng.integers(50))
+        edges += [Edge(a, b, length), Edge(b, a, length)]
+    return make_graph(xy, edges)
+
+
 def named_roads(
     rows: int, cols: int, row_names: Sequence[str | None], col_names: Sequence[str | None]
 ) -> dict[tuple[int, int], dict[str, str]]:

@@ -80,6 +80,25 @@ async def test_the_automatic_leash_is_the_one_snapped_and_recorded(
         assert report["ok"] is True
 
 
+async def test_a_better_route_whose_bound_lies_below_it_is_sent_with_a_null_bound(
+    data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ortools.sat.python import cp_model
+
+    below = property(lambda _: 0.0)
+    monkeypatch.setattr(cp_model.CpSolverSolutionCallback, "best_objective_bound", below)
+    async with serving(data) as (client, _):
+        _, events = await finished(client, certified())
+        kinds = [e["event"] for e in events]
+        better = [
+            events[k + 1]["data"]
+            for k, kind in enumerate(kinds[:-1])
+            if kind == "snapshot" and k > 2 and kinds[k + 1] == "progress"
+        ]
+        assert better and all(p["certified"] == {"bound_m": None, "gap": None} for p in better)
+        assert events[-1]["data"]["stopped_because"] == "optimal"
+
+
 @pytest.mark.parametrize(
     "fields",
     [

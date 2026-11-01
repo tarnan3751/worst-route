@@ -202,6 +202,23 @@ def test_every_route_the_solver_hands_on_is_legal_and_longer_than_the_last() -> 
     assert result.run.accepted == len(seen) and result.run.attempts >= len(seen)
 
 
+def test_a_better_route_whose_bound_lies_below_it_carries_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ortools.sat.python import cp_model
+
+    # CP-SAT's bound never lies below a solution it reports; were it to, the event says nothing
+    below = property(lambda _: 0.0)
+    monkeypatch.setattr(cp_model.CpSolverSolutionCallback, "best_objective_bound", below)
+    g = lattice(5, 6)
+    seen: list[ProgressEvent] = []
+    result = plan_route(
+        g, certified(g, [0, 29]), backend=PythonBackend(g), on_progress=lambda e, _: seen.append(e)
+    )
+    assert seen and result.report.ok
+    assert all(isinstance(e, Incumbent) and (e.bound_m, e.gap) == (None, None) for e in seen)
+
+
 def test_the_area_holds_only_what_a_walk_from_the_start_to_the_end_can_pass() -> None:
     # 0 → 1 → 2 → 3 (the end), 1 → 4 a dead end, 3 → 5 → 3 behind the end, 6 → 1 nowhere from
     # the start, and 2 → 0 back into the start

@@ -305,7 +305,9 @@ const progress = object<Progress>({
       best_ratios: array(nullable("number")),
     }),
   ),
-  certified: optional(object<CertifiedProgress>({ bound_m: "number", gap: "number" })),
+  certified: optional(
+    object<CertifiedProgress>({ bound_m: nullable("number"), gap: nullable("number") }),
+  ),
 });
 const snapshot = object<Snapshot>({
   iteration: "integer",

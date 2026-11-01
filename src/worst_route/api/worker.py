@@ -110,7 +110,8 @@ class Improved:
     elapsed_s: float
     score: float
     route: RouteArrays
-    certified: tuple[float, float] | None = None  # a certified route's bound and gap
+    # a certified route's bound and gap (each None when the solver's lies below the route)
+    certified: tuple[float | None, float | None] | None = None
 
 
 @dataclass(frozen=True, eq=False)

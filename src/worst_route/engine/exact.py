@@ -42,20 +42,20 @@ to CP-SAT's own, the request's seed (mod 2³¹) as its seed, and the time left o
 budget. Each better solution, in a solver thread, is read, chained from the start, scored and made
 a route by `Route.new` under the request's bans (a solution `check_route` refused would be a bug,
 which stops the search and is raised), and handed on as an `Incumbent`: a `ProgressEvent` whose
-splice replaces the whole route, with the stops' positions and the solver's bound then. Between
-them the bound, at most every `CERTIFIED_BOUND_EVERY_S`, goes to `on_bound(elapsed_s, bound_m,
-gap)`. An exception from either hook (a cancelled job, a closed pipe) stops the search and is
-raised once the solve returns. The result is the last incumbent, or the seed when none was
-better, with a `Certificate`: `optimal` when the solver proved it, else `feasible`; `bound_m`, the
-longest any legal route in the area can be (the route's length when proven), and `gap`, the
-fraction by which it may exceed the route (`(bound - found) / found` in the model's decimetres;
-0 when proven), both null when the solver ended without a solution of its own (`UNKNOWN`: the
-time limit came before it took in the hint, the route then the seed) or with a bound below its
-route's; the area's counts, the leash, the solve's time and the threads. A solve that ends
-`INFEASIBLE` or `MODEL_INVALID` is a bug (the hint is a legal route), raised, and so is a proof
-whose value is not the last route's. The run's
-`attempts` are the solutions the solver reported, its `accepted` the incumbents, and it stops
-`optimal` or on its `budget`.
+splice replaces the whole route, with the stops' positions and the solver's bound then (none when
+it lies below the solution's own value). Between them the bound, at most every
+`CERTIFIED_BOUND_EVERY_S`, goes to `on_bound(elapsed_s, bound_m, gap)`. An exception from either
+hook (a cancelled job, a closed pipe) stops the search and is raised once the solve returns. The
+result is the last incumbent, or the seed when none was better, with a `Certificate`: `optimal`
+when the solver proved it, else `feasible`; `bound_m`, the longest any legal route in the area can
+be (the route's length when proven), and `gap`, the fraction by which it may exceed the route
+(`(bound - found) / found` in the model's decimetres; 0 when proven), both null when the solver
+ended without a solution of its own (`UNKNOWN`: the time limit came before it took in the hint, the
+route then the seed) or with a bound below its route's; the area's counts, the leash, the solve's
+time and the threads. A solve that ends `INFEASIBLE` or `MODEL_INVALID` is a bug (the hint is a
+legal route), raised, and so is a proof whose value is not the last route's. The run's `attempts`
+are the solutions the solver reported, its `accepted` the incumbents, and it stops `optimal` or on
+its `budget`.
 
 Reproducibility: a proven route's length is fixed by the build and the request; the route among
 equally long ones, and a best found under the time limit, are not, as a budgeted loop's are not.
@@ -165,11 +165,12 @@ class Certificate:
 @dataclass(frozen=True, eq=False)
 class Incumbent(ProgressEvent):
     """A better route the solver found, whole (its splice replaces the route before it), its
-    stops' positions, and the solver's bound and gap when it found it."""
+    stops' positions, and the solver's bound and gap when it found it (None when that bound lies
+    below the route's own value)."""
 
     stop_idx: tuple[int, ...]
-    bound_m: float
-    gap: float
+    bound_m: float | None
+    gap: float | None
 
 
 def certified_area(data: GraphData, masks: RequestMasks, stop_nodes: Sequence[int]) -> Area | None:
@@ -437,7 +438,9 @@ def certified_route(
                     )
                     before: Route = state["best"]
                     state["best"], state["value"] = best, value
-                    bound_m, gap = bound_of(self.best_objective_bound)
+                    bound = self.best_objective_bound
+                    # a bound below the solution's own value bounds nothing: none on this event
+                    bound_m, gap = bound_of(bound) if bound >= value else (None, None)
                     elapsed = time.monotonic() - started
                     splice = Splice(0, len(before.edges), best.nodes, best.edges)
                     solutions = counted["solutions"]

@@ -391,10 +391,11 @@ export interface Portfolio {
 }
 
 /** How a certified route's solve stands: the bound on the longest legal route in the area so far,
- * and the fraction by which it may exceed the route. */
+ * and the fraction by which it may exceed the route (both null when the bound a better route came
+ * with lay below it). */
 export interface CertifiedProgress {
-  bound_m: number;
-  gap: number;
+  bound_m: number | null;
+  gap: number | null;
 }
 
 /** A portfolio's numbers are its leader's, and it says how its searches stand; a certified

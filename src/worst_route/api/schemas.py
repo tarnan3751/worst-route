@@ -317,10 +317,11 @@ class SpliceOut(_Out):
 
 class CertifiedProgress(_Out):
     """How a certified route's solve stands: the longest any legal route in the area can be, by
-    the solver's bound so far, and the fraction by which it may exceed the route."""
+    the solver's bound so far, and the fraction by which it may exceed the route (both null when
+    the bound a better route came with lay below it)."""
 
-    bound_m: float
-    gap: float
+    bound_m: float | None
+    gap: float | None
 
 
 class Progress(_Out):

@@ -1315,10 +1315,9 @@ def plan(
             ratio = event.metrics.length_m / baseline.length_m if baseline.length_m else 0.0
             line = f"iteration {event.iteration}: ratio {ratio:.2f}x, {km:.2f} km"
             if isinstance(event, Incumbent):  # a better route the solver found
-                line = (
-                    f"solution {event.iteration}: ratio {ratio:.2f}x, {km:.2f} km, the worst "
-                    f"possible at most {100 * event.gap:.2f} % longer"
-                )
+                line = f"solution {event.iteration}: ratio {ratio:.2f}x, {km:.2f} km"
+                if event.gap is not None:
+                    line += f", the worst possible at most {100 * event.gap:.2f} % longer"
             if "alphabet" in event.metrics.counters:  # each event a better route, of a restart
                 letters = event.metrics.counters["alphabet"]["letters"]
                 line = (

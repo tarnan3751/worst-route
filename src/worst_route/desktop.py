@@ -24,8 +24,10 @@ executable started again, which that call turns into the worker. Then:
   User-Agent, `worst-route-desktop/<version> (<url>[; contact])`; the basemap is the downloaded
   Protomaps file when it is there (`choose_basemap`), else OpenFreeMap's; and only a `Host` of
   127.0.0.1 or localhost is answered, so a web page that rebinds its name to this machine cannot
-  reach it. `LocalServer` runs it under uvicorn in a thread, on a port the system picks
-  (`free_socket`), and stops it, the job manager terminating the workers.
+  reach it. `LocalServer` runs it under uvicorn in a thread, on the app's own port
+  (`app_socket`: `config.DESKTOP_PORT`, so the page's origin, and with it the web view's storage,
+  is the same at every start; one the system picks when another program may be there, or the one
+  `--port` names), and stops it, the job manager terminating the workers.
 - **The window** (macOS and Windows, `run_window`): pywebview on the system's web view
   (WKWebView, WebView2), first a page saying the app is starting (the first start compiles the
   kernels; `loading_page` asks to move the app into Applications first when macOS runs it
@@ -215,6 +217,58 @@ def free_socket(host: str = "127.0.0.1", port: int = 0) -> socket.socket:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind((host, port))
     return sock
+
+
+def app_socket(
+    port: int | None, preferred: int | None = None, platform: str = sys.platform
+) -> socket.socket:
+    """The socket the app listens on: on `port` when one is given (0: one the system picks), else
+    on `preferred` (`config.DESKTOP_PORT`), so the page's origin is the same at every start, unless
+    another program may be there (then on a free one).
+
+    On macOS and Linux a probe connects first: only a refused connection says nothing listens
+    there, and the port is then bound with SO_REUSEADDR, every time, so a start soon after a quit
+    binds over the last start's closed connections (TIME_WAIT; Linux allows it only when those
+    carried the option too); a connection accepted, a timeout or any other error gives a free port,
+    since SO_REUSEADDR would let macOS bind over another program's listener on the wildcard
+    address (a socket bound but not listening drops the probe there, which times out). Two races
+    remain, both negligible: on Linux, a program that has bound the wildcard address with
+    SO_REUSEADDR (as servers do) but not called `listen` yet is refused like a free port, and the
+    app takes the port, the program's `listen` then failing (EADDRINUSE); and a program that starts
+    listening on the wildcard address between the probe and the bind, which macOS lets the app
+    bind over (Linux refuses the bind, and the app takes a free port). On Windows a plain bind, no
+    probe (refusals there can take seconds) and never SO_REUSEADDR (which would bind over a live
+    listener), a free port when it fails: TIME_WAIT blocks no bind there."""
+    if port is not None:
+        return free_socket(port=port)
+    if preferred is None:
+        from worst_route.config import DESKTOP_PORT
+
+        preferred = DESKTOP_PORT
+    windows = platform == "win32"
+    if windows or _refused(preferred):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if not windows:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("127.0.0.1", preferred))
+            return sock
+        except OSError:
+            sock.close()
+    log.info("port %d is taken; listening on a free one, with storage of its own", preferred)
+    return free_socket()
+
+
+def _refused(port: int) -> bool:
+    """Whether a connection to 127.0.0.1:`port` is refused, which only a port without a listener
+    does."""
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=1).close()
+    except ConnectionRefusedError:
+        return True
+    except OSError:
+        return False
+    return False
 
 
 def user_agent(contact: str | None) -> str:
@@ -492,7 +546,9 @@ def parse(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog=PRODUCT, description="Worst Route on this computer.")
     parser.add_argument("--headless", action="store_true", help="the server only (for the smoke)")
     parser.add_argument("--browser", action="store_true", help="open the browser, not a window")
-    parser.add_argument("--port", type=int, default=0, help="the port (0: a free one)")
+    parser.add_argument(
+        "--port", type=int, help="the port (0: a free one; default: the app's own, else a free one)"
+    )
     parser.add_argument("--region", action="append", help="a region to serve (repeatable)")
     parser.add_argument("--data", type=Path, help="the data directory (default: the app's)")
     parser.add_argument("--frontend", type=Path, help="the frontend's build (default: the app's)")
@@ -532,7 +588,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             contact=manifest.contact,
             geocoder=args.geocoder,
         )
-        return LocalServer(site, free_socket(port=args.port))
+        return LocalServer(site, app_socket(args.port))
 
     if mode == "window":
         return run_window(build, manifest, user, agent)

@@ -533,6 +533,11 @@ DAILY_MAX_ITERATIONS = 5_000
 DAILY_MPG = 24.0
 DAILY_GAS_PRICE_USD = 3.89
 
+# The desktop app (`docs/reference/desktop.md`) listens on 127.0.0.1 at DESKTOP_PORT unless another
+# program listens there, so that the page's origin, and with it the web view's storage (the
+# challenges' badges), is the same at every start; on a free port otherwise.
+DESKTOP_PORT = 17429
+
 
 # Geocoding (`docs/reference/api.md`, **Geocoding**; `docs/PLAN.md` §4.4). The proxy sends its
 # requests upstream one at a time, each at least 1 / GEOCODE_RPS seconds after the previous one's

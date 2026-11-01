@@ -141,6 +141,83 @@ def test_a_free_port_on_the_loopback_never_taken_twice() -> None:
         second.close()
 
 
+def a_free_port() -> int:
+    sock = desktop.free_socket()
+    port: int = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows blocks no bind on TIME_WAIT")
+def test_the_apps_own_port_when_free_and_again_soon_after_a_quit() -> None:
+    from worst_route.config import DESKTOP_PORT
+
+    assert DESKTOP_PORT == 17429
+    port = a_free_port()
+    sock = desktop.app_socket(None, preferred=port)  # free: the app's own, with SO_REUSEADDR
+    assert sock.getsockname() == ("127.0.0.1", port)
+    assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR) != 0
+    sock.listen()
+    client = socket.create_connection(("127.0.0.1", port))
+    served, _ = sock.accept()
+    served.close()  # the server closes first, as a stopping app does: TIME_WAIT on its side
+    client.recv(1)
+    client.close()
+    sock.close()
+    with pytest.raises(OSError), socket.socket() as plain:
+        plain.bind(("127.0.0.1", port))  # what a plain bind makes of TIME_WAIT
+    again = desktop.app_socket(None, preferred=port)  # a start soon after a quit
+    assert again.getsockname() == ("127.0.0.1", port)
+    again.close()
+
+
+def test_another_programs_listener_on_the_wildcard_gives_a_free_port() -> None:
+    port = a_free_port()
+    with socket.socket() as other:
+        other.bind(("0.0.0.0", port))
+        other.listen()
+        sock = desktop.app_socket(None, preferred=port)  # the probe connects: not the app's
+        assert sock.getsockname()[1] not in (0, port)
+        sock.close()
+
+
+def test_a_probe_that_is_not_refused_gives_a_free_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    def hung(*args: object, **kwargs: object) -> socket.socket:
+        raise TimeoutError("timed out")  # a listener whose backlog is full
+
+    port = a_free_port()
+    monkeypatch.setattr(desktop.socket, "create_connection", hung)
+    sock = desktop.app_socket(None, preferred=port)
+    assert sock.getsockname()[1] not in (0, port)
+    sock.close()
+
+
+def test_on_windows_a_plain_bind_without_a_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    def probe(*args: object, **kwargs: object) -> socket.socket:
+        raise AssertionError("no probe on Windows")
+
+    monkeypatch.setattr(desktop.socket, "create_connection", probe)
+    port = a_free_port()
+    sock = desktop.app_socket(None, preferred=port, platform="win32")
+    assert sock.getsockname() == ("127.0.0.1", port)
+    assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR) == 0
+    sock.listen()
+    other = desktop.app_socket(None, preferred=port, platform="win32")  # the bind fails
+    assert other.getsockname()[1] not in (0, port)
+    other.close()
+    sock.close()
+
+
+def test_the_port_named_or_one_the_system_picks() -> None:
+    port = a_free_port()
+    named = desktop.app_socket(port)  # --port names it
+    assert named.getsockname() == ("127.0.0.1", port)
+    named.close()
+    picked = desktop.app_socket(0)  # --port 0: one the system picks
+    assert picked.getsockname()[1] > 0
+    picked.close()
+
+
 def local(
     port: int, path: str, body: dict[str, Any] | None = None, host: str | None = None
 ) -> tuple[int, Any]:

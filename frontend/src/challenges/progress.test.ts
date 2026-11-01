@@ -183,6 +183,21 @@ describe("grading a route", () => {
     expect(sameTrip(bridges, { ...trip, stops: [...trip.stops, end] })).toBe(false);
   });
 
+  it("takes a trip on the challenge's leash only when it sets one", () => {
+    const draw = challenge("portland-draw"); // a 300 m leash
+    const onLeash = variant(max, { stops: drawn.request.stops, leash_km: 0.3 });
+    const trip = tripOf(onLeash, storeWith().state);
+    expect(trip.leashKm).toBe(0.3);
+    expect(sameTrip(draw, trip)).toBe(true);
+    expect(sameTrip(draw, { ...trip, leashKm: "auto" })).toBe(false);
+    expect(sameTrip(draw, { ...trip, leashKm: 0.5 })).toBe(false);
+    const unset = tripOf(variant(max, { leash_km: undefined }), storeWith().state);
+    expect(unset.leashKm).toBe("auto"); // the API's default
+    const town = challenge("portland-30x"); // no leash
+    expect(graded(town, variant(max, { leash_km: 5 }))).toBe(true);
+    expect(graded(town, variant(max, { leash_km: "auto" }))).toBe(true);
+  });
+
   it("never completes a drawing's challenge from a stored route", () => {
     const route = variant(max, { stops: drawn.request.stops }, { ratio: 1000 });
     expect(reached(challenge("portland-draw").goal, route, TODAY)).toBe(false);
@@ -265,7 +280,7 @@ describe("the completions", () => {
     }
   });
 
-  it("complete the drawing's challenge when the drawing beats the engine, and only then", () => {
+  it("complete the drawing's challenge when a drawing on its leash beats the engine, and only then", () => {
     const progress = new ChallengeProgress(
       storeWith(),
       () => TODAY,
@@ -281,12 +296,15 @@ describe("the completions", () => {
       note: null,
     });
     const finished = { routeId: "d1", ratio: 16.9, lengthM: 11_492 };
-    const { request } = drawn; // Powell's → Pioneer Courthouse Square, Portland's build
+    // Powell's → Pioneer Courthouse Square, Portland's build, on the challenge's 300 m leash
+    const request = { ...drawn.request, leash_km: 0.3 };
     progress.drawn({ request, finished: null, par: par(5000) }); // not finished
     progress.drawn({ request, finished, par: { ...par(5000), phase: "planning" } });
     progress.drawn({ request, finished, par: par(11_500) }); // a tie: 16.9× each
     progress.drawn({ request, finished, par: par(12_000) }); // the engine wins
     progress.drawn({ request: { ...request, region: "oregon" }, finished, par: par(5000) });
+    progress.drawn({ request: { ...request, leash_km: "auto" }, finished, par: par(5000) });
+    progress.drawn({ request: { ...request, leash_km: 1 }, finished, par: par(5000) });
     expect(progress.done).toEqual({});
     progress.drawn({ request, finished, par: par(10_000) });
     expect(Object.keys(progress.done)).toEqual(["portland-draw"]);

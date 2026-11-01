@@ -25,7 +25,8 @@ export interface ChallengeBrand {
 /** The settings a challenge fixes, as the panel's (`Settings`) names them; setting one up gives
  * the others of these their defaults (the longest route, as bad as possible, any turns, no hard
  * mode, the stops in their own order, the automatic tier and leash), and a route counts only in
- * the worst order the challenge sets (`reorder`: none, unless it says so). */
+ * the worst order the challenge sets (`reorder`: none, unless it says so) and, when it sets a
+ * leash, on that leash (`leashKm`). */
 export interface ChallengeSettings {
   objective?: Mode;
   item?: CollectItem;

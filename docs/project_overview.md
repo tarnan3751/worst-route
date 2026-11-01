@@ -1136,9 +1136,11 @@ brief):
   run reached 200–320× while a patient drawing lands around 10–15×, and nobody beat it. A round
   trip, on which the API refuses a ratio target (its baseline is 0 m when it has no stop between),
   keeps the full run as its par; where the engine stops short of the target, its ratio is the par
-  as before. The verdict, the drawing challenge's grading and the API are unchanged. Considered:
-  leaving the par the full run, a shorter budget, and two jobs (a capped par beside the engine's
-  full number). Out of scope: tiers (bronze, silver, gold), scoring across players.
+  as before. The verdict and the API are unchanged; the drawing challenge now grades only a drawing
+  on its own 300 m leash (the coordinator, 2026-11-01), since on the automatic leash a 10× par is
+  beaten easily and the challenge's point is the 300 m leash. Considered: leaving the par the full
+  run, a shorter budget, and two jobs (a capped par beside the engine's full number). Out of scope:
+  tiers (bronze, silver, gold), scoring across players.
 
 ### 3.2 Open
 

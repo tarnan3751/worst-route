@@ -1,13 +1,13 @@
 // Which challenges are done (docs/reference/frontend.md, **Challenges**): every finished route the
 // store shows (its `route`, once stored: a run's, a drawing's, one opened by link) is graded
 // against each challenge not yet done whose trip it is (`sameTrip`: the region, the mode with its
-// item or brand, the worst order as the challenge sets it, and the stops within NEAR_M of the
-// challenge's when it fixes them) by the challenge's goal (`reached`); a drawing's verdict is
-// graded against the drawing challenges (`drawn`). A challenge newly done is recorded with the day
-// under STORAGE_KEY in the browser's storage, every read and write of which may fail (a private
-// window, storage blocked), so the page works without it and the badges then last as long as the
-// page; "completed" says which, for its toast (`completedLine`). `reset` forgets them all. No DOM,
-// so the tests drive it.
+// item or brand, the worst order as the challenge sets it, its leash when it sets one, and the
+// stops within NEAR_M of the challenge's when it fixes them) by the challenge's goal (`reached`); a
+// drawing's verdict is graded against the drawing challenges (`drawn`). A challenge newly done is
+// recorded with the day under STORAGE_KEY in the browser's storage, every read and write of which
+// may fail (a private window, storage blocked), so the page works without it and the badges then
+// last as long as the page; "completed" says which, for its toast (`completedLine`). `reset`
+// forgets them all. No DOM, so the tests drive it.
 import type { BrandEntry, Daily, RouteDocument } from "../api/types";
 import { verdictOf, type Drawing } from "../draw/drawing";
 import { isoWithOffset } from "../format";
@@ -22,13 +22,14 @@ const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 export type ChallengeStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
 /** A finished route as a challenge sees it: its region, objective, item and brand, whether in
- * the worst order, and stops. */
+ * the worst order, its leash, and stops. */
 export interface Trip {
   region: string;
   objective: string;
   item: string | null;
   brand: { wikidata: string | null; name: string } | null;
   reorder: boolean;
+  leashKm: number | "auto";
   stops: { lat: number; lon: number }[];
 }
 
@@ -52,13 +53,15 @@ function sameBrand(brand: Trip["brand"], wanted: ChallengeBrand): boolean {
 
 /** Whether `trip` is one `challenge` grades: its region (for today's challenge, today's route's,
  * from `today`, null while it is not done), its mode and item or brand, its worst order or none as
- * the challenge sets, and, when the challenge fixes its stops, as many stops each within NEAR_M of
+ * the challenge sets, its leash when the challenge sets one (that leash exactly: "auto" or any
+ * other is not it), and, when the challenge fixes its stops, as many stops each within NEAR_M of
  * the challenge's. */
 export function sameTrip(challenge: Challenge, trip: Trip, today: Daily | null = null): boolean {
-  const { objective = "distance", item, brand, reorder = false } = challenge.settings;
+  const { objective = "distance", item, brand, reorder = false, leashKm } = challenge.settings;
   const region = challenge.region ?? today?.region;
   if (trip.region !== region || trip.objective !== objective) return false;
   if (trip.reorder !== reorder) return false;
+  if (leashKm !== undefined && trip.leashKm !== leashKm) return false;
   if (objective === "collect" && trip.item !== item) return false;
   if (objective === "brand" && (brand === undefined || !sameBrand(trip.brand, brand))) return false;
   const { stops } = challenge;
@@ -82,6 +85,7 @@ export function tripOf(route: RouteDocument, state: Readonly<AppState>): Trip {
     item: request.item ?? null,
     brand: visited && { wikidata: listed?.wikidata ?? null, name: visited.name },
     reorder: request.reorder === true,
+    leashKm: request.leash_km ?? "auto",
     stops: request.stops ?? route.stops,
   };
 }
@@ -169,6 +173,7 @@ export class ChallengeProgress extends EventTarget {
       item: null,
       brand: null,
       reorder: false, // a drawing takes the stops in their order
+      leashKm: request.leash_km ?? "auto",
       stops: request.stops ?? [],
     };
     for (const challenge of this.#challenges) {

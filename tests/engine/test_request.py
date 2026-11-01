@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from worst_route.config import HighwayClass
+from worst_route.engine import request as request_module
 from worst_route.engine.constraints import NO_CONSTRAINTS
 from worst_route.engine.objectives import OBJECTIVE_KEYS, OBJECTIVES
 from worst_route.engine.objectives.collect import ITEMS
@@ -14,7 +15,9 @@ from worst_route.engine.request import (
     RouteRequest,
     auto_leash_m,
     auto_tier,
+    max_reorder_stops,
     objective_problem,
+    reorder_problem,
     request_masks,
 )
 from worst_route.engine.target import Target
@@ -169,6 +172,37 @@ def test_the_alphabet_route_takes_a_start_and_an_end_and_no_target() -> None:
         "only the collect objective takes an item",
     )
     assert objective_problem("distance", None, "max", None, 3) is None
+
+
+def test_the_worst_order_is_asked_for_up_to_seven_stops_and_not_by_the_alphabet_route() -> None:
+    seven = [(45.5 + k / 100, -122.6) for k in range(6)] + [PORTLAND[1]]
+    request = RouteRequest(stops=seven, seed=1, reorder=True)
+    assert request.model_dump(mode="json")["reorder"] is True
+    assert RouteRequest.model_validate(json.loads(json.dumps(request.model_dump(mode="json")))) == (
+        request
+    )
+    plain = RouteRequest(stops=PORTLAND, seed=1)
+    assert not plain.reorder and "reorder" not in plain.model_dump(mode="json")  # as before
+    with pytest.raises(ValidationError, match="the worst order takes at most 7 stops, not 8"):
+        RouteRequest(stops=[*seven, PORTLAND[0]], seed=1, reorder=True)
+    assert RouteRequest(stops=[*seven, PORTLAND[0]], seed=1).stops[-1] == PORTLAND[0]
+    with pytest.raises(ValidationError, match="the alphabet route takes no worst order"):
+        RouteRequest(stops=PORTLAND, seed=1, objective="alphabet", reorder=True)
+    assert objective_problem("alphabet", None, "max", None, 2, True) == (
+        "reorder",
+        "the alphabet route takes no worst order: it has no stop to reorder",
+    )
+    assert objective_problem("distance", None, "max", None, 7, True) is None
+
+
+def test_a_large_build_reorders_fewer_stops(monkeypatch: pytest.MonkeyPatch) -> None:
+    g = lattice(3, 3)
+    assert max_reorder_stops(g) == 7 and reorder_problem(7, g) is None
+    monkeypatch.setattr(request_module, "REORDER_LARGE_NODES", g.n - 1)  # 9 nodes now large
+    assert max_reorder_stops(g) == 5 and reorder_problem(5, g) is None
+    assert reorder_problem(6, g) == "the worst order takes at most 5 stops on test, not 6"
+    assert reorder_problem(7) is None  # without a build, the most any build takes
+    assert reorder_problem(8) == "the worst order takes at most 7 stops, not 8"
 
 
 def test_round_trips_through_json() -> None:

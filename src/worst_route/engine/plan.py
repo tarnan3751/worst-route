@@ -2,7 +2,12 @@
 
 `plan_route(data, request, ...)` computes the request's masks (`request_masks`) and, for a
 pilgrimage, refuses a brand the build does not have or the area does not hold (`BrandRefused`,
-`objectives.brand.brand_problem`), makes one
+`objectives.brand.brand_problem`); with `reorder`, refuses more stops than the build allows
+(`request.reorder_problem`, a `ValueError` the CLI and the API refuse first) and puts the stops in
+the worst order (`seed_route.choose_order`: the longest seed of every order of the stops between
+the ends, the given order's errors raised as without it), the request planned from then on being
+the reordered one, with its own masks, so everything after (the result's request, the baseline,
+the validator) sees the stops in the order the route visits them; makes one
 `numpy.random.Generator(PCG64(request.seed))` for every random draw that follows, settles the
 stops (`resolve_stops`: snapping and its fallback, which may move stops), builds the seed route
 and the baseline on them, makes the request's objective (the distance for the alphabet route)
@@ -25,18 +30,19 @@ repeating a road). The seed checks every leg itself, so a `ValueError` or `Illeg
 seeding would be a bug; it is still reported as `StopUnreachable` for the leg at fault, one
 line from the CLI rather than a traceback.
 
-Two hooks serve the API (`docs/reference/api.md`). `on_start(snaps, masks, baseline, route)` is
-called once, after the route the loop starts from is made and before the loop. `base`, a route
-planned earlier on this build for the same stops, tier and leash, is what the loop starts from
-instead of the seed ("make it worse"; with a target, a base past it shrinks toward it).
-`check_base` refuses it with `BaseRouteMismatch` (a
-`ValueError` naming the field at fault) unless its stop nodes are the ones `resolve_stops`
-gives, every node lies in the request's active mask, none of its edges is one the request
-bans, under a strict turn constraint none of its turns is one the constraint refuses (a soft
-one takes any base), and under hard mode no road it leaves comes back; `Route.new` then checks
-it as it checks any route (repeats, twins, transitions). Nothing is drawn from the rng before
-the loop then, so the run is fixed by the base, the request and its seed. Without them,
-planning is exactly as above.
+Two hooks serve the API (`docs/reference/api.md`). `on_start(snaps, masks, baseline, route,
+order)` is called once, after the route the loop starts from is made and before the loop
+(`order`, each stop's position among those given, is the identity without `reorder`). `base`,
+a route planned earlier on this build for the same stops, tier and leash, is what the loop
+starts from instead of the seed ("make it worse"; with a target, a base past it shrinks toward
+it), in the base's order (with `reorder` set it is a `ValueError`). `check_base` refuses it
+with `BaseRouteMismatch` (a `ValueError` naming the field at fault) unless its stop nodes are
+the ones `resolve_stops` gives, every node lies in the request's active mask, none of its edges
+is one the request bans, under a strict turn constraint none of its turns is one the constraint
+refuses (a soft one takes any base), and under hard mode no road it leaves comes back;
+`Route.new` then checks it as it checks any route (repeats, twins, transitions). Nothing is
+drawn from the rng before the loop then, so the run is fixed by the base, the request and its
+seed. Without them, planning is exactly as above.
 """
 
 from bisect import bisect_right
@@ -49,9 +55,15 @@ from worst_route.engine.alphabet_search import alphabet_route, alphabet_scored, 
 from worst_route.engine.constraints import Constraints, constrain, returning
 from worst_route.engine.objectives import make_objective
 from worst_route.engine.objectives.brand import BrandRefused, brand_problem
-from worst_route.engine.request import RequestMasks, RouteRequest, request_masks
+from worst_route.engine.request import RequestMasks, RouteRequest, reorder_problem, request_masks
 from worst_route.engine.route import IllegalSplice, Route
-from worst_route.engine.seed_route import Baseline, baseline_route, resolve_stops, seed_route
+from worst_route.engine.seed_route import (
+    Baseline,
+    baseline_route,
+    choose_order,
+    resolve_stops,
+    seed_route,
+)
 from worst_route.engine.snap import StopUnreachable
 from worst_route.engine.target import Goal
 from worst_route.engine.turns import turn_classes
@@ -67,10 +79,15 @@ from worst_route.graph.backends import make_backend
 from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import Snap, SpatialIndex
 
+# `plan_route`'s `on_start(snaps, masks, baseline, route, order)`.
+OnStart = Callable[[tuple[Snap, ...], RequestMasks, Baseline, Route, tuple[int, ...]], None]
+
 
 @dataclass(frozen=True, eq=False)
 class PlanResult:
-    """A validated route and everything that went into it."""
+    """A validated route and everything that went into it: the request as planned (with
+    `reorder`, its stops in the order the route visits them) and `order`, each stop's position
+    among those asked for (the identity without `reorder`)."""
 
     request: RouteRequest
     masks: RequestMasks
@@ -81,6 +98,7 @@ class PlanResult:
     report: ValidationReport
     backend: str  # the name of the backend that searched
     goal: Goal
+    order: tuple[int, ...]
 
 
 def plan_route(
@@ -90,7 +108,7 @@ def plan_route(
     backend: GraphBackend | None = None,
     spatial: SpatialIndex | None = None,
     base: RouteLike | None = None,
-    on_start: Callable[[tuple[Snap, ...], RequestMasks, Baseline, Route], None] | None = None,
+    on_start: OnStart | None = None,
     on_progress: Callable[[ProgressEvent, Baseline], None] | None = None,
     check_delta: bool = False,
 ) -> PlanResult:
@@ -99,6 +117,8 @@ def plan_route(
     alphabet = request.objective == "alphabet"
     if alphabet and base is not None:
         raise ValueError("the alphabet route cannot be continued")
+    if request.reorder and base is not None:
+        raise ValueError("a continuation keeps its base route's order: reorder must be off")
     backend = backend if backend is not None else make_backend(data)
     spatial = spatial if spatial is not None else SpatialIndex(data)
     masks = request_masks(spatial, data, request)
@@ -106,6 +126,14 @@ def plan_route(
         problem = brand_problem(data, request.brand, masks.active)
         if problem is not None:
             raise BrandRefused(problem)
+    given = order = tuple(range(len(request.stops)))
+    if request.reorder:
+        refused = reorder_problem(len(request.stops), data)
+        if refused is not None:
+            raise ValueError(refused)
+        request, order = choose_order(data, spatial, backend, request)
+        if order != given:
+            masks = request_masks(spatial, data, request)
     rng = np.random.Generator(np.random.PCG64(request.seed))
     r_max = min(masks.leash_m, masks.extent_m)
 
@@ -166,7 +194,7 @@ def plan_route(
             raise
         raise _refused(error, stop_idx) from error
     if on_start is not None:
-        on_start(tuple(snaps), masks, baseline, route)
+        on_start(tuple(snaps), masks, baseline, route, order)
 
     def progress(event: ProgressEvent) -> None:
         if on_progress is not None:
@@ -216,7 +244,7 @@ def plan_route(
     if not report.ok:
         raise ValidationFailed(report)
     return PlanResult(
-        request, masks, tuple(snaps), baseline, run.best, run, report, backend.name, goal
+        request, masks, tuple(snaps), baseline, run.best, run, report, backend.name, goal, order
     )
 
 

@@ -36,6 +36,7 @@ def test_route_json_round_trips(tmp_path: Path) -> None:
     assert saved.engine_version == ENGINE_VERSION
     assert saved.request == result.request
     assert saved.stops == result.snaps
+    assert doc["order"] == [0, 1, 2] and saved.order == (0, 1, 2)
     for stop in doc["stops"]:  # the node's position, at most 7 decimals as OSM writes them
         assert stop["lat"] == round(stop["lat"], 7) and stop["lon"] == round(stop["lon"], 7)
         assert len(repr(stop["lon"]).split(".")[1]) <= 7
@@ -86,6 +87,29 @@ def test_the_target_is_in_the_request_and_for_a_target_run_in_the_metrics() -> N
     assert target["kind"] == "ratio" and target["value"] == 3.0
     assert target["achieved"] == doc["metrics"]["ratio"]
     assert target["within_tolerance"] == (abs(target["achieved"] / 3 - 1) <= TARGET_TOLERANCE)
+
+
+def test_the_worst_order_is_in_the_route_file_and_a_file_without_one_reads_as_given(
+    tmp_path: Path,
+) -> None:
+    request = RouteRequest(
+        stops=[at_node(GRID, v) for v in (0, 27, 7, 56, 63)],
+        seed=2,
+        max_iterations=150,
+        budget_s=120,
+        reorder=True,
+    )
+    result = plan_route(GRID, request)
+    doc = route_document(GRID, result)
+    path = tmp_path / "route.json"
+    path.write_text(json.dumps(doc))
+    saved = read_route(path)
+    assert saved.order == result.order != (0, 1, 2, 3, 4) and doc["order"] == list(result.order)
+    assert doc["request"]["reorder"] is True and saved.request == result.request
+    assert saved.request.stops == [request.stops[k] for k in result.order]
+    del doc["order"]  # a file from before the worst order
+    path.write_text(json.dumps(doc))
+    assert read_route(path).order == (0, 1, 2, 3, 4)
 
 
 def test_a_round_trip_has_no_ratio() -> None:

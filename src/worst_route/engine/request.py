@@ -6,15 +6,18 @@ the last the end; the same point first and last makes a round trip), the objecti
 the alphabet route takes a start and an end only, and no target), the item
 it collects (`collect` only, which needs one), the brand it visits (`brand` only, which needs
 one: its id in the build's brand index), the turn constraints (`constraints.Constraints`:
-none by default), the tier (`"auto"` or `"T0"`..`"T4"`), the leash in km (`"auto"` or a number,
+none by default), whether its stops may be visited in the worst order (`reorder`: every order
+of the stops between the start and the end is tried, `seed_route.choose_order`; at most
+`MAX_REORDER_STOPS` stops, fewer on a large build: `reorder_problem`; not for the alphabet
+route), the tier (`"auto"` or `"T0"`..`"T4"`), the leash in km (`"auto"` or a number,
 at most 150), the budget in seconds (at most 120) and iterations, the seed, and the target
 (`target.Target`: max by default; a ratio target is refused for a round trip, whose baseline is
 0 m, and for `collect` and `brand`, which count items and visits rather than metres;
-`objective_problem` names what is wrong with an objective, its item, its brand, its target kind
-and its number of stops, for the API to refuse it as early). Every number is finite, so it
-round-trips through JSON (`model_dump(mode="json")`) without `Infinity`; its JSON leaves the
-constraints out when there are none, and the brand when there is none, so a request without them
-reads as it did before they existed.
+`objective_problem` names what is wrong with an objective, its item, its brand, its target kind,
+its number of stops and the worst order, for the API to refuse it as early). Every number is
+finite, so it round-trips through JSON (`model_dump(mode="json")`) without `Infinity`; its JSON
+leaves the constraints out when there are none, the brand when there is none, and `reorder`
+when it is off, so a request without them reads as it did before they existed.
 
 `request_masks(spatial, data, request)` turns it into `RequestMasks`, from the request alone,
 so the validator can recompute them from a saved route. The stops are projected and the trip
@@ -59,6 +62,9 @@ from worst_route.config import (
     LEASH_LONG_FACTOR,
     LEASH_MAX_KM,
     LEASH_MIN_KM,
+    MAX_REORDER_STOPS,
+    MAX_REORDER_STOPS_LARGE,
+    REORDER_LARGE_NODES,
     TIER_AUTO_KM,
 )
 from worst_route.engine.constraints import NO_CONSTRAINTS, Constraints
@@ -74,8 +80,8 @@ ObjectiveKey = Literal["distance", "time", "collect", "brand", "alphabet"]  # OB
 
 
 class RouteRequest(BaseModel):
-    """What to plan: stops in order, the objective and its constraints, the scale, the budget,
-    the seed and the target."""
+    """What to plan: stops in order (or in the worst order), the objective and its constraints,
+    the scale, the budget, the seed and the target."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -84,6 +90,7 @@ class RouteRequest(BaseModel):
     item: CollectItem | None = None
     brand: int | None = Field(default=None, ge=0)
     constraints: Constraints = NO_CONSTRAINTS
+    reorder: bool = False
     tier: TierChoice = "auto"
     leash_km: Annotated[float, Field(gt=0, le=LEASH_MAX_KM)] | Literal["auto"] = "auto"
     budget_s: float = Field(default=DEFAULT_BUDGET_S, gt=0, le=BUDGET_MAX_S)
@@ -116,10 +123,17 @@ class RouteRequest(BaseModel):
     @model_validator(mode="after")
     def _item_fits(self) -> "RouteRequest":
         problem = objective_problem(
-            self.objective, self.item, self.target.kind, self.brand, len(self.stops)
+            self.objective, self.item, self.target.kind, self.brand, len(self.stops), self.reorder
         )
         if problem is not None:
             raise ValueError(problem[1])
+        return self
+
+    @model_validator(mode="after")
+    def _few_enough_to_reorder(self) -> "RouteRequest":
+        problem = reorder_problem(len(self.stops)) if self.reorder else None
+        if problem is not None:
+            raise ValueError(problem)
         return self
 
     @model_serializer(mode="wrap")
@@ -129,6 +143,8 @@ class RouteRequest(BaseModel):
             del fields["constraints"]
         if self.brand is None:
             del fields["brand"]
+        if not self.reorder:
+            del fields["reorder"]
         return fields
 
 
@@ -138,11 +154,12 @@ def objective_problem(
     target: TargetKind,
     brand: int | None = None,
     stops: int = 2,
+    reorder: bool = False,
 ) -> tuple[str, str] | None:
-    """What is wrong with this objective, item, kind of target, brand and number of stops, as
-    (the field at fault, a sentence), or None: `collect` needs an item, only it takes one, and it
-    takes no ratio; the same for `brand` and its brand; the alphabet route takes no via and no
-    target."""
+    """What is wrong with this objective, item, kind of target, brand, number of stops and worst
+    order, as (the field at fault, a sentence), or None: `collect` needs an item, only it takes
+    one, and it takes no ratio; the same for `brand` and its brand; the alphabet route takes no
+    via, no target and no worst order."""
     if objective == "collect" and item is None:
         return "item", f"the collect objective needs an item: {', '.join(ITEMS)}"
     if objective != "collect" and item is not None:
@@ -159,7 +176,25 @@ def objective_problem(
         return "stops", "the alphabet route takes a start and an end"
     if objective == "alphabet" and target != "max":
         return "target", "the alphabet route takes no target: it counts letters"
+    if objective == "alphabet" and reorder:
+        return "reorder", "the alphabet route takes no worst order: it has no stop to reorder"
     return None
+
+
+def max_reorder_stops(data: GraphData) -> int:
+    """How many stops a request may visit in the worst order on this build: `MAX_REORDER_STOPS`,
+    or `MAX_REORDER_STOPS_LARGE` on a build of more than `REORDER_LARGE_NODES` nodes."""
+    return MAX_REORDER_STOPS if data.n <= REORDER_LARGE_NODES else MAX_REORDER_STOPS_LARGE
+
+
+def reorder_problem(stops: int, data: GraphData | None = None) -> str | None:
+    """Why `stops` stops cannot be visited in the worst order, or None: more than
+    `MAX_REORDER_STOPS`, or on `data`'s build more than its cap (`max_reorder_stops`)."""
+    cap = MAX_REORDER_STOPS if data is None else max_reorder_stops(data)
+    if stops <= cap:
+        return None
+    where = "" if data is None else f" on {data.meta['region']}"
+    return f"the worst order takes at most {cap} stops{where}, not {stops}"
 
 
 @dataclass(frozen=True, eq=False)

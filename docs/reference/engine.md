@@ -15,11 +15,11 @@ routes either way, on every build, transition tables included (**Searches**).
 |---|---|
 | `route.py` | `Route`, `Splice`, `Metrics`, the `IllegalSplice` refusals, `check_route`, `splice_arrays`, `twins_of` |
 | `validator.py` | `validate_route`, `ValidationReport`, `Check`, `ValidationFailed`, `RouteLike` |
-| `request.py` | `RouteRequest`, `ObjectiveKey`, `RequestMasks`, `request_masks`, `auto_tier`, `auto_leash_m`, `objective_problem` |
+| `request.py` | `RouteRequest`, `ObjectiveKey`, `RequestMasks`, `request_masks`, `auto_tier`, `auto_leash_m`, `objective_problem`, `max_reorder_stops`, `reorder_problem` |
 | `target.py` | `Target` (a request's target), `Goal` (what a run is after: better, done, its phases) |
 | `snap.py` | `snap_stops`, `resnap`, `apart_from`, `role_of`, `is_round_trip`, `StopUnreachable`, `InfeasibleTurnConstraint`, `InfeasibleHardMode` |
 | `search.py` | `shortest_path`, `leg_path` (a seed leg's), `simple_paths`: which backend search builds a path |
-| `seed_route.py` | `resolve_stops`, `baseline_route` / `Baseline`, `seed_route` / `SeedRoute` |
+| `seed_route.py` | `resolve_stops`, `choose_order` (the worst order), `baseline_route` / `Baseline`, `seed_route` / `SeedRoute` |
 | `objectives/` | `base.py` (`Objective`, `BaseObjective`, `route_delay_s`), `distance.py` (`Distance`), `time.py` (`SlowestTime`), `collect.py` (`Collect`, `count_items`, `ITEMS`, `CollectItem`), `brand.py` (`Brand`, `brand_counts`, `brand_problem`, `BrandRefused`), `composite.py` (`Composite`), `OBJECTIVES`, `OBJECTIVE_KEYS`, `make_objective` |
 | `turns.py` | `turn_classes`, `count_turns` |
 | `constraints.py` | `Constraints`, `TurnConstraint`, `NoLeft`, `NoRight`, `HardMode`, `stretches`, `returning`, `constrain`, `turn_penalty_for`, `NO_CONSTRAINTS` |
@@ -154,7 +154,9 @@ build's brand index (≥ 0; null for every other objective, and then left out of
 JSON, so a request reads as it did before brands existed); `constraints` (**Constraints**:
 `{no_left, no_right, strict, hard}`, none by default, and then left out of the request's JSON,
 so a request reads as it did before constraints existed, and `hard` in it only when set, so a
-request without hard mode reads as it did before hard mode existed); `tier` (`"auto"` or
+request without hard mode reads as it did before hard mode existed); `reorder`, whether the
+stops may be visited in the worst order (**Seed and baseline**, **The worst order**; off by
+default, and then left out of the JSON, so a request reads as it did before it existed); `tier` (`"auto"` or
 `"T0"`..`"T4"`); `leash_km` (`"auto"` or in
 (0, 150]); `budget_s` (in (0, 120], default 20) and `max_iterations` (default 5000); `seed`
 (≥ 0); and `target` (**Targets**: `max`, the default, `ratio` or `duration`; a ratio target is
@@ -166,8 +168,16 @@ under `alphabet`, more than two stops ("the alphabet route takes a start and an 
 `collect`
 without an item, an item for another objective, and a ratio target under `collect`, which
 counts items rather than metres; the same for `brand` and its brand ("the brand objective needs
-a brand", "only the brand objective takes a brand", and no ratio target: it counts visits); the
-CLI and the API ask it first, to refuse as early. Whether the build has the brand, and whether
+a brand", "only the brand objective takes a brand", and no ratio target: it counts visits); and
+`reorder` under `alphabet` ("the alphabet route takes no worst order: it has no stop to reorder",
+field `reorder`); the CLI and the API ask it first, to refuse as early. The request itself
+refuses `reorder` with more than `MAX_REORDER_STOPS` (7) stops ("the worst order takes at most 7
+stops, not 8"); on a build of more than `REORDER_LARGE_NODES` (100,000) nodes the cap is
+`MAX_REORDER_STOPS_LARGE` (5): `max_reorder_stops(data)` is a build's cap and
+`reorder_problem(stops, data)` the sentence for a request past it (without `data`, past 7) ("the worst order takes at
+most 5 stops on us-t3, not 6"), which planning raises as a `ValueError` and the CLI and the API
+refuse first. The cap depends on the build and the number of stops only, never on their order,
+so a request already in its worst order is never refused where it was accepted. Whether the build has the brand, and whether
 the request's area holds any of its locations, is planning's to check (**Planning**).
 
 `request_masks(spatial, data, request)` derives everything from the request alone, so a saved
@@ -347,6 +357,43 @@ waypoint at least 500 m away, drawn up to 20 times from the request's rng. If no
 a legal loop (under hard mode, one that never comes back to a road it left),
 `StopUnreachable` for the leg (0, 1), or its constraint's error (step 6). Its baseline is 0 m,
 so its ratio is undefined.
+
+**The worst order** (`choose_order(data, spatial, backend, request)`, for a request with
+`reorder`; `docs/PLAN.md` §3.13). Every order of the stops between the start and the end is tried
+(the start and the end stay; a round trip's start is its end), in lexicographic order of the
+given positions, the given order first: up to 120 orders for 7 stops. Each is resolved in full,
+as a request in that order would be: its own masks (the tier and the leash follow its polyline),
+for a pilgrimage the brand within them (an order whose area holds none of its locations is
+skipped; the given order's is planning's step 1), then the stops snapped and moved by the
+fallback above until a seed fits, the seed built once (`resolve_stops`' work, `_settle`, hands it
+on). The order whose seed is the longest wins (strictly longer, so the first among equals); an
+order no seed fits is skipped, but the given order's error is raised as `resolve_stops` raises
+it, so a request is planned in its worst order only when it can be planned in its own, and is
+refused with the same error otherwise. The baseline is not compared: it exists whenever the seed
+does. A seed with legs draws nothing from the rng, and the search is bounded by its count of
+orders, never by time, so the order is fixed by the build and the request and does not depend on
+the seed. The result is the request with its stops in that order (`reorder` still set) and the
+order, each stop's position among those given (`[0, 3, 1, 2, 4]`). Planned again, that request
+picks the same order: it comes first among its own orders and none is longer. Fewer than two
+stops between the ends make one order, tried by nothing.
+
+Planning goes on with the reordered request (**Planning**), so the baseline, the ratio and a
+ratio target are the chosen order's: what a sane GPS drives through the stops in the order the
+route visits them. The ratio therefore does not count the way the order itself lengthens the
+trip; the route's length does.
+
+The cost is a resolution an order: masks (3 ms on Portland's build, 58 ms on us-t3's 2.15 M
+nodes), the snaps and a seed, and up to twenty more builds for an order whose stop must move.
+Measured (2026-10-31, CSR, the dev machine at a load of 5-12; `config.MAX_REORDER_STOPS`): 7 stops
+in town, 120 orders, 11.8 s on Portland's build (118 orders fit; 28 s when each order also built
+its seed a second time and its baseline); on us-t3, 120 orders took 10-75 s with one build each
+and no stop moved, and 102 s resolved in full in New York with a stop that had to move in nearly
+every order (Queens: on us-t3's roads the nearest node to a stop is often one a seed cannot pass
+through, and the fallback moves the failing leg's earlier stop ten times before its later one);
+5 stops, 6 orders, took 0.3-7.3 s on us-t3 (7.3 s in Los Angeles, Long Beach moving in every
+order) and 5.0 s on Oregon. Hence 7 stops on a build of at most 100,000 nodes and 5 on a larger
+one. Resolving each order with its stops as snapped only, without the fallback, cost 4.7 s on
+Portland but left only the given order in Los Angeles (1 of 6) and 3 of 6 in New York.
 
 ## Objectives
 
@@ -936,35 +983,43 @@ order, so a seed gives the same route on either backend.
 
 `plan_route(data, request, *, backend=None, spatial=None, base=None, on_start=None,
 on_progress=None, check_delta=False) -> PlanResult(request, masks, snaps, baseline, route, run,
-report, backend, goal)` runs a request end to end. It searches with `backend`, else
+report, backend, goal, order)` runs a request end to end. It searches with `backend`, else
 `make_backend(data)` (`config.DEFAULT_BACKEND`, `auto`: `CsrBackend` when numba imports);
 `PlanResult.backend` is the name of the one that searched. The steps run in this order:
 
 1. the masks, and for a pilgrimage its brand: one the build does not have, or none of whose
    nodes the active mask holds, raises `BrandRefused` (**Objectives**);
-2. one `Generator(PCG64(request.seed))`;
-3. `resolve_stops` (snapping and its fallback, which may move stops; `snaps` are the final
+2. with `reorder`: more stops than the build's cap is a `ValueError` (`reorder_problem`), and
+   so is a `base`; then the worst order (`choose_order`, **Seed and baseline**), whose request
+   (its stops in the order the route visits them) is the one planned from here on, with its own
+   masks; `order` is each stop's position among those given (the identity without `reorder`);
+3. one `Generator(PCG64(request.seed))`;
+4. `resolve_stops` (snapping and its fallback, which may move stops; `snaps` are the final
    ones);
-4. `seed_route` on them, or, given `base`, that route instead;
-5. `baseline_route` on those stops;
-6. `make_objective` with the baseline length and `r_max` (for `collect`, the request's item and
+5. `seed_route` on them, or, given `base`, that route instead;
+6. `baseline_route` on those stops;
+7. `make_objective` with the baseline length and `r_max` (for `collect`, the request's item and
    active nodes; for `brand`, its brand and active nodes; the distance for `alphabet`), with
    the request's turn constraints (`constrain`), and the request's `Goal` (**Targets**) with
    the baseline length;
-7. `Route.new` of the seed (or the base; an alphabet route's seed scored with its letters,
-   `alphabet_scored`, none yet), then `on_start(snaps, masks, baseline, route)`;
-8. `run_worsen` toward the goal within the request's budget, calling
+8. `Route.new` of the seed (or the base; an alphabet route's seed scored with its letters,
+   `alphabet_scored`, none yet), then `on_start(snaps, masks, baseline, route, order)`;
+9. `run_worsen` toward the goal within the request's budget, calling
    `on_progress(event, baseline)` on every accepted splice; for `alphabet`, `alphabet_route`
    instead (**Alphabet**), calling it on every better route;
-9. `validate_route` on the best route, against the request's masks and the resolved stops (and
-   for `alphabet`, with its `alphabet` check).
+10. `validate_route` on the best route, against the request's masks and the resolved stops (and
+    for `alphabet`, with its `alphabet` check).
+
+`PlanResult.request` is the request as planned: with `reorder`, its stops in the order the route
+visits them, which is what the route file records and `validate` re-derives the stops from.
 
 An alphabet route cannot be continued: `base` with `objective: "alphabet"` is a `ValueError`
 ("the alphabet route cannot be continued"), which the CLI and the API refuse first.
 
 The two hooks serve the API (`docs/reference/api.md`). `on_start` reports the route the loop
 starts from before the first splice: the seed is not the baseline once there are stops between
-the ends, and a client applying splices needs it. `base` ("make it worse") is a route planned
+the ends, and a client applying splices needs it; and, with `reorder`, the order the search chose
+and the stops resolved in it, which the API's `snapped` event reports. `base` ("make it worse") is a route planned
 earlier on this build for the same stops, tier and leash, anything the validator reads
 (`RouteLike`). Before the loop, `check_base(base, masks, stop_nodes)` refuses it with
 `BaseRouteMismatch`, a `ValueError` whose `field` is `"stops"` (its stop nodes are not the ones
@@ -1052,8 +1107,11 @@ check reports `ok`, the first offending index and a detail. `report.ok` is their
 
 - `graph_version`, `region`, `build_id`, `seed`, `engine_version`;
 - `request`, the `RouteRequest` as JSON (its `constraints` and its `brand` only when it has
-  some, and the constraints' `hard` only when set);
+  some, the constraints' `hard` and `reorder` only when set; with `reorder`, its stops in the
+  order the route visits them);
 - `stops`: `[{lat, lon, node, moved_m, note}]`, the snapped node's position;
+- `order`: each stop's position among those asked for, in the order visited (the identity
+  without `reorder`; a file from before the worst order has none, read as the identity);
 - `nodes`, `edges`, `stop_idx`;
 - `metrics`: `{length_m, time_s, delay_s, baseline_length_m, baseline_time_s,
   baseline_delay_s, ratio, turns: {left, right, straight, u_turn}, items: {toll_booth,
@@ -1080,7 +1138,8 @@ jokes included) and `toasts` beside the keys above, and in `metrics` `extra_fuel
 places index under `WORST_ROUTE_DATA`) and `network_fraction`. `route_document` itself, which
 the API's worker stores, leaves them out; nothing reads them back.
 
-`read_route(path)` returns a `SavedRoute`, which the validator reads like a `Route` (its
+`read_route(path)` returns a `SavedRoute` (with the file's `order`), which the validator reads
+like a `Route` (its
 metrics' counters carry the file's `items`, `brand` and `alphabet`, which the validator
 recounts; the keys
 it does not read, the presentation's among them, are kept in its `document`). A file that is
@@ -1857,11 +1916,11 @@ two-way street, which the drawing's tests and the API's draw on).
 | `test_road_copies.py` | a road mapped several times over one run (three two-way copies, two one-way copies and a two-way copy, a one-way and a two-way copy; one segment or an inner junction), built from OSM through the pipeline's test helpers: every round trip out on one copy and back on another refused by `Route.new` and `Route.splice` and failing `edge_simple` alone |
 | `test_validator.py` | each violation caught by the right check, including one OSM junction a cluster and its stub both hold, passed at each (failing at the edge into the second), a cluster's members met once, non-finite metrics and reported item counts that differ from the recount; a strict turn constraint proven from the bearings (a left turn failing strict no-left, a right turn strict no-right, nothing under a soft one); an alphabet route passing with any roads on its free first and last legs (the `alphabet` check only in an alphabet request's report, its detail saying so), one out of order failing `alphabet` at the road at fault, each edited field of its letters failing `metrics`, a `free_from` outside the route (or not an int) failing both, an alphabet request whose route reports no letters |
 | `test_alphabet.py` | the letters (unnamed edges, links and numbered streets free), the counts (the free first leg up to the first A, equal letters in a row once, a road of the same letter after another, letters out of order counted as they come, the wrap from Z to A, an empty part); the search on named lattices: an ordered town driven A to J, every better route legal (`check_route`) and replaying from the seed, each better than the last and in order, the same bytes twice and on both backends (another seed another route), a connector driving a road of the letter just completed, the free first leg, a town without an A road keeping the seed and converging after its first restart, a run converging after its patience, the build's letters passed in, no restart, a round trip, a strict constraint on every route, a soft one, hard mode on every route (no road come back to), turn tables kept; `plan_route` the same on both backends with the `alphabet` check, its route.json read back and validated (an edited sequence failing `metrics`), no continuation |
-| `test_request.py` | the request model and its bounds (its target's too, and no ratio target for a round trip; the item only and always with `collect`, which takes no ratio; the brand only and always with `brand`, which takes none either, and left out of the JSON when there is none; the alphabet route with two stops only, a round trip among them, and no target), tier and leash auto, the masks and the tier's edge bans; the objective's keys, the constraints left out of the JSON when there are none, both at once refused |
+| `test_request.py` | the request model and its bounds (its target's too, and no ratio target for a round trip; the item only and always with `collect`, which takes no ratio; the brand only and always with `brand`, which takes none either, and left out of the JSON when there is none; the alphabet route with two stops only, a round trip among them, and no target; `reorder` left out of the JSON when off, at most 7 stops, not under the alphabet route, and 5 on a large build), tier and leash auto, the masks and the tier's edge bans; the objective's keys, the constraints left out of the JSON when there are none, both at once refused |
 | `test_target.py` | the target's bounds; the goal's rules on values (the band's edges, phases, the closer route better and a tie to the later, growing and shrinking acceptance at the band, a duration moving one way, a candidate's value equal to the re-scored route's, a ratio and a duration under the slowest time and a duration under the distance on the experienced time, delays included); and on lattices with `check_delta`: ratio and duration targets reached while only growing, a base past a target shrinking into it, a route already within it stopping before an attempt, an unreachable target converging with the closest route, the overshoot after an empty cycle (the closest route returned, and a run cut at its attempt the prefix ending with it), the same bytes on both backends and twice; the slowest time reaching ratio and duration targets on its experienced time |
 | `test_snap.py` | roles, cul-de-sacs, stops kept apart, round trips only for identical points, an end near the start moved on, re-snapping |
 | `test_search.py` | the turn edges counting only on a build with rows, a path driving both carriageways searched again, and the rounds' limit; a cheapest legal walk entering a node twice searched again, to a bypass or to no path (and none at once for the baseline's search), the rounds' limit (as many loops as rounds, not one more), on both backends; on every pair of two small towns with tables, the answer a legal simple path by brute force (or None, always when none exists), costing at least the walk; the searches made again on a 30 × 30 town the same bytes on both backends; a seed leg's tree (`leg_path`): the walk's first entry banned where banning its way back leaves nothing, the searches growing with the distance between the ends (as many loops as searches, not one more, unless the ends lie 100 km farther apart), the later twin banned, on the small towns the walk where it is simple and else a legal simple path costing at least it, all 107 with 17 searches, the same bytes on both backends there and on the 30 × 30 town |
-| `test_seed_route.py` | `resolve_stops` deterministic, node-disjoint legs, legs avoiding later stops, the penalty re-solve on a corridor, the baseline, the re-snap walk out of a one-entrance ring, the start never moving, a point-to-point trip never collapsing onto the start, a leg between two stops on one node, unreachable legs named by both ends, a leg going round a junction that allows only straight on, the turn at a via, the baseline's legal legs and its turn-blind fallback, a leg whose cheapest legal walk loops taking a simple path (the end staying, the baseline still turn-blind), a leg the chain of rounds refused entering the node by the way its walk came back (the end staying), a leg driving both carriageways going round, a round trip to a neighbour not one road out and back, round-trip loops (never back along the way out) |
+| `test_seed_route.py` | `resolve_stops` deterministic, node-disjoint legs, legs avoiding later stops, the penalty re-solve on a corridor, the baseline, the re-snap walk out of a one-entrance ring, the start never moving, a point-to-point trip never collapsing onto the start, a leg between two stops on one node, unreachable legs named by both ends, a leg going round a junction that allows only straight on, the turn at a via, the baseline's legal legs and its turn-blind fallback, a leg whose cheapest legal walk loops taking a simple path (the end staying, the baseline still turn-blind), a leg the chain of rounds refused entering the node by the way its walk came back (the end staying), a leg driving both carriageways going round, a round trip to a neighbour not one road out and back, round-trip loops (never back along the way out); the worst order against each order's seed found as planning finds it: the first of the longest (four orders tied, two on a round trip), the orders no seed fits skipped (8 of 24 round a round trip), the start and the end kept, a stop the fallback moves out of a one-entrance ring in every order and the order not given winning, the given order's refusal raised as `resolve_stops` raises it, the same order twice and on both backends, one order for one stop between the ends, a pilgrimage's order whose area lacks its brand skipped |
 | `test_objectives.py` | `Distance`, the radius, the registry (`brand` with its brand), and `delta` against a full re-score for every kind of term, the first-edge term included; the delays in every mode's metrics; `SlowestTime`'s terms, weights, waypoint pool, `describe` and primary quantity (the experienced time), and its `delta` against a full re-score |
 | `test_collect.py` | `count_items` and each item's score, items first then length (a bridge split by a junction once, a bridge at the start, a bridge run through a round trip's start once, a roundabout on a round trip's start once, a toll booth in either direction), `delta` against a full re-score for each item with windows at the route's start and at its end (a round trip's start inside a bridge run among them), the waypoint pool (the uncollected places, once per route, any node once none is left in the area), the radius, `describe`; for each item a loop run with `check_delta` that never gives an item back and validates; a request planning the same collecting route on both backends, and one reaching a duration target |
 | `test_brand.py` | `brand_counts` and the score, visits first then length (a round trip's start once), the counters and `describe`, an unknown brand refused, `delta` against a full re-score with windows at the route's start and at a round trip's end, the waypoint pool (the brand's unvisited nodes in the area, once per route, any node once none is left), the radius; a 300-attempt loop with `check_delta` that never gives a visit back, validates and is the same on both backends; the validator failing each tampered field of a reported brand and an `of` the area does not give; a request planning the same pilgrimage on both backends, its route.json read back with its brand and validated, an edited one failing; a brand the build lacks or the area does not hold refused as `BrandRefused`; a duration target reached |
@@ -1871,8 +1930,8 @@ two-way street, which the drawing's tests and the API's draw on).
 | `test_detour.py` | each strategy's legal detours and None when none exists, the waypoint's pool (and any node of the ball when it holds none of the pool), the strategy weights, random weight drawing only near the window, the local-exhaustive ranking and the refused-candidate skip, no turn refused on a lattice of straight-only junctions (and many when the searches are made turn-blind); shrinking toward a target, the local-exhaustive path closest to the band first, and never a longer one (a longer, faster path shadowed a shorter one for a duration) |
 | `test_worsen.py` | over fixed seeds, `check_delta` on: the score only rises, every event replays to the best route, budgets in iterations and seconds, convergence, a splice after two empty cycles and the run stopping only after three, the segment bias's rate and its anchors (the edges with the most unused nodes near), the unused-node grid's cap, the same seed gives the same bytes, different seeds give edge sets with Jaccard < 0.7, random one-way towns with twins always validate, and so do those with turn tables (no turn refused), a tier's shortcut ban, a point-to-point request never becoming a round trip, identical points planning a loop, an unexpected seed error reported as `StopUnreachable`; the same-seed test on both backends, and both backends planning the same route, splice for splice, on the grid and on one-way towns with and without turn tables; shrinking toward a target, runs of 6 edges on average and up to 24; the nodes a detour can leave or join (three distinct neighbours over the usable edges, the mask and bans of both directions taking one away), a window widened to them on a lattice whose streets are split in two, never past a stop, and every splice of a run there starting and ending at one or a stop |
 | `test_draw.py` | a drawing on a 5 × 5 lattice with one-ways, twins, a straight-only junction and named roads: an empty path at the start with its legal ways out, the stops reached in order and the end; every refusal at its first illegal edge (a one-way taken from its head, an id outside the graph, a path not from the start among them); of two refusals the earlier, the path before it legal, where the route check finds the later first; a round trip closing at its start only once its stops are reached and not out and back along one road (a road of its own back allowed); on 150 random walks under random stops, round trips, areas, bans, strict turns and hard mode, the next moves exactly the out-edges the check takes, each other refused at the path's end, every code met; on 300 walks that break the rules anywhere, the refusal at an edge whose path before passes and whose path with it is refused alike; a finished drawing's route.json (its run drawn by a human, its ratio), a round trip's without a ratio, an unfinished one refused; the objective and target a drawing takes |
-| `test_io.py` | the route files, the target in the request and, for a target run, in the metrics; the delays and the turns in the metrics, and a saved route's metrics carrying its file's item counts |
-| `test_plan.py` | `plan_route`'s hooks: `on_start` once before the loop with the route it starts from (every splice replays from it to the result), the same route without the hooks, a continuation from `base` that never scores less, is fixed by its seed on both backends, and refuses a base for other stops, one leaving the request's area (before the loop) and, in `check_base`, a node outside the mask or an edge the request bans; a soft constraint starting from the plain seed and keeping left turns rarer than the plain run's, a strict one no route keeps as `InfeasibleTurnConstraint` with its note, one no route keeps without it either (two one-way rings) refused as without it, a stop the strict fallback moves noting why, a base refused for a turn a strict constraint refuses (taken by a soft one); a strict route validated against its constraint |
+| `test_io.py` | the route files, the target in the request and, for a target run, in the metrics; the delays and the turns in the metrics, and a saved route's metrics carrying its file's item counts; the order and the reordered request in the file, a file without an order read as the identity |
+| `test_plan.py` | `plan_route`'s hooks: `on_start` once before the loop with the route it starts from (every splice replays from it to the result), the same route without the hooks, a continuation from `base` that never scores less, is fixed by its seed on both backends, and refuses a base for other stops, one leaving the request's area (before the loop) and, in `check_base`, a node outside the mask or an edge the request bans; a soft constraint starting from the plain seed and keeping left turns rarer than the plain run's, a strict one no route keeps as `InfeasibleTurnConstraint` with its note, one no route keeps without it either (two one-way rings) refused as without it, a stop the strict fallback moves noting why, a base refused for a turn a strict constraint refuses (taken by a soft one); a strict route validated against its constraint; the worst order planned and validated in the order it visits the stops (`on_start` given it), the identity and the same route without it, the same order and route twice, on both backends and with another seed's order, the reordered request planned again the same, refused with a base and past a large build's cap |
 | `test_cli_plan.py` | `plan` and `validate` on builds written with `write_build`, including the error paths, a route that fails validation never printed, a truncated and re-edited file caught by its re-derived stops, an id beyond int32, `--backend` on both commands (the same route.json on both backends but the backend and the time), and the same on a build with turn tables, where `auto` is `csr` too, a file from another engine version refused; `--target` (its line, its parsing, its refusals) and `--base` (a continuation to a smaller target, the options it refuses, a file from another engine version, region or `graph_version`, a truncated or broken route, stops that do not resolve); a ratio target for a round trip, from the stops or the base, refused; an illegal route reported as the base file's fault only with `--base`; `--objective`, `--no-left`, `--no-right` and `--strict` (their lines, the time ratio with its drive and delays, the route.json, `validate`, their refusals, `--strict` alone in one line, a strict refusal in one line ending "try without --strict", `--base` taking them from its file); `validate` failing a soft route's file edited to claim a strict constraint; `--objective collect --item` (the collected line, the items and item in route.json, `--base` keeping them, a distance run's items) and its refusals, each one plain line (an unknown objective before its item); `--objective brand --brand` by name in any case and by id (the visited line, the brand in route.json, `--base` keeping it and refusing `--brand`, `validate` passing it and failing an edited count) and its refusals (the misfits, a name no brand has, one two brands share, an unknown id, a brand out of reach); a brand named "76" in a build whose brand 76 is another (the bare number refused, `"76"` the name, `#76` the id, `77` an id), `#` without a number, `²`; a build missing an array, one line for `plan` and `validate`; `validate` refusing a route.json whose item counts were edited; `--objective alphabet` (its objective and letters lines, the letters line for one letter and past Z, the `alphabet` check in the validator's line, the letters in route.json, `validate` passing it and failing a road edited in it) and its refusals (`--via`, a target, a `--base` file of an alphabet route), each one plain line |
 | `test_portland_data.py` | (`data`: Portland's latest build through `WORST_ROUTE_DATA`, skipped without one) Powell's → Reed, seed 1, 4,000 attempts: the same bytes on both backends, splice for splice, no turn refused; the slowest time reaching 9 h within ±2 %; soft no-left with fewer left turns a kilometre than its seed, at more than 5×; strict no-left planning Powell's → Reed with no left turn or U-turn, strict no-right refusing it in one line; hard mode over 4,000 attempts, the same on both backends, every road one stretch, at more than 3×; collecting each item over 4,000 attempts, more of it than the distance route passes (none of the toll booths, which lie outside the area), and a duration target under `collect` reached within ±2 %; a pilgrimage to the brand with the most locations visiting more of it than the distance route over the same 4,000 attempts, its counts the recount's; an alphabet route over 100 restarts, the same bytes and letters on both backends, no turn refused, its `alphabet` check passing, at least 5 letters (A to I on build ffe2e7c881ca) |
 

@@ -180,7 +180,11 @@ def run_job(
             raise _Orphaned
 
     def start(
-        snaps: tuple[Snap, ...], masks: RequestMasks, baseline: Baseline, route: Route
+        snaps: tuple[Snap, ...],
+        masks: RequestMasks,
+        baseline: Baseline,
+        route: Route,
+        order: tuple[int, ...],
     ) -> None:
         check()
         arrays = RouteArrays(route.nodes, route.edges, route.stop_idx, route.metrics)

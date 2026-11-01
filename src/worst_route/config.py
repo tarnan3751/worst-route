@@ -284,6 +284,19 @@ LEG_SEARCH_KM = 100.0
 # banned but for one of its stretches, up to HARD_SEED_ROUNDS times (`engine/seed_route.py`; on
 # Portland's acceptance pairs 4 rounds at most were needed).
 HARD_SEED_ROUNDS = 16
+# The worst order (`reorder`, `engine/seed_route.py`, `choose_order`) tries every order of the
+# stops between the start and the end, each resolved in full (its masks, its snaps, its seed, and
+# up to 2 x SNAP_FALLBACK_CANDIDATES more builds when a stop must move): at most
+# MAX_REORDER_STOPS stops (120 orders) on a build of at most REORDER_LARGE_NODES nodes, and
+# MAX_REORDER_STOPS_LARGE (6 orders) on a larger one. Measured (2026-10-31, CSR, the dev machine
+# at a load of 5-12): 7 stops in town took 11.8 s on Portland's build (65,779 nodes; 28 s with a
+# second seed build and a baseline per order). On us-t3 (2,154,537 nodes), whose masks alone take
+# 58 ms an order, 120 orders took 10-75 s with one seed build each and no stop moved, and 102 s
+# resolved in full in New York with a stop that must move in nearly every order; 5 stops took
+# 0.3-7.3 s there (7.3 s in Los Angeles, every order moving Long Beach), 5.0 s on Oregon.
+MAX_REORDER_STOPS = 7
+MAX_REORDER_STOPS_LARGE = 5
+REORDER_LARGE_NODES = 100_000
 
 # Detours (`docs/PLAN.md` §3.5). A strategy is drawn with STRATEGY_WEIGHTS (waypoint, random
 # weight, local exhaustive); local exhaustive only when the window's ends lie less than

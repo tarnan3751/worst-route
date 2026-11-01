@@ -3,8 +3,9 @@
 `route_document(data, result)` is the `route.json` of a planned route:
 
     {graph_version, region, build_id, seed, engine_version,
-     request:  the RouteRequest as JSON,
+     request:  the RouteRequest as JSON (with `reorder`, its stops in the order visited),
      stops:    [{lat, lon, node, moved_m, note}]  (where each stop was snapped),
+     order:    each stop's position among those asked for (the identity without `reorder`),
      nodes, edges, stop_idx,
      metrics:  {length_m, time_s, delay_s (at signals and stop signs), baseline_length_m,
                 baseline_time_s, baseline_delay_s, ratio (null for a round trip, whose
@@ -16,13 +17,15 @@
                 value, achieved, within_tolerance}},
      run:      {attempts, accepted, stopped_because, elapsed_s, backend}}
 
-`document(data, request, snaps, route, baseline, run=..., target=...)` is the same document from
-its parts, with the run's numbers given as they are: `route_document` builds it from a plan's
-result, a route drawn by hand (`engine/draw.py`) from its own.
+`document(data, request, snaps, route, baseline, run=..., target=..., order=...)` is the same
+document from its parts, with the run's numbers given as they are (`order` the identity when not
+given): `route_document` builds it from a plan's result, a route drawn by hand
+(`engine/draw.py`) from its own.
 
 `read_route(path)` reads one back as a `SavedRoute`, which the validator reads like a `Route`
 (its metrics' counters hold the file's `items`, a pilgrimage's `brand` and an alphabet route's
-`alphabet`, which the validator recounts):
+`alphabet`, which the validator recounts; a file from before the worst order has no `order`,
+read as the identity):
 `worst-route validate` re-checks it against the build it names. A run that stopped on time is
 replayed exactly with `max_iterations` set to its `run.attempts` and a budget in seconds at
 least as large as the first run's.
@@ -60,6 +63,7 @@ class SavedRoute:
     engine_version: str
     request: RouteRequest
     stops: tuple[Snap, ...]
+    order: tuple[int, ...]
     nodes: IntArray
     edges: IntArray
     stop_idx: tuple[int, ...]
@@ -84,6 +88,7 @@ def route_document(data: GraphData, result: PlanResult) -> dict[str, Any]:
             "backend": result.backend,
         },
         target=result.goal.describe(result.goal.value(route.score, route.metrics)),
+        order=result.order,
     )
 
 
@@ -96,10 +101,12 @@ def document(
     *,
     run: dict[str, Any],
     target: dict[str, Any] | None = None,
+    order: Sequence[int] | None = None,
 ) -> dict[str, Any]:
     """The `route.json` of `route`, planned or drawn for `request` on these stops against this
     baseline: `run` its `{attempts, accepted, stopped_because, elapsed_s, backend}`, `target` a
-    ratio or duration target's `{kind, value, achieved, within_tolerance}`."""
+    ratio or duration target's `{kind, value, achieved, within_tolerance}`, `order` each stop's
+    position among those asked for (the identity when not given)."""
     ratio = route.metrics.length_m / baseline.length_m if baseline.length_m > 0 else None
     return {
         "graph_version": data.meta["graph_version"],
@@ -112,6 +119,7 @@ def document(
             {"lat": s.lat, "lon": s.lon, "node": s.node, "moved_m": s.moved_m, "note": s.note}
             for s in snaps
         ],
+        "order": list(order) if order is not None else list(range(len(snaps))),
         "nodes": route.nodes.tolist(),
         "edges": route.edges.tolist(),
         "stop_idx": list(route.stop_idx),
@@ -153,6 +161,7 @@ def read_route(path: Path) -> SavedRoute:
             )
             for s in doc["stops"]
         ),
+        order=tuple(int(k) for k in doc.get("order", range(len(doc["stops"])))),
         nodes=np.array(doc["nodes"], dtype=np.int32),
         edges=np.array(doc["edges"], dtype=np.int32),
         stop_idx=tuple(int(k) for k in doc["stop_idx"]),

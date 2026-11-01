@@ -1,15 +1,24 @@
 import math
 from collections.abc import Sequence
 from dataclasses import replace
+from itertools import permutations
 
 import numpy as np
 import pytest
 
+from worst_route.engine import seed_route as seed_route_module
 from worst_route.engine.request import RouteRequest, request_masks
 from worst_route.engine.route import Metrics, Route, check_route
-from worst_route.engine.seed_route import SeedRoute, baseline_route, resolve_stops, seed_route
+from worst_route.engine.seed_route import (
+    SeedRoute,
+    baseline_route,
+    choose_order,
+    resolve_stops,
+    seed_route,
+)
 from worst_route.engine.snap import StopUnreachable
 from worst_route.engine.validator import validate_route
+from worst_route.graph.csr_backend import CsrBackend
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
 from worst_route.graph.spatial import SpatialIndex
@@ -377,3 +386,136 @@ def test_a_round_trip_through_a_via() -> None:
     assert seed.nodes[0] == seed.nodes[-1] == 0
     assert seed.nodes[seed.stop_idx[1]] == 8
     assert len(np.unique(seed.nodes[:-1])) == len(seed.nodes) - 1
+
+
+# The worst order (`choose_order`). Each order's seed is found here as planning finds it for a
+# request in that order (its own masks, `resolve_stops` with its fallback, `seed_route`): its
+# length, whether a stop moved to fit it, or None where no seed fits.
+Lengths = dict[tuple[int, ...], tuple[float, bool] | None]
+
+
+def seed_lengths(g: GraphData, request: RouteRequest) -> Lengths:
+    spatial, backend = SpatialIndex(g), PythonBackend(g)
+    stops, lengths = request.stops, {}
+    for between in permutations(range(1, len(stops) - 1)):
+        order = (0, *between, len(stops) - 1)
+        ordered = request.model_copy(update={"stops": [stops[k] for k in order]})
+        masks = request_masks(spatial, g, ordered)
+        try:
+            snaps = resolve_stops(g, spatial, backend, ordered, masks)
+        except StopUnreachable:
+            lengths[order] = None
+            continue
+        rng = np.random.Generator(np.random.PCG64(0))
+        found = seed_route(backend, spatial, g, snaps, masks.active, masks.banned, rng, r_max=1e4)
+        moved = any(s.note is not None and "nearer nodes" in s.note for s in snaps)
+        lengths[order] = (math.fsum(g.edge_length_m[found.edges].astype(float).tolist()), moved)
+    return lengths
+
+
+def first_longest(lengths: Lengths) -> tuple[int, ...]:
+    """The first order, as `permutations` gives them, of the longest seed."""
+    longest = max(found[0] for found in lengths.values() if found is not None)
+    return next(o for o, found in lengths.items() if found is not None and found[0] == longest)
+
+
+def reordered(g: GraphData, stops: Sequence[int]) -> tuple[RouteRequest, tuple[int, ...]]:
+    request = RouteRequest(stops=[at_node(g, v) for v in stops], seed=0, reorder=True)
+    return choose_order(g, SpatialIndex(g), PythonBackend(g), request)
+
+
+@pytest.mark.parametrize(
+    ("stops", "tied", "infeasible"),
+    [
+        ((0, 6, 18, 8, 24), 1, 0),
+        ((0, 7, 17, 13, 24), 1, 0),
+        ((12, 0, 4, 20, 24), 4, 0),  # four orders tie: the first wins
+        ((0, 4, 20, 24, 0), 2, 0),  # a round trip, two tied
+        ((0, 2, 22, 14, 10, 0), 1, 8),  # a round trip four stops round: 8 of 24 orders fit none
+    ],
+)
+def test_the_worst_order_is_the_first_of_the_longest_seeds(
+    stops: tuple[int, ...], tied: int, infeasible: int
+) -> None:
+    g = lattice(5, 5)
+    request, order = reordered(g, stops)
+    lengths = seed_lengths(g, RouteRequest(stops=[at_node(g, v) for v in stops], seed=0))
+    longest = max(found[0] for found in lengths.values() if found is not None)
+    assert sum(found is not None and found[0] == longest for found in lengths.values()) == tied
+    assert sum(found is None for found in lengths.values()) == infeasible
+    assert order == first_longest(lengths)
+    assert order[0] == 0 and order[-1] == len(stops) - 1  # the start and the end stay
+    assert request.stops == [at_node(g, stops[k]) for k in order]
+    assert request.reorder and request.seed == 0
+
+
+def test_a_stop_the_fallback_moves_counts_in_every_order() -> None:
+    # the via at 17 lies in a ring whose one entrance is a road to lattice node 5: no seed fits
+    # it in either order until it moves out, and the order the given one is not wins
+    g = ring_town()
+    request, order = reordered(g, (0, 17, 10, 15))
+    lengths = seed_lengths(g, RouteRequest(stops=[at_node(g, v) for v in (0, 17, 10, 15)], seed=0))
+    assert lengths == {(0, 1, 2, 3): (600.0, True), (0, 2, 1, 3): (1200.0, True)}
+    assert order == (0, 2, 1, 3)
+
+
+def test_the_given_order_s_refusal_is_raised_as_without_the_worst_order() -> None:
+    # (0, 22, 2, 14, 10, 0) fits no seed in its own order, while others do: refused, with the
+    # error `resolve_stops` gives, so a request is plannable in its order or not at all
+    g = lattice(5, 5)
+    request = RouteRequest(stops=[at_node(g, v) for v in (0, 22, 2, 14, 10, 0)], seed=0)
+    spatial, backend = SpatialIndex(g), PythonBackend(g)
+    with pytest.raises(StopUnreachable) as plain:
+        resolve_stops(g, spatial, backend, request, request_masks(spatial, g, request))
+    with pytest.raises(StopUnreachable) as caught:
+        choose_order(g, spatial, backend, request.model_copy(update={"reorder": True}))
+    assert (caught.value.leg, str(caught.value)) == (plain.value.leg, str(plain.value))
+
+
+def test_the_worst_order_is_the_same_twice_and_on_both_backends() -> None:
+    g = lattice(5, 5)
+    request = RouteRequest(stops=[at_node(g, v) for v in (12, 0, 4, 20, 24)], seed=0, reorder=True)
+    spatial = SpatialIndex(g)
+    found = [choose_order(g, spatial, b(g), request) for b in (PythonBackend, CsrBackend) * 2]
+    assert found[0][1] == (0, 2, 1, 3, 4)
+    assert all(f == found[0] for f in found)
+
+
+def test_one_stop_between_the_ends_has_one_order() -> None:
+    g = lattice(3, 3)
+    request = RouteRequest(stops=[at_node(g, v) for v in (0, 4, 8)], seed=0, reorder=True)
+    assert choose_order(g, SpatialIndex(g), PythonBackend(g), request) == (request, (0, 1, 2))
+
+
+def test_a_pilgrimage_skips_an_order_whose_area_lacks_its_brand(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # every other order's area refused (the given order's area is planning's to check): the
+    # given order stays, though (0, 3, 2, 1, 4) has the longest seed
+    g = lattice(5, 5, brands={"Acme": [12]})
+    asked: list[int] = []
+
+    def out_of_reach(data: GraphData, brand: int, area: np.ndarray) -> str:
+        asked.append(brand)
+        return "none of its locations is in the area"
+
+    monkeypatch.setattr(seed_route_module, "brand_problem", out_of_reach)
+    stops = [at_node(g, v) for v in (0, 7, 17, 13, 24)]
+    request = RouteRequest(stops=stops, seed=0, objective="brand", brand=0, reorder=True)
+    assert choose_order(g, SpatialIndex(g), PythonBackend(g), request) == (request, (0, 1, 2, 3, 4))
+    assert asked == [0] * 5
+    assert first_longest(seed_lengths(g, request.model_copy(update={"reorder": False}))) == (
+        0, 3, 2, 1, 4,
+    )  # fmt: skip
+
+
+def ring_town() -> GraphData:
+    """A 4 x 4 lattice of 100 m streets (node r * 4 + c) and a ring 16 - 17 - 18 below node 5,
+    whose one entrance is the road 5 - 16."""
+    xy = [(X0 + c * 100.0, Y0 + r * 100.0) for r in range(4) for c in range(4)]
+    streets = [(v, v + 1, 100.0) for v in range(16) if v % 4 < 3]
+    streets += [(v, v + 4, 100.0) for v in range(12)]
+    ax, ay = xy[5]
+    xy += [(ax + 50, ay - 60), (ax + 20, ay - 150), (ax + 110, ay - 140)]
+    streets += [(5, 16, 80.0), (16, 17, 95.0), (17, 18, 92.0), (18, 16, 90.0)]
+    return two_way(xy, streets)

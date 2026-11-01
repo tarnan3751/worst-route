@@ -47,6 +47,20 @@ node, the later stop the same way (a via or the end); the start never moves. The
 `StopUnreachable` names the leg. So a via trapped where the route can enter but not leave walks
 out, and the stops after it stay. It costs a few seed builds.
 
+`choose_order(data, spatial, backend, request)` is the worst order (`RouteRequest.reorder`): every
+order of the stops between the start and the end (the start and the end stay; on a round trip
+the start is the end), in lexicographic order of the given positions, the given order first, is
+resolved in full as `resolve_stops` does, under its own masks (the tier and the leash follow
+each order's polyline) and, for a pilgrimage, only if its area holds the brand; the order whose
+seed is the longest wins, the first among equals. An order no seed fits is skipped, but the
+given order's error is raised as `resolve_stops` raises it, so a request plannable in its order
+stays plannable and one that is not is refused as without `reorder`. The baseline is not
+compared: it exists whenever the seed does. Nothing is drawn from an rng (a seed with legs
+draws nothing), and the search is bounded by the number of orders, so it is deterministic and
+the order it picks does not depend on the seed. It returns the request with its stops in that
+order and the order (each stop's position among those given); planned again, that request
+picks the same order, since it comes first among its own orders and none is longer.
+
 A round trip with no stop between its ends (start and end on one node) has no legs: its seed is
 a loop through a waypoint, the waypoint strategy from the start back to itself on length, with
 a radius of `RADIUS_INITIAL_MIN_M` (at most r_max) and the waypoint at least `ROUND_TRIP_MIN_M`
@@ -59,7 +73,7 @@ there is no fallback.
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from itertools import pairwise
+from itertools import pairwise, permutations
 
 import numpy as np
 from numpy.typing import NDArray
@@ -77,7 +91,8 @@ from worst_route.config import (
 from worst_route.engine.constraints import NO_CONSTRAINTS, Constraints, returning
 from worst_route.engine.detour import waypoint_path
 from worst_route.engine.objectives.base import route_delay_s
-from worst_route.engine.request import RequestMasks, RouteRequest
+from worst_route.engine.objectives.brand import brand_problem
+from worst_route.engine.request import RequestMasks, RouteRequest, request_masks
 from worst_route.engine.route import IllegalSplice, IntArray, Metrics, check_route, twins_of
 from worst_route.engine.search import leg_path, shortest_path
 from worst_route.engine.snap import (
@@ -181,6 +196,46 @@ def resolve_stops(
     if isinstance(settled, _Unsettled):
         raise _unreachable(request.constraints, settled.leg, settled.detail, settled.build)
     return settled[0]
+
+
+def choose_order(
+    data: GraphData,
+    spatial: SpatialIndex,
+    backend: GraphBackend,
+    request: RouteRequest,
+) -> tuple[RouteRequest, tuple[int, ...]]:
+    """The request with its stops in the order whose seed is the longest, and that order (each
+    stop's position in `request.stops`); see the module docstring."""
+    stops = request.stops
+    given = tuple(range(len(stops)))
+    if len(stops) < 4:  # one stop between the ends at most: one order
+        return request, given
+    best, longest = given, -math.inf
+    for between in permutations(range(1, len(stops) - 1)):
+        order = (0, *between, len(stops) - 1)
+        candidate = request.model_copy(update={"stops": [stops[k] for k in order]})
+        masks = request_masks(spatial, data, candidate)
+        brand = request.brand  # the given order's area is the caller's to check
+        if order != given and brand is not None and brand_problem(data, brand, masks.active):
+            continue
+        try:
+            settled = _settle(data, spatial, backend, candidate, masks)
+        except SnapError:
+            if order == given:
+                raise
+            continue
+        if isinstance(settled, _Unsettled):
+            if order == given:
+                raise _unreachable(request.constraints, settled.leg, settled.detail, settled.build)
+            continue
+        seed = settled[1]
+        edges = seed.edges if seed is not None else np.zeros(0, dtype=np.int32)
+        length = math.fsum(data.edge_length_m[edges].astype(np.float64).tolist())
+        if length > longest:
+            best, longest = order, length
+    if best == given:
+        return request, given
+    return request.model_copy(update={"stops": [stops[k] for k in best]}), best
 
 
 @dataclass(frozen=True, eq=False)

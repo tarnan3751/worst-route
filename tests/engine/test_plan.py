@@ -6,11 +6,12 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
+from worst_route.engine import request as request_module
 from worst_route.engine.constraints import NO_CONSTRAINTS, Constraints
 from worst_route.engine.plan import BaseRouteMismatch, PlanResult, check_base, plan_route
 from worst_route.engine.request import RequestMasks, RouteRequest, request_masks
 from worst_route.engine.route import Route, Splice
-from worst_route.engine.seed_route import Baseline
+from worst_route.engine.seed_route import Baseline, choose_order
 from worst_route.engine.snap import InfeasibleTurnConstraint, StopUnreachable
 from worst_route.engine.turns import count_turns, turn_classes
 from worst_route.engine.worsen import ProgressEvent
@@ -33,6 +34,7 @@ class Seen:
         default_factory=list
     )
     splices: list[Splice] = field(default_factory=list)
+    orders: list[tuple[int, ...]] = field(default_factory=list)
 
 
 def request(stops: list[int], seed: int, attempts: int) -> RouteRequest:
@@ -47,9 +49,14 @@ def plan(
     seen = Seen()
 
     def start(
-        snaps: tuple[Snap, ...], masks: RequestMasks, baseline: Baseline, route: Route
+        snaps: tuple[Snap, ...],
+        masks: RequestMasks,
+        baseline: Baseline,
+        route: Route,
+        order: tuple[int, ...],
     ) -> None:
         seen.starts.append((len(seen.splices), snaps, masks, baseline, route))
+        seen.orders.append(order)
 
     def progress(event: ProgressEvent, baseline: Baseline) -> None:
         seen.splices.append(event.splice)
@@ -230,3 +237,63 @@ def test_a_strict_route_is_validated_against_its_constraint() -> None:
     result, _ = plan(strict)
     assert result.report.ok and count_turns(GRID, result.route.edges)["left"] == 0
     assert result.report.check("constraints").ok
+
+
+# The worst order (`reorder`): the stops of the lattice's corners and centre (0, 27, 7, 56, 63).
+CORNERS = [0, 27, 7, 56, 63]
+
+
+def reorder(stops: list[int], seed: int, attempts: int) -> RouteRequest:
+    return request(stops, seed, attempts).model_copy(update={"reorder": True})
+
+
+def test_the_worst_order_is_planned_and_validated_in_the_order_it_visits_the_stops() -> None:
+    result, seen = plan(reorder(CORNERS, 3, 300))
+    order = choose_order(GRID, SpatialIndex(GRID), PYTHON, reorder(CORNERS, 3, 300))[1]
+    assert result.order == order != (0, 1, 2, 3, 4) and seen.orders == [order]
+    visited = [CORNERS[k] for k in order]
+    assert result.request.stops == [at_node(GRID, v) for v in visited] and result.request.reorder
+    assert [s.node for s in result.snaps] == visited
+    assert [int(result.route.nodes[k]) for k in result.route.stop_idx] == visited
+    assert result.report.ok
+    assert result.masks.leash_m == request_masks(SpatialIndex(GRID), GRID, result.request).leash_m
+    assert replay(seen.starts[0][4], seen.splices) == result.route.nodes.tobytes()
+
+
+def test_without_the_worst_order_the_order_is_the_identity_and_the_route_the_same() -> None:
+    plain = plan_route(GRID, request(CORNERS, 3, 300), backend=PYTHON)
+    assert plain.order == (0, 1, 2, 3, 4) and plain.request == request(CORNERS, 3, 300)
+    given = [at_node(GRID, v) for v in CORNERS]
+    kept = plan_route(GRID, reorder(CORNERS, 3, 300), backend=PYTHON)
+    same = plan_route(GRID, request(CORNERS, 3, 300).model_copy(update={"stops": [
+        given[k] for k in kept.order
+    ]}), backend=PYTHON)  # fmt: skip
+    assert same.route.nodes.tobytes() == kept.route.nodes.tobytes()  # planned as asked in order
+
+
+@pytest.mark.parametrize("backend", [PYTHON, CsrBackend(GRID)], ids=["python", "csr"])
+def test_the_worst_order_is_fixed_by_the_request_and_planned_again_the_same(
+    backend: GraphBackend,
+) -> None:
+    one = plan_route(GRID, reorder(CORNERS, 5, 300), backend=backend)
+    two = plan_route(GRID, reorder(CORNERS, 5, 300), backend=PYTHON)
+    again = plan_route(GRID, one.request, backend=backend)  # the stops already in that order
+    other = plan_route(GRID, reorder(CORNERS, 6, 300), backend=backend)
+    assert one.order == two.order == other.order  # the order does not depend on the seed
+    assert again.order == (0, 1, 2, 3, 4) and again.request == one.request
+    for result in (two, again):
+        assert result.route.nodes.tobytes() == one.route.nodes.tobytes()
+        assert result.route.edges.tobytes() == one.route.edges.tobytes()
+
+
+def test_the_worst_order_is_refused_with_a_base_and_beyond_the_build_s_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = plan(request(CORNERS, 1, 40))[0].route
+    with pytest.raises(ValueError, match="keeps its base route's order"):
+        plan_route(GRID, reorder(CORNERS, 2, 40), backend=PYTHON, base=base)
+    monkeypatch.setattr(request_module, "REORDER_LARGE_NODES", GRID.n - 1)  # GRID a large build
+    six = reorder([*CORNERS[:-1], 36, 63], 2, 40)
+    with pytest.raises(ValueError, match="at most 5 stops on test, not 6"):
+        plan_route(GRID, six, backend=PYTHON)
+    assert plan_route(GRID, reorder(CORNERS, 2, 40), backend=PYTHON).report.ok

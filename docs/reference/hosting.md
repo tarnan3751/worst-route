@@ -309,7 +309,9 @@ the search off, and `--nominatim-url` points the proxy at a self-hosted Nominati
   pybind11 with pybind11_abseil and pybind11_protobuf, zlib, bzip2, with where their sources are;
   their texts in the app's `THIRD-PARTY-LICENSES.txt`, `docs/reference/desktop.md`, **The bundled
   libraries' licences**), and Python with its libraries (each its own licence, in the app's
-  `THIRD-PARTY-LICENSES.txt`).
+  `THIRD-PARTY-LICENSES.txt`); then, under a Fonts heading, the themes' typefaces from
+  Fontsource's packages, each with its copyright notice, and the SIL Open Font License 1.1's text
+  once.
   It is the "(more)" the Protomaps maintainer suggests for the credits the attribution control
   has no room for.
 - **The land cover is drawn by the light and dark flavors only**: `@protomaps/basemaps` 5.7's

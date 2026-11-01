@@ -22,10 +22,12 @@
 // every order, the stat line saying "Trying every order…" until then), `baseline` draws the
 // sensible route, each `snapshot` replaces the route and each `progress` applies its splices in
 // order (the alphabet route sends each better route as a snapshot, then a progress without
-// splices); `done` shows the stored route whole, and for a ratio or duration target what it
-// achieved; `error` shows its code and message. The stat line follows the run's own objective and
-// constraints, or a stored route's request. A refusal under strict, or under hard mode, can be sent
-// again without it.
+// splices), and while a run's best route so far scores above its current one (an annealing run
+// takes shorter splices too) the stat line gives the best's ratio beside it, "best 31.0×"; `done`
+// shows the stored route whole (the best), and for a ratio or duration target what it achieved;
+// `error` shows its code and message. The stat line follows the run's own objective and
+// constraints, or a stored route's request. A refusal under strict, or under hard mode, can be
+// sent again without it.
 // Cancel sends DELETE, and the stream then ends with `done` (the route so far, stored) or
 // `error`. Every error ends the run with its code in the banner and the controls unlocked: the
 // API's, or CLIENT_ERROR for one of the app's own (a running job is then cancelled). Leaving the
@@ -341,6 +343,12 @@ export class JobRunner {
           iteration: data.iteration,
           elapsedS: data.elapsed_s,
           metrics: data.metrics,
+          // the best route's ratio while it scores above the current route: an annealing
+          // run takes shorter splices too (under the slowest time a faster one may be longer)
+          bestRatio:
+            data.best_score !== undefined && data.best_score > data.score
+              ? (data.best_metrics?.ratio ?? null)
+              : null,
         });
       }),
       done: guard((data) => void this.#finish(data, base, seed, { goal, mode })),
@@ -552,6 +560,7 @@ export function statLines(state: Readonly<AppState>): StatLines {
       : `attempt ${formatCount(run.iteration)}`;
   const parts = drawn ? [attempts] : [attempts, formatElapsed(run.elapsedS)];
   if (run.phase === "running") {
+    if (run.bestRatio !== null) parts.push(`best ${formatRatio(run.bestRatio)}`);
     parts.push(run.connection === "open" ? "getting worse…" : "reconnecting…");
   }
   if (run.phase === "failed") parts.push("failed");

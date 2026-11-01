@@ -99,6 +99,39 @@ describe("errors end the run with the controls unlocked", () => {
   });
 });
 
+describe("the best ratio so far", () => {
+  const metrics = (ratio: number) => ({ length_m: ratio * 1000, time_s: ratio * 60, ratio });
+  const progress = (ratio: number, best?: number) => ({
+    iteration: 7,
+    elapsed_s: 0.5,
+    score: ratio * 1000,
+    metrics: metrics(ratio),
+    splices: [],
+    ...(best === undefined ? {} : { best_score: best * 1000, best_metrics: metrics(best) }),
+  });
+
+  it("shows beside the current ratio while an annealing run's best scores above it", async () => {
+    stubFetch((call) => created(call, "jb"));
+    const s = store();
+    await new JobRunner(s, fakeView(), () => {}).go();
+    const running = (rest: string) => `attempt 7 · 0.5 s · ${rest}getting worse… · seed 77`;
+    sources[0].send("progress", progress(12.3, 14.1));
+    expect(statLines(s.state)[0]).toBe("12.3×");
+    expect(statLines(s.state)[3]).toBe(running("best 14.1× · "));
+    sources[0].send("progress", progress(14.1, 14.1)); // the current route is the best
+    expect(statLines(s.state)[3]).toBe(running(""));
+    // a best that scores higher with a ratio that rounds alike, and one with a lower ratio (a
+    // faster but longer route under the slowest time): the best's own ratio, either way
+    sources[0].send("progress", { ...progress(14.1, 14.1), score: 14_090 });
+    expect(statLines(s.state)[3]).toBe(running("best 14.1× · "));
+    sources[0].send("progress", { ...progress(15.0, 14.8), score: 900, best_score: 950 });
+    expect(statLines(s.state)[0]).toBe("15.0×");
+    expect(statLines(s.state)[3]).toBe(running("best 14.8× · "));
+    sources[0].send("progress", progress(15.0)); // a stream without the best route's numbers
+    expect(statLines(s.state)[3]).toBe(running(""));
+  });
+});
+
 describe("make it worse", () => {
   it("keeps the route and its seed when nothing worse is found, and tries the next seed", async () => {
     const base = fixture.route; // seed 1

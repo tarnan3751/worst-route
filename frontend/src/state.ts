@@ -188,6 +188,7 @@ export interface RunView {
   iteration: number; // the attempt of the last splice; a finished route's attempts
   elapsedS: number;
   metrics: RunMetrics | null;
+  bestRatio: number | null; // the best route's ratio while it scores above the current route
   stoppedBecause: StopReason | null;
   resolved: { tier: string; leashKm: number } | null; // what `auto` became, from `snapped`
   goal: Target | null; // the run's target, null for max
@@ -206,6 +207,7 @@ export const IDLE_RUN: RunView = {
   iteration: 0,
   elapsedS: 0,
   metrics: null,
+  bestRatio: null,
   stoppedBecause: null,
   resolved: null,
   goal: null,

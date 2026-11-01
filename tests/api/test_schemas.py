@@ -99,7 +99,7 @@ def test_stops_may_be_left_out_only_to_continue_a_route() -> None:
         {"stops": [{"lat": 91, "lon": 0}, {"lat": 0, "lon": 0}]},
         {"stops": [{"lat": math.nan, "lon": 0}, {"lat": 0, "lon": 0}]},
         {"stops": STOPS[:1]},
-        {"leash_km": 151},
+        {"leash_km": 5001},
         {"budget_s": 0},
         {"max_iterations": -1},
         {"seed": -1},

@@ -224,9 +224,9 @@ DEFAULT_BACKEND: BackendName = "auto"
 # The engine (`docs/reference/engine.md`). A request's defaults and the masks it implies: the
 # tier is chosen by the straight-line length of the polyline through the stops (T4 below the
 # first threshold, T0 beyond the last), the leash is LEASH_FACTOR × that length within
-# [LEASH_MIN_KM, LEASH_MAX_KM], or LEASH_LONG_FACTOR × it when that is more (from 750 km), and
-# every road within BUBBLE_KM of a stop stays usable. A request's own leash is at most
-# LEASH_MAX_KM and its budget at most BUDGET_MAX_S.
+# [LEASH_MIN_KM, LEASH_AUTO_MAX_KM], or LEASH_LONG_FACTOR × it when that is more (from 750 km),
+# and every road within BUBBLE_KM of a stop stays usable. A request's own leash is at most
+# LEASH_MAX_KM (wider than any automatic one) and its budget at most BUDGET_MAX_S.
 DEFAULT_BUDGET_S = 20.0
 BUDGET_MAX_S = 120.0
 DEFAULT_MAX_ITERATIONS = 5000
@@ -249,8 +249,12 @@ DEFAULT_MAX_ITERATIONS = 5000
 TIER_AUTO_KM = (800.0, 800.0, 800.0, math.inf)
 LEASH_FACTOR = 0.6
 LEASH_MIN_KM = 3.0
-LEASH_MAX_KM = 150.0
-# A fifth of the trip, past LEASH_MAX_KM from 750 km: on the national T1 build at 150 km (3% of
+LEASH_AUTO_MAX_KM = 150.0  # the automatic leash's ceiling before the fifth-of-the-trip rule
+# A request's own leash, typed or from the CLI, at most this: the whole of the national build from
+# any trip (the owner, 2026-11-01, from 150 km, which no typed leash could pass while an automatic
+# one on a long trip did). The automatic leash never reads it.
+LEASH_MAX_KM = 5000.0
+# A fifth of the trip, past LEASH_AUTO_MAX_KM from 750 km: on the national T1 build at 150 km (3% of
 # a 4,500 km trip) the four trips above made 3.4-6.3x on T1 and Miami to Seattle was refused, at
 # a tenth of the trip 4.9-8.6x, at a fifth 8.6-11.1x (the plan's runs, as above).
 LEASH_LONG_FACTOR = 0.2
@@ -616,9 +620,8 @@ GEOCODE_MAX_QUERY_CHARS = 200
 # (`POST /regions/pick`, once a change of its stops) at most PUBLIC_PICK_PER_MINUTE times, and
 # draws (`POST /draw` and `POST /draw/finish` together) at most PUBLIC_DRAW_PER_MINUTE steps, of
 # which at most PUBLIC_FINISH_PER_MINUTE finishes (each stores a route). A request's own leash
-# stays at most LEASH_MAX_KM;
-# the automatic leash follows the trip (LEASH_LONG_FACTOR of it beyond 750 km), and the budget
-# bounds the job.
+# stays at most LEASH_MAX_KM; the automatic leash follows the trip within LEASH_AUTO_MAX_KM
+# (LEASH_LONG_FACTOR of it beyond 750 km), and the budget bounds the job.
 PUBLIC_RUNNING_PER_CLIENT = 1
 PUBLIC_QUEUED_PER_CLIENT = 3
 PUBLIC_MAX_PORTFOLIO = 2

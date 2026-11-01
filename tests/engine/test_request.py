@@ -46,7 +46,7 @@ def test_defaults() -> None:
         {"stops": [(91.0, 0.0), (0.0, 0.0)]},
         {"stops": [(0.0, 181.0), (0.0, 0.0)]},
         {"leash_km": 0},
-        {"leash_km": 150.5},
+        {"leash_km": 5000.5},
         {"leash_km": float("inf")},
         {"leash_km": float("nan")},
         {"leash_km": "far"},

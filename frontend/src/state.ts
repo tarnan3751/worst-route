@@ -44,7 +44,7 @@ export interface Stop {
 // The API's limits (docs/reference/api.md, **Requests and errors**).
 export const TIERS: readonly Tier[] = ["auto", "T0", "T1", "T2", "T3", "T4"];
 export const BUDGET_MAX_S = 120; // BUDGET_TOO_LARGE above
-export const LEASH_MAX_KM = 150;
+export const LEASH_MAX_KM = 5000;
 export const TARGET_TOLERANCE = 0.02; // a target is reached within ±2 %
 export const TARGET_MAX_DURATION_S = 7 * 24 * 3600;
 export const MAX_PORTFOLIO = 4; // the most seeds a job runs on any server (GET /config: this one's)

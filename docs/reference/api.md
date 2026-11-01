@@ -206,7 +206,7 @@ what the API and the presentation need:
   edges (so a default request is proven within the default budget), which the `snapped` event's
   `leash_km` and the document's `run.certified.leash_m` say, the request as stored keeping
   `"auto"`; an explicit leash is used as given. `max_iterations` does not apply.
-- `tier`: `auto` or `T0`..`T4`. `leash_km`: `auto` or in (0, 150].
+- `tier`: `auto` or `T0`..`T4`. `leash_km`: `auto` or in (0, 5000].
 - `budget_s`: in (0, 120] (over 120 is `BUDGET_TOO_LARGE`; on a public server in (0, 60],
   **Public limits**), default 20.
 - `max_iterations`: default 1,000,000, so the seconds budget ends a run. The CLI keeps the
@@ -1295,7 +1295,7 @@ one file, a national extract, may serve every build.
  "basemap": {"kind": "pmtiles", "tiles": "/basemap/portland.pmtiles",
              "glyphs": "/basemap/fonts/{fontstack}/{range}.pbf",
              "sprite": "/basemap/sprites/grayscale", "style": null},
- "limits": {"budget_max_s": 120.0, "leash_max_km": 150.0, "portfolio_max": 4}}
+ "limits": {"budget_max_s": 120.0, "leash_max_km": 5000.0, "portfolio_max": 4}}
 ```
 
 `public` is `--public`'s, `limits` the budget, leash and portfolio a request may ask for
@@ -1337,9 +1337,10 @@ and a local server have always had them. Off by default.
 
 - **A budget of at most 60 s** (`PUBLIC_BUDGET_MAX_S`, against `BUDGET_MAX_S`'s 120): more is
   `BUDGET_TOO_LARGE` with `max_s: 60`, in the same place among the checks.
-- **A request's leash stays at most 150 km** (`LEASH_MAX_KM`), the request's schema's limit for
-  every server; a public server adds nothing to it (the plan's public limit since 2026-10-31: a
-  request's own leash at most 150 km, the automatic one following the trip). An auto leash is a
+- **A request's leash stays at most 5,000 km** (`LEASH_MAX_KM`; 150 km until 2026-11-01), the
+  request's schema's limit for every server; a public server adds nothing to it (the plan's public
+  limit since 2026-10-31: a request's own leash capped, the automatic one following the trip within
+  `LEASH_AUTO_MAX_KM`, 150 km). An auto leash is a
   fifth of the trip from 750 km on (`docs/reference/engine.md`, **Requests**), so a
   cross-country job's is longer, up to about 900 km, its searches larger; the budget still
   bounds the job's loop. A job asking for the worst order searches for it first, for up to

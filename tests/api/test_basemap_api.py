@@ -45,7 +45,7 @@ async def test_config_names_the_basemap_and_the_limits(data: Path) -> None:
             },
             "limits": {
                 "budget_max_s": 120.0,
-                "leash_max_km": 150.0,
+                "leash_max_km": 5000.0,
                 "portfolio_max": min(MAX_PORTFOLIO, API_MAX_JOBS),
             },
         }

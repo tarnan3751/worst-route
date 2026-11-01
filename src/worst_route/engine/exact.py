@@ -17,7 +17,7 @@ what the caps judge: at most `CERTIFIED_MAX_NODES` and `CERTIFIED_MAX_EDGES`, el
 
 **The leash** (`certified_request(data, spatial, request)`): a request's own leash is used as
 given. With the automatic leash it is the widest one, in `CERTIFIED_LEASH_STEP_M` steps from
-`CERTIFIED_LEASH_MIN_M` to the automatic leash (at most `LEASH_MAX_KM`), whose area holds at
+`CERTIFIED_LEASH_MIN_M` to the automatic leash (at most `LEASH_AUTO_MAX_KM`), whose area holds at
 most `CERTIFIED_MAX_NODES` nodes and `CERTIFIED_AUTO_MAX_EDGES` edges, by bisection over request
 copies with that leash (their masks and snapped stops, as planning would make them; a leash that
 does not join the stops counts as small enough: it is too narrow). When that leash does not join
@@ -83,7 +83,7 @@ from worst_route.config import (
     CERTIFIED_MAX_NODES,
     CERTIFIED_SUBSOLVERS,
     CERTIFIED_WORKERS,
-    LEASH_MAX_KM,
+    LEASH_AUTO_MAX_KM,
 )
 from worst_route.engine.objectives.base import Objective
 from worst_route.engine.request import RequestMasks, RouteRequest, request_masks
@@ -226,7 +226,7 @@ def certified_request(
         return request
     step = CERTIFIED_LEASH_STEP_M
     low = CERTIFIED_LEASH_MIN_M // step
-    widest = min(request_masks(spatial, data, request).leash_m, LEASH_MAX_KM * 1000)
+    widest = min(request_masks(spatial, data, request).leash_m, LEASH_AUTO_MAX_KM * 1000)
     high = max(low, int(widest // step))
     known: dict[int, tuple[int, int] | None] = {}
 

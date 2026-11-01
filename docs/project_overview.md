@@ -669,7 +669,9 @@ brief):
   coordinator for now, with the version bump; revisited at M5.3 with national data: as tuned on
   the national T1 build (2026-10-31, engine version 5, the coordinator at its plan), T1 from 800
   km and T0 by override only, the leash a fifth of the trip when that is more than 150 km (from
-  750 km), a request's own leash still at most 150 km. Connectivity, at the same
+  750 km), a request's own leash still at most 150 km; since 2026-11-01 a request's own leash is
+  at most 5,000 km (`LEASH_MAX_KM`, the owner: a typed leash could not pass the automatic one on a
+  long trip), the automatic one's ceiling `LEASH_AUTO_MAX_KM` staying 150 km. Connectivity, at the same
   time, fails a build below a 98% share of nodes kept or with a dropped component of more than
   200 nodes (it was a 99% share).
 - **Enrich, tiers, save and qa as built for M1** (2026-10-30, at their plan): bearings follow

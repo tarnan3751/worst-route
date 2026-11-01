@@ -202,8 +202,10 @@ of the polyline through the projected stops.
 - **Leash auto**: 0.6 × the trip length within [3, 150] km, or a fifth of it
   (`LEASH_LONG_FACTOR`) when that is more, from 750 km on (engine version 5: on the national T1
   build a 150 km leash, 3% of a 4,500 km trip, refused Miami → Seattle and left little room);
-  `leash` is the nodes within it of the polyline. A request's own leash stays at most 150 km
-  (`LEASH_MAX_KM`), so an auto leash can be longer than any a request asks for.
+  `leash` is the nodes within it of the polyline; 150 km is `LEASH_AUTO_MAX_KM`, the automatic
+  leash's ceiling before the fifth-of-the-trip rule. A request's own leash stays at most 5,000 km
+  (`LEASH_MAX_KM`; 150 km until 2026-11-01, when no typed leash could pass the automatic one on a
+  long trip), the whole national build from any trip.
 - **Bubbles**: the nodes within 3 km of a stop (`BUBBLE_KM`).
 - **`active`**, the node mask of every search: `leash & (tier_node_mask[t] | bubbles)`.
 - **`banned`**, the request's edge bans for every search, every splice, the seed and the

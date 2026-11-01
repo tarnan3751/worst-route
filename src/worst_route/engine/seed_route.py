@@ -177,14 +177,38 @@ def resolve_stops(
     masks: RequestMasks,
 ) -> list[Snap]:
     """Where the request's stops go: snapped, then moved until a seed can be built."""
+    settled = _settle(data, spatial, backend, request, masks)
+    if isinstance(settled, _Unsettled):
+        raise _unreachable(request.constraints, settled.leg, settled.detail, settled.build)
+    return settled[0]
+
+
+@dataclass(frozen=True, eq=False)
+class _Unsettled:
+    """Stops no seed could be built for: the leg at fault, the moves tried, and a build of the
+    seed on the stops as they are under other constraints (to blame the request's)."""
+
+    leg: tuple[int, int]
+    detail: str
+    build: Callable[[Constraints], SeedRoute]
+
+
+def _settle(
+    data: GraphData,
+    spatial: SpatialIndex,
+    backend: GraphBackend,
+    request: RouteRequest,
+    masks: RequestMasks,
+) -> tuple[list[Snap], SeedRoute | None] | _Unsettled:
+    """`resolve_stops`' work: the stops and the seed built on them (None for a round trip
+    without legs, which has none to try), or why no seed could be built."""
     stops = request.stops
     snaps = snap_stops(spatial, data, stops, masks.active)
     if len(snaps) == 2 and snaps[0].node == snaps[1].node:
-        return snaps  # a round trip without legs: nothing to fall back from
+        return snaps, None  # a round trip without legs: nothing to fall back from
     builder = _Builder(backend, data, masks.active, masks.banned, request.constraints)
     try:
-        builder.seed(snaps)
-        return snaps
+        return snaps, builder.seed(snaps)
     except _LegError as failed:
         leg = failed.leg
     note = request.constraints.note
@@ -208,8 +232,7 @@ def resolve_stops(
                 break
             tried.append(snaps[stop].node)
             try:
-                builder.seed(snaps)
-                return snaps
+                return snaps, builder.seed(snaps)
             except _LegError:
                 continue
         snaps[stop] = original
@@ -220,7 +243,7 @@ def resolve_stops(
     def build(constraints: Constraints) -> SeedRoute:
         return _Builder(backend, data, masks.active, masks.banned, constraints).seed(snaps)
 
-    raise _unreachable(request.constraints, (leg, leg + 1), after, build)
+    return _Unsettled((leg, leg + 1), after, build)
 
 
 def seed_route(

@@ -35,6 +35,7 @@ const full: UrlState = {
   strict: null,
   hard: null,
   reorder: null,
+  certified: null,
   vehicle: null,
   departure: null,
   region: null,
@@ -60,6 +61,7 @@ const nothing: UrlState = {
   strict: null,
   hard: null,
   reorder: null,
+  certified: null,
   vehicle: null,
   departure: null,
   region: null,
@@ -525,6 +527,21 @@ describe("the mode and the turns in the URL", () => {
     }
   });
 
+  it("carries Certified only when on, as certified=1, and gives it back", () => {
+    const shown = (patch: Partial<Settings>): AppState => ({
+      ...emptyApp(),
+      settings: { ...DEFAULT_SETTINGS, ...patch },
+    });
+    const certified: Settings = { ...DEFAULT_SETTINGS, certified: true, leashKm: 0.4 };
+    const query = encodeUrlState(urlStateOf(shown(certified)));
+    expect(query).toMatch(/&leash=0.4&target=max&certified=1$/);
+    expect(settingsFrom(decodeUrlState(query), DEFAULT_SETTINGS)).toEqual(certified);
+    expect(encodeUrlState(urlStateOf(shown({})))).not.toContain("certified");
+    for (const value of ["true", "0", "yes", ""]) {
+      expect(decodeUrlState(`?certified=${value}`).certified).toBeNull();
+    }
+  });
+
   it("carries a portfolio's seeds only above one, as seeds=4, and gives them back", () => {
     const shown = (patch: Partial<Settings>): AppState => ({
       ...emptyApp(),
@@ -682,6 +699,14 @@ describe("a pilgrimage, an alphabet route and a hard-mode route opened by their 
     expect(encodeUrlState(urlStateOf(store.state))).toContain("&reorder=1&stops=");
     const plain = await open({ objective: "distance" }, { reorder: true });
     expect(plain.state.settings.reorder).toBe(false);
+  });
+
+  it("takes Certified from a certified route, and unticks it for another", async () => {
+    const store = await open({ objective: "distance", certified: true });
+    expect(store.state.settings.certified).toBe(true);
+    expect(encodeUrlState(urlStateOf(store.state))).toContain("&certified=1&stops=");
+    const plain = await open({ objective: "distance" }, { certified: true });
+    expect(plain.state.settings.certified).toBe(false);
   });
 
   it("takes a portfolio's seeds, its first seed into the panel, its winner's on the stats", async () => {

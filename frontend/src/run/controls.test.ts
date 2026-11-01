@@ -1152,3 +1152,84 @@ describe("the worst order", () => {
     expect(lines).toEqual([null, null, null, null]); // no "visited" places
   });
 });
+
+describe("a certified route", () => {
+  const certified = loadStream("portland-certified-stream");
+
+  it("is sent with as bad as possible and none of what it does not take", async () => {
+    const calls = stubFetch((call) => created(call, "jc"));
+    const s = store();
+    s.updateSettings({
+      certified: true,
+      target: "ratio",
+      turns: "no_left",
+      strict: true,
+      hard: true,
+      reorder: true,
+      portfolio: 4,
+      leashKm: 0.4,
+    });
+    await new JobRunner(s, fakeView(), () => {}).go();
+    const sent = calls[0].body as RouteRequest;
+    expect(sent).toMatchObject({ certified: true, target: { kind: "max" }, leash_km: 0.4 });
+    for (const key of ["constraints", "reorder", "portfolio"]) expect(sent).not.toHaveProperty(key);
+    expect(s.state.settings).toMatchObject({ target: "ratio", hard: true, portfolio: 4 }); // kept
+    // under another mode the box counts for nothing
+    s.update({ run: IDLE_RUN });
+    s.updateSettings({ objective: "time" });
+    await new JobRunner(s, fakeView(), () => {}).go();
+    const plain = calls[1].body as RouteRequest;
+    expect(plain).not.toHaveProperty("certified");
+    expect(plain).toMatchObject({ objective: "time", reorder: true, portfolio: 4 });
+  });
+
+  it("shows the solver's bound live, then its certificate", async () => {
+    stubFetch((call) => (call.method === "POST" ? created(call, "jc") : json(certified.route)));
+    const s = store();
+    s.updateSettings({ certified: true });
+    const view = fakeView();
+    await new JobRunner(s, view, () => {}).go();
+    const live: string[] = [];
+    for (const event of certified.events.slice(0, -1)) {
+      sources[0].send(event.event, event.data);
+      if (event.event === "progress") live.push(statLines(s.state)[2]);
+    }
+    expect(live[0]).toBe("the worst possible is at most 6368 % longer"); // the seed, at first
+    expect(live.at(-1)).toBe("the worst possible is at most 0.5 % longer"); // proving
+    expect(view.applySplice).not.toHaveBeenCalled();
+    sources[0].send("done", certified.events.at(-1)!.data);
+    await settle();
+    const [ratio, , target, run] = statLines(s.state);
+    expect(ratio).toBe("21.5×");
+    expect(target).toBe("certified: no legal route in this area is longer · 182 nodes");
+    expect(run).toMatch(/ · proven · seed 1$/);
+  });
+
+  it("reads the longest found and its gap when not proven, and is not made worse", () => {
+    const proven = certified.route;
+    const s = store(proven);
+    new JobRunner(s, fakeView(), () => {}).showRoute(proven);
+    expect(statLines(s.state)[2]).toBe(
+      "certified: no legal route in this area is longer · 182 nodes",
+    );
+    expect(worseRefused(s.state)).toBe("a certified route is the worst its area allows");
+    const run = proven.run;
+    const feasible: RouteDocument = {
+      ...proven,
+      run: {
+        ...run,
+        stopped_because: "budget",
+        certified: { ...run.certified!, status: "feasible", gap: 0.124 },
+      },
+    };
+    new JobRunner(s, fakeView(), () => {}).showRoute(feasible);
+    expect(statLines(s.state)[2]).toBe("longest found · the worst possible is at most 12 % longer");
+    expect(worseRefused(s.state)).toBe("plan it again with a longer budget");
+    const unbounded: RouteDocument = {
+      ...feasible,
+      run: { ...feasible.run, certified: { ...feasible.run.certified!, bound_m: null, gap: null } },
+    };
+    new JobRunner(s, fakeView(), () => {}).showRoute(unbounded);
+    expect(statLines(s.state)[2]).toBe("longest found · no bound yet");
+  });
+});

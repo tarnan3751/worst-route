@@ -128,8 +128,8 @@ describe.each(RECORDINGS)("replaying the recorded stream %s", (name) => {
 
   // The client's algorithm (docs/reference/api.md, **Applying the stream**): a snapshot
   // replaces the line, each splice of a progress event replaces route nodes i..j. `check` sees
-  // each snapshot that follows splices (the alphabet route's snapshots follow none: each is a
-  // better route, not the one the splices drew).
+  // each snapshot that follows splices (the alphabet route's and a certified route's snapshots
+  // follow none: each is a better route, not the one the splices drew).
   function replay(check?: (before: RouteLine, snapshot: RouteLine) => void): RouteLine {
     let current: RouteLine = { points: [], index: [] };
     let spliced = false;
@@ -170,7 +170,8 @@ describe.each(RECORDINGS)("replaying the recorded stream %s", (name) => {
       checked++;
     });
     const snapshots = events.filter((e) => e.event === "snapshot").length;
-    expect(checked).toBe(name === "portland-alphabet-stream" ? 0 : snapshots - 1);
+    const whole = name === "portland-alphabet-stream" || name === "portland-certified-stream";
+    expect(checked).toBe(whole ? 0 : snapshots - 1);
   });
 
   it("ends with the stored route's nodes, every one where the final snapshot has it", () => {
@@ -198,7 +199,8 @@ describe.each(RECORDINGS)("replaying the recorded stream %s", (name) => {
       if (at === stored.length) throw new Error(`${point} is not on the stored route, in order`);
       at++;
     }
-    expect(drawn.length).toBeLessThan(stored.length); // the snapshots are simplified
+    // the snapshots are simplified; the certified route's straight grid streets leave nothing to
+    if (name !== "portland-certified-stream") expect(drawn.length).toBeLessThan(stored.length);
   });
 });
 

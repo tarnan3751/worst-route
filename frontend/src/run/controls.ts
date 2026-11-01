@@ -2,14 +2,17 @@
 // tests drive without a DOM, and `mountRunControls`, the Go, Cancel, Reroll and Make it worse
 // buttons and the live stat line (ratio, length, drive time, attempts, elapsed, a portfolio's seeds
 // and its leader's seed; the drive and the delays under the slowest time, the items collected, a
-// pilgrimage's visits, an alphabet route's letters, the turns; once stored, its arrival, the towns
-// and states it passes through, its extra fuel and its share of the roads within reach).
+// pilgrimage's visits, an alphabet route's letters, the turns, a certified route's certificate;
+// once stored, its arrival, the towns and states it passes through, its extra fuel and its share
+// of the roads within reach).
 //
 // Go posts the stops (each stop along the way labelled as its marker is numbered, "Stop 2") and
 // settings (the target, the objective with its item or brand, the turn constraints and hard mode,
 // the worst order when ticked and the seeds when more than one, neither under the alphabet route,
-// the vehicle and the departure, now when none is set, among them) to the region trips run on (the
-// server's pick for the stops, or the one pinned: stops/pick.ts; Go and Reroll wait for it), and
+// `certified` when ticked under the longest, with as bad as possible and none of the turns, hard
+// mode, the worst order or a second seed, the vehicle and the departure, now when none is set,
+// among them) to the region trips run on (the server's pick for the stops, or the one pinned:
+// stops/pick.ts; Go and Reroll wait for it), and
 // Reroll the same without a seed, so the server picks one; the 202's seed goes into the settings,
 // and a seed the user gave stays there once the route is stored, whatever record the store kept.
 // Make it worse posts the shown route as `base_route_id` to the route's own region, with the seed
@@ -23,10 +26,12 @@
 // order…" until then), `baseline` draws the sensible route, each `snapshot` replaces the route and
 // each `progress` applies its splices in order (the alphabet route sends each better route as a
 // snapshot, then a progress without splices; a portfolio's snapshot when another search takes the
-// lead, its progress naming the leader, whose seed the stat line shows), and while a run's best
-// route so far scores above its current one (an annealing run takes shorter splices too) the stat
-// line gives the best's ratio beside it, "best 31.0×"; `done` shows the stored route whole (the
-// best), and for a ratio or duration target what it achieved; `error` shows its code and message.
+// lead, its progress naming the leader, whose seed the stat line shows; a certified route's
+// progress carries the solver's bound, which the target row gives as "the worst possible is at most
+// 12 % longer"), and while a run's best route so far scores above its current one (an annealing run
+// takes shorter splices too) the stat line gives the best's ratio beside it, "best 31.0×"; `done`
+// shows the stored route whole (the best), and for a ratio or duration target what it achieved, for
+// a certified route its certificate; `error` shows its code and message.
 // The stat line follows the run's own objective and constraints, or a stored route's request. A
 // refusal under strict, or under hard mode, can be sent again without it.
 // Cancel sends DELETE, and the stream then ends with `done` (the route so far, stored) or
@@ -34,9 +39,9 @@
 // API's, or CLIENT_ERROR for one of the app's own (a running job is then cancelled). Leaving the
 // page cancels a running job, or a job whose POST is in flight as soon as it is answered. Under
 // Brand, Go, Reroll and Make it worse wait for the region's brands (`awaitingBrand`); an alphabet
-// route cannot be made worse (`worseRefused`). Draw it starts drawing a route by hand on the same
-// stops (draw/drawing.ts), which locks the run like a job; a route drawn by hand reads "drawn by
-// hand" and its moves.
+// route and a certified route are not made worse (`worseRefused`). Draw it starts drawing a route
+// by hand on the same stops (draw/drawing.ts), which locks the run like a job; a route drawn by
+// hand reads "drawn by hand" and its moves.
 import {
   cancelJob,
   cancelJobOnLeave,
@@ -73,6 +78,7 @@ import type { RouteLayer } from "../map/routeLayer";
 import {
   IDLE_RUN,
   TARGET_TOLERANCE,
+  certifies,
   departureOf,
   modeOf,
   takesTarget,
@@ -93,25 +99,30 @@ export type RouteView = Pick<
   "clear" | "setBaseline" | "setSnapshot" | "applySplice" | "setFinal"
 >;
 
-/** The request Go makes, with `seed` (null: the server picks one). */
+/** The request Go makes, with `seed` (null: the server picks one): a certified route's with none of
+ * what it does not take, the boxes keeping their ticks. */
 function jobRequest(state: Readonly<AppState>, seed: number | null): RouteRequest {
   const { settings, stops } = state;
+  const certified = certifies(settings);
+  const { constraints, ...mode } = modeOf(settings);
   const request: RouteRequest = {
     region: state.region?.region ?? "",
     stops: stops.map(({ lat, lon }, k) => {
       const label = stopLabel(k, stops.length);
       return label === null ? { lat, lon } : { lat, lon, label };
     }),
-    ...modeOf(settings),
+    ...mode,
     tier: settings.tier,
     leash_km: settings.leashKm,
     budget_s: settings.budgetS,
-    target: targetOf(settings),
+    target: certified ? { kind: "max" } : targetOf(settings),
     vehicle: vehicleOf(settings),
     departure: departureOf(settings),
   };
-  if (settings.reorder && settings.objective !== "alphabet") request.reorder = true;
-  if (settings.portfolio > 1 && settings.objective !== "alphabet") {
+  if (certified) request.certified = true;
+  else if (constraints !== undefined) request.constraints = constraints;
+  if (settings.reorder && settings.objective !== "alphabet" && !certified) request.reorder = true;
+  if (settings.portfolio > 1 && settings.objective !== "alphabet" && !certified) {
     request.portfolio = settings.portfolio;
   }
   if (seed !== null) request.seed = seed;
@@ -277,6 +288,7 @@ export class JobRunner {
         outcome: shown.outcome !== undefined ? shown.outcome : (route.metrics.target ?? null),
         mode: shown.mode ?? modeOfRequest(route.request),
         order: shown.order ?? null,
+        certified: route.run.certified ?? null,
         note,
       },
     });
@@ -371,6 +383,7 @@ export class JobRunner {
               ? (data.best_metrics?.ratio ?? null)
               : null,
           leader: data.portfolio?.leader ?? store.state.run.leader,
+          certified: data.certified ?? store.state.run.certified,
         });
       }),
       done: guard((data) => void this.#finish(data, base, seed, { goal, mode, request })),
@@ -427,9 +440,14 @@ export function awaitingBrand({ settings, brands }: Readonly<AppState>): boolean
 }
 
 /** Why the route shown cannot be made worse, or null: a continuation keeps its route's objective,
- * and the API continues no route under the alphabet route. */
+ * and the API continues no route under the alphabet route; nor is a certified route made worse,
+ * the worst its area allows when proven, else better planned again with a longer budget. */
 export function worseRefused({ route }: Readonly<AppState>): string | null {
-  return route?.request.objective === "alphabet" ? "the alphabet route cannot be continued" : null;
+  if (route?.request.objective === "alphabet") return "the alphabet route cannot be continued";
+  if (route?.request.certified !== true) return null;
+  return route.run.certified?.status === "optimal"
+    ? "a certified route is the worst its area allows"
+    : "plan it again with a longer budget";
 }
 
 /** The run section in `root`: the buttons, which drive `runner` (Draw it, `draw`), and the stat
@@ -484,6 +502,7 @@ export function mountRunControls(
 const STOPPED: Partial<Record<StopReason, string>> = {
   target: "target reached",
   drawn: "drawn by hand",
+  optimal: "proven",
 };
 
 /** A target's number: × for a ratio, a drive time for a duration. */
@@ -504,6 +523,24 @@ function targetLine(goal: Target | null, outcome: TargetMetrics | null): string 
   if (goal === null || goal.kind === "max") return "";
   const value = goal.kind === "ratio" ? goal.value : goal.seconds;
   return value == null ? "" : `target ${targetValue(goal.kind, value)}`;
+}
+
+/** The target row of a certified run: proven, "certified: no legal route in this area is longer ·
+ * 212 nodes"; else the longest found once stored, and how much longer the worst possible may be,
+ * "longest found · the worst possible is at most 12 % longer", or "longest found · no bound yet"
+ * when the solver ended without one (while it runs, the second part, once it has one). */
+function certifiedLine(run: Readonly<AppState>["run"]): string {
+  const certified = run.certified;
+  if (certified === null) return "";
+  if ("status" in certified && certified.status === "optimal") {
+    const nodes = formatCount(certified.nodes);
+    return `certified: no legal route in this area is longer · ${nodes} nodes`;
+  }
+  const { gap } = certified;
+  const percent = gap === null ? "" : (gap * 100).toFixed(gap < 0.1 ? 1 : 0);
+  const bound = gap === null ? "" : `the worst possible is at most ${percent} % longer`;
+  if (run.phase !== "done") return bound;
+  return `longest found · ${bound || "no bound yet"}`;
 }
 
 /** The turns row: the left and right turns, "no lefts" (rights) when the side avoided has none
@@ -597,7 +634,7 @@ export function statLines(state: Readonly<AppState>): StatLines {
       ? `${formatRatio(time_ratio)} slower`
       : formatRatio(ratio),
     numbers,
-    targetLine(run.goal, run.outcome),
+    targetLine(run.goal, run.outcome) || certifiedLine(run),
     parts.join(" · "),
     slowest && delay_s !== undefined
       ? `drive ${formatDuration(time_s)} + delays ${formatDuration(delay_s)}`

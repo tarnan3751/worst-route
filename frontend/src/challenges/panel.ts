@@ -34,8 +34,8 @@ export interface SetupHooks {
 
 /** The settings a challenge sets up over `settings`: its region pinned and the settings it fixes,
  * the rest of those (the mode, the tier, the leash, the turns, hard mode, the worst order, the
- * target) at their defaults; the brand, the seed, the budget, the vehicle, the departure and the
- * units left. */
+ * target) at their defaults, and Certified unticked; the brand, the seed, the budget, the vehicle,
+ * the departure and the units left. */
 export function challengeSettings(challenge: Challenge, settings: Settings): Settings {
   const fixed = challenge.settings;
   return {
@@ -49,6 +49,7 @@ export function challengeSettings(challenge: Challenge, settings: Settings): Set
     strict: fixed.strict ?? false,
     hard: fixed.hard ?? false,
     reorder: fixed.reorder ?? false,
+    certified: false,
     ...targetSettings(fixed.target ?? { kind: "max" }),
   };
 }

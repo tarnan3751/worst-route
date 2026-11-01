@@ -6,6 +6,8 @@ import type {
   AlphabetLetters,
   BrandEntry,
   BrandVisits,
+  CertifiedProgress,
+  CertifiedRun,
   CollectItem,
   ErrorBody,
   Metrics,
@@ -76,7 +78,9 @@ export type TurnSetting = "any" | "no_left" | "no_right";
  * what `brand` visits, kept the same way; `strict` counts only with a side to avoid, and `hard`
  * (hard mode: each road in one stretch) with or without one. `reorder` visits the stops between
  * the start and the end in the worst order (not under the alphabet route), and `portfolio` runs
- * that many seeds at once and keeps the best (not under the alphabet route either). `mpg` and
+ * that many seeds at once and keeps the best (not under the alphabet route either). `certified`
+ * asks for the provably longest route in a small area, under the longest only, which then takes
+ * no target, turn constraint, hard mode, worst order or second seed (`certifies`). `mpg` and
  * `gasPriceUsd` are the vehicle, for the route's extra fuel and its cost; `departure` an ISO 8601
  * time with its offset, null for now. */
 export interface Settings {
@@ -95,6 +99,7 @@ export interface Settings {
   strict: boolean;
   hard: boolean;
   reorder: boolean;
+  certified: boolean;
   portfolio: number;
   mpg: number;
   gasPriceUsd: number;
@@ -118,6 +123,7 @@ export const DEFAULT_SETTINGS: Settings = {
   strict: false,
   hard: false,
   reorder: false,
+  certified: false,
   portfolio: 1,
   mpg: 24,
   gasPriceUsd: 3.89,
@@ -130,6 +136,12 @@ export const DEFAULT_SETTINGS: Settings = {
 export function takesTarget(objective: Mode, kind: TargetKind): boolean {
   if (objective === "alphabet") return kind === "max";
   return kind !== "ratio" || (objective !== "collect" && objective !== "brand");
+}
+
+/** Whether `settings` ask for a certified route: Certified ticked under the longest (the box keeps
+ * its tick under another mode, where it counts for nothing). */
+export function certifies(settings: Settings): boolean {
+  return settings.certified && settings.objective === "distance";
 }
 
 /** The request's target for `settings`. */
@@ -201,6 +213,7 @@ export interface RunView {
   reorder: boolean; // the run asked for the worst order
   portfolio: number; // the seeds it runs, or the shown route's portfolio ran; 1 for one search
   leader: number; // the index of a portfolio's leading search, whose seed is `seed` plus it
+  certified: CertifiedProgress | CertifiedRun | null; // a certified run's bound, or a route's
   order: number[] | null; // the list's index of each stop, in the order visited; null: the list's
   connection: "open" | "reconnecting" | "lost";
   note: string | null;
@@ -222,6 +235,7 @@ export const IDLE_RUN: RunView = {
   reorder: false,
   portfolio: 1,
   leader: 0,
+  certified: null,
   order: null,
   connection: "open",
   note: null,

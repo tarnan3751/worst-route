@@ -7,15 +7,18 @@
 // collecting an item, picked under it, a brand's pilgrimage, the brand picked under it from the
 // GET /brands of the region trips run on, asked again whenever that region changes, or the alphabet
 // route), the turns (any, or left or right turns avoided, `strict` for none at all; hard mode, each
-// road in one stretch; and the worst order, the stops between the start and the end visited in
-// whatever order is worst, not under the alphabet route), the inefficiency target (as bad as
+// road in one stretch; the worst order, the stops between the start and the end visited in
+// whatever order is worst, not under the alphabet route; and Certified, the provably worst route in
+// a small area, under the longest only, which then takes none of the target, the turns, hard mode,
+// the worst order or a second seed, their controls disabled with their values kept), the
+// inefficiency target (as bad as
 // possible, a ratio to the sensible route, or a drive time typed as `9h`, `90m`, `2h30m` or
 // minutes; typing a number picks its kind; no ratio under collect or brand, none under the alphabet
 // route), the vehicle (its mpg and the gas price, for the route's extra fuel and its cost), the
 // departure (empty: now; for the route's arrival), and the units the panel shows. Locked while a
 // job runs, except the units. The setting an error names (`field`: the target, the item, the brand,
-// the constraints, the worst order, the seeds, the vehicle or the departure; the seeds for
-// PORTFOLIO_TOO_LARGE too) is highlighted.
+// the constraints, the worst order, Certified, the leash, the seeds, the vehicle or the departure;
+// the seeds for PORTFOLIO_TOO_LARGE too) is highlighted.
 import { errorBody, getBrands } from "../api/client";
 import type { BrandEntry, CollectItem, Region, TargetKind, Tier } from "../api/types";
 import {
@@ -75,8 +78,12 @@ const HARD = "each road in one stretch, never driven again once left";
 const REORDER =
   "the stops between the start and the end in whatever order is worst: up to 7 stops, 5 on a " +
   "state's or the national map; the ratio compares against the sensible route in the chosen order";
+const CERTIFIED =
+  "the provably worst route in a small area; tighten the leash to make the area small";
 const SEEDS = "the best of that many seeds, searched at once; the route drawn is the one ahead";
 const ONE_SEARCH = "the alphabet route runs one search";
+const ONE_CERTIFIED = "a certified route runs one search";
+const NO_TARGET = "a certified route is the longest: no target";
 const UNITS: [Units, string][] = [
   ["mi", "Miles"],
   ["km", "Kilometres"],
@@ -292,6 +299,13 @@ export function mountSettings(
   reorderLabel.title = REORDER;
   turns.group.append(reorderLabel);
   const reorderNote = el("span", "resolved", REORDER);
+  const certified = el("input");
+  certified.type = "checkbox";
+  const certifiedLabel = el("label");
+  certifiedLabel.append(certified, " Certified");
+  certifiedLabel.title = CERTIFIED;
+  turns.group.append(certifiedLabel);
+  const certifiedNote = el("span", "resolved", CERTIFIED);
   const mpg = numberInput("", MPG_MIN, MPG_MAX, "any");
   mpg.ariaLabel = "miles per gallon";
   const gasPrice = numberInput("", GAS_PRICE_MIN, GAS_PRICE_MAX, "0.01");
@@ -312,10 +326,11 @@ export function mountSettings(
 
   const seedsRow = field("Seeds", seeds, seedsNote);
   seedsRow.hidden = true; // until the server says it runs more than one
+  const leashRow = field("Leash (km)", leash, leashNote);
   const regionRow = field("Region", region, regionNote);
   const modeRow = field("Mode", mode.group);
   const turnsRow = field("Turns", turns.group, strictNote);
-  turnsRow.append(hardNote, reorderNote);
+  turnsRow.append(hardNote, reorderNote, certifiedNote);
   const targetRow = field("How bad", target.group, targetNote);
   const vehicleRow = field("Vehicle", vehicle);
   const departureRow = field("Departure", departure, departureNote);
@@ -326,7 +341,7 @@ export function mountSettings(
     seedsRow,
     field("Time budget (s)", budget),
     field("Road tier", tier, tierNote),
-    field("Leash (km)", leash, leashNote),
+    leashRow,
     regionRow,
     modeRow,
     turnsRow,
@@ -358,6 +373,7 @@ export function mountSettings(
     strict.checked = settings.strict;
     hard.checked = settings.hard;
     reorder.checked = settings.reorder;
+    certified.checked = settings.certified;
     mpg.value = String(settings.mpg);
     gasPrice.value = String(settings.gasPriceUsd);
     departure.value = settings.departure?.slice(0, 16) ?? ""; // its clock, at its own offset
@@ -415,6 +431,7 @@ export function mountSettings(
   strict.addEventListener("change", () => set({ strict: strict.checked }));
   hard.addEventListener("change", () => set({ hard: hard.checked }));
   reorder.addEventListener("change", () => set({ reorder: reorder.checked }));
+  certified.addEventListener("change", () => set({ certified: certified.checked }));
   mpg.addEventListener("change", () => {
     const value = typed(mpg, MPG_MIN, MPG_MAX, false);
     if (value === undefined || value === null) render();
@@ -444,6 +461,8 @@ export function mountSettings(
     ["brand", modeRow],
     ["constraints", turnsRow],
     ["reorder", turnsRow],
+    ["certified", turnsRow],
+    ["leash", leashRow],
     ["portfolio", seedsRow],
     ["target", targetRow],
     ["vehicle", vehicleRow],
@@ -459,7 +478,7 @@ export function mountSettings(
     const { resolved } = state.run;
     const { brands } = state;
     const { objective, turns: side, hard: hardMode, reorder: reordering } = state.settings;
-    const { portfolio } = state.settings;
+    const { portfolio, certified: certifying } = state.settings;
     const key = [
       locked,
       resolved,
@@ -470,6 +489,7 @@ export function mountSettings(
       hardMode,
       reordering,
       portfolio,
+      certifying,
       brands,
     ];
     if (key.every((value, k) => value === shown[k])) return;
@@ -478,38 +498,51 @@ export function mountSettings(
       control.disabled = locked;
     }
     brand.disabled = locked || brands === null;
-    for (const input of [...mode.inputs, ...turns.inputs]) input.disabled = locked;
+    // Certified counts under the longest only (the box keeps its tick under another mode), and
+    // a certified route takes no target, turn constraint, hard mode, worst order or second seed:
+    // their controls are disabled, keeping their values for when it is unticked.
+    const certifiedRun = certifying && objective === "distance";
+    for (const input of mode.inputs) input.disabled = locked;
+    for (const input of turns.inputs) input.disabled = locked || certifiedRun;
     mode.inputs[3].disabled = locked || brands?.length === 0;
     mode.inputs[3].parentElement?.classList.toggle("disabled", brands?.length === 0);
     target.inputs.forEach((input) => {
-      const refused = !takesTarget(objective, input.value as TargetKind);
+      const refused =
+        !takesTarget(objective, input.value as TargetKind) ||
+        (certifiedRun && input.value !== "max");
       input.disabled = locked || refused;
       input.parentElement?.classList.toggle("disabled", refused);
     });
     ratio.disabled = target.inputs[1].disabled;
     duration.disabled = target.inputs[2].disabled;
-    targetNote.textContent = TARGET_NOTES[objective] ?? "";
-    targetNote.hidden = TARGET_NOTES[objective] === undefined;
-    strict.disabled = locked || side === "any";
-    strictLabel.classList.toggle("disabled", side === "any");
-    strictNote.hidden = side === "any";
-    hard.disabled = locked;
-    hardNote.hidden = !hardMode;
+    const targetNoteText = certifiedRun ? NO_TARGET : TARGET_NOTES[objective];
+    targetNote.textContent = targetNoteText ?? "";
+    targetNote.hidden = targetNoteText === undefined;
+    strict.disabled = locked || side === "any" || certifiedRun;
+    strictLabel.classList.toggle("disabled", side === "any" || certifiedRun);
+    strictNote.hidden = side === "any" || certifiedRun;
+    hard.disabled = locked || certifiedRun;
+    hardLabel.classList.toggle("disabled", certifiedRun);
+    hardNote.hidden = !hardMode || certifiedRun;
     // The alphabet route has no stop to reorder: the box keeps its tick, which counts again
     // under another mode.
     const alphabet = objective === "alphabet";
-    reorder.disabled = locked || alphabet;
-    reorderLabel.classList.toggle("disabled", alphabet);
-    reorderNote.hidden = !reordering || alphabet;
+    reorder.disabled = locked || alphabet || certifiedRun;
+    reorderLabel.classList.toggle("disabled", alphabet || certifiedRun);
+    reorderNote.hidden = !reordering || alphabet || certifiedRun;
+    certified.disabled = locked || objective !== "distance";
+    certifiedLabel.classList.toggle("disabled", objective !== "distance");
+    certifiedNote.hidden = !certifiedRun;
     // nor does it run more than one search: the seeds keep their number for another mode
-    seeds.disabled = locked || alphabet;
-    seedsNote.textContent = alphabet ? ONE_SEARCH : SEEDS;
-    seedsNote.hidden = portfolio < 2 && !alphabet; // the reason whenever it is disabled
+    const oneSearch = alphabet || certifiedRun;
+    seeds.disabled = locked || oneSearch;
+    seedsNote.textContent = alphabet ? ONE_SEARCH : certifiedRun ? ONE_CERTIFIED : SEEDS;
+    seedsNote.hidden = portfolio < 2 && !oneSearch; // the reason whenever it is disabled
     tierNote.textContent =
       resolved && state.settings.tier === "auto" ? `auto was ${resolved.tier}` : "";
     leashNote.textContent =
       resolved && state.settings.leashKm === "auto"
-        ? `auto was ${resolved.leashKm.toFixed(1)} km`
+        ? `auto was ${resolved.leashKm.toFixed(resolved.leashKm < 1 ? 2 : 1)} km`
         : "";
   };
   store.watch(["run", "settings", "brands"], lock);

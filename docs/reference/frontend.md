@@ -3,15 +3,16 @@
 The single-page app under `frontend/`: a map of the served regions on which the user clicks a
 start, an end and stops along the way, starts a job, watches the worst route grow live, cancels,
 rerolls, makes the route worse, reads its directions and its toasts, opens a stored route
-by link, sees today's route, the server's one trip of the day, and draws a route by hand against
-the engine's. Vite + TypeScript (strict), no
+by link, sees today's route, the server's one trip of the day, draws a route by hand against
+the engine's, and takes on the challenges, a fixed list of goals whose badges the browser keeps.
+Vite + TypeScript (strict), no
 framework, MapLibre GL JS 6. The design it implements is `docs/PLAN.md` §5; the conventions are
 `CLAUDE.md`. It talks to the backend through the API only (`docs/reference/api.md`), and changes
 nothing there.
 
 | Module | What it holds |
 |---|---|
-| `main.ts` | bootstrap and wiring: the store from the URL's state, the panel's parts (today's route among them), the served regions (`GET /regions`) and the map fitted to all their bboxes, the build each trip runs on (`RegionPicker`), the basemap the server names (`GET /config`), a stored route when the URL names one (or today's, for `?daily`), clicks on the map, the cancel on `pagehide` |
+| `main.ts` | bootstrap and wiring: the store from the URL's state, the panel's parts (today's route and the challenges among them), the served regions (`GET /regions`) and the map fitted to all their bboxes, the build each trip runs on (`RegionPicker`), the basemap the server names (`GET /config`), a stored route when the URL names one (or today's, for `?daily`; or else the challenge `?challenge=` names set up), the challenges graded on every route shown and every drawing's verdict, a toast for each one completed, clicks on the map, the cancel on `pagehide` |
 | `state.ts` | `Store`, the app's state on an `EventTarget`; `Settings`, `Stop`, `RunView`, `targetOf`, `takesTarget` (the targets a mode takes), `modeOf` (the request's objective, item, brand and constraints), `vehicleOf`, `departureOf`; the API's limits (tiers, budget, leash, targets), the vehicle's, and the modes and items it plans |
 | `api/types.ts` | the API's shapes, written by hand from `api.md` |
 | `api/client.ts` | the fetch wrappers (`getConfig`, `pickRegion`, `getBrands`, `geocode` and `getDaily` among them), `ApiError`, `errorBody`, `subscribe` (a job's events over `EventSource`) |
@@ -26,11 +27,14 @@ nothing there.
 | `settings/panel.ts` | the request's settings (the region pinned, the mode with its item or brand, the turns, hard mode and the worst order, the vehicle and the departure among them; `regionOptions`, the region picker's; `loadBrands` and `brandOptions`, the brand picker's), the row an error's `field` names, and the units |
 | `run/controls.ts` | `JobRunner`, a job's lifecycle (no DOM, so the tests drive it), and the retries without strict and without hard mode; `mountRunControls`, Go, Cancel, Reroll, Make it worse, Draw it and the stat line; `statLines`, `countsTitle` and `routeLines`, its rows; `awaitingBrand`, which holds the buttons under Brand until the brands are known, and `worseRefused`, which turns Make it worse off for an alphabet route |
 | `directions/panel.ts` | `StepLocator` (where the steps lie along the route's geometry), `stepRows`, `DirectionsPanel` (the list's rows, a hover's highlight and a click's pan, no DOM) and `mountDirections` (**Directions**) |
-| `toasts.ts` | `Toasts`, the rotation (no DOM), and `mountToasts`, the strip under the map (**Toasts**) |
+| `toasts.ts` | `Toasts`, the rotation and the notices shown once each (`notify`; no DOM), and `mountToasts`, the strip under the map (**Toasts**) |
 | `share/share.ts` | the URL state, `UrlSync`, `openRoute`, `shareImageUrl`, `geojsonUrl`, the share section (**Links**) |
-| `draw/drawing.ts` | `Drawing` (a route drawn by hand, its steps and its par; no DOM), `drawRequest`, `finalMove`, `nearestMove`, `moveLabel`, and the panel's lines (`progressLine`, `youLine`, `parLine`, `verdictLine`) (**Drawing**) |
+| `draw/drawing.ts` | `Drawing` (a route drawn by hand, its steps and its par; no DOM), `drawRequest`, `finalMove`, `nearestMove`, `moveLabel`, `verdictOf` (who has won), and the panel's lines (`progressLine`, `youLine`, `parLine`, `verdictLine`) (**Drawing**) |
 | `draw/panel.ts` | `mountDraw`, the drawing's section (**Drawing**) |
 | `daily/panel.ts` | `DailyRoute` (today's route, `GET /daily`, and its plan followed; no DOM), `dailyLine`, `openDailyAtStart` (`?daily`), `mountDaily`, the section and the header's link (**Today's route**) |
+| `challenges/list.ts` | `CHALLENGES`, the challenges, each measured where it is set (**Challenges**); `Challenge`, `ChallengeSettings`, `Goal` |
+| `challenges/progress.ts` | `sameTrip` and `tripOf` (whether a route is a challenge's trip), `reached` (its goal), `ChallengeProgress` (the completions, graded on every route shown and on a drawing's verdict, kept in the browser's storage; no DOM), `completedLine`, the toast (**Challenges**) |
+| `challenges/panel.ts` | `ChallengePanel` (the challenges listed, Set it up, whether one is still set up, the collapse; no DOM), `challengeSettings`, `stillSetUp`, `setUpLine`, `mountChallenges`, the section and the header's link (**Challenges**) |
 | `banner.ts` | the error banner, with "Try without strict" or "Try without hard mode" when the refusal says either is why (`retryOf`) |
 | `format.ts` | distances (mi/km), durations, ratios, counts, items collected; fuel and its cost, percentages, states by their codes; times of day (`isoWithOffset`, `parseIsoTime`, `formatClock`); the daily route's day (`formatDay`) |
 | `util/geo.ts`, `util/dom.ts` | rounding and bounds; building DOM with text, never HTML |
@@ -94,6 +98,63 @@ pre-bundled dependencies in the dev server) does not keep, so `map.ts` imports i
   shows it again; opening today's route does not collapse it. A server with no daily route (`GET
   /daily` refused, 404: a region without a places index, or without two towns that fit) shows
   neither the section nor the link.
+- **Challenges** (`challenges/`). Under today's route, a fixed list of goals over the modes the API
+  plans (`challenges/list.ts`), each a region, a trip (or any trip in the region), the settings it
+  fixes (as the panel's `Settings` names them: the mode with its item or brand, a brand by its
+  wikidata id and name, the tier, the leash, the turns, strict, hard mode, the worst order, the
+  target) and a goal measured on a finished route: a ratio (`{kind: "ratio", min}`), a count of an
+  item (`items`), a brand's visits (`brand`), the alphabet's first letters in order (`alphabet`), a
+  drawing that beats the engine (`drawn`), a hard-mode route's ratio (`hard`), or today's route
+  made worse once (`daily_worse`). The first ten: on Portland, 20 bridges from Powell's Books to
+  Reed College, 40 roundabouts from Beaverton to Milwaukie, the alphabet from Powell's to the
+  airport (A to W: Portland's only X roads, Southwest Xanthus Court and Xylopia, are dead ends,
+  which a route that never repeats an intersection cannot drive), any trip at 30×, any trip under
+  hard mode at 8×, and beating the engine by hand from Powell's to Pioneer Courthouse Square on a
+  300 m leash; on Oregon, a pilgrimage past 10 Starbucks (wikidata Q37158) and Portland to Bend at
+  8×; on the national build (`us-t3`), Portland to Chicago at 4×; and today's route made worse, on
+  whichever region the server plans it (its `region` null in the list: the region of today's route,
+  as `GET /daily` names it). Each stop and threshold comes from measured runs, noted beside it in
+  the list, the ratios and counts with room for a run on a busy (public) server. The section lists
+  the challenges of the regions the server serves, the others left out (none until `/regions` has
+  answered; today's once `GET /daily` has answered with a day, planning, done or failed, whatever
+  region it runs on), each with its badge (a green tick once completed, "Completed Saturday,
+  October 31" in its tooltip), its title, its blurb and "Set it up". **Set it up** pins the
+  challenge's region, puts in its stops (for any trip in the region, keeps the stops when all lie
+  in the region's bbox, else none), and gives the settings it fixes, the rest of those their
+  defaults (Longest, as bad as possible, any turns, no hard mode, Worst order unticked, the
+  automatic tier and leash: a challenge's request is its own, and none of the ten takes the worst
+  order; the seed, the budget, the vehicle, the departure and the units stay the panel's); its
+  brand is picked once the region's brands are known, by its wikidata id, else its name. It forgets
+  the route shown and a drawing (as an edit of the stops does), scrolls the stop list into view and
+  fits the map to the stops (or the region), and the row says what next: "Set up: press Go.", "Set
+  up: press Draw it.", "Set up: place a start and an end, then press Go." Today's challenge instead
+  opens today's route as "Open it" does ("Set up: press Make it worse."; its button disabled until
+  the day's route is done). A challenge stays set up (the store's `challenge`, the row highlighted,
+  `?challenge=` in the URL) while its region, stops and fixed settings are the store's (a run, its
+  seed and the snaps change none of them), and today's while its route is shown. **Grading**
+  (`challenges/progress.ts`): every route the store shows (a run's, a drawing's, one opened by
+  link) is graded against each challenge not yet completed whose trip it is (`sameTrip`: the same
+  region, for today's challenge the region of today's route; the same objective, with the same
+  item, or the same brand by its wikidata id through the loaded brands when they are the route's
+  region's, else by its name; the worst order only when the challenge sets it (the request's
+  `reorder`); and when the challenge fixes its stops, as many stops each within 500 m of its own,
+  the request's), by its goal (`reached`: the document's `ratio` at least the goal's, none for a
+  round trip; `items` of the item; `brand.visits`; `alphabet.sequence` starting with the alphabet's
+  first letters; a request under hard mode at the ratio; a request whose `base_route_id` is today's
+  route at least at today's ratio, a continuation toward a target below it shrinking); and a
+  drawing, once stored with its par done, against the drawing challenges whose trip it is, when its
+  verdict is that it beat the engine (`verdictOf`). A challenge newly completed is recorded with
+  the day (the browser's, YYYY-MM-DD) in the browser's `localStorage` under
+  `worst-route.challenges` (a JSON object from id to day; what is not a known id with a string is
+  ignored), every read and write in a try, so the page works without it (a private window, storage
+  blocked: the badges then last as long as the page); its toast, "Challenge completed: Cross 20
+  bridges", is shown once (**Toasts**), and its badge turns on. "Reset badges", under the list once
+  one is completed, forgets them all; a route still shown that meets a challenge (a reload of a
+  page whose URL still names it, `?route=`) completes it again. The storage is the page's origin's:
+  the badges are a browser's and a site's, and the desktop app keeps its own between starts on its
+  own port (`docs/reference/desktop.md`). The section collapses when a run or a drawing of the
+  user's own starts, as today's route does, and a "Challenges" link under the tagline shows it
+  again.
 - **Stops.** On load the map fits the bboxes of every region the server serves (`GET /regions`,
   one or several builds: a state's all roads beside the national one). The first click sets the
   start, the second the end; later clicks add stops along the
@@ -340,8 +401,11 @@ pre-bundled dependencies in the dev server) does not keep, so `map.ts` imports i
   none (before its first snapshot, or a round trip), so the line shown never jumps when the
   ratio comes. Once the
   route is stored (or opened by a link), its document's `toasts`, from the first, in order,
-  looping. The pointer over the strip holds the line shown; a click shows the next one at once
-  and starts the 4 s again. Nothing is shown while no job runs and no route is shown.
+  looping. A notice, a challenge completed ("Challenge completed: Cross 20 bridges",
+  **Challenges**), is shown once, for one period, before the lines go on where they were (several
+  notices in turn). The pointer over the strip holds the line shown; a click shows the next one at
+  once and starts the 4 s again. Nothing is shown while no job runs, no route is shown and no
+  notice waits.
 - **Errors.** Every API error shows its `code` and `message` in a banner over the map, closed by
   its × or the next action (a place search's too: `RATE_LIMITED`, "the geocoder is busy, try
   again in a few seconds", when the server's slots are taken; a search closes the banner first); an error with a `stop_index` (`STOP_OUTSIDE_REGION`,
@@ -372,21 +436,23 @@ pre-bundled dependencies in the dev server) does not keep, so `map.ts` imports i
 
 ## State
 
-`Store` holds `{regions, region, pick, stops, settings, run, route, error, brands}`: `regions`,
-the served ones, null until `GET /regions` has answered; `region`, the one trips run on (the
-pinned one, else the pick's; null until known); `pick`, the server's pick for the stops,
+`Store` holds `{regions, region, pick, stops, settings, run, route, error, brands, challenge}`:
+`regions`, the served ones, null until `GET /regions` has answered; `region`, the one trips run on
+(the pinned one, else the pick's; null until known); `pick`, the server's pick for the stops,
 `"picking"` while it is asked; `brands`, the region's, null until `GET /brands` has answered;
-`run.order`, the list's index of each stop the run's route visits, in that order (null when it is
-the list's own: always for a stored route opened by link, whose stops come in its order), from
-the `snapped` event (for a continuation, through the base route's order) and kept with the
-route stored. A module renders from it with
+`challenge`, the id of the challenge set up while what it set is still the store's (**Challenges**),
+else null; `run.order`, the list's index of each stop the run's route visits, in that order (null
+when it is the list's own: always for a stored route opened by link, whose stops come in its
+order), from the `snapped` event (for a continuation, through the base route's order) and kept
+with the route stored. A module renders from it with
 `watch(keys, listener)` (called at once, then after every `update` that touches one of the
 keys) and changes it with `update(patch)`, `updateRun` or `updateSettings`. `run` changes up to
 ten times a second while a job runs, so the stop list, the markers and the settings compare what
 they show before rebuilding. The route's geometry is not in the store: it lives in
 `RouteLayer`. Nor is today's route: `DailyRoute` keeps its own (the server's answer, where it
 stands, its ratio so far, whether it is collapsed) and tells its section when it changes, as
-`PlaceSearch` does; it reads the store's `run` to collapse when a run starts.
+`PlaceSearch` does; it reads the store's `run` to collapse when a run starts. Nor are the
+challenges' badges: `ChallengeProgress` keeps them, and the browser's storage.
 
 ## Live growth
 
@@ -532,6 +598,14 @@ Reroll) or a route opened ("Open it") before the day's route is done ends the wa
 user's own run and route left alone and the URL following the app from then on. The app's own
 state never writes `daily`, and beside `route=` it is ignored.
 
+`?challenge=<id>` sets that challenge up once `/regions` has answered, as its Set it up does (an id
+the list lacks, or a challenge of a region the server does not serve, sets nothing up). Today's
+challenge (`?challenge=daily-worse`) is looked up whether or not `GET /daily` has answered yet, and
+waits for today's route to be done (after its plan, while the server plans it), then opens it,
+unless the user has started a run or opened a route meanwhile; a day that could not be planned, or a
+server without a daily route, sets nothing up. The URL carries `challenge=<id>` for as long as the
+challenge stays set up (**Challenges**); beside `route=` or `daily` it is ignored.
+
 `?route=<id>` opens a stored route without running anything (`openRoute`): `GET /routes/{id}`
 and `GET /routes/{id}/geojson` (for the baseline), the stops and settings from the route's own
 request (its seed, budget, tier, leash, target, objective, item, brand, turn constraints, hard
@@ -561,12 +635,15 @@ follows the app again from the next change. The units are not in the URL.
 | `banner.test.ts` | `retryOf`: "Try without strict" for `INFEASIBLE_TURN_CONSTRAINT`, "Try without hard mode" for `STOP_UNREACHABLE_WITHOUT_REPEAT` under hard mode and `BASE_ROUTE_MISMATCH` naming hard mode, nothing for the same codes without it (a base route a strict constraint refuses) nor for another refusal |
 | `stops/pick.test.ts` | `RegionPicker` with `fetch` stubbed on fake timers over a real store: no request without stops, one `POST /api/regions/pick` after the stops stop changing (for the last of them), no region meanwhile (so Go waits) and "Finding the build…" in the header, then the region picked and the header "Oregon · all roads" with its reason, then "United States · primary roads and up" for a stop in Chicago; an answer for stops since moved dropped; a job's snaps asking nothing; a refusal in the banner with its stop, asked no more; any other failure asked again a second later, up to three times, then the banner saying the server could not be asked, until the stops change; a pinned region taken without asking, "set in the settings", and the pick asked again once unpinned; nothing before `/regions`, and a pin the server does not serve dropped; `roadsOf` and `regionLabel` from the real builds' tiers |
 | `stops/stopList.test.ts` | `stopErrored`: the stop of an error's `stop_index`, every stop along the way for `field: "stops"`, none otherwise; `visitLine`: "visited 1st" to "visited 5th" for a route visiting the list 0, 1, 3, 2, 4, nothing in the list's own order or for a stop moved since |
-| `toasts.test.ts` | `Toasts` on fake timers: nothing and no timer while idle; the three waiting lines and the live ratio every 4 s while a job starts and runs (the ratio following `progress` while shown, round again), the ratio's slot skipped without one, and the line shown kept when the ratio comes; none of the last run's ratio while the next one's POST is in flight (and the route's back when it is refused); the stored route's toasts from the first, in order, every 4 s, looping (ten toasts, so ten periods come round); held under the pointer, a click moving on at once and starting the period again; nothing once the route is forgotten, nor for a document without toasts |
+| `toasts.test.ts` | `Toasts` on fake timers: nothing and no timer while idle; the three waiting lines and the live ratio every 4 s while a job starts and runs (the ratio following `progress` while shown, round again), the ratio's slot skipped without one, and the line shown kept when the ratio comes; none of the last run's ratio while the next one's POST is in flight (and the route's back when it is refused); the stored route's toasts from the first, in order, every 4 s, looping (ten toasts, so ten periods come round); held under the pointer, a click moving on at once and starting the period again; two notices, each once for a period, then the route's toasts from the first, a click moving on from a notice too; a notice with nothing else to show, then nothing and no timer; nothing once the route is forgotten, nor for a document without toasts |
 | `api/client.test.ts` | the API's error bodies, `BAD_RESPONSE` for an HTML success, `HTTP_<status>`, `NETWORK`, `CLIENT_ERROR` |
 | `stops/search.test.ts` | `PlaceSearch` with `fetch` stubbed and a real store: nothing asked while typing, one `GET /api/geocode?q=&region=` on Search, nothing for a blank text or before `/regions` has answered; the region asked in, the pinned one, else the served region with the largest bbox (Chicago searched for with a start in Portland asks the national one); the candidates listed, an empty answer said; a pick placing the stop exactly as `placeStop` (a click) does, as the start and as a stop before the end, and clearing the field; nothing placed or asked while a job runs; a 429 in the banner, and a search closing it |
-| `share/share.test.ts` | the URL state round trip (every field, a pinned region and none, values it ignores, `auto`, seeds 0 and 2⁵³ − 1, clicked coordinates exactly), values it ignores, the app's state to the URL and back; a `?route=` link at startup: the URL untouched until the route opens, then written from its request, and kept, with the banner, when it does not open; targets in the URL, values ignored, and a ratio-target route opened by link; every mode and turn setting round-tripped, values ignored (strict without a side among them), a ratio beside a collect mode read as max, the defaults left out, the settings given back; a brand (`brand:229`, `brand:0`), the alphabet route and hard mode round-tripped with every turn setting, malformed brands ignored (none, a name, negative, a fraction, an exponent, a space, beyond 2⁵³ − 1), `alphabet:1` and a `hard` other than 1 ignored, a ratio beside a brand and any target beside the alphabet route read as max, a pilgrimage whose brand is not known yet written without a mode, the brand kept under another mode; a slowest-time and a collecting route opened by link (mode, item and turns into the settings, the URL and the stat line, the panel's item kept), the recorded pilgrimage and alphabet route (`mode=brand:229` and "14 of 19 Starbucks", `mode=alphabet` and "letters: 15 (A–O)" with its roads); a pilgrimage, an alphabet route and a hard-mode route (alone and beside a side) opened by link, hard mode unticked by a route without it; the share image's URL; the vehicle round-tripped, at its limits, the default left out, values ignored; a route opened by link putting its request's vehicle into the settings and the URL (the default not written), and one without a vehicle, or with one outside the panel's limits, keeping the panel's; the departure round-tripped with its offset (encoded), what is not an ISO time with an offset ignored, a route's link putting its request's departure into the settings and the URL, and one without keeping the panel's; the GeoJSON's URL; `?daily` read (and written back alone), never written from the app's state; the worst order round-tripped as `reorder=1` only when on, values other than 1 ignored, and a worst-order route opened by link ticking it, its stops in its route's order and no "visited" places, Worst order unticked by a route without it |
+| `share/share.test.ts` | the URL state round trip (every field, a pinned region and none, values it ignores, `auto`, seeds 0 and 2⁵³ − 1, clicked coordinates exactly), values it ignores, the app's state to the URL and back; a `?route=` link at startup: the URL untouched until the route opens, then written from its request, and kept, with the banner, when it does not open; targets in the URL, values ignored, and a ratio-target route opened by link; every mode and turn setting round-tripped, values ignored (strict without a side among them), a ratio beside a collect mode read as max, the defaults left out, the settings given back; a brand (`brand:229`, `brand:0`), the alphabet route and hard mode round-tripped with every turn setting, malformed brands ignored (none, a name, negative, a fraction, an exponent, a space, beyond 2⁵³ − 1), `alphabet:1` and a `hard` other than 1 ignored, a ratio beside a brand and any target beside the alphabet route read as max, a pilgrimage whose brand is not known yet written without a mode, the brand kept under another mode; a slowest-time and a collecting route opened by link (mode, item and turns into the settings, the URL and the stat line, the panel's item kept), the recorded pilgrimage and alphabet route (`mode=brand:229` and "14 of 19 Starbucks", `mode=alphabet` and "letters: 15 (A–O)" with its roads); a pilgrimage, an alphabet route and a hard-mode route (alone and beside a side) opened by link, hard mode unticked by a route without it; the share image's URL; the vehicle round-tripped, at its limits, the default left out, values ignored; a route opened by link putting its request's vehicle into the settings and the URL (the default not written), and one without a vehicle, or with one outside the panel's limits, keeping the panel's; the departure round-tripped with its offset (encoded), what is not an ISO time with an offset ignored, a route's link putting its request's departure into the settings and the URL, and one without keeping the panel's; the GeoJSON's URL; `?daily` read (and written back alone), never written from the app's state; the worst order round-tripped as `reorder=1` only when on, values other than 1 ignored, and a worst-order route opened by link ticking it, its stops in its route's order and no "visited" places, Worst order unticked by a route without it; `?challenge=` read and written back (every challenge's id among them), an id that is not one ignored, written from the app's state only while a challenge is set up, and dropped from the URL once it is not |
 | `notices.test.ts` | the footer's "Data sources" link (relative, `notices.html`, in a new tab) beside the two credits; the notices page's title and its nine sources, each with its licence and link, in order; a build (Vite's own, into a temporary directory) holding `notices.html` as it is |
 | `draw/drawing.test.ts` | `Drawing` with `fetch` and `EventSource` stubbed over a real store, answered from a drawing recorded on Portland (`portland-draw.json`): the request (the longest route with no target, whatever the panel's mode and target; the turns and hard mode, the labels, the seed); the start (one `POST /api/draw` with no edge, the run `drawing` and locked, the stops snapped, the route shown cleared) and the par (`POST /api/jobs` with the same request, its stream followed); moves taken only when offered, taken back without a request; a refused path cut back to its first illegal edge with the error in the banner; the drawing forgotten, its par cancelled, once the stops change (a stop moved; another route opened over a drawing left with Esc) or a setting it was drawn on (the tier, the leash, the turns, strict, hard mode, the region), kept when one it does not depend on changes (the seed, the budget, the units, the mode, the vehicle, the departure, the target) and by the stops' snaps; Finish taking the longest move to the end, the stored route opened, the drawing then neither active nor drawn; the par's ratio as it plans, its failure, and the verdict both ways once both are done, either route opened; leaving drawing mode and resuming without asking again; the drawing forgotten and its par cancelled when a run starts; an answer for a drawing since forgotten dropped; a start the server refuses giving the run back with no par; `nearestMove` (the nearer line, nothing beyond the pixels, a tie to the first), `moveLabel`, `finalMove`, the panel's lines at the end, at a dead end and for a round trip |
+| `challenges/list.test.ts` | the ids, each once, of lowercase letters, digits and hyphens (`share.test.ts` reads each from a link); about ten challenges in the regions the tests' builds serve (Portland, Oregon, `us-t3`), each with challenges, today's with no region of its own, and every goal kind present; each challenge's parts agreeing (an items goal collecting what its settings collect, a pilgrimage naming its brand's wikidata id, the alphabet's goal under the alphabet route, hard mode's under hard mode, a drawing on fixed stops, the ratio, drawing and hard-mode goals on the longest route) |
+| `challenges/progress.test.ts` | grading the recordings' stored routes: the collect recording's 18 bridges (its stops within 500 m of the challenge's) short of 20 and reaching 18, not under another item; the alphabet recording's A–O short of A–W and reaching 15 letters, not 16; the brand recording's 14 of 19 Starbucks by name (no brands loaded) and by wikidata id, not when the build's brand 229 is another, not against Oregon's challenge; the max-mode recording's 78× completing any trip in Portland at 30× and the ratio recording's 25× not, nor another mode, another region, a round trip or the worst order (which a challenge setting it takes, and only it); hard mode's ratio only under hard mode; today's route made worse (its base and at least its ratio, on the region of today's route, `us-t1` too; not shrunk below it, not a continuation of another route, not without a day, not on another region); a stop 489 m away the challenge's and one 512 m not, nor another number of stops; no drawing goal from a stored route; the completions recorded once for the routes the store shows, with the toast's line, in the storage; read back by another page, reset (storage cleared), junk in the storage ignored; a storage that throws, or none, survived for as long as the page; a drawing's verdict completing the drawing challenge only when it beat the engine (not unfinished, not before the par is done, not a tie as shown, not the engine's win, not another region) |
+| `challenges/panel.test.ts` | `ChallengePanel` over a real store, today's route stubbed: none listed before `/regions`, then the served regions', and today's once `GET /daily` has answered with a day (planning, done or failed), not before nor on a server without one; Set it up refused while a run goes, today's until its route is done ("could not be planned" when failed); Set it up pinning the region, putting in the stops and the settings it fixes, the rest of those their defaults (the worst order unticked) and the seed, budget and vehicle the panel's, the route shown forgotten, the challenge in the store, the map fitted to the stops; a trip's own stops kept for any trip in the region when they lie in it, else none, the map fitted to the region; the brand picked once the region's brands are known, by wikidata id over the one `loadBrands` carried, else by name when already loaded, and the challenge no longer set up once another brand is picked; set up through a run, its seed, the budget and the snaps, and no longer once the item, the worst order, a stop, the leash or the region changes; today's challenge opening today's route, set up while it is shown; a link's challenge set up (`setUpLink`), today's waiting for its route when `/daily` answers after `/regions`, nothing for a failed day, an id not in the list or a region not served; the collapse when a run or a drawing starts; `setUpLine` |
 | `daily/panel.test.ts` | `DailyRoute` with `fetch` and `EventSource` stubbed over a real store: a busy server's 429 a day to try again; planning, its job's stream followed (the ratio so far from its `snapshot` and `progress`), then on `done` the stream closed and `GET /daily` asked again, done, with the route's id for `?daily` (`route`), and never a `DELETE`; a route done at once, no stream opened; failed (no route for `?daily`), asked again, and asked again when the stream ends in an `error` or is lost; none on a server without a daily route; collapsed when a run of the user's own starts, not when a route is opened, shown again from the link, not collapsed again by the same run; `dailyLine` in each state; `openDailyAtStart`: today's route opened once done while the user has done nothing, never once a run has started (the wait ended at once, the run's job left as it is) or a route has been opened, nor for a failed day |
 | `format.test.ts` | distances in both units and their thresholds, durations, ratios, counts, items one and many; drive times typed as a target, read and written back; fuel and its cost, percentages ("under 1 %"), states by their codes and a name not known; a time written at the browser's offset to the second and read back, ISO times with an offset read and others (a day the month lacks among them) refused, a time shown as a clock at its own offset; a UTC day named as the daily route names it; places in an order (1st, 2nd, 3rd, 4th, 11th to 13th, 21st, 101st, 111th) |
 
@@ -810,7 +887,46 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
   Go collapsed the section to the header's "Today's route", which showed it again. `?daily`
   opened the same route at start, the URL rewritten the same way.
 
+- **Challenges** (2026-10-31, a lane's `serve --region portland --region oregon --region us-t3
+  --geocoder none` on the version 8 builds 0b72253e5e8a, a7674d56daf4 and 6adae6917be1 with
+  their places indexes, the dev server proxying to it, headless Chrome with the tile server
+  blocked, load averages of 9–18): the section listed the ten, none done. Set it up on "Cross 20
+  bridges" (seed 1 from the link) wrote
+  `?challenge=portland-bridges&…&mode=collect:bridge&region=portland&stops=…`; Go: 58.0×, 27
+  bridges, the toast "Challenge completed: Cross 20 bridges" as the route was stored, the badge
+  ("Completed Saturday, October 31") and `{"portland-bridges":"2026-10-31"}` in the storage. A
+  new page kept the badge. On the same stops, kept by any trip's challenges: hard mode, 13.3×
+  (converged in 7.8 s), and 30× in town, 62.5×; Beaverton to Milwaukie, 59 roundabouts (48.7×).
+  `?seed=1&challenge=portland-alphabet` set the alphabet up at load; Go: "letters: 23 (A–W)", to
+  "W: Northwest Wilson Street" (2.2×, 865 restarts). `?seed=5&challenge=portland-draw`, Draw it:
+  the par 7.9×; the engine's own seed-2 route for the same request (90 edges, 11.0× from the
+  CLI), taken move by move through the page's `Drawing` (90 `POST /draw` in 1.0 s), then Finish:
+  "You 11.0× · the engine 7.9×: you beat the engine.", the toast and the badge. With the stops
+  kept, Oregon's pilgrimage picked "Starbucks (209)" (`mode=brand:369`) once Oregon's brands
+  came: 17 of 19 Starbucks; Portland to Bend 10.4× and Portland to Chicago 6.5× on seeds the
+  server picked (5,108 and 3,502 attempts). Today's route (Vista, MO → Franklin, NH, 10.1×): Set
+  it up opened it ("Set up: press Make it worse."), and Make it worse, on the day's own 120 s
+  budget from its request, came to 14.7×: the toast and the tenth badge. A reload kept all ten;
+  Reset badges cleared them and the storage, and a reload after, of a page that showed no route,
+  showed none. Rebased onto the worst order: from a link with `reorder=1`, Set it up on the
+  bridges unticked Worst order and left `reorder` out of the URL; ticking it again ended the
+  set-up (`challenge=` gone from the URL); set up again, Go (seed 1) came to 58.4× with 27
+  bridges, converged after 66,905 attempts, as `worst-route plan` plans the same request, and
+  completed it. With the bars then set where they are (40 roundabouts, hard mode at 8×, Bend at
+  8× and Chicago at 4×, from 8, 10×, 10× and 5×, for room on a busy server), each again on a
+  seed the server picked: hard mode 12.9× (converged in 6.0 s), 60 roundabouts (43.4×), Bend
+  10.5× (4,386 attempts) and Chicago 6.0× (6,268 attempts), each with its toast and badge. With
+  today's challenge on the region of today's route (`us-t3`, from `GET /daily`), set up again
+  with the budget lowered to 5 s: Make it worse came to 10.5× (1,343 attempts), the toast and
+  the badge.
+
 ## Limitations
+
+- **A challenge is completed by any route shown that meets it**, a route opened by someone else's
+  link included: there are no accounts, and the badges are only this browser's.
+- **Today's challenge makes today's route worse on that route's budget**: opening a route puts its
+  request's budget in the settings, the server's largest for today's route (120 s, 60 s on a
+  public server), so Make it worse runs that long unless the budget is changed first.
 
 - **A stream through the dev proxy whose upstream drops is not ended**: Vite's proxy keeps the
   browser's response open, so if the API dies mid-run the stat line stays at `getting worse…`.

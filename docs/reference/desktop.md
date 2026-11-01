@@ -58,8 +58,27 @@ uv run --no-sync worst-route-desktop --headless --port 0 --region portland --geo
 `--region` names the regions served (repeatable; the first is the default) in place of the
 manifest's, `--data` the data in place of the app's (from a checkout: `WORST_ROUTE_DATA`'s), and
 `--frontend` the frontend's build (from a checkout: `frontend/dist`, `npm run build`). The port is
-the one the system picks (`--port 0`, the default), bound before uvicorn starts, so it is never
-taken twice.
+the app's own, 17429 (`config.DESKTOP_PORT`; `app_socket`), so the page's origin, and with it the
+web view's storage (the challenges' badges, `docs/reference/frontend.md`, **Challenges**), is the
+same at every start; a free one the system picks when another program may be there. On macOS and
+Linux a probe connects to 127.0.0.1:17429 first (a 1 s timeout), and only a refused connection says
+nothing listens there: the app then binds it with `SO_REUSEADDR`, at every start, so a start soon
+after a quit binds over the last start's closed connections, which the stopping server leaves in
+TIME_WAIT on its side (about 30 s on macOS, which refuses a plain bind meanwhile; Linux allows the
+`SO_REUSEADDR` bind only when those connections carried the option too, hence every start sets it).
+A connection accepted, a timeout (a listener whose backlog is full) or any other error gives a free
+port: `SO_REUSEADDR` would let macOS bind 127.0.0.1:17429 over another program's listener on the
+wildcard address and take its connections (a socket bound there but not listening drops the probe on
+macOS, which times out, so the app falls back). Two races remain, both negligible: on Linux, a
+program that has bound the wildcard address with `SO_REUSEADDR` (as servers usually do) but not yet
+called `listen` is refused like a free port, so the app takes the port and that program's `listen`
+fails with `EADDRINUSE`; and, on either, a program that starts listening on the wildcard address
+between the probe and the bind, which macOS lets the app bind over (Linux refuses that bind, and the
+app takes a free port). On Windows the app binds the port plainly, with no probe (a refusal on the
+loopback can take seconds there) and never `SO_REUSEADDR` (which on Windows binds over a live
+listener), and takes a free port when the bind fails; Windows refuses no bind for TIME_WAIT
+connections, so a restart keeps the port. `--port N` names another, `--port 0` has the system pick
+one, never taken twice. The port is bound before uvicorn starts.
 
 The server is `create_app` and `create_site` as `serve` builds them (`docs/reference/api.md`,
 **Running it**), in a thread of the app's process, with the local limits (budgets up to 120 s),
@@ -310,12 +329,14 @@ other lanes kept the load average at 5–25:
 
 ## Limitations
 
-- **A shared link names this computer**: the share section's link is `http://127.0.0.1:<port>/`
-  of that start, which another person cannot open, nor this one at the next start (another port).
-  The share image and the GeoJSON work.
-- **One start, one port**: the web view's storage (the units, a remembered setting) belongs to the
-  origin, which changes with the port, so the frontend's own memory does not carry over; the route
-  store does.
+- **A shared link names this computer**: the share section's link is `http://127.0.0.1:17429/`,
+  which another person cannot open, and this one only while the app runs. The share image and the
+  GeoJSON work.
+- **The storage is the port's**: the web view's storage (the challenges' badges) belongs to the
+  origin, `http://127.0.0.1:17429`; a start that finds another program may be on the port (its
+  probe answered, or not refused) runs on another one, whose storage is that start's own (the
+  badges then start empty, and are back at the next start on the app's port). The route store is
+  the user's directory's, whatever the port.
 - **The basemap switches at the next start**, not while the app runs: the server names its
   basemap when it starts.
 - **The day's route is planned on this computer**: the frontend asks for it as it opens, so the

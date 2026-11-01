@@ -720,6 +720,7 @@ frontend/
 │   ├── run/controls.ts       # Go / Cancel / Reroll (new seed) / Make it worse; the live stat line with the ratio ticking up
 │   ├── share/share.ts        # URL state, ?route= links, copy link, open share.png and download GeoJSON (M4, built)
 │   ├── daily/panel.ts        # (M6, built) today's route at the top of the panel, ?daily
+│   ├── challenges/           # (M6, built) list.ts, the challenges; progress.ts, their grading and badges (localStorage); panel.ts, Set it up and ?challenge=
 │   ├── banner.ts             # API errors, non-modal
 │   ├── format.ts             # units (mi/km toggle), durations, numbers; money and dates (M4, built)
 │   ├── util/                 # geo (rounding, bounds), dom
@@ -847,7 +848,7 @@ Deliverable: `worst-route plan --region portland --from 45.5231,-122.6765 --to 4
 
 ### M6 — Stretch
 
-1. **The desktop app**: Worst Route as a download for computers, one installer per platform, a window with the map and the national build ready to plan on, the engine running on that computer, no server of ours involved; the same API and frontend as the site. Built (2026-10-31; `docs/reference/desktop.md`): `worst-route-desktop`, the site's API and frontend on 127.0.0.1 at a free port in a pywebview window (WKWebView on macOS, WebView2 on Windows; the system's browser on Linux, and wherever the web view lacks WebGL 2), its job workers its own processes; frozen by PyInstaller in one folder with the national T3 build, Portland's and the places indexes inside (607 MB of the 1.0 GB app; a 322–340 MB disk image on macOS), Numba's kernels compiled on the first start into the user's directory (a first start 4–22 s on the dev machine, a second 1.7–5 s); OpenFreeMap's vector tiles until the app has fetched its own basemap, a Protomaps extract of the contiguous US to zoom 11 (684 MB), resumably and checked; the geocoder the API's proxy, each installation one client; macOS on Apple Silicon only (Numba has no Intel macOS wheels since 0.63; Intel Macs use the site); a release workflow building, smoke-testing (two trips planned and validated, a first start and a second) and attaching the installers to a draft release on a tag, signing when the owner's certificates exist.
+1. **The desktop app**: Worst Route as a download for computers, one installer per platform, a window with the map and the national build ready to plan on, the engine running on that computer, no server of ours involved; the same API and frontend as the site. Built (2026-10-31; `docs/reference/desktop.md`): `worst-route-desktop`, the site's API and frontend on 127.0.0.1 at its own port (17429, so the web view's storage is the same at every start; a free one when another program has it) in a pywebview window (WKWebView on macOS, WebView2 on Windows; the system's browser on Linux, and wherever the web view lacks WebGL 2), its job workers its own processes; frozen by PyInstaller in one folder with the national T3 build, Portland's and the places indexes inside (607 MB of the 1.0 GB app; a 322–340 MB disk image on macOS), Numba's kernels compiled on the first start into the user's directory (a first start 4–22 s on the dev machine, a second 1.7–5 s); OpenFreeMap's vector tiles until the app has fetched its own basemap, a Protomaps extract of the contiguous US to zoom 11 (684 MB), resumably and checked; the geocoder the API's proxy, each installation one client; macOS on Apple Silicon only (Numba has no Intel macOS wheels since 0.63; Intel Macs use the site); a release workflow building, smoke-testing (two trips planned and validated, a first start and a second) and attaching the installers to a draft release on a tag, signing when the owner's certificates exist.
 
 Then: certified-worst mode (CP-SAT); OSM turn restrictions via the transitions table; stop reordering; portfolio runs (K seeds in parallel, stream the best); simulated-annealing acceptance. Stop reordering is built (2026-10-31; §3.13): the worst order of up to 7 stops (5 on a build of more than 100,000 nodes), from `plan --reorder`, the API's `reorder` and the frontend's "Worst order" box, the stop list saying where each stop is visited ("visited 3rd"). On Portland a 5-stop trip in town is visited 0, 3, 2, 1, 4 at every seed, its seed 44.59 km against the given order's 37.81 km, the route 655–700 km against 527–580 km in 3,000 attempts, at 15.5–16.6× against 14.6–16.1× (its baseline 42.19 km against 36.05 km); on `us-t3` Portland, Seattle, Spokane, Bend and Boise are visited Portland, Spokane, Bend, Seattle, Boise, its seed 3,155 km against 1,954 km, the order searched in 0.9 s.
 
@@ -873,6 +874,21 @@ is worked out again. The frontend's "Draw it" shows the moves as highlighted roa
 undoes with Backspace, leaves with Esc, finishes with the longest move to the end, and gives the
 verdict against the par: "You 14.3× · the engine 37.5×: the engine wins." Scoring across players,
 accounts and leaderboards come next.
+
+The game loop's third piece is built (2026-10-31; `docs/reference/frontend.md`, **Challenges**):
+challenges. A fixed list in the frontend (`challenges/list.ts`, ten at first), each a region, a trip
+or any trip in the region, the settings it fixes and a goal measured on a finished route (a ratio, a
+count of an item, a brand's visits, the alphabet's first letters, a drawing that beats the engine, a
+hard-mode ratio, today's route made worse once), its stops and threshold from measured runs: 20
+bridges, 40 roundabouts, the alphabet A to W (Portland's only X roads are dead ends), any trip at
+30× and under hard mode at 8×, and beating the engine by hand on a 300 m leash, on Portland; 10
+Starbucks and Portland to Bend at 8× on Oregon; Portland to Chicago at 4× on `us-t3`; and today's
+route made worse, on whichever region the server plans it. "Set it up" puts in a challenge's region,
+stops and settings for Go (or Draw it; today's opens today's route), and `?challenge=<id>` does at
+load. Every route shown and every drawing's verdict is graded in the browser; a challenge completed
+is kept with its day in the browser's storage (no accounts, no server-side list), with a toast and a
+badge. The desktop app listens on a port of its own, so its storage, and the badges, last between
+starts.
 
 ---
 

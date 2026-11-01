@@ -97,6 +97,11 @@ opened by `?daily` (`docs/reference/api.md`, **The daily route**). So is its sec
 engine: `POST /draw` checks a route drawn by hand from its path on every step and offers its legal
 next moves, `POST /draw/finish` stores it as a validated route, and the frontend's "Draw it" plays
 it against the engine's own route for the same stops (`docs/reference/api.md`, **Drawing a route**).
+So is its third, the challenges: a fixed list of goals over the modes (20 bridges in Portland, 10
+Starbucks in Oregon, Portland to Chicago at 4×, today's route made worse, ...), set up from the
+panel or `?challenge=`, graded in the browser on every route shown, their badges kept in its
+storage, which the desktop app's own port keeps between starts (`docs/reference/frontend.md`,
+**Challenges**).
 OSM's turn restrictions are honoured (M6, pipeline version 8): `filter` keeps them and cleanup
 makes them turn tables at the junctions, which the engine, the splice and the validator read as
 they read a super-junction's (`docs/reference/pipeline.md`, **Turn restrictions**).

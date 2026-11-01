@@ -111,14 +111,10 @@ export function mountStopList(
   search: HTMLElement,
 ): void {
   const hint =
-    "Click the map: first the start, then the end; more clicks add stops along the way. " +
+    "Click the map for a start, then an end. More clicks add stops along the way. " +
     "Drag a marker to move it, or search for a place.";
   const list = el("ol", "stop-list");
-  const ends = el(
-    "p",
-    "hint",
-    "start and end only: the alphabet route takes no stops along the way",
-  );
+  const ends = el("p", "hint", "The alphabet route takes a start and an end, no stops between.");
   const build = el("p", "region-pick");
   const why = el("span", "hint");
   root.replaceChildren(el("h2", "", "Stops"), build, search, el("p", "hint", hint), ends, list);

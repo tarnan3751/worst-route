@@ -94,10 +94,10 @@ afterEach(() => {
 describe("the build a trip runs on", () => {
   it("names a build by its roads, from its tiers", () => {
     expect(roadsOf(OREGON)).toBe("all roads");
-    expect(roadsOf(US)).toBe("primary roads and up");
+    expect(roadsOf(US)).toBe("main roads");
     expect(roadsOf({ ...OREGON, tiers: [] })).toBe("");
     expect(regionLabel(OREGON)).toBe("Oregon · all roads");
-    expect(regionLabel({ ...US, name: undefined })).toBe("us-t1 · primary roads and up");
+    expect(regionLabel({ ...US, name: undefined })).toBe("us-t1 · main roads");
   });
 
   it("asks the server once the stops have stopped changing, and plans on its pick", async () => {
@@ -109,7 +109,7 @@ describe("the build a trip runs on", () => {
     place(PORTLAND, BEND);
     expect(store.state.pick).toBe("picking");
     expect(store.state.region).toBeNull(); // so Go waits
-    expect(pickLine(store.state).text).toBe("Finding the build…");
+    expect(pickLine(store.state).text).toBe("Finding the map…");
     await answered();
     expect(calls.map(({ method, url, body }) => [method, url, body])).toEqual([
       ["POST", "/api/regions/pick", { stops: [PORTLAND, BEND] }], // once, for the last stops
@@ -124,7 +124,7 @@ describe("the build a trip runs on", () => {
     await answered();
     expect(store.state.region).toBe(US);
     expect(pickLine(store.state)).toEqual({
-      text: "United States · primary roads and up",
+      text: "United States · main roads",
       reason: "stops in Oregon and Illinois",
     });
   });
@@ -182,7 +182,7 @@ describe("the build a trip runs on", () => {
     store.updateSettings({ region: "us-t1" });
     expect(store.state.region).toBe(US);
     expect(pickLine(store.state)).toEqual({
-      text: "United States · primary roads and up",
+      text: "United States · main roads",
       reason: "set in the settings",
     });
     await answered();

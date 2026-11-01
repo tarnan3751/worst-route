@@ -10,7 +10,7 @@
 // Until it answers there is no region, so Go waits. A region pinned in the settings skips the pick, and one the server does
 // not serve is unpinned once /regions has answered. `pickLine` is the stop list's header: the
 // region by its name, with its roads (from its tiers), and why ("Oregon · all roads", "all
-// stops in Oregon").
+// stops in Oregon"). The roads' names are the settings' Roads options too.
 import { ApiError, errorBody, pickRegion } from "../api/client";
 import type { Region } from "../api/types";
 import type { AppState, Store } from "../state";
@@ -19,12 +19,13 @@ export const PICK_DELAY_MS = 300;
 export const PICK_RETRY_MS = 1000;
 export const PICK_RETRIES = 3;
 
-// A build's roads by the first tier holding all of its edges (T0..T4).
-const ROADS = [
-  "motorways and trunks",
-  "primary roads and up",
-  "secondary roads and up",
-  "tertiary roads and up",
+// Each tier's roads (T0..T4) as the app names them: a build's, by the first tier holding all of
+// its edges, and the settings' Roads options.
+export const ROADS = [
+  "highways",
+  "main roads",
+  "main and secondary roads",
+  "most roads",
   "all roads",
 ];
 
@@ -34,7 +35,7 @@ export function regionName(region: Region): string {
 }
 
 /** A region's roads, by the first of its tiers that holds all of its edges: "all roads" for a
- * state's build, "primary roads and up" for the national T1 build; "" without tiers. */
+ * state's build, "main roads" for the national T1 build; "" without tiers. */
 export function roadsOf(region: Region): string {
   const all = region.tiers[region.tiers.length - 1]?.edges;
   const first = region.tiers.findIndex(({ edges }) => edges === all);
@@ -53,7 +54,7 @@ export function pickLine({ region, pick, settings }: Readonly<AppState>): {
   text: string;
   reason: string;
 } {
-  if (pick === "picking") return { text: "Finding the build…", reason: "" };
+  if (pick === "picking") return { text: "Finding the map…", reason: "" };
   if (region === null) return { text: "", reason: "" };
   const text = regionLabel(region);
   if (settings.region !== null) return { text, reason: "set in the settings" };

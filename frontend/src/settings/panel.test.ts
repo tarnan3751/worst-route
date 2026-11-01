@@ -170,7 +170,7 @@ describe("the region picker", () => {
     expect(regionOptions([oregon, us])).toEqual([
       ["", "Picked from the stops", true],
       ["oregon", "Oregon · all roads", true],
-      ["us-t1", "United States · primary roads and up", true],
+      ["us-t1", "United States · main roads", true],
     ]);
   });
 });

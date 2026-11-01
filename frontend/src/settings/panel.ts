@@ -1,14 +1,16 @@
 // The settings (docs/reference/frontend.md, **Settings**): the request's seed (empty: random,
 // picked by the server), the seeds a job runs at once, keeping the best (1 up to the most the
 // server runs, from GET /config, a setting above it lowered to it; the row hidden when that is 1,
-// and not under the alphabet route), time budget, tier and leash (empty: auto, with what auto
-// became once a job has said), the region (picked by the server from the stops, or one of those it
-// serves pinned; the row only when it serves several), the mode (the longest, the slowest,
-// collecting an item, picked under it, a brand's pilgrimage, the brand picked under it from the
-// GET /brands of the region trips run on, asked again whenever that region changes, or the alphabet
-// route), the turns (any, or left or right turns avoided, `strict` for none at all; hard mode, each
-// road in one stretch; the worst order, the stops between the start and the end visited in
-// whatever order is worst, not under the alphabet route; and Certified, the provably worst route in
+// and not under the alphabet route), time budget, tier (by its roads, its code and road classes in
+// the option's tooltip) and leash (empty: auto, with what auto became once a job has said; the
+// corridor, as the panel calls it), the region (picked by the server from the stops, or one of
+// those it serves pinned; the row only when it serves several), the mode (the longest, the
+// slowest, collecting an item, picked under it, a brand's pilgrimage, the brand picked under it
+// from the GET /brands of the region trips run on, asked again whenever that region changes, or the
+// alphabet route; a line under them says what the one picked does), the turns (any, or left or
+// right turns avoided, `strict` for none at all; hard mode, each road in one stretch; the worst
+// order, the stops between the start and the end visited in whatever order is worst, not under the
+// alphabet route; and Certified, the provably worst route in
 // a small area, under the longest only, which then takes none of the target, the turns, hard mode,
 // the worst order or a second seed, their controls disabled with their values kept), the
 // inefficiency target (as bad as
@@ -47,7 +49,7 @@ import {
   type Store,
   type TurnSetting,
 } from "../state";
-import { regionLabel } from "../stops/pick";
+import { ROADS, regionLabel } from "../stops/pick";
 import { busy } from "../stops/stopList";
 import { el } from "../util/dom";
 import { themeRow } from "./themeRow";
@@ -64,6 +66,22 @@ const MODE_OPTIONS: [Mode, string, boolean][] = [
   ["brand", "Brand", true],
   ["alphabet", "Alphabet", true],
 ];
+// What each mode does, under the Mode row.
+const MODE_NOTES: Record<Mode, string> = {
+  distance: "the longest legal route",
+  time: "the slowest, counting delays",
+  collect: "passes as many of one thing as it can",
+  brand: "visits as many of a chain's locations as it can",
+  alphabet: "named roads in A, B, C order",
+};
+// The road classes each tier keeps (T0..T4, `config.TIERS`), in its Roads option's tooltip.
+const TIER_CLASSES = [
+  "motorways and trunks",
+  "primary roads and up",
+  "secondary roads and up",
+  "tertiary roads and up",
+  "every road",
+];
 const TURNS: [TurnSetting, string, boolean][] = [
   ["any", "Any", true],
   ["no_left", "Avoid left turns", true],
@@ -71,24 +89,29 @@ const TURNS: [TurnSetting, string, boolean][] = [
 ];
 // Why a mode refuses a target kind, under the target row.
 const TARGET_NOTES: Partial<Record<Mode, string>> = {
-  collect: "a collect run takes a drive-time target only",
-  brand: "a brand run counts visits: a drive-time target only",
-  alphabet: "the alphabet route takes no target",
+  collect: "a collect run takes a drive-time goal only",
+  brand: "a brand run counts visits, so a drive-time goal only",
+  alphabet: "the alphabet route takes no goal",
 };
-const HARD = "each road in one stretch, never driven again once left";
-const REORDER =
-  "the stops between the start and the end in whatever order is worst: up to 7 stops, 5 on a " +
-  "state's or the national map; the ratio compares against the sensible route in the chosen order";
+const HARD = "each road in one stretch; once left, never again";
+const REORDER = "visits the stops between in the worst order; 7 at most, 5 on a big map";
 const CERTIFIED =
-  "the provably worst route in a small area; tighten the leash to make the area small";
-const SEEDS = "the best of that many seeds, searched at once; the route drawn is the one ahead";
+  "proves there is no longer legal route in this small area; keep the corridor short to keep " +
+  "the area small";
+const CORRIDOR = "how far off the direct line it may wander";
+const SEEDS = "runs that many searches and keeps the best; the map shows the one ahead";
 const ONE_SEARCH = "the alphabet route runs one search";
-const ONE_CERTIFIED = "a certified route runs one search";
-const NO_TARGET = "a certified route is the longest: no target";
+const ONE_CERTIFIED = "a proof runs one search";
+const NO_TARGET = "a proof finds the longest, so it takes no goal";
 const UNITS: [Units, string][] = [
   ["mi", "Miles"],
   ["km", "Kilometres"],
 ];
+
+/** A tier's place in T0..T4: 2 for "T2". */
+function tierIndex(tier: string): number {
+  return Number(tier.slice(1));
+}
 
 /** A number typed in `input`: null when empty, undefined when not a number in [min, max]. */
 function typed(input: HTMLInputElement, min: number, max: number, integer: boolean) {
@@ -147,7 +170,7 @@ export function brandOptions(brands: BrandEntry[]): [string, string, boolean][] 
 }
 
 /** The region picker's options: the server's pick, then each region it serves by its name and
- * roads, "United States · primary roads and up", in its order. */
+ * roads, "United States · main roads", in its order. */
 export function regionOptions(regions: Region[]): [string, string, boolean][] {
   return [
     ["", "Picked from the stops", true],
@@ -251,15 +274,22 @@ export function mountSettings(
 ): void {
   const seed = numberInput("random", 0, Number.MAX_SAFE_INTEGER, "1");
   const seeds = el("select");
-  seeds.ariaLabel = "seeds";
+  seeds.ariaLabel = "runs at once";
   const seedsNote = el("span", "resolved", SEEDS);
   const budget = numberInput("", 1, BUDGET_MAX_S, "1");
-  const tier = select(TIERS.map((t): [Tier, string, boolean] => [t, t, true]));
+  const tier = select(
+    TIERS.map((t): [Tier, string, boolean] => [t, t === "auto" ? t : ROADS[tierIndex(t)], true]),
+  );
+  for (const option of tier.options) {
+    if (option.value !== "auto") {
+      option.title = `${option.value}: ${TIER_CLASSES[tierIndex(option.value)]}`;
+    }
+  }
   const tierNote = el("span", "resolved");
   const leash = numberInput("auto", 0.1, LEASH_MAX_KM, "0.1");
-  const leashNote = el("span", "resolved");
+  const leashNote = el("span", "resolved", CORRIDOR);
   const region = select<string>(regionOptions([]));
-  const regionNote = el("span", "resolved", "the smallest the server has that holds every stop");
+  const regionNote = el("span", "resolved", "the smallest map that holds every stop");
   const target = radios("target", TARGETS);
   const ratio = numberInput("20", 1, Number.MAX_SAFE_INTEGER, "any");
   const duration = el("input", "duration");
@@ -268,6 +298,7 @@ export function mountSettings(
   target.inputs[2].parentElement?.append(" ", duration);
   const targetNote = el("span", "resolved");
   const mode = radios("mode", MODE_OPTIONS);
+  const modeNote = el("span", "resolved");
   const item = select(
     ITEMS.map((i): [CollectItem, string, boolean] => [i, ITEM_NAMES[i][1], true]),
   );
@@ -281,29 +312,25 @@ export function mountSettings(
   const strictLabel = el("label");
   strictLabel.append(strict, " strict");
   turns.group.append(strictLabel);
-  const strictNote = el(
-    "span",
-    "resolved",
-    "strict rarely finds a route on a street grid: the route may not exist",
-  );
+  const strictNote = el("span", "resolved", "strict rarely finds a route on a street grid");
   const hard = el("input");
   hard.type = "checkbox";
   const hardLabel = el("label");
-  hardLabel.append(hard, " Hard mode");
+  hardLabel.append(hard, " No road twice, ever");
   hardLabel.title = HARD;
   turns.group.append(hardLabel);
   const hardNote = el("span", "resolved", HARD);
   const reorder = el("input");
   reorder.type = "checkbox";
   const reorderLabel = el("label");
-  reorderLabel.append(reorder, " Worst order");
+  reorderLabel.append(reorder, " Worst order of stops");
   reorderLabel.title = REORDER;
   turns.group.append(reorderLabel);
   const reorderNote = el("span", "resolved", REORDER);
   const certified = el("input");
   certified.type = "checkbox";
   const certifiedLabel = el("label");
-  certifiedLabel.append(certified, " Certified");
+  certifiedLabel.append(certified, " Prove it");
   certifiedLabel.title = CERTIFIED;
   turns.group.append(certifiedLabel);
   const certifiedNote = el("span", "resolved", CERTIFIED);
@@ -319,20 +346,20 @@ export function mountSettings(
   vehicle.append(mpgLabel, priceLabel);
   const departure = el("input");
   departure.type = "datetime-local";
-  const departureNote = el("span", "resolved", "empty: now");
+  const departureNote = el("span", "resolved", "empty means now");
   const units = radios(
     "units",
     UNITS.map(([u, text]): [Units, string, boolean] => [u, text, true]),
   );
 
-  const seedsRow = field("Seeds", seeds, seedsNote);
+  const seedsRow = field("Runs at once", seeds, seedsNote);
   seedsRow.hidden = true; // until the server says it runs more than one
-  const leashRow = field("Leash (km)", leash, leashNote);
+  const leashRow = field("Corridor (km)", leash, leashNote);
   const regionRow = field("Region", region, regionNote);
-  const modeRow = field("Mode", mode.group);
+  const modeRow = field("Mode", mode.group, modeNote);
   const turnsRow = field("Turns", turns.group, strictNote);
   turnsRow.append(hardNote, reorderNote, certifiedNote);
-  const targetRow = field("How bad", target.group, targetNote);
+  const targetRow = field("Goal", target.group, targetNote);
   const vehicleRow = field("Vehicle", vehicle);
   const departureRow = field("Departure", departure, departureNote);
 
@@ -341,7 +368,7 @@ export function mountSettings(
     field("Seed", seed),
     seedsRow,
     field("Time budget (s)", budget),
-    field("Road tier", tier, tierNote),
+    field("Roads", tier, tierNote),
     leashRow,
     regionRow,
     modeRow,
@@ -367,6 +394,7 @@ export function mountSettings(
     ratio.value = String(settings.ratio);
     duration.value = formatDurationInput(settings.durationS);
     for (const input of mode.inputs) input.checked = input.value === settings.objective;
+    modeNote.textContent = MODE_NOTES[settings.objective];
     item.value = settings.item;
     item.hidden = settings.objective !== "collect";
     brand.value = brands?.some(({ id }) => id === settings.brand) ? String(settings.brand) : "";
@@ -541,11 +569,13 @@ export function mountSettings(
     seedsNote.textContent = alphabet ? ONE_SEARCH : certifiedRun ? ONE_CERTIFIED : SEEDS;
     seedsNote.hidden = portfolio < 2 && !oneSearch; // the reason whenever it is disabled
     tierNote.textContent =
-      resolved && state.settings.tier === "auto" ? `auto was ${resolved.tier}` : "";
+      resolved && state.settings.tier === "auto"
+        ? `auto was ${ROADS[tierIndex(resolved.tier)]}`
+        : "";
     leashNote.textContent =
       resolved && state.settings.leashKm === "auto"
-        ? `auto was ${resolved.leashKm.toFixed(resolved.leashKm < 1 ? 2 : 1)} km`
-        : "";
+        ? `${CORRIDOR}; auto was ${resolved.leashKm.toFixed(resolved.leashKm < 1 ? 2 : 1)} km`
+        : CORRIDOR;
   };
   store.watch(["run", "settings", "brands"], lock);
   store.watch(["brands"], ({ brands }) => {

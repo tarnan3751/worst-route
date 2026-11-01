@@ -63,13 +63,18 @@ case "$platform" in
   windows-*)
     sign() {
       if [ -n "${WINDOWS_CERTIFICATE:-}" ]; then
-        signtool sign /f "$WINDOWS_CERTIFICATE" /p "$WINDOWS_CERTIFICATE_PASSWORD" /fd SHA256 \
+        MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' \
+          signtool sign /f "$WINDOWS_CERTIFICATE" /p "$WINDOWS_CERTIFICATE_PASSWORD" /fd SHA256 \
           /tr http://timestamp.digicert.com /td SHA256 "$1"
       fi
     }
     sign "$out/dist/worst-route-desktop/worst-route-desktop.exe"
     iscc="${ISCC:-C:/Program Files (x86)/Inno Setup 6/ISCC.exe}"
-    "$iscc" /Q "/DVersion=$version" "/DSource=$out/dist/worst-route-desktop" "/DOutput=$out" \
+    # Git Bash rewrites arguments that start with a slash (/Q, /DVersion=...) into Windows paths
+    # before a native program sees them, which ISCC then takes for more script files; the two
+    # variables switch that off for this call (and signtool's above).
+    MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' \
+      "$iscc" /Q "/DVersion=$version" "/DSource=$out/dist/worst-route-desktop" "/DOutput=$out" \
       "/DName=$name" packaging/desktop/worst-route.iss
     sign "$out/$name.exe"
     package="$out/$name.exe"

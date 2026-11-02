@@ -102,11 +102,12 @@ engine: `POST /draw` checks a route drawn by hand from its path on every step an
 next moves, `POST /draw/finish` stores it as a validated route, and the frontend's "Draw it" plays
 it against the engine's route for the same stops aiming at 10× (`docs/reference/api.md`, **Drawing
 a route**).
-So is its third, the challenges: a fixed list of goals over the modes (20 bridges in Portland, 10
-Starbucks in Oregon, Portland to Chicago at 4×, today's route made worse, ...), set up from the
-panel or `?challenge=`, graded in the browser on every route shown, their badges kept in its
-storage, which the desktop app's own port keeps between starts (`docs/reference/frontend.md`,
-**Challenges**).
+So is its third, the challenges: eight a day, generated from the date by the server on the
+national build (`GET /challenges`: the long way, the slow way, no left turns, bridges, a
+pilgrimage, hard mode, the worst order, today's route made worse), set up from the panel or
+`?challenge=` (another day's too, an id carrying its day), graded in the browser on every route
+shown, their badges kept in its storage by dated id, which the desktop app's own port keeps between
+starts (`docs/reference/frontend.md`, **Challenges**).
 OSM's turn restrictions are honoured (M6, pipeline version 8): `filter` keeps them and cleanup
 makes them turn tables at the junctions, which the engine, the splice and the validator read as
 they read a super-junction's (`docs/reference/pipeline.md`, **Turn restrictions**). So are

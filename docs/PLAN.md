@@ -725,7 +725,7 @@ frontend/
 │   ├── run/controls.ts       # Go / Cancel / Reroll (new seed) / Make it worse; the live stat line with the ratio ticking up
 │   ├── share/share.ts        # URL state, ?route= links, copy link, open share.png and download GeoJSON (M4, built)
 │   ├── daily/panel.ts        # (M6, built) today's route at the top of the panel, ?daily
-│   ├── challenges/           # (M6, built) list.ts, the challenges; progress.ts, their grading and badges (localStorage); panel.ts, Set it up and ?challenge=
+│   ├── challenges/           # (M6, built) list.ts, the server's challenges of a day; progress.ts, their grading and badges (localStorage); panel.ts, the day's asked for, Set it up and ?challenge=
 │   ├── banner.ts             # API errors, non-modal
 │   ├── format.ts             # units (mi/km toggle), durations, numbers; money and dates (M4, built)
 │   ├── util/                 # geo (rounding, bounds), dom
@@ -881,19 +881,17 @@ verdict against the par: "You 14.3× · the engine 9.9×: you beat the engine." 
 accounts and leaderboards come next.
 
 The game loop's third piece is built (2026-10-31; `docs/reference/frontend.md`, **Challenges**):
-challenges. A fixed list in the frontend (`challenges/list.ts`, ten at first), each a region, a trip
-or any trip in the region, the settings it fixes and a goal measured on a finished route (a ratio, a
-count of an item, a brand's visits, the alphabet's first letters, a drawing that beats the engine, a
-hard-mode ratio, today's route made worse once), its stops and threshold from measured runs: 20
-bridges, 40 roundabouts, the alphabet A to W (Portland's only X roads are dead ends), any trip at
-30× and under hard mode at 8×, and beating the engine by hand on a 300 m leash, on Portland; 10
-Starbucks and Portland to Bend at 8× on Oregon; Portland to Chicago at 4× on `us-t3`; and today's
-route made worse, on whichever region the server plans it. "Set it up" puts in a challenge's region,
-stops and settings for Go (or Draw it; today's opens today's route), and `?challenge=<id>` does at
-load. Every route shown and every drawing's verdict is graded in the browser; a challenge completed
-is kept with its day in the browser's storage (no accounts, no server-side list), with a toast and a
-badge. The desktop app listens on a port of its own, so its storage, and the badges, last between
-starts.
+challenges. Since 2026-11-01 they are the server's, eight a day at most, generated from the date on
+the national build (`GET /challenges`, `docs/reference/api.md`): the long way, the slow way, no left
+turns, bridges, a pilgrimage, hard mode and the worst order between towns, each with its bar, and
+today's route made worse once; the first list, ten fixed in the frontend over Portland, Oregon and
+`us-t3`, is gone. The panel asks for the day's at start and lists them; "Set it up" puts in a
+challenge's region, stops (named for their towns) and settings for Go (today's route made worse
+opens today's route), and `?challenge=<id>` does at load, for another day's too within the
+server's window, since an id carries its day. Every route shown is graded in the browser; a
+challenge completed is kept by its dated id in the browser's storage (no accounts), so past days'
+badges stay and are counted, with a toast and a badge. The desktop app listens on a port of its
+own, so its storage, and the badges, last between starts.
 
 ---
 

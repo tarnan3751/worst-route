@@ -8,19 +8,20 @@ The day is the UTC date (`today`). The trip runs on the served region with the m
 `PlaceIndex.town_points`) that `draw_trips` draws with one `numpy.random.Generator(PCG64(seed))`,
 the seed the date as YYYYMMDD (20261031): two incorporated places (`DAILY_LSAD`: a city, a town or a
 village), each inside the build's bbox with a node of the build within `DAILY_NEAR_KM` that can play
-its stop's role (`SpatialIndex.snap` with no mask), drawn as a pair, and again, while their
-straight-line distance in the build's CRS lies outside `DAILY_BAND` of the bbox's diagonal (at most
-`DAILY_DRAWS` pairs). Each is labelled with its name and its state's code ("Bend, OR"). The request
-is the longest route as bad as possible, at the automatic tier and leash, with that seed,
-`DAILY_MAX_ITERATIONS` attempts, and the server's largest budget (`Limits.budget_max_s`) as a safety
-net, with the frontend's default vehicle (`DAILY_MPG`, `DAILY_GAS_PRICE_USD`) and, as the frontend's
-empty departure does, the moment its job is submitted as its departure (UTC, to the second), so its
-document has its fuel and its arrival; the trip is the first pair the request's pre-flight accepts
-(`jobs.prepare`: at the automatic tier a long trip runs on the primary roads and those within 3 km
-of its stops, which some towns' roads do not reach), at most `DAILY_TRIES` pairs tried. A run the
-iterations (or convergence) end is the same on every server with the same build, places index and
-settings, one the clock ends is not, and the answer says which ended it (`stopped_because` "budget"
-with fewer `attempts` than `max_iterations` is the clock).
+its stop's role (`SpatialIndex.snap` with no mask; the towns' `TownPool`), drawn as a pair, and
+again, while their straight-line distance in the build's CRS lies outside `DAILY_BAND` of the bbox's
+diagonal (at most `DAILY_DRAWS` pairs). Each is labelled with its name and its state's code
+("Bend, OR"). The request is the longest route as bad as possible, at the automatic tier and leash,
+with that seed, `DAILY_MAX_ITERATIONS` attempts, and the server's largest budget
+(`Limits.budget_max_s`) as a safety net, with the frontend's default vehicle (`DAILY_MPG`,
+`DAILY_GAS_PRICE_USD`) and, as the frontend's empty departure does, the moment its job is submitted
+as its departure (UTC, to the second), so its document has its fuel and its arrival; the trip is the
+first pair the request's pre-flight accepts (`jobs.prepare`: at the automatic tier a long trip runs
+on the primary roads and those within 3 km of its stops, which some towns' roads do not reach), at
+most `DAILY_TRIES` pairs tried. A run the iterations (or convergence) end is the same on every
+server with the same build, places index and settings, one the clock ends is not, and the answer
+says which ended it (`stopped_because` "budget" with fewer `attempts` than `max_iterations` is the
+clock).
 
 The first `GET /daily` of a day plans it through the job manager with no client (its job takes one
 of the server's slots, never a client's share; a server whose slots and queue are full answers 429
@@ -46,7 +47,6 @@ import math
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, date, datetime
-from functools import cache
 from itertools import islice
 from typing import TYPE_CHECKING, Any
 
@@ -105,41 +105,60 @@ def daily_region(api: "Api") -> str:
     return max(api.builds, key=states)
 
 
+class TownPool:
+    """The towns a trip of the day may run between on `loaded`'s build (the module's rule): the
+    incorporated places of `towns` (`DAILY_LSAD`), at 6 decimals and labelled with the name and
+    the state's code, inside the build's bbox (`stops`, in the order of `towns`); each one's
+    position in the build's CRS (`xy`), and whether a node within `DAILY_NEAR_KM` can play a
+    stop's role there (`near`), worked out once a town."""
+
+    def __init__(self, loaded: Loaded, towns: Sequence[TownPoint]) -> None:
+        self.spatial = loaded.spatial
+        stops = [
+            DailyStop(lat=round(t.lat, 6), lon=round(t.lon, 6), label=f"{t.name}, {t.usps}")
+            for t in towns
+            if t.lsad in DAILY_LSAD
+        ]
+        self.stops = [s for s in stops if holds(loaded, s.lat, s.lon)]
+        self._xy: dict[int, tuple[float, float]] = {}
+        self._near: dict[tuple[int, Role], bool] = {}
+
+    def xy(self, k: int) -> tuple[float, float]:
+        """Town `k`'s position in the build's CRS, metres."""
+        if k not in self._xy:
+            self._xy[k] = self.spatial.project(self.stops[k].lat, self.stops[k].lon)
+        return self._xy[k]
+
+    def near(self, k: int, role: Role) -> bool:
+        """Whether a node within `DAILY_NEAR_KM` of town `k` can play `role` (no mask)."""
+        if (k, role) not in self._near:
+            stop = self.stops[k]
+            try:
+                self.spatial.snap(stop.lat, stop.lon, role, max_radius_m=DAILY_NEAR_KM * 1000)
+                self._near[k, role] = True
+            except SnapError:
+                self._near[k, role] = False
+        return self._near[k, role]
+
+
 def draw_trips(
     loaded: Loaded, towns: Sequence[TownPoint], seed: int
 ) -> Iterator[tuple[DailyStop, DailyStop]]:
     """The day's trips on `loaded`'s build, two of `towns` each, drawn with `seed` (the module's
     rule): every pair that fits, in the order drawn, among the first `DAILY_DRAWS` pairs."""
-    spatial = loaded.spatial
-    stops = [
-        DailyStop(lat=round(t.lat, 6), lon=round(t.lon, 6), label=f"{t.name}, {t.usps}")
-        for t in towns
-        if t.lsad in DAILY_LSAD
-    ]
-    stops = [s for s in stops if holds(loaded, s.lat, s.lon)]
+    pool = TownPool(loaded, towns)
+    stops = pool.stops
     if len(stops) < 2:
         return
+    spatial = loaded.spatial
     west, south, east, north = loaded.bbox
     diagonal = math.dist(spatial.project(south, west), spatial.project(north, east))
     low, high = (share * diagonal for share in DAILY_BAND)
-
-    @cache
-    def xy(k: int) -> tuple[float, float]:
-        return spatial.project(stops[k].lat, stops[k].lon)
-
-    @cache
-    def near(k: int, role: Role) -> bool:
-        try:
-            spatial.snap(stops[k].lat, stops[k].lon, role, max_radius_m=DAILY_NEAR_KM * 1000)
-        except SnapError:
-            return False
-        return True
-
     rng = np.random.Generator(np.random.PCG64(seed))
     for _ in range(DAILY_DRAWS):
         a, b = (int(k) for k in rng.integers(len(stops), size=2))
-        fits = a != b and low <= math.dist(xy(a), xy(b)) <= high
-        if fits and near(a, "start") and near(b, "end"):
+        fits = a != b and low <= math.dist(pool.xy(a), pool.xy(b)) <= high
+        if fits and pool.near(a, "start") and pool.near(b, "end"):
             yield stops[a], stops[b]
 
 

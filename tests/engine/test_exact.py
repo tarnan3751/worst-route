@@ -19,7 +19,15 @@ import networkx as nx
 import numpy as np
 import pytest
 
-from tests.pipeline.chain import FIXTURES, cleaned, poi_table, restrictions_of, tier_nodes
+from tests.pipeline.chain import (
+    FIXTURES,
+    OSM_FIXTURES,
+    cleaned,
+    fixture_build,
+    poi_table,
+    restrictions_of,
+    tier_nodes,
+)
 from tests.pipeline.copies import META
 from worst_route.engine import exact
 from worst_route.engine.exact import AreaTooLarge, Incumbent, certified_area, certified_request
@@ -32,10 +40,11 @@ from worst_route.engine.worsen import ProgressEvent
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
 from worst_route.graph.spatial import SpatialIndex
-from worst_route.graph.testing import GRID_ORIGIN, Edge, make_graph
+from worst_route.graph.testing import GRID_ORIGIN, Edge, grid_graph, make_graph
 from worst_route.pipeline.enrich import run_enrich
 from worst_route.pipeline.save import graph_data
 
+from .exact_parity import check_areas
 from .graphs import at_node, board, lattice
 
 X0, Y0 = GRID_ORIGIN
@@ -233,6 +242,21 @@ def test_the_area_holds_only_what_a_walk_from_the_start_to_the_end_can_pass() ->
     pairs = [(int(g.edge_u[e]), int(g.edge_v[e])) for e in area.edges]
     assert pairs == [(0, 1), (1, 2), (2, 3)]
     assert certified_area(g, masks, [3, 0]) is None  # nothing leads back
+
+
+@pytest.mark.slow
+def test_the_areas_and_automatic_leashes_are_the_ones_scipy_s_reach_gives() -> None:
+    # 200 random requests on a 20 × 20 lattice and on one with one-way rows and columns (two or
+    # three stops within 800 m, a leash up to 500 m or the automatic one, too wide for the whole
+    # lattice), then 20 on each OSM fixture's build: each area node for node and edge for edge,
+    # each automatic leash
+    ways = "+-." * 6 + "+-"
+    oneway = grid_graph(20, 20, 100.0, oneway_rows=ways, oneway_cols=ways[::-1])
+    joined = check_areas(lattice(20, 20), 100, seed=1, near_m=800.0, leash_m=500.0)
+    joined += check_areas(oneway, 100, seed=2, near_m=800.0, leash_m=500.0)
+    assert joined > 100
+    for k, name in enumerate(OSM_FIXTURES):
+        check_areas(fixture_build(name), 20, seed=10 + k, near_m=400.0, leash_m=300.0)
 
 
 def test_an_explicit_leash_over_the_caps_is_refused_with_the_counts(

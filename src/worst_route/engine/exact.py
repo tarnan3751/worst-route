@@ -207,14 +207,24 @@ def certified_area(data: GraphData, masks: RequestMasks, stop_nodes: Sequence[in
 
 
 def _reached(n: int, source: int, tail: NDArray[np.intp], head: NDArray[np.intp]) -> BoolArray:
-    """The nodes of [0, n) reached from `source` along the edges tail → head."""
-    # imported on first use, not with the module, which the API imports at its start
-    from scipy.sparse import csr_array
-    from scipy.sparse.csgraph import breadth_first_order
-
-    graph = csr_array((np.ones(len(tail)), (tail, head)), shape=(n, n))
+    """The nodes of [0, n) reached from `source` along the edges tail → head: a breadth-first
+    search a level at a time, each level the heads of the last one's edges not yet reached."""
+    heads = head[np.argsort(tail)]
+    first = np.zeros(n + 1, dtype=np.intp)
+    np.cumsum(np.bincount(tail, minlength=n), out=first[1:])
     reached = np.zeros(n, dtype=np.bool_)
-    reached[breadth_first_order(graph, source, directed=True, return_predecessors=False)] = True
+    reached[source] = True
+    seen = np.empty(n, dtype=np.intp)  # each new node's last position in a level, to keep it once
+    level = np.array([source], dtype=np.intp)
+    while len(level):
+        start, count = first[level], first[level + 1] - first[level]
+        offset = np.repeat(start - (np.cumsum(count) - count), count)
+        found = heads[np.arange(len(offset)) + offset]
+        found = found[~reached[found]]
+        k = np.arange(len(found))
+        seen[found] = k
+        level = found[seen[found] == k]
+        reached[level] = True
     return reached
 
 

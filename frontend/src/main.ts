@@ -12,7 +12,8 @@
 // one back and Esc leaves; changing the stops forgets a drawing; leaving the page cancels a running
 // job, and a drawing's par.
 // The basemap the server names (GET /config) goes under the route's layers once the map has
-// loaded (OpenFreeMap's once its style has); the most seeds a job runs there goes to the settings.
+// loaded (OpenFreeMap's once its style has), the land outside the contiguous US flat over it
+// (map/outside.ts, from public/conus.json); the most seeds a job runs there goes to the settings.
 // The theme the settings name (the device's, from the browser's storage; auto by default) is put
 // on the page at once and on the map's layers and basemap once they are there, and again
 // whenever it changes (theme/, docs/reference/frontend.md, **Themes**).
@@ -30,6 +31,7 @@ import { Basemap } from "./map/basemap";
 import { CITY_LAYERS, cityAt } from "./map/cities";
 import { DrawLayer, paintDrawing } from "./map/drawLayer";
 import { createMap, fitTo } from "./map/map";
+import { fetchOutline, paintOutside, withOutside } from "./map/outside";
 import { RouteLayer, paintRoute } from "./map/routeLayer";
 import { StopsLayer } from "./map/stopsLayer";
 import { JobRunner, mountRunControls } from "./run/controls";
@@ -63,6 +65,7 @@ const store = new Store({
 
 const map = createMap(byId("map"));
 const config = getConfig();
+const outline = fetchOutline();
 let routeLayer: RouteLayer | null = null;
 let drawLayer: DrawLayer | null = null;
 let runner: JobRunner | null = null;
@@ -79,6 +82,7 @@ followTheme(store, (next) => {
   if (routeLayer === null) return; // the map's layers take it once it has loaded
   paintRoute(map, next);
   paintDrawing(map, next);
+  paintOutside(map, next);
   basemap?.show(next.basemap).catch((error: unknown) => store.update({ error: errorBody(error) }));
 });
 
@@ -176,10 +180,12 @@ map.once("load", () => {
   if (url.route !== null) {
     void openRoute(url.route, store, runner).then((opened) => urlSync.start(opened));
   }
-  config
-    .then(async (answer) => {
+  Promise.all([config, outline])
+    .then(async ([answer, us]) => {
       cities = CITY_LAYERS[answer.basemap.kind];
-      basemap = new Basemap(map, answer.basemap, location.origin + API_BASE);
+      basemap = new Basemap(map, answer.basemap, location.origin + API_BASE, (parts) =>
+        withOutside(parts, us, theme),
+      );
       await basemap.show(theme.basemap);
     })
     .catch((error: unknown) => store.update({ error: errorBody(error) }));

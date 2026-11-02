@@ -18,7 +18,8 @@
 //
 // `basemapParts` is pure and imports MapLibre's types only, so the tests load it in Node;
 // `addBasemap` puts the parts under whatever the map draws already (the route's layers), and
-// `Basemap` changes the variant drawn in place, the route's layers and their data kept.
+// `Basemap` changes the variant drawn in place, the route's layers and their data kept, with what
+// its `extend` adds to the parts (outside.ts: the land outside the contiguous US drawn flat).
 import { layers, namedFlavor } from "@protomaps/basemaps";
 import type {
   AddLayerObject,
@@ -160,19 +161,27 @@ export function addBasemap(map: BasemapMap, parts: BasemapParts): void {
 /** The basemap `config` names on `map`, in a variant: `show` draws it, and when the variant
  * changes takes the last one's layers and sources away and adds the new one's under the route's
  * layers, which keep their data; for `openfreemap` each variant's style is fetched the first time
- * it is drawn and kept (one that did not load is asked for again the next time). */
+ * it is drawn and kept (one that did not load is asked for again the next time). Its parts are
+ * drawn with what `extend` adds to them (outside.ts). */
 export class Basemap {
   readonly #map: BasemapMap;
   readonly #config: BasemapConfig;
   readonly #apiRoot: string;
+  readonly #extend: (parts: BasemapParts) => BasemapParts;
   #parts: BasemapParts | null = null;
   readonly #styles = new Map<string, StyleSpecification>(); // OpenFreeMap's, by their URLs
   #shown: string | null = null; // the look asked for last: raster's one, a flavor, a style's URL
 
-  constructor(map: BasemapMap, config: BasemapConfig, apiRoot: string) {
+  constructor(
+    map: BasemapMap,
+    config: BasemapConfig,
+    apiRoot: string,
+    extend: (parts: BasemapParts) => BasemapParts = (parts) => parts,
+  ) {
     this.#map = map;
     this.#config = config;
     this.#apiRoot = apiRoot;
+    this.#extend = extend;
   }
 
   /** Draw the basemap in `variant`, unless it looks the same as the one drawn or being drawn. */
@@ -184,7 +193,7 @@ export class Basemap {
     this.#shown = look;
     const style = kind === "openfreemap" ? await this.#style(url) : null;
     if (look !== this.#shown) return; // another variant was asked for meanwhile
-    const parts = basemapParts(this.#config, this.#apiRoot, style, variant);
+    const parts = this.#extend(basemapParts(this.#config, this.#apiRoot, style, variant));
     if (this.#parts !== null) {
       for (const layer of this.#parts.layers) this.#map.removeLayer(layer.id);
       for (const id of Object.keys(this.#parts.sources)) this.#map.removeSource(id);

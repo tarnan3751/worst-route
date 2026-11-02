@@ -12,11 +12,12 @@ nothing there.
 
 | Module | What it holds |
 |---|---|
-| `main.ts` | bootstrap and wiring: the store from the URL's state, the panel's parts (today's route and the challenges among them), the served regions (`GET /regions`) and the map fitted to all their bboxes, the build each trip runs on (`RegionPicker`), the basemap the server names (`GET /config`), a stored route when the URL names one (or today's, for `?daily`; or else the challenge `?challenge=` names set up), the challenges graded on every route shown and every drawing's verdict, a toast for each one completed, clicks on the map, the cancel on `pagehide`; the theme the settings name, on the page, the map's layers and the basemap (**Themes**) |
+| `main.ts` | bootstrap and wiring: the store from the URL's state, the panel's parts (today's route and the challenges among them), the served regions (`GET /regions`) and the map fitted to all their bboxes, the build each trip runs on (`RegionPicker`), the basemap the server names (`GET /config`) with the land outside the contiguous US flat (`public/conus.json`), a stored route when the URL names one (or today's, for `?daily`; or else the challenge `?challenge=` names set up), the challenges graded on every route shown and every drawing's verdict, a toast for each one completed, clicks on the map, the cancel on `pagehide`; the theme the settings name, on the page, the map's layers, the basemap and the land outside the US (**Themes**) |
 | `state.ts` | `Store`, the app's state on an `EventTarget`; `Settings`, `Stop`, `RunView`, `targetOf`, `takesTarget` (the targets a mode takes), `certifies` (whether the settings ask for a certified route), `modeOf` (the request's objective, item, brand and constraints), `vehicleOf`, `departureOf`; the API's limits (tiers, budget, leash, targets), the vehicle's, and the modes and items it plans |
 | `api/types.ts` | the API's shapes, written by hand from `api.md` |
 | `api/client.ts` | the fetch wrappers (`getConfig`, `pickRegion`, `getBrands`, `geocode` and `getDaily` among them), `ApiError`, `errorBody`, `subscribe` (a job's events over `EventSource`) |
-| `map/basemap.ts` | `basemapParts` (the basemap `/config` names, as sources and layers, in a variant), `styleUrl` (OpenFreeMap's style for a variant), `fetchStyle` (OpenFreeMap's style), `addBasemap`, `Basemap` (the basemap drawn, its variant changed in place), `EMPTY_STYLE` (**Basemap**, **Themes**) |
+| `map/basemap.ts` | `basemapParts` (the basemap `/config` names, as sources and layers, in a variant), `styleUrl` (OpenFreeMap's style for a variant), `fetchStyle` (OpenFreeMap's style), `addBasemap`, `Basemap` (the basemap drawn, its variant changed in place, with what its `extend` adds to its parts), `EMPTY_STYLE` (**Basemap**, **Themes**) |
+| `map/outside.ts` | the land outside the contiguous US drawn flat (**Basemap**): `fetchOutline` (`public/conus.json`, its polygons' own holes filled), `maskOf` (the mask, the world with the outline's polygons as holes), `withOutside` (over Protomaps' earth and land cover, the earth again in the outside tone and the US in the land's colour; else the mask, just below the first water layer), `paintOutside` (the outside tone from the theme) |
 | `map/map.ts` | the MapLibre map, its controls, MapLibre's worker and the `pmtiles://` protocol, `fitTo` |
 | `map/cities.ts` | `CITY_LAYERS` (the basemap's layers that draw the labels of cities, towns and villages, by its kind), `CITY_HIT_PX`, `cityAt` (the city whose label a click is on; no DOM) (**Stops**) |
 | `map/bounds.ts` | `US_BOUNDS`, the box around the contiguous US the map's camera is held to; `fitZoom`, the zoom with the whole box in view; `holdToUs`, a camera held to the box (**Stops**) |
@@ -46,6 +47,7 @@ nothing there.
 | `format.ts` | distances (mi/km), durations, ratios, counts, items collected; fuel and its cost, percentages, states by their codes; times of day (`isoWithOffset`, `parseIsoTime`, `formatClock`); the daily route's day (`formatDay`) |
 | `util/geo.ts`, `util/dom.ts` | rounding and bounds; building DOM with text, never HTML |
 | `public/notices.html` | "Data sources and notices", the page the footer links to (**Basemap**) |
+| `public/conus.json` | the contiguous US's outline, as `tools/desktop_data.py conus` writes it, which the map draws the land outside flat around (**Basemap**) |
 
 ## Running it
 
@@ -690,6 +692,55 @@ console).
   "OpenFreeMap © OpenMapTiles Data from OpenStreetMap", linked; Positron's design is CC BY 4.0,
   credited on the notices page. MapLibre fetches only the tiles in view, as with `raster`.
 
+**The land outside the contiguous US** is drawn flat (`map/outside.ts`): the land of Canada,
+Mexico and the rest of the world but the 48 states and DC takes one flat tone, the theme's
+`outside` colour (**Themes**), so it reads as not part of the app, while the water and the states
+keep the basemap's look. The outline is `public/conus.json`, the contiguous US as
+`tools/desktop_data.py conus` writes it (the 48 states and DC from the places index's states,
+buffered 10 km and simplified, about 22 kB), committed as the command writes it (Prettier leaves it
+alone) and written again with `uv run python tools/desktop_data.py conus frontend/public/conus.json`
+when the Census outline changes; the page fetches it beside itself (`conus.json`, relative), with
+`/config`, and keeps each polygon's outer ring, so Lake Michigan and the bays the Census coast
+leaves out stay the US's. `withOutside` adds to the basemap's parts by its make:
+
+- **`pmtiles`**: the file is cut to the outline (`tools/fetch_basemap.sh --region`), so a tile or so
+  beyond it there are no tiles and the sea there is only the basemap's background, which any fill
+  over the world would paint. Two land fills go instead just above Protomaps' `earth` layer (the
+  land) and, in the light and dark flavors, the `landcover` right after it: `earth-outside`, the
+  earth layer again (its source, source layer and filter) in the outside tone, so all land is flat,
+  and `us-land`, the outline from a GeoJSON source of its own (`us-land`) filled in the flavor's
+  land colour, read from the earth layer's `fill-color` (`#cccccc` grayscale, `#e2dfda` light,
+  `#1f1f1f` dark), so the states are land again. The land's uses, the water, the roads, the
+  boundaries and the labels draw over both as they did; the sea is left as it was, water where the
+  file has tiles and the background past them. The land cover goes under the fills, the US's with
+  the rest: drawn over them it would cover the land outside again until zoom 7, where it fades out,
+  so in the light and dark flavors the US shows its land colour where it showed its cover below
+  zoom 7.
+- **`openfreemap`** (OpenFreeMap's tiles cover the world) **and `raster`**: the mask, a GeoJSON
+  source of its own (`outside`) holding a ring round the world, counterclockwise, with each of the
+  outline's polygons as a hole, clockwise (MapLibre rewinds the rings itself; the world's ring first
+  is what makes the rest holes), and a fill layer (`outside`) at opacity 1 that `withOutside` puts
+  just below the basemap's first water layer (by its source layer: OpenMapTiles' `water`,
+  `waterway` or `water_name`): over the land's layers, under the water and everything the basemap
+  draws after it, so the seas, the Great Lakes and the rivers draw as they do everywhere and
+  nothing inside the outline changes. The raster basemap (dev only) has no vector layers: the mask
+  goes over its tiles, and with no vector water the sea outside the outline is flat too. A basemap
+  that draws nothing (a `pmtiles` answer without its file, an OpenFreeMap style that did not load)
+  gets the mask alone, the US's shape on the flat tone.
+
+`Basemap` takes the fills or the mask with the basemap's parts (its `extend`), so a change of
+variant swaps them with the rest, the land colour read again from the new flavor, always under the
+route's layers and removed before their sources; `paintOutside` recolours the outside tone when
+the theme changes and the variant does not. An outline that does not load draws neither (an error
+on the console) and the basemap as it is. The border effects (**Limitations**): the outline runs
+10 km out from the borders and the coast, so a strip of Canada and Mexico along the border is
+drawn as the basemap has it (Windsor across from Detroit, Tijuana's edge, the towns facing the
+Great Lakes' US shore); islands the Census outline lacks (the Farallon Islands off San Francisco)
+take the outside tone; where a `pmtiles` file has no tiles, land and sea alike show its background,
+as before; the roads, the boundaries and the labels outside the outline are drawn over the flat
+tone; and OpenFreeMap's Positron draws some land cover after its water (residential areas, woods,
+buildings), which shows over the flat tone outside.
+
 The URLs are made absolute under the page's origin and `/api` (MapLibre needs absolute ones,
 and the templates' braces must stay unencoded). Below the panel a footer credits the data: "Road
 data © OpenStreetMap contributors (ODbL) · Towns and states: U.S. Census Bureau · Data sources",
@@ -714,7 +765,8 @@ the route's colours and widths on the map and the basemap's variant come from on
   `light` or `dark`, **Basemap**);
 - `colors`: the panel's (`panel`, `ink`, `muted`, `line`, `hover`), `accent` and `accentInk` (Go,
   the big ratio), `link` (links, the challenge set up, the focus ring; optional, the accent when
-  left out), `mapBg` (behind the tiles while they load), the markers' (`start`, `via`, `end`,
+  left out), `mapBg` (behind the tiles while they load), `outside` (the land outside the contiguous US, one
+  flat tone over the basemap's land, **Basemap**), the markers' (`start`, `via`, `end`,
   `markerInk`), the map's (`route`, one to four colours spread evenly from the start to the end,
   one a flat line; `routeCasing`, under the route and the drawing and round a marker; `baseline`;
   `flash`; `highlight`, a step of the directions; `draw`, a drawing; `par`, its next moves), the
@@ -776,9 +828,9 @@ The root forbids a synthesized bold (`font-synthesis: style`): each theme loads 
 uses, and a face that exists at one weight only (arcade's pixel faces) must not be smeared into a
 fake bold; a slant may still be synthesized, since no theme loads an italic face and the
 directions' jokes are in italics. The map's layers take theirs from the theme too: `paintRoute` (the baseline, the casing,
-the route's gradient and width, the flash, the highlight) and `paintDrawing` (the drawing, its
-next moves, the node it is at), as the layers are added and again by `setPaintProperty` whenever
-the theme changes; and `Basemap.show(theme.basemap)` swaps the basemap's layers and sources in
+the route's gradient and width, the flash, the highlight), `paintDrawing` (the drawing, its
+next moves, the node it is at) and `paintOutside` (the land outside the US, **Basemap**), as the
+layers are added and again by `setPaintProperty` whenever the theme changes; and `Basemap.show(theme.basemap)` swaps the basemap's layers and sources in
 place when the variant changes (**Basemap**), not `setStyle`, which would drop the route's layers
 and their data.
 
@@ -875,6 +927,7 @@ follows the app again from the next change. The units and the theme are not in t
 | `api/types.test.ts` | each type's runtime spec, which the compiler holds to the type's keys; the specs against `api.md` (its JSON request example, and the field lists of the events, `done`'s metrics, `/regions` (its `name` optional: the recordings predate it), `/regions/pick`, the 202, the job status, the route document, `/routes/{id}/directions`, `/brands`, `/geocode`, `/config` `/daily`, with its example, `/draw` and `/draw/finish`) and against every payload of the eight recordings and the recorded drawing's answers, finish and refusal; the ratio recording's target reached in `done` and the document, its round-trip refusal; the slowest-time recording's time ratio, delays and turns in `done` and the document, its refusal of both turn constraints; the collect recording's bridges counted in every `progress`, in `done` and the document, its refusal of a ratio target; the directions recording's vehicle, fuel and cost, states and towns, its steps numbered from 1 with the driving steps' ranges covering the route's edges in order and adding up to its length, its first toast, its refusal of a vehicle of 0 mpg; the brand recording's visits never falling in its `progress` events (8, 13, 14 of 19), `done` and the document agreeing, its refusal of a ratio target; the alphabet recording's better routes, each a snapshot then a `progress` with no splice, the same metrics and a higher score, from "A" to "ABCDEFGHIJKLMNO", `done` and the document agreeing, its refusal of a stop along the way (`field: "stops"`); a payload that does not fit is caught; the request's `reorder` and the `order` of `snapped` and the route document (optional: the recordings predate them) |
 | `map/basemap.test.ts` | `basemapParts`: OSM's raster tiles for `raster`; nothing (an error on the console, never OSM's tiles) for `pmtiles` without its file; Protomaps' tiles from the server for `pmtiles`, its `pmtiles://` URL absolute under `/api`, the attribution the app's own, no symbol layer without the server's fonts; with them the fonts' and icons' URLs absolute with the template's braces kept, and the labels asking for no font but the four `tools/fetch_basemap.sh` fetches; `addBasemap` on a stand-in map: the fonts, icons and sources set, then every layer before the first layer the map already had (the route's), or on top of an empty map; the light and dark flavors with their own background, without points of interest, on the grayscale sprite and the four fonts, grayscale the default; `styleUrl`: OpenFreeMap's Dark for dark, Positron otherwise; `Basemap` on a stand-in map: a new variant's layers and sources swapped in under the route's, nothing redone for the same look, OpenFreeMap's style fetched once for each look (Positron once for grayscale and light) and kept, a style that did not load asked for again, raster one look |
 | `map/cities.test.ts` | `cityAt` on a stand-in map: a label drawn under the click taken however far its point (20 px), before a nearer point beside it, the nearer point of two under the click, and no box asked then; else the nearest point within 12 px wins, at its point with its name; none when no label is under the click and every point lies beyond 12 px though its label meets the box, one at 12 px exactly taken; the queries the click's point, then a box of 12 px round it, on the layers the style has, and none when it has none (raster, a pmtiles basemap without labels or none yet, another kind's layers); each basemap's name (`name:en`, `name_en`, then `name`), a feature without one or not a point skipped; `CITY_LAYERS` per kind, and Protomaps' `places_locality` the one locality layer among its four place layers in each flavor drawn, absent without labels |
+| `map/outside.test.ts` | `public/conus.json`: a GeoJSON MultiPolygon of closed rings within the contiguous US's box (−125, 24.4, −66.8, 49.5) and under 100 kB; `fetchOutline`: the outline fetched beside the page (`conus.json`) with its polygons' own holes filled, null and an error on the console when it does not load; `maskOf`: a ring round the world, counterclockwise, with each polygon's outer ring a hole, clockwise, whichever way it was wound, the committed outline's every polygon cut out; `withOutside` on a stand-in map that keeps its layers in order: on Protomaps' grayscale flavor `background`, `earth`, `earth-outside` (the earth layer again in the theme's tone), `us-land` (the outline from a GeoJSON source of its own in `#cccccc`), then the land's uses and the rest, the route's layers above everything, and no mask; on the light and dark flavors the two fills above `landcover`, `us-land` in each flavor's land colour; OpenFreeMap's mask just below its first water layer, over its land's layers, from a GeoJSON source of its own; the mask on top of the raster tiles, and alone when the basemap draws nothing; the basemap as it is when the outline did not load; through a change of variant (grayscale to dark) the fills over the new flavor's earth and land cover, `us-land` in the dark land colour and the outside tone the theme then shown, the last basemap's layers removed before their sources; `paintOutside` colouring the mask, or Protomaps' `earth-outside`, once drawn, nothing before |
 | `map/bounds.test.ts` | `US_BOUNDS` runs west to east and south to north, and holds the national build's extent and Portland's bbox; `fitZoom` against the zooms MapLibre gave for the box filling a map of three sizes, the lesser of its two axes'; `holdToUs`: a view smaller than the box kept inside it (a centre outside put half a view from its edge), the whole box kept in a view larger than it on that axis (taller and wider maps at the fit zoom), a zoom below the fit raised to it, a camera already held unchanged |
 | `run/controls.test.ts` | `JobRunner` with `fetch` and `EventSource` stubbed: the stat line while drawing and for a route drawn by hand ("25 moves · drawn by hand · seed 1", "1 move"); how a run ended, in words ("1 try · 2.0 s · nothing worse found · seed 1", nothing for a spent budget); "goal 25.0×, reached 25.0×, within ±2 %" and "goal reached"; a TypeError from the client and an event the app cannot handle end the run as `CLIENT_ERROR` with the controls unlocked (the job cancelled), the server's `error` closes the stream; Make it worse keeps the route and its seed when nothing worse is found and tries the next seed, follows a worse route's seed; Go and Reroll send the settings' seed, then none; leaving the page cancels a job whose POST is in flight once it is answered, a running one at once; a ratio and a drive-time target sent, shown while running and with what was achieved (`target reached`), and Make it worse whose base already meets its target; the objective, the item only under collect and the constraints only with a side sent (and not by default), the brand only under brand, the alphabet route with no item nor brand, Brand waiting for the region's brands with the brand set among them (none, a link's before they answer, one they lack, an empty list) and no other mode waiting, hard mode's `hard: true` alone or beside a side (the key left out when off, strict sent only with a side), Make it worse in its route's own objective with its own item or brand, whatever the panel's mode and brand (a pilgrimage under hard mode, its whole body, the panel's brand another build's id), with the panel's turns and target (as bad as possible where the route's objective refuses it); the slowest-time recording replayed (the lengths' ratio while running, then the time ratio, the drive and delays, the turns) and the collect recording's bridges counted live, then the stored route's; the route's own mode shown when Make it worse, the panel in another, finds nothing; "no lefts" and "no rights" (not with a U-turn); `INFEASIBLE_TURN_CONSTRAINT` as the error, and the refused request sent again without strict: a Go with its seed, a Make it worse on the same route with its seed, a Reroll with none, hard mode kept; the counter row's "17 of 19 Starbucks" and "letters: 23 (A–W)", "letters: 1 (A)", "letters: 0", the laps past Z for 26, 27 and 29 letters ("(A–Z)", "(A–Z, A)", "(A–Z, A–C)"), the roads one a line in its tooltip, nothing under another mode; Make it worse off for an alphabet route with its reason, whatever the mode set, and for no other route; the brand recording's visits counted live (1, 8, 13, 14 of 19), then the stored route's; the alphabet recording replayed: every snapshot drawn, no splice, the ratio and letters following each better route (1.1× and 1, 1.0× and 2, ...), the stored route drawn, its fifteen roads in the tooltip; a refusal under hard mode sent again without it: a Go with its seed and no constraints left, a Make it worse with its base and seed and its strict side kept, a Reroll with none, and a Make it worse whose base hard mode refuses (`BASE_ROUTE_MISMATCH`) on the same route with the same seed; each stop along the way labelled as its marker is numbered ("Stop 2", "Stop 3"), the start and the end without a label, and a city's stop by its name whatever its role; the vehicle set sent by Make it worse, Go and Reroll (the default in Make it worse's whole body); the departure set sent, or, empty, the time Go is pressed at the browser's offset (on a fake clock); "arrives Sat 17:42" from a document's arrival at its own offset, nothing without one; the directions recording replayed: no route rows while it runs, then its towns, states, fuel and share of the roads; the first two towns and how many more with every name in the tooltip, two states by their codes, no fuel without a vehicle, "under 1 %", and nothing from a document without them; the worst order sent only when ticked and never under the alphabet route, "Trying every order…" until `snapped`, its stops snapped onto the list in the order it names and the run's order kept with the stored route, Make it worse's stops through the base route's order, and no order for a run in the list's own, nor for a `snapped` without one (an older server's), whose stops say no place; the best's ratio beside the current one while the best route scores above it ("best 14.1×"), "reconnecting…" while the stream is down, also when the two round alike and when the best's is the lower (a faster but longer current route under the slowest time), not when the current route is the best nor from a stream without the best's numbers; a certified route sent with as bad as possible and no constraints, worst order or portfolio, whatever the panel holds (kept), and Certified counting for nothing under another mode; the certified recording replayed: the bound live on the target row ("at most 6368 % longer" at first, "0.5 %" while proving), no splice, then "certified: no legal route in this area is longer · 182 nodes" and "proven"; a stored route's certificate when not proven, with its gap and without one ("longest found · no bound yet"), and Make it worse off for a certified route with the reason for each; a portfolio sent only above one seed and never under the alphabet route, the stat line's "best of 4 runs" with its leader's seed from each `progress` event (after the leader's "best 3.2×" while its best scores above its current route), then the stored route's winner, the settings keeping the first seed, and Make it worse from the winner's next seed with no portfolio; `PORTFOLIO_TOO_LARGE` lowering the seeds to its `max`, the next Go passing; a route an earlier portfolio stored coming back to a Go of one seed (the user's seed kept on the panel and the stat line, no "best of") and to a portfolio's Go (its winner's seed shown, its first kept) |
 | `directions/panel.test.ts` | on the directions recording: a row per step classed by its kind, numbered as the document numbers them (none for the 40 jokes, the numbers skipping them), a driving step's distance and time in miles and kilometres, the arrival's and a stop's rows with none; `StepLocator`: the driving steps' lines ending on their first and last nodes (more than 99 % exactly, all within a metre; the job's last snapshot gives where the nodes are) and covering the geometry end to end, a step given at least one segment however short its distance, no line for a step that drives nothing, every step starting where it is; `DirectionsPanel` with a stand-in map: the rows of the route shown and none without one, the units followed, a hover highlighting the right edges, from node to node (once for the same step), a joke and none highlighting nothing, a click panning to the step's start, the highlight forgotten when the route changes, a document without directions listing nothing |
@@ -893,7 +946,7 @@ follows the app again from the next change. The units and the theme are not in t
 | `challenges/panel.test.ts` | `ChallengePanel` over a real store, today's route stubbed: none listed before `/regions`, then the served regions', and today's once `GET /daily` has answered with a day (planning, done or failed), not before nor on a server without one; Set it up refused while a run goes, today's until its route is done ("Today's route could not be planned." when failed); Set it up pinning the region, putting in the stops and the settings it fixes, the rest of those their defaults (the worst order unticked) and the seed, budget and vehicle the panel's, the route shown forgotten, the challenge in the store, the map fitted to the stops; a trip's own stops kept for any trip in the region when they lie in it, else none, the map fitted to the region; the brand picked once the region's brands are known, by wikidata id over the one `loadBrands` carried, else by name when already loaded, and the challenge no longer set up once another brand is picked; set up through a run, its seed, the budget and the snaps, and no longer once the item, the worst order, a stop, the leash or the region changes; today's challenge opening today's route, set up while it is shown; a link's challenge set up (`setUpLink`), today's waiting for its route when `/daily` answers after `/regions`, nothing for a failed day, an id not in the list or a region not served; the collapse when a run or a drawing starts; `setUpLine` |
 | `daily/panel.test.ts` | `DailyRoute` with `fetch` and `EventSource` stubbed over a real store: a busy server's 429 a day to try again; planning, its job's stream followed (the ratio so far from its `snapshot` and `progress`), then on `done` the stream closed and `GET /daily` asked again, done, with the route's id for `?daily` (`route`), and never a `DELETE`; a route done at once, no stream opened; failed (no route for `?daily`), asked again, and asked again when the stream ends in an `error` or is lost; none on a server without a daily route; collapsed when a run of the user's own starts, not when a route is opened, shown again from the link, not collapsed again by the same run; `dailyLine` in each state; `openDailyAtStart`: today's route opened once done while the user has done nothing, never once a run has started (the wait ended at once, the run's job left as it is) or a route has been opened, nor for a failed day |
 | `format.test.ts` | distances in both units and their thresholds, durations, ratios, counts, items one and many; drive times typed as a target, read and written back; fuel and its cost, percentages ("under 1 %"), states by their codes and a name not known; a time written at the browser's offset to the second and read back, ISO times with an offset read and others (a day the month lacks among them) refused, a time shown as a clock at its own offset; a UTC day named as the daily route names it; places in an order (1st, 2nd, 3rd, 4th, 11th to 13th, 21st, 101st, 111th) |
-| `theme/presets/presets.test.ts` | `THEMES` in the order the settings list them, each id once; every preset's colours in hex, its route one to four of them; each preset's `load` resolving (the fontsource stylesheets it imports found, so a weight a package lacks fails here) |
+| `theme/presets/presets.test.ts` | `THEMES` in the order the settings list them, each id once; every preset's colours in hex, its route one to four of them; every preset's `outside` colour, darker than its `mapBg` under a light scheme and lighter under a dark one; each preset's `load` resolving (the fontsource stylesheets it imports found, so a weight a package lacks fails here) |
 
 The drawn points are not the stored geometry point for point: a snapshot is simplified
 (`api.md`, **Applying the stream**) and a splice is not, so the replay has fewer points; it is
@@ -1221,6 +1274,29 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
   coordinates alone, and with a plain start and Portland as the end the request labelled the end
   "Portland" and the stored route's directions ended "Arrive at Portland". No request left the
   page's origin.
+- **The land outside the contiguous US** (2026-11-02, headless Chrome at 1400×900 on the lane's
+  `serve --region portland --region us-t3 --geocoder none --basemap-name us --frontend dist`,
+  `WORST_ROUTE_BASEMAP=pmtiles`, the main tree's `us.pmtiles`, cut to the outline, fonts and sprite
+  read, the tile hosts unresolvable; a stored Portland → Chicago route on `us-t3`, seed 1, 5.1×):
+  at the national fit (zoom 3.59) under studio, Canada and Mexico one flat #dfe2e6 with their
+  roads, boundaries and names on it; the Pacific, the Gulf, Hudson Bay and the Great Lakes the
+  grayscale flavor's grey; the states as before, their labels whole ("San Francisco", "Miami",
+  "Washington"), the route over all. Florida at zoom 6 and San Diego at 7, where the file's tiles
+  end offshore, show sea all the way, studio's and night's (a mask over the world painted 29–40 %
+  of those views flat); past the tiles, Mexico's land south of Ensenada shows the background, as
+  before. The layers: `background`, `earth`, `earth-outside`, `us-land`, `landuse_park`, ...,
+  `places_country`, then `wr-baseline` and the route's; under night (a change of variant)
+  `background`, `earth`, `landcover`, `earth-outside` (#141a30), `us-land` (#1f1f1f), and under
+  classic (paint only) `earth-outside` #e2e2df. At Detroit, zoom 10, Ontario flat beyond the 10 km
+  margin and Windsor's shore within it drawn as the basemap has it; over Portland at zoom 14 the
+  Willamette's bridges drawn. Under atlas and night the land cover is under the fills: with the
+  fills right above `earth` instead, the national fit showed Canada and Mexico in the same green
+  cover as the US. Each light theme's tone was set on screen against the light flavor's land
+  (#e2dfda), a clear step darker: the first tones tried (atlas #e6e3da, ledger #e6e6e4, transit
+  #e3e3e3) sat within a few levels of it and the edge barely showed at Detroit; arcade's first,
+  #0f2a78, read as sea. Copies of the water drawn over a fill above every basemap layer were tried
+  first and dropped: they covered every bridge (the Willamette's at zoom 14) and the parts of
+  labels over water ("San Francisco" read "Francisco", "Miami" "Mia").
 
 ## Limitations
 
@@ -1259,6 +1335,14 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
   stored (the same request and seed again, or another seed landing on it) shows the first
   record's arrival, fuel and stop names, whatever departure, vehicle or labels it was sent with:
   changing the departure and pressing Go with the same seed shows the first arrival.
+- **The land outside the contiguous US is flat only beyond its 10 km margin**, and the basemap's
+  roads, boundaries and labels are drawn there over the flat tone (**Basemap**): Windsor, across
+  the river from Detroit, is drawn as the basemap has it, as is Canada's shore facing the Great
+  Lakes' US one, and Toronto's or Monterrey's names show on the flat tone. Islands the Census
+  outline lacks, beyond the margin, take the outside tone (the Farallon Islands off San Francisco).
+  On the `pmtiles` basemap the light and dark flavors' land cover is under the flat tone, the US's
+  too, so below zoom 7 the states show the flavor's plain land colour; and past the file's tiles
+  land and sea show its background (in the light flavor a grey where the sea should be).
 - **A city's name is kept only until the page reloads**: the URL keeps the stops' coordinates
   alone, so a reload, a link or a stored route opened lists a city's stop by its coordinates
   (a stored route's request and directions keep the name it was sent with).

@@ -1108,7 +1108,9 @@ the image as a GET would, if it is not cached yet.
 **`?theme=<id>`** draws it in one of the frontend's themes (`classic`, `studio`, `night`,
 `transit`, `topo`, `arcade`, `dashboard`, `atlas`, `sign`, `ledger`), its colours the theme's
 (`presentation/share_palettes.py`; `docs/reference/presentation.md`, **Share image**), the fonts
-the image's own; without it, classic's, the image's colours from before the themes.
+the image's own; without it, classic's, the image's colours from before the themes. The
+frontend's "Open share image" link carries the theme the page shows, `auto` resolved by the
+system's scheme as the page resolves it (`docs/reference/frontend.md`, **Links**).
 
 - An id that is not a route id (12 lowercase hex digits) is 404 `NOT_FOUND` before any file is
   looked at; then a theme that is not one of the ten (`auto` included: a client passes the theme it

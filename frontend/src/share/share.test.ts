@@ -11,6 +11,7 @@ import {
   UrlSync,
   decodeUrlState,
   encodeUrlState,
+  followShareImage,
   openRoute,
   settingsFrom,
   geojsonUrl,
@@ -335,6 +336,34 @@ describe("a ratio-target route opened by its link", () => {
 describe("the share image", () => {
   it("is the API's share.png of the route, through the /api proxy", () => {
     expect(shareImageUrl("5ea844bffd40")).toBe("/api/routes/5ea844bffd40/share.png");
+    expect(shareImageUrl("5ea844bffd40", "night")).toBe(
+      "/api/routes/5ea844bffd40/share.png?theme=night",
+    );
+  });
+
+  it("is in the theme the page shows, followed as the setting and the system change", () => {
+    let changed = () => {};
+    const scheme = {
+      matches: false, // a light system
+      addEventListener: (_type: string, listener: () => void) => (changed = listener),
+    } as unknown as Pick<MediaQueryList, "matches" | "addEventListener">;
+    const store = new Store(emptyApp()); // the theme setting "auto"
+    const shown: (string | null)[] = [];
+    followShareImage(store, (url) => shown.push(url), scheme);
+    expect(shown).toEqual([null]); // no route shown
+    const route = loadStream("portland-stream").route;
+    store.update({ route });
+    const url = `/api/routes/${route.route_id}/share.png?theme=`;
+    expect(shown.at(-1)).toBe(`${url}studio`); // auto by day
+    (scheme as { matches: boolean }).matches = true;
+    changed();
+    expect(shown.at(-1)).toBe(`${url}night`); // auto by night
+    store.updateSettings({ theme: "ledger" });
+    expect(shown.at(-1)).toBe(`${url}ledger`);
+    store.updateSettings({ theme: "classic" });
+    expect(shown.at(-1)).toBe(`${url}classic`);
+    store.update({ route: null });
+    expect(shown.at(-1)).toBeNull();
   });
 });
 

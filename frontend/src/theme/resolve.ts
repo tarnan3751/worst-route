@@ -9,7 +9,7 @@ import type { Store } from "../state";
 
 export const DEFAULT_THEME: ThemeId = "studio";
 export const THEME_KEY = "worst-route.theme";
-const DARK = "(prefers-color-scheme: dark)";
+export const DARK = "(prefers-color-scheme: dark)"; // the system's scheme, as matchMedia asks
 
 /** A theme by its id, or "auto". */
 export type ThemeSetting = ThemeId | "auto";

@@ -17,7 +17,8 @@
 // while it stays set up. `UrlSync` keeps the URL in step with what the app shows once it is
 // started, which is after a `?route=` or `?daily` link has been opened, or has failed to open (the
 // parameter then stays). The share section copies a link to the route shown, opens its share image
-// (`GET /routes/{id}/share.png`) in a new tab, and downloads its GeoJSON
+// (`GET /routes/{id}/share.png?theme=<id>`, in the theme the page shows, followed as the setting or
+// the system's scheme changes: `followShareImage`) in a new tab, and downloads its GeoJSON
 // (`GET /routes/{id}/geojson`).
 import { API_BASE, errorBody, getRoute, getRouteGeojson } from "../api/client";
 import type { CollectItem, LineString, Target, Tier, Vehicle } from "../api/types";
@@ -45,6 +46,8 @@ import {
   type TurnSetting,
 } from "../state";
 import { parseIsoTime } from "../format";
+import { DARK, resolveTheme, type SchemeQuery } from "../theme/resolve";
+import type { ThemeId } from "../theme/theme";
 import { el } from "../util/dom";
 import { round6 } from "../util/geo";
 
@@ -361,9 +364,28 @@ export class UrlSync {
   }
 }
 
-/** The share image of stored route `routeId`, as the API renders it. */
-export function shareImageUrl(routeId: string): string {
-  return `${API_BASE}/routes/${routeId}/share.png`;
+/** The share image of stored route `routeId`, as the API renders it: in `theme`'s palette, or
+ * without one in the classic palette. */
+export function shareImageUrl(routeId: string, theme?: ThemeId): string {
+  const url = `${API_BASE}/routes/${routeId}/share.png`;
+  return theme === undefined ? url : `${url}?theme=${theme}`;
+}
+
+/** Call `show` with the share image of the route the store shows (null when none) in the theme the
+ * page shows (the settings' theme, "auto" by the system's `scheme`), now and whenever the route,
+ * the setting or the scheme changes. */
+export function followShareImage(
+  store: Store,
+  show: (url: string | null) => void,
+  scheme: SchemeQuery = matchMedia(DARK),
+): void {
+  const render = () => {
+    const { route, settings } = store.state;
+    const theme = resolveTheme(settings.theme, scheme.matches).id;
+    show(route === null ? null : shareImageUrl(route.route_id, theme));
+  };
+  store.watch(["route", "settings"], render);
+  scheme.addEventListener("change", render);
 }
 
 /** The GeoJSON of stored route `routeId`: the route, its baseline and its stops. */
@@ -402,9 +424,11 @@ export function mountShare(root: HTMLElement, store: Store): void {
     link.hidden = copy.hidden = imageLine.hidden = id === undefined;
     if (id !== undefined) {
       link.value = `${location.origin}${location.pathname}?route=${id}`;
-      image.href = shareImageUrl(id);
       download.href = geojsonUrl(id);
       download.download = `worst-route-${id}.geojson`;
     }
+  });
+  followShareImage(store, (url) => {
+    if (url !== null) image.href = url;
   });
 }

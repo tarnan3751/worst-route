@@ -51,7 +51,9 @@ again on every request from its build, its request, its seed and its region's pl
 (`presentation_of`, `places_of`: the region's own, else a served region's whose states hold its
 own); `directions_of` gives its directions alone, the same ones, for
 `GET /routes/{id}/directions` (`directions_api`). An alphabet route's letters are recounted on
-every request too, from the build's edge letters, worked out once per build (`Api.letters`).
+every request too, from the build's edge letters, worked out once per build (`Api.letters`), and
+so are a pilgrimage's or a collecting route's marks, where it visits its brand or collects its
+item (`presentation.marks`), so a route stored before them has them too.
 
 `/snap` judges the stop in the tier's nodes and the nodes within `BUBBLE_KM` of it (as a job's
 masks would near a stop; `auto` is T4); a job's `snapped` event, which also keeps stops apart
@@ -60,6 +62,7 @@ and re-snaps, is the authority.
 
 import secrets
 from collections.abc import AsyncIterator, Iterable
+from dataclasses import asdict
 from datetime import timedelta
 from itertools import pairwise
 from typing import TYPE_CHECKING, Any
@@ -87,6 +90,7 @@ from worst_route.api.schemas import (
     LineString,
     RegionOut,
     RouteDocument,
+    RouteMark,
     RouteRequestIn,
     RouteStop,
     Run,
@@ -128,6 +132,7 @@ from worst_route.graph.store import MissingArray
 from worst_route.presentation.directions import Step
 from worst_route.presentation.document import present, route_directions
 from worst_route.presentation.geojson import feature_collection, line_coordinates
+from worst_route.presentation.marks import marks
 from worst_route.presentation.places import PlaceIndex
 
 if TYPE_CHECKING:
@@ -595,6 +600,15 @@ def route(route_id: str, request: Request) -> RouteDocument:
         "alphabet": _alphabet_letters(api, data, stored),
     }
     presented = presentation_of(api, loaded, stored, asked, metrics)
+    geometry = geometry_of(loaded)
+    found = marks(
+        data,
+        geometry,
+        stored.nodes,
+        stored.edges,
+        item=stored.request.item,
+        brand=stored.request.brand,
+    )
     return RouteDocument(
         route_id=stored.route_id,
         created=stored.created,
@@ -617,7 +631,7 @@ def route(route_id: str, request: Request) -> RouteDocument:
             for label, s, at in zip(labels, stored.stops, stored.stop_idx, strict=True)
         ],
         order=list(stored.order),
-        geometry=LineString(coordinates=line_coordinates(data, geometry_of(loaded), stored.edges)),
+        geometry=LineString(coordinates=line_coordinates(data, geometry, stored.edges)),
         legs=[
             Leg(from_stop=k, to_stop=k + 1, node_range=(a, b))
             for k, (a, b) in enumerate(pairwise(stored.stop_idx))
@@ -627,6 +641,7 @@ def route(route_id: str, request: Request) -> RouteDocument:
         validation=Validation(ok=True, checked_at=stored.created),
         directions=[DirectionStep(**step) for step in presented["directions"]],
         toasts=presented["toasts"],
+        marks=[RouteMark(**asdict(mark)) for mark in found],
     )
 
 

@@ -23,8 +23,9 @@ build's projected coordinates from its tail's position to its head's, into the g
 `straight(m)` is the geometry of edges without interior points (the test builders'). `edge_xy`
 decodes the lines of some edges in projected metres and `edge_points` in lon/lat, ends included
 (the nodes' `node_lon`, `node_lat`, bit for bit); `lonlat_to_xy` projects lon/lat into the
-build's CRS. `geometry_version(geometry)` is the sha256 over each array's name, dtype, shape and
-bytes, as `graph_version` hashes the arrays; `write_build` puts it in `meta.json`.
+build's CRS and `xy_to_lonlat` back. `geometry_version(geometry)` is the sha256 over each
+array's name, dtype, shape and bytes, as `graph_version` hashes the arrays; `write_build` puts
+it in `meta.json`.
 `read_geometry(path, m)` memory-maps the files of the build at `path` and checks their dtypes
 and shapes; a missing file raises `MissingArray`.
 """
@@ -175,6 +176,12 @@ def lonlat_to_xy(data: GraphData, lon: Points, lat: Points) -> tuple[Points, Poi
     """Points given in lon/lat, projected into the build's CRS."""
     x, y = _to_xy(int(data.meta["crs_epsg"])).transform(lon, lat)
     return np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64)
+
+
+def xy_to_lonlat(data: GraphData, x: Points, y: Points) -> tuple[Points, Points]:
+    """Points given in the build's CRS, as lon/lat (a node's as `node_lon`, `node_lat` give it)."""
+    lon, lat = _to_lonlat(int(data.meta["crs_epsg"])).transform(x, y)
+    return np.asarray(lon, dtype=np.float64), np.asarray(lat, dtype=np.float64)
 
 
 def geometry_version(geometry: Geometry) -> str:

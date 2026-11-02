@@ -525,12 +525,16 @@ async def test_a_collecting_job_counts_its_item_as_it_grows(tmp_path: Path) -> N
         doc = (await client.get(f"/routes/{done['route_id']}")).json()
         assert doc["request"]["item"] == "bridge"
         assert doc["metrics"]["items"] == done["metrics"]["items"]
+        # a mark a bridge, worked out on the stored route: the stored row has none
+        assert len(doc["marks"]) == doc["metrics"]["items"]["bridge"]
+        assert {(m["kind"], m["label"]) for m in doc["marks"]} == {("bridge", None)}
 
         _, events = await finished(client, job_body(stops=[stop(0), stop(9)]))  # distance
         done = events[-1]["data"]
         assert "item" not in done["metrics"] and done["metrics"]["items"]["toll_booth"] == 0
         doc = (await client.get(f"/routes/{done['route_id']}")).json()
         assert doc["metrics"]["items"] == done["metrics"]["items"]
+        assert doc["marks"] == []
 
 
 # Brands of the GRID lattice, off its bottom row: ids in name order, 0 Acme, 1 Pilgrim Coffee,
@@ -578,6 +582,14 @@ async def test_a_pilgrimage_counts_its_visits_as_it_grows(tmp_path: Path) -> Non
         doc = (await client.get(f"/routes/{done['route_id']}")).json()
         assert (doc["request"]["objective"], doc["request"]["brand"]) == ("brand", 1)
         assert doc["metrics"]["brand"] == done["metrics"]["brand"]
+        # a mark a visit, at the brand's node, in the order the route meets them
+        coordinates = doc["geometry"]["coordinates"]
+        located = {at_node(GRID, v) for v in BRANDS["Pilgrim Coffee"]}
+        assert len(doc["marks"]) == doc["metrics"]["brand"]["visits"]
+        assert all(m["kind"] == "brand" and m["label"] == "Pilgrim Coffee" for m in doc["marks"])
+        assert {(m["lat"], m["lon"]) for m in doc["marks"]} <= located
+        met = [coordinates.index([m["lon"], m["lat"]]) for m in doc["marks"]]
+        assert met == sorted(met)
         report = (await client.post(f"/routes/{done['route_id']}/validate")).json()
         assert report["ok"] is True
 
@@ -586,6 +598,7 @@ async def test_a_pilgrimage_counts_its_visits_as_it_grows(tmp_path: Path) -> Non
         assert "brand" not in done["metrics"]
         doc = (await client.get(f"/routes/{done['route_id']}")).json()
         assert doc["metrics"]["brand"] is None and doc["request"]["brand"] is None
+        assert doc["marks"] == []
 
 
 async def test_a_brand_the_build_lacks_or_the_area_does_not_hold_names_its_field(

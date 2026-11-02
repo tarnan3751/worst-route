@@ -2,10 +2,11 @@
 
 What the app says and shows about a route once it exists: its turn-by-turn directions with
 deadpan jokes among them, its extra numbers (fuel, states and towns, the share of the roads) and
-its toasts, how its length compares with things people know, and its share image. Code:
-`src/worst_route/presentation/`, the endpoints `api/share_api.py` (`docs/reference/api.md`,
-**Share image**) and `api/directions_api.py`, the route documents' fields (`GET /routes/{id}`,
-`worst-route plan --out`), `worst-route directions`, and the Census files' fetch script
+its toasts, where it meets what it counts (its marks), how its length compares with things
+people know, and its share image. Code: `src/worst_route/presentation/`, the endpoints
+`api/share_api.py` (`docs/reference/api.md`, **Share image**) and `api/directions_api.py`, the
+route documents' fields (`GET /routes/{id}`, `worst-route plan --out`; the API's alone carries
+the marks), `worst-route directions`, and the Census files' fetch script
 `tools/fetch_census.sh`. The design it implements is `docs/PLAN.md` §4.3 and §7 M4; the
 conventions are `CLAUDE.md`. Nothing here plans or changes a route: it reads routes, their
 builds and the places index.
@@ -20,6 +21,7 @@ builds and the places index.
 | `jokes.py` | `JOKES`, `inject` |
 | `stats.py` | `stats`, `Stats`, `toasts`, `Vehicle` |
 | `document.py` | `present`, `with_presentation`, `route_directions` |
+| `marks.py` | `marks`, `Mark`, `MarkKind` |
 | `geojson.py` | `route_geojson`, `feature_collection`, `line_coordinates` |
 
 `config.py` holds `CENSUS_VINTAGE` (2025) and `STATES`: each state's Geofabrik slug (a `Region`'s
@@ -195,6 +197,35 @@ builds the prepared polygons' indexes), `/directions` in 13–45 ms; in one proc
 takes 17–47 ms, the directions about 10 ms, the places lookups 5–7 ms and the request's masks
 4 ms. Before the places lookups were prepared (**Places**), the same document took 0.26–0.38 s
 on a quiet machine and 1.8–2.6 s at load average 30, nine tenths of it the lookups.
+
+## Marks
+
+`marks(data, geometry, nodes, edges, *, item, brand) -> list[Mark]` is where a route meets what
+its objective counts, for the map: `GET /routes/{id}`'s `marks` (`docs/reference/api.md`, **The
+route document**), worked out from the stored route on every request, as its `items` and `brand`
+are, so every route stored has them. Each `Mark(kind, lat, lon, label)` is one place, in the
+order the route meets them, by the counters' own rules (`objectives.brand.brand_counts`,
+`objectives.collect.count_items`, `docs/reference/engine.md`, **Objectives**):
+
+| Objective | A mark | Where | As many as |
+|---|---|---|---|
+| `brand` | each of the brand's nodes the route passes (a round trip's start once), `label` the brand's name | the node | `brand.visits` |
+| `collect` `bridge` | each run of bridge edges (one through a round trip's start once, met at the route's end; a round trip only of bridges none) | the middle of the run's shapes, by length | `items.bridge` |
+| `collect` `toll_booth`, `level_crossing` | each edge the route drives holding some | the middle of the edge's shape | the edges holding some, at most `items` |
+| `collect` `roundabout` | each super-junction with rings it passes | the node | the nodes holding rings, at most `items` |
+
+Any other route has none. The build keeps how many booths or crossings an edge holds, not where
+along it, so an edge's mark is at its middle, and a toll plaza of several booths on one edge, or
+an interchange of two rings, is one mark (on `us-t3`, 28 % of the edges holding level crossings
+hold more than one, a toll booth edge up to 16). The points are projected from the build's CRS
+(`geometry.xy_to_lonlat`; a node's are `node_lon`, `node_lat` bit for bit) and rounded to 7
+decimals, as the route's line. **Measured** on `us-t3` (6adae6917be1, `serve --port 0`,
+2026-11-02): a pilgrimage to Dollar General from Glenfield, ND to Webster, SD (20 s, seed 7, 3,717
+nodes) has 15 marks for its 15 visits, each at a point of the route's line; the bridges from
+Hanover, OH to Milford, OH (7,833 nodes) 640 for its 640 bridges, each within 7 mm of a bridge edge
+the route drives (the rounding to 7 decimals); a pilgrimage stored by the code before the marks
+read with its 2. The marks take 0.2–0.4 ms of those documents' 0.2–0.6 s, and the positions on a
+route of 128,000 nodes 0.6 ms once its arrays are in memory.
 
 ## GeoJSON
 
@@ -506,6 +537,7 @@ data directory and holds a route over the API tests' 10 × 10 lattice):
 | `test_stats.py` | fuel and cost from a vehicle (the API's `Vehicle`), null without; states and towns from the census fixture in route order, null without an index; the network fraction over the units within reach, less what the request bans or leaves outside its area, a unit of two edges counted once; the toasts in order with everything known, four without places, a vehicle or delays, never turning one way, one town, what the stat line says left out (the states, the turns both ways, the share of the roads), the items, a round trip with and without a via (its ratio first, then its ending where it began), ten at most and the items never dropped |
 | `test_geojson.py` | the route, the baseline and the stops as features, one point per node along a lattice route, a round trip's null baseline, and the collection from a stored route's parts equal to the planned route's |
 | `test_document.py` | `present`'s keys, `with_presentation`'s layout, and the same presentation from a planned route and from its route.json |
+| `test_marks.py` | on a lattice with one of every item and a brand: each item marked once a place in route order (an edge of two crossings once, an interchange of two rings once, a bridge split by a junction at the junction), a pilgrimage's visits labelled with the brand; a round trip's start once and a bridge run through it once, met at the end, one opening the route, a round trip only of bridges none; a node's point its `node_lon`, `node_lat` bit for bit; an edge's mark at the middle of a bent shape; on 300 random walks, round trips among them, as many marks as the visits and the bridges `brand_counts` and `count_items` count, and as the places holding the other items |
 | `test_cli_directions.py` | `plan --out` writing the directions (the ones `route_directions` gives), the toasts and the metrics (no fuel, the fixture's states and towns, null without an index) into route.json, which `validate` and `plan --base` still read; `worst-route directions` printing the file's steps with and without jokes, and refusing another graph_version or a file it cannot read |
 | `test_directions_data.py` (`data`) | Portland: Powell's → Reed's first step heads along a road at Powell's (West Burnside Street, NW Couch Street, NW or SW 10th or 11th Avenue), every step has words, the driving steps tile the route, there are jokes, and the toasts open with the ratio, four to ten of them |
 | `test_places_data.py` (`data`) | Portland: Powell's → Reed crosses `[OR]` and enters Portland city first; a straight line over the Columbia enters WA and ends in Vancouver. It needs the index `aux places` wrote under `WORST_ROUTE_DATA` beside the build, and is skipped without either |

@@ -23,11 +23,12 @@ its run with `PortfolioRun` for a portfolio's and `CertifiedRun` for a certified
 `ValidationOut`, `BrandsOut` (`GET /brands`, with its `BrandOut`s), and `ErrorBody` (`{code,
 message}` and the error's own fields) for every error. The document's metrics count the route's
 turns (`Turns`), its delays and its collectibles, and with the presentation's numbers (fuel,
-states and towns, the share of the roads) it carries its directions (`DirectionStep`s) and
-toasts; the metrics of a route while it grows (`RouteMetrics`: `progress`, `snapshot`, the job
-status) carry its delays, and `Done`'s (`DoneMetrics`) the target and the turns too, and the
-stored route's other metrics (its item counts, a collecting route's item, a pilgrimage's brand,
-an alphabet route's letters) as extra fields.
+states and towns, the share of the roads) it carries its directions (`DirectionStep`s), its
+toasts and its marks (`RouteMark`s: where a pilgrimage visits its brand and a collecting route
+collects its item); the metrics of a route while it grows (`RouteMetrics`: `progress`,
+`snapshot`, the job status) carry its delays, and `Done`'s (`DoneMetrics`) the target and the
+turns too, and the stored route's other metrics (its item counts, a collecting route's item, a
+pilgrimage's brand, an alphabet route's letters) as extra fields.
 A route document and the `snapped` event carry `order`, each stop's position among the stops
 the job was given, in the order the route visits them (the identity without `reorder`).
 The SSE events' payloads are `Snapped`, `BaselineOut`, `Progress` (with `SpliceOut`s; for a
@@ -63,6 +64,7 @@ from worst_route.engine.objectives.collect import CollectItem
 from worst_route.engine.request import ObjectiveKey, RouteRequest, TierChoice
 from worst_route.engine.target import Target as EngineTarget
 from worst_route.presentation.directions import StepKind
+from worst_route.presentation.marks import MarkKind
 
 StopReason = Literal["budget", "converged", "target", "cancelled", "timeout", "drawn", "optimal"]
 TurnName = Literal["left", "right", "straight", "u_turn"]  # `engine.turns.TURN_NAMES`
@@ -524,8 +526,18 @@ class DirectionStep(_Out):
     kind: StepKind
 
 
+class RouteMark(_Out):
+    """A place the route counts (`presentation.marks`): a brand's location it visits, labelled
+    with the brand's name, or a place of the item it collects (label null)."""
+
+    kind: MarkKind
+    lat: float
+    lon: float
+    label: str | None
+
+
 class RouteDocument(_Out):
-    """`GET /routes/{id}`: a stored route, with its directions and its toasts."""
+    """`GET /routes/{id}`: a stored route, with its directions, its toasts and its marks."""
 
     route_id: str
     created: datetime
@@ -544,6 +556,7 @@ class RouteDocument(_Out):
     validation: Validation
     directions: list[DirectionStep]
     toasts: list[str]
+    marks: list[RouteMark]  # a pilgrimage's visits, a collecting route's items; else none
 
 
 class BrandOut(_Out):

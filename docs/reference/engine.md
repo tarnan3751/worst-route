@@ -497,7 +497,9 @@ The first radius is half the baseline (`COLLECT_RADIUS_FRACTION`), at least 2 km
 
 `count_items(data, nodes, edges)` counts all four items on any route the same way (a round
 trip's start, and a bridge run through it, once); the route files give it for every mode
-(**Route files**), and the validator recounts the items a route reports (**The validator**).
+(**Route files**), the validator recounts the items a route reports (**The validator**), and
+the API's route document marks the places it counts by the same rules (`presentation.marks`,
+`docs/reference/presentation.md`, **Marks**).
 A collecting route's `Metrics.counters` are `{item, items}`, `items` that count, so the API's progress
 events carry them as the route grows. Its target value is its item's count, and `describe` is
 `{item, count, candidates_in_area}`, the last the item's places in the request's area (an item
@@ -519,7 +521,8 @@ is the length, its target value the visits; a ratio target is refused under it, 
 target compares the experienced time. Its `Metrics.counters` are `{"brand": {id, name, visits,
 of}}`, `of` the brand's nodes in the area, and `describe` is the same object;
 `brand_counts(data, brand, nodes, area)` counts the same from a route's nodes and the build
-alone, for the validator and the API. Planning refuses a brand the build does not have
+alone, for the validator and the API, whose route document marks the visits it counts
+(`presentation.marks`). Planning refuses a brand the build does not have
 ("unknown brand 999") or none of whose nodes the request's area holds ("no Starbucks within
 reach"): `brand_problem` says which, `plan_route` raises it as `BrandRefused`, a `ValueError`
 whose `field` is `"brand"`, right after the masks (**Planning**).

@@ -13,7 +13,7 @@ Code: `src/worst_route/graph/`. The design it implements is `docs/PLAN.md` §2.6
 |---|---|
 | `data.py` | `GraphData`, `Strings`, `ARRAY_SPECS` (the format), `FORMAT_VERSION`, `MAX_SPEEDS`, `NodeKind`, `EdgeFlag`, `validate()` |
 | `store.py` | `write_build`, `read_build`, `graph_version`, `MissingArray`, `outdated` |
-| `geometry.py` | `Geometry`, `GEOMETRY_SPECS`, `encode`, `straight`, `edge_xy`, `edge_points`, `lonlat_to_xy`, `geometry_version`, `read_geometry` (**Geometry**) |
+| `geometry.py` | `Geometry`, `GEOMETRY_SPECS`, `encode`, `straight`, `edge_xy`, `edge_points`, `lonlat_to_xy`, `xy_to_lonlat`, `geometry_version`, `read_geometry` (**Geometry**) |
 | `backend.py` | the `GraphBackend` protocol, the `Path` and `EdgeTree` types, and what every backend shares: `check_ends`, `WeightCheck`, `as_cost`, `as_limits`, `enterable`, `banned_mask`, `final_mask`, `largest_scc_mask`, the turn classes (`TURN_CLASS`, `as_turn_classes`, `check_turn_edges`) |
 | `python_backend.py` | `PythonBackend`, the reference implementation |
 | `csr_backend.py` | `CsrBackend`, the production implementation, over `kernels.py` |
@@ -215,7 +215,9 @@ is 1.4 MB.
   projected metres, its ends included, edge k's `counts[k]` of them in a row; `edge_points`
   the same in (lon, lat), projected back with one transformer per CRS, so an edge's ends are
   `node_lon`, `node_lat` bit for bit and consecutive edges share their junction point exactly.
-  `lonlat_to_xy` projects lon/lat into the build's CRS (the share image's extent).
+  `lonlat_to_xy` projects lon/lat into the build's CRS (the share image's extent), and
+  `xy_to_lonlat` back with the same transformer, a node's point to its `node_lon`, `node_lat`
+  bit for bit (a route document's marks, `docs/reference/presentation.md`, **Marks**).
 - `geometry_version(geometry)`: the sha256 over each array's `name|dtype.str|[shape]` line
   and raw bytes, as `graph_version`'s recipe, pinned by a test (`tests/graph/test_geometry.py`).
 - `read_geometry(path, m, mmap=True)`: memory-maps the files read-only and checks their dtypes

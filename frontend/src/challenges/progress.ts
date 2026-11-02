@@ -10,7 +10,14 @@
 // may fail (a private window, storage blocked), so the page works without it and the badges then
 // last as long as the page; "completed" says which, for its toast (`completedLine`). `reset`
 // forgets them all. No DOM, so the tests drive it.
-import type { BrandEntry, ChallengeBrand, ChallengeGoal, Daily, RouteDocument } from "../api/types";
+import type {
+  BrandEntry,
+  BrandVisits,
+  ChallengeBrand,
+  ChallengeGoal,
+  Daily,
+  RouteDocument,
+} from "../api/types";
 import { isoWithOffset } from "../format";
 import type { AppState, Store } from "../state";
 import { dateOf, type Challenge } from "./list";
@@ -98,18 +105,26 @@ export function sameTrip(challenge: Challenge, trip: Trip, today: Daily | null =
   return sameStops(setup.stops, trip.stops, setup.reorder);
 }
 
-/** A stored route as a challenge sees it; its brand's wikidata id from `brands` when they are its
- * region's (a brand's id is its build's), else none, so its name decides. */
-export function tripOf(route: RouteDocument, state: Readonly<AppState>): Trip {
-  const { request, metrics, region } = route;
-  const visited = metrics.brand ?? null;
+/** The brand a route on `region` visits as a challenge sees it; its wikidata id from `brands`
+ * when they are its region's (a brand's id is its build's), else none, so its name decides. */
+function brandSeen(
+  visited: BrandVisits | null,
+  region: string,
+  state: Readonly<AppState>,
+): Trip["brand"] {
   const brands: BrandEntry[] = state.region?.region === region ? (state.brands ?? []) : [];
   const listed = visited && brands.find(({ id }) => id === visited.id);
+  return visited && { wikidata: listed?.wikidata ?? null, name: visited.name };
+}
+
+/** A stored route as a challenge sees it. */
+export function tripOf(route: RouteDocument, state: Readonly<AppState>): Trip {
+  const { request, metrics, region } = route;
   return {
     region,
     objective: request.objective ?? "distance",
     item: request.item ?? null,
-    brand: visited && { wikidata: listed?.wikidata ?? null, name: visited.name },
+    brand: brandSeen(metrics.brand ?? null, region, state),
     reorder: request.reorder === true,
     stops: request.stops ?? route.stops,
   };

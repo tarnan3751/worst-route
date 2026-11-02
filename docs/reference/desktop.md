@@ -97,7 +97,10 @@ Route.app/Contents/Resources/data`), or `WORST_ROUTE_DATA` from a checkout:
 desktop.json                       the manifest (below)
 graphs/us-t3/latest, <id>/         the national T3 build: meta.json, strings.json, arrays/, geometry/
 graphs/portland/latest, <id>/      Portland's all-roads build, picked for a trip inside its bbox
-aux/places/                        states.parquet, states_outline.parquet, us-t3.parquet, portland.parquet
+aux/places/                        the places index (format 2, docs/reference/presentation.md,
+                                   **Places**): places.json; states, states_outline, us-t3 and
+                                   portland, each as <table>.places.json, .places.npy and
+                                   .places.offsets.npy
 basemap/fonts/, sprites/           the basemap's labels (tools/fetch_basemap.sh --assets)
 ```
 
@@ -210,9 +213,11 @@ tools/build_desktop.sh tools/out/desktop-data [tools/out/desktop]
 each platform builds on its own. The spec:
 
 - one folder, not one file (nothing unpacked at each start), the app's code and dependencies by
-  PyInstaller's analysis and the hooks (hooks-contrib's for numba, llvmlite, shapely, pyproj,
-  pyarrow and uvicorn; pywebview's own), without the pipeline's packages (geopandas, OSMnx,
-  osmium, networkx), the test and type tools, pywebview's other platforms, and on Linux pywebview;
+  PyInstaller's analysis and the hooks (hooks-contrib's for numba, llvmlite, shapely, pyproj and
+  uvicorn; pywebview's own), without the pipeline's packages (geopandas, OSMnx, osmium, networkx),
+  pyarrow (the app reads no Parquet: the places index is NumPy arrays and JSON; pandas, which
+  OR-Tools' CP-SAT imports at its own import, would bring it, and runs without it), the test and
+  type tools, pywebview's other platforms, and on Linux pywebview;
 - `worst_route.graph.kernels` as its source too (**The first start**);
 - OR-Tools whole (`collect_all("ortools")`: hooks-contrib 2026.9 has no hook for it, and the
   analysis alone would miss its native libraries), for the certified worst
@@ -266,9 +271,11 @@ another library or version needs its entry and its file by hand.
 
 **Its data.** `tools/desktop_data.py pack OUT.tar.gz [--basemap FILE --basemap-url URL]`, run
 by a person on the machine with the builds, writes what the app serves of each region's latest
-build (not its `qa/` or `stages/`), the places index's files, the basemap's labels and the
-manifest, and prints the pack's sha256; `stage` checks a pack and unpacks it for a build, into a
-directory that is empty or not there (`--replace` deletes what one holds first). The
+build (not its `qa/` or `stages/`), the places index's files (format 2's, with a `places.json` of
+the regions packed; a pack of format 1's parquet files makes the app refuse to start, naming `aux
+places`), the basemap's labels and the manifest, and prints the pack's sha256; `stage` checks a
+pack and unpacks it for a build, into a directory that is empty or not there (`--replace` deletes
+what one holds first). The
 pack of `us-t3` (6adae6917be1) and Portland (0b72253e5e8a) with the labels: 268 MB packed, in
 62 s. A release's pack is a release asset a person uploads (`gh release create data-<date>
 --prerelease <pack>`; agents never upload), which `packaging/desktop/data.json` names by tag,
@@ -382,6 +389,21 @@ other lanes kept the load average at 5–25:
   620 m automatic leash, 28.07×); `THIRD-PARTY-LICENSES.txt` carries the OR-Tools entry and the
   bundled libraries' notice (`BUNDLED`); `libortools.9.dylib` appears three times in the bundle,
   two of them the `.app` layout's symlinks, so nothing ships twice.
+- **Without pyarrow** (2026-11-01, the release's data pack `data-20261101` staged and its places
+  index written again at format 2, `docs/reference/presentation.md`, **Places**; against the v0.1.0
+  app built from d359896, the same lockfile and spec but for the exclusion): `Worst Route.app`
+  1,004,480 kB, from 1,125,424 (`Contents/Frameworks` 309,988 kB from 423,340, pyarrow's 113,352
+  gone; `Resources` without pyarrow's 8,696 kB and the links to its eleven Arrow and Parquet
+  libraries; the places index 33.2 MB from 31.6); the disk image 318,976,089 bytes, from
+  353,247,606. pandas (18.8 MB) stays: OR-Tools' CP-SAT imports it at its own import and the
+  certified worst needs it. The smoke test passed on a first start (8.95 s to `/health`) and a
+  second (1.86 s, `--long --budget 30`: 65.92×, 9.07× and 3.51×, every route validated, exit 0,
+  nothing left behind), `/ready`'s places `us-t3: 31540 towns; portland: 68 towns` as before; two
+  trips planned with a fixed number of attempts by a checkout of 7e7fd77 serving format 1 and on
+  this app gave the same routes, states, towns and share images byte for byte; a certified route in
+  town proved optimal in 0.99 s (286 nodes, 594 edges, a 640 m leash, 28.47×). pyproj's 18.8 MB (its
+  libraries 8.4 MB in `Frameworks`, `proj_dir` 10.2 MB in `Resources`) is left whole: `proj.db`
+  (10.2 MB) is what its EPSG lookups read, and the rest of its share is 0.14 MB.
 - **Extract sizes**: **The basemap**.
 
 ## Limitations

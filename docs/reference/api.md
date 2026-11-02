@@ -63,7 +63,9 @@ in that process's memory, and each search of a job (one, or one a seed for a por
 `--nominatim-url` pointed at a stub of its own (no agent calls Nominatim). The share images are
 cached in `share/` beside the route store, so a lane's stay in its own tree too. At startup it
 loads each region's places index that `worst-route aux places` has written under
-`<WORST_ROUTE_DATA>/aux/places/`; a route on a region without its own uses that of a served
+`<WORST_ROUTE_DATA>/aux/places/` (one it cannot read, as format 1's parquet files, is one line on
+stderr and exit 1, before the route store opens: `docs/reference/presentation.md`, **Places**); a
+route on a region without its own uses that of a served
 region whose states hold all of the route's region's (`config.Region.states`), the fewest states
 first, never one clipped to a bbox, whose index holds only its bbox's towns
 (`routes_api.places_of`): the national T1 build's covers every state's (**Share image**). `--port 0` binds a free port, which

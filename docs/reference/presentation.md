@@ -235,48 +235,75 @@ sum printed, to pin in the script; a fetch that fails leaves nothing behind (exi
 that is not two digits is refused before anything is fetched (exit 2).
 
 **The index.** `worst-route aux places --region R [--census-dir PATH]` (`--census-dir` default
-`<WORST_ROUTE_DATA>/aux/census/`) writes three GeoParquet files under
-`<WORST_ROUTE_DATA>/aux/places/`, geometry as WKB, CRS EPSG:4326 (the Census files are NAD83,
-EPSG:4269, taken as equal):
+`<WORST_ROUTE_DATA>/aux/census/`) writes three tables under `<WORST_ROUTE_DATA>/aux/places/`,
+polygons in EPSG:4326 (the Census files are NAD83, EPSG:4269, taken as equal):
 
 ```
-states.parquet           STATEFP, STUSPS, NAME, geometry   the 5m file: 56 rows (50 states, DC,
-                                                           5 territories), by STATEFP
-states_outline.parquet   the same columns                  the 20m file: 52 rows, for drawing
-<region>.parquet         GEOID, NAME, NAMELSAD, LSAD,      the places of every
-                         STUSPS, geometry                  cb_2025_<FIPS>_place_500k.zip present
-                                                           whose polygon meets the region's bbox,
-                                                           every LSAD (25 city, 43 town, 47
-                                                           village, 21 borough, 57 CDP, ...),
-                                                           by GEOID
+states            STATEFP, STUSPS, NAME             the 5m file: 56 rows (50 states, DC,
+                                                    5 territories), by STATEFP
+states_outline    the same columns                  the 20m file: 52 rows, for drawing
+<region>          GEOID, NAME, NAMELSAD, LSAD,      the places of every
+                  STUSPS                            cb_2025_<FIPS>_place_500k.zip present
+                                                    whose polygon meets the region's bbox,
+                                                    every LSAD (25 city, 43 town, 47
+                                                    village, 21 borough, 57 CDP, ...),
+                                                    by GEOID
 ```
+
+The index is at **format 2**, which NumPy and json read without pandas or pyarrow (the desktop app
+carries no pyarrow; format 1 was GeoParquet). Each table is three files (`places.table_files`):
+
+```
+<table>.places.json          {"<column>": [values, one a row], ...}, in the columns' order above
+<table>.places.npy           uint8[*]: each row's polygon as WKB (shapely's), one after another
+<table>.places.offsets.npy   int64[rows + 1]: where each row's WKB starts, 0 first, the total last
+places.json                  {"format": 2, "regions": [...]}: every region written at format 2
+```
+
+(a structured array cannot hold WKB of varying length without pickling, hence the offsets). The
+JSON is ASCII, its names' other letters escaped, so it reads the same under any locale.
 
 The region's bbox is its latest build's (`params.bbox`), else its own in `config.REGIONS`, else
 the bounds of its states' polygons (the union of them, for a region of several states). Every
 places file present is read, so a region across a state line has both states' places (STUSPS
-says which). It prints what it wrote, and on stderr a warning,
+says which). It prints what it wrote (each table's columns file), and on stderr a warning,
 not an error, for each state whose polygon meets the bbox but whose places file is absent; a
 missing state file is one line and exit 1. It rewrites its files each time (about a second), the
-same files from the same inputs:
+same files from the same inputs, then adds the region to `places.json` (a manifest at another
+format is replaced, listing the region alone; a malformed one, not a JSON object with its format,
+and at format 2 its list of regions, is refused before anything is written, one line and exit 1,
+saying to delete it and write each region's index again):
 
 ```
-wrote data/aux/places/states.parquet (56 states)
-wrote data/aux/places/states_outline.parquet (52 outlines)
-wrote data/aux/places/portland.parquet (68 places: OR 53, WA 15)
+wrote data/aux/places/states.places.json (56 states)
+wrote data/aux/places/states_outline.places.json (52 outlines)
+wrote data/aux/places/portland.places.json (68 places: OR 53, WA 15)
 ```
 
 Without Washington's file it writes Oregon's 53 places and warns
 `missing places for WA: run tools/fetch_census.sh 53`.
 
-For `us-t1`, the 48 contiguous states and DC, it reads the 49 places files and writes 31,540
-places (a 30.5 MB file) in 4.4 s, peaking at 0.33 GB. Loading that index takes 0.75 s and 279 MB
-of the API process, and a 50,000-point line from coast to coast meets its 12–15 states and up to
-235 towns in 0.13–0.14 s.
+For `us-t1` or `us-t3`, the 48 contiguous states and DC, it reads the 49 places files and writes
+31,540 places (32.2 MB: 30.2 MB of polygons, 1.7 MB of columns, 0.25 MB of offsets; format 1's
+file was 30.5 MB) in 1.3 s, peaking at 0.33 GB. Loading that index takes 0.22 s in a fresh
+process, which peaks at 226 MB (format 1's, read with pyarrow, 0.18 s and 328 MB, measured alike
+on 2026-11-01), and a 50,000-point line from coast to coast meets its 12–15 states and up to 235
+towns in 0.13–0.14 s. Its polygons are format 1's byte for byte (their WKB the same), so every
+lookup answers as it did.
 
-**Asking it.** `PlaceIndex.load(region, data_dir=None)` reads the three files (pyarrow and
-shapely, no geopandas) into two shapely STRtrees, the states and the region's places, and keeps
-the outlines to draw; it returns None when any file is missing, and callers then know no states
-or towns and draw no outlines, never an error. For a route's line in lon/lat
+**Asking it.** `PlaceIndex.load(region, data_dir=None)` reads the three tables (`read_table`:
+NumPy, json and shapely, no geopandas, pandas or pyarrow) into two shapely STRtrees, the states and
+the region's places, and keeps the outlines to draw; it returns None when the region has no index
+or a file is missing, and callers then know no states or towns and draw no outlines, never an
+error. An index it cannot read raises `PlacesFormatError`, naming `worst-route aux places --region
+R` to write it again: the region's format 1 file (`<region>.parquet`) with no format 2 index of
+it, a `places.json` at another format, format 2's files of a region `places.json` does not list,
+or a table whose three files disagree (its columns of different lengths, or its offsets not one
+more than its rows, not starting at 0, not ending at its WKB's length, going back, or not int64);
+a malformed `places.json` raises it too, saying to delete it first. `serve` refuses to start on
+one (one line, exit 1, before it listens or opens the route store), and so do `plan --out` and
+the desktop app. A region whose bbox meets no town loads all the same, its towns none. For a
+route's line in lon/lat
 (`route_line(data, geometry, edges)`, the points `geojson.line_coordinates` gives, along the
 build's geometry):
 
@@ -468,7 +495,7 @@ data directory and holds a route over the API tests' 10 × 10 lattice):
 
 | Test file | What it covers |
 |---|---|
-| `test_places.py` | the index's rows; each town's point inside its polygon, in the towns' order, worked out once; states and towns in route order, the CDP included, and reversed; a route that comes back into a town listed where it first met it; a point repeated (a zero-length segment) met where it is; a route touching nothing; a touch counting; the state each point lies in (one in each, one on the border, a corner, one in neither); places outside the bbox left out; a state the bbox meets without its places file reported missing; the state's bounds when there is no bbox; the files' columns and CRS; no index when a file is missing; `aux places` on the fixture zipped as the Census ships it (shapefiles), with the latest build's bbox and the warning, and its missing state file; `STATES` (51, unique, every region's state) |
+| `test_places.py` | the index's rows; each town's point inside its polygon, in the towns' order, worked out once; states and towns in route order, the CDP included, and reversed; a route that comes back into a town listed where it first met it; a point repeated (a zero-length segment) met where it is; a route touching nothing; a touch counting; the state each point lies in (one in each, one on the border, a corner, one in neither); places outside the bbox left out; a state the bbox meets without its places file reported missing; the state's bounds when there is no bbox; the files' columns, arrays and manifest at format 2, and their polygons the source files' own; the manifest listing every region written; no index when a file is missing; an index it cannot read refused (a region's format 1 file, format 2's files without the manifest, a manifest at another format, a table whose files disagree in each way, a malformed manifest, by the writer too, which then writes nothing); a region without a town loading and answering; `aux places` on the fixture zipped as the Census ships it (shapefiles), with the latest build's bbox and the warning, its missing state file, and a malformed manifest refused in one line; `STATES` (51, unique, every region's state) |
 | `test_comparisons.py` | the four lines above; the things in order, each with both lines; a sweep from 0.1 to 500,000 mi reaching every thing, and every "N×" line but those the list makes unreachable (derived from it), deterministic; the boundaries (equal is not longer, 2× exactly, the shorter line); every distance's format |
 | `test_share_image.py` | a 1200 × 630 PNG (its IHDR), the same bytes twice, with and without the index (which differ), no Software stamp; each theme's palette: classic's the default, the same bytes twice, the map's corner its surface, its ink and its route among the pixels, ten different images; `headline` for each objective and a round trip; a slowest-time route drawing its own headline, a distance route ignoring its time ratio; a round trip; no baseline; the extent's margin and shape, and its minimum; the network one line per road unit, drawn along a bent geometry, only the units near the map; the roads a full decode finds, on the lattice with every road bent over 243 maps in and around it and on a hairpin met only by its tip, and none decoded to tell for a map holding every road or none; under a cap of 10, thinned to T0–T2, T0–T1, T0, then the longest units of T0 (359 of one length: the first ten; among unequal lengths the ten longest, ties to the lower unit id, a long unit outside T0 left out), the same lines twice |
 | `test_share_palettes.py` | the ten themes, classic first, every colour a lowercase hex string, no two palettes alike; classic's the image's colours from before the themes; night's its preset's; transit's and ledger's networks light grey |

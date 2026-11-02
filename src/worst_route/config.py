@@ -18,8 +18,9 @@ class allowlists and defaults join this module as their steps are built.
 `HighwayClass` numbers the road classes a build keeps (stored per edge as `edge_highway`) and
 `TIERS` lists each tier's classes (`docs/PLAN.md` §2.6). `DEFAULT_BACKEND` names the graph
 backend the engine searches with unless told otherwise. The `API_*` numbers are the API's job
-limits and streaming cadence (`docs/reference/api.md`); the `GEOCODE_*` numbers its geocoding
-proxy's rate, cache and limits; the `PUBLIC_*` numbers the limits of a public server.
+limits and streaming cadence (`docs/reference/api.md`), the `GZIP_*` values which of its answers
+travel gzipped; the `GEOCODE_*` numbers its geocoding proxy's rate, cache and limits; the
+`PUBLIC_*` numbers the limits of a public server.
 """
 
 import math
@@ -562,6 +563,28 @@ API_LEADER_HOLD_S = 2.0
 API_PORTFOLIO_TICK_S = 1.0
 MAX_PORTFOLIO = 4
 API_DEFAULT_MAX_ITERATIONS = 1_000_000
+
+# Compressed answers (`docs/reference/hosting.md`, **Compression and caching**): the API's answers
+# and the frontend's files go gzipped to a client that accepts it when GZIP_MINIMUM bytes or longer,
+# but never those of GZIP_EXCLUDED_TYPES: the event stream, which goes out event by event, and what
+# is compressed already (Starlette's own list, less gRPC's, written out here; `api/app.py` adds the
+# basemap's tiles).
+GZIP_MINIMUM = 1024
+GZIP_EXCLUDED_TYPES = (
+    "text/event-stream",
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/avif",
+    "font/woff",
+    "font/woff2",
+    "application/gzip",
+    "application/x-gzip",
+    "application/zip",
+    "audio/*",
+    "video/*",
+)
 
 # A route drawn by hand (`docs/reference/api.md`, **Drawing a route**): a path holds at most
 # MAX_DRAW_EDGES edges, and the API keeps what DRAW_CONTEXTS requests drawn on last need on every

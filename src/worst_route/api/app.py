@@ -23,7 +23,9 @@ the drawing's steps and finishes, held as `Api.limits`, the job manager's settin
 `GET /config` offers the frontend (`basemap`, its file named by `basemap_name`, by default the first
 region), whose files it serves under `/basemap/` from `basemap_dir` (by default
 `<data_dir>/basemap`; `basemap_api`). Every request gets an id and an access line
-(`logs.RequestLog`). Once the job manager has started, the lifespan makes each build's spatial
+(`logs.RequestLog`), and an answer of a kilobyte or more travels gzipped to a client that accepts
+it (`GZipMiddleware`, `config.GZIP_MINIMUM`), but never the event stream or what is compressed
+already (`GZIP_EXCLUDED`). Once the job manager has started, the lifespan makes each build's spatial
 index and then its backend in a thread (`warm_builds`; `graph.loader`): on a first start the Numba
 kernels compile then, into their cache, while the server already listens, and a request that needs
 one before it is made waits for the kernels' import or makes its own.
@@ -53,6 +55,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
+from starlette.middleware.gzip import GZipMiddleware
 
 from worst_route import __version__, config
 from worst_route.api import (
@@ -75,6 +78,8 @@ from worst_route.api.store import RouteStore
 from worst_route.config import (
     DEFAULT_BACKEND,
     DRAW_CONTEXTS,
+    GZIP_EXCLUDED_TYPES,
+    GZIP_MINIMUM,
     NOMINATIM_URL,
     BackendName,
     BasemapName,
@@ -89,6 +94,12 @@ from worst_route.graph.store import MissingArray
 from worst_route.presentation.places import PlaceIndex
 
 log = logging.getLogger(__name__)
+
+# Never gzipped: config's media types (the event stream, and what is compressed already, the share
+# image's PNG among them) and the basemap's tiles, compressed in their file. An answer of at least
+# GZIP_MINIMUM bytes travels gzipped, with `Vary: Accept-Encoding`, to a client that accepts it; a
+# shorter one or a byte range (206) travels as it is, and a file's HEAD answers its plain headers.
+GZIP_EXCLUDED = (*GZIP_EXCLUDED_TYPES, basemap_api.MEDIA_TYPES[".pmtiles"])
 
 
 @dataclass(frozen=True)
@@ -227,6 +238,9 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
     app.include_router(draw_api.router)
     app.include_router(basemap_api.router)
     basemap_api.mount_basemap(app, basemap_api.basemap_dir(settings))
+    app.add_middleware(
+        GZipMiddleware, minimum_size=GZIP_MINIMUM, exclude_content_types=GZIP_EXCLUDED
+    )
     app.add_middleware(RequestLog, trust_proxy=settings.trust_proxy)
 
     @app.exception_handler(ApiError)

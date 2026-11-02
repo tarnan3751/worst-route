@@ -13,6 +13,7 @@ frontend on one person's computer instead (`docs/reference/desktop.md`).
 | The image | `Dockerfile`, `.dockerignore` |
 | One machine's service | `compose.yaml` |
 | The frontend and the API from one process | `src/worst_route/api/static.py` (`serve --frontend`) |
+| Compressed answers, the files' caching | `src/worst_route/config.py` (`GZIP_MINIMUM`, `GZIP_EXCLUDED_TYPES`), `src/worst_route/api/app.py` (`GZIP_EXCLUDED`), `src/worst_route/api/static.py` (**Compression and caching**) |
 | Each client's share, the public budget | `src/worst_route/api/limits.py`, the job manager (`docs/reference/api.md`, **Public limits**) |
 | Request ids, JSON logs | `src/worst_route/api/logs.py` (`docs/reference/api.md`, **Logs**) |
 | `/config`, the basemap's files | `src/worst_route/api/basemap_api.py` (`docs/reference/api.md`, **Basemap**) |
@@ -215,6 +216,48 @@ believed), and nginx's `$request_id` becomes the request's id in the logs. Witho
 it but no proxy, a visitor could name any address. The API's stream already sends
 `X-Accel-Buffering: no`. Caddy does the same with `reverse_proxy 127.0.0.1:8000` (it sets
 `X-Forwarded-For` and streams event streams unbuffered).
+
+A proxy that compresses as well is fine: an answer that arrives compressed, with its
+`Content-Encoding`, is passed on as it is (nginx's `gzip` skips one), and nginx compresses only
+`text/html` unless `gzip_types` names more. It must leave `text/event-stream` out of them, or the
+events may wait in its compressor (**Compression and caching**).
+
+## Compression and caching
+
+The API's answers and the frontend's files go gzipped to a client that sends `Accept-Encoding:
+gzip` (Starlette's `GZipMiddleware`: on the API in `create_app`, on the build's files in
+`create_site`, with `config.py`'s `GZIP_MINIMUM` and `api/app.py`'s `GZIP_EXCLUDED`): an answer
+of 1,024 bytes or more, with `Content-Encoding: gzip` and `Vary: Accept-Encoding`. A file (the
+build's, the basemap's fonts and icons) is read and sent in chunks, so it goes without a
+`Content-Length` (chunked); any other answer, as a route's document, carries its compressed
+length. Its plain answer, to a client that does not accept gzip, carries the `Vary` too, so a
+cache keeps the two apart, and so does a `304 Not Modified` for one of the build's files when its
+200 would (RFC 9110 §15.4.5: `api/static.py` adds it, the middleware giving a 304 none), the 200
+and the 304 each carrying it once; a 304 for one of the basemap's files carries none. Measured on
+Portland's build (2026-11-01): the frontend's script, 1,251,810 bytes, travels as 347,421; its
+stylesheet, 82,884, as 12,577; a route's document, 323,114, as 75,451; `index.html`, 1,414, as
+622. Compressing the script takes the API's process about 25 ms (gzip's level 9), once for each
+visitor and build, since the script is then cached a year.
+
+Never compressed:
+
+- the event stream (`text/event-stream`), which goes out event by event as before, each event
+  its own write (`X-Accel-Buffering: no`, **Behind a reverse proxy**);
+- what is compressed already: `config.GZIP_EXCLUDED_TYPES`, Starlette's own list less gRPC's
+  (`image/png`, so the share image and the basemap's icons, the other image formats, the WOFF
+  and WOFF2 fonts, archives, audio and video), and the basemap's tiles
+  (`application/vnd.pmtiles`, compressed inside the file; the PMTiles reader asks for byte
+  ranges, and a range, a 206, is never compressed either);
+- an answer under a kilobyte.
+
+A `HEAD` of a file (the build's, the basemap's) answers the plain file's headers (no
+`Content-Encoding`, its whole `Content-Length`): `curl -sI` shows those, and `curl -s -D - -o
+/dev/null -H 'Accept-Encoding: gzip' <url>` what a browser gets.
+
+The caching is `api/static.py`'s: Vite names the files under `assets/` by their content, so they
+are kept a year (`Cache-Control: public, max-age=31536000, immutable`), and `index.html`, like
+anything else at the root, is `no-cache`, revalidated at every load, so a new build is seen at
+once. The basemap's files and the share image are kept a day (`public, max-age=86400`).
 
 ## Limits, logs, readiness
 

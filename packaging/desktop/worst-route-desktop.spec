@@ -4,9 +4,9 @@
 # WORST_ROUTE_DESKTOP_DATA (tools/desktop_data.py stage) and the frontend built.
 #
 # - The app's code and its dependencies, by PyInstaller's analysis from launch.py and the hooks
-#   (hooks-contrib's for numba, llvmlite, shapely, pyproj, pyarrow and uvicorn; pywebview's own),
-#   less the pipeline's packages (the app never builds a graph) and, on Linux, pywebview (the app
-#   opens the browser there).
+#   (hooks-contrib's for numba, llvmlite, shapely, pyproj and uvicorn; pywebview's own), less the
+#   pipeline's packages (the app never builds a graph), pyarrow (the app reads no Parquet) and, on
+#   Linux, pywebview (the app opens the browser there).
 # - The Numba kernels' module also as its source file: a frozen module's code names a file that
 #   does not exist, for which Numba ignores NUMBA_CACHE_DIR and caches in a directory of its own
 #   choosing; with the file there, the kernels compile once into the user's directory.
@@ -121,6 +121,10 @@ def shipped_distributions(entries: list[tuple[str, str, str]]) -> set[str]:
 # imports inside functions (`aux places` reads Census files with geopandas) would still pull them.
 EXCLUDES = ["geopandas", "osmnx", "osmium", "networkx", "pyogrio", "fiona", "IPython", "tkinter"]
 EXCLUDES += ["pytest", "hypothesis", "mypy", "PyInstaller"]
+# pyarrow (111 MB): the app reads no Parquet (the places index is NumPy arrays and JSON), but
+# pandas, which OR-Tools' CP-SAT imports (`ortools.sat.python.cp_model`, the certified worst),
+# imports it when it is there, as PIL does inside functions; both run without it.
+EXCLUDES += ["pyarrow"]
 # pywebview's other platforms (its guilib imports each inside a function).
 PLATFORMS = {"cocoa", "winforms", "edgechromium", "win32", "gtk", "qt", "cef", "mshtml", "android"}
 OWN = {"cocoa"} if MACOS else {"winforms", "edgechromium", "win32"}

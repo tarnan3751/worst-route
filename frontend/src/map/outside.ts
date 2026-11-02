@@ -19,19 +19,27 @@
 //   layer (over the land, under the water and all after it), or over the raster tiles, which have
 //   no vector water, the sea outside the outline flat there too; a basemap that draws nothing gets
 //   the mask alone.
-// map/basemap.ts `Basemap` draws them with the basemap's parts and swaps them with each variant,
+// Either way the basemap's labels but the water's draw a point (a place's, an island's name) only
+// `within` the outline, so the names of places outside it are not drawn at all. Only points:
+// `within` takes a feature whole, and at low zooms the basemap merges a tile's roads or boundaries
+// of one kind into one feature, which a part beyond the outline would drop whole, the US's part
+// with it; the roads, the boundaries and the labels along them (road names, shields) outside the
+// outline are drawn over the flat tone as they are.
+// map/basemap.ts `Basemap` draws all this with the basemap's parts and swaps it with each variant,
 // the land colour read again from the new flavor; `paintOutside` recolours the outside tone.
 //
 // maplibre-gl is imported for its types only, so the tests load this module in Node.
 import type {
   AddLayerObject,
   FillLayerSpecification,
+  FilterSpecification,
   Map as MapLibreMap,
   SourceSpecification,
 } from "maplibre-gl";
 import type { LonLat } from "../api/types";
 import type { Theme } from "../theme/theme";
 import type { BasemapParts } from "./basemap";
+import { asExpression } from "./filters";
 
 type Ring = LonLat[];
 export interface Polygon {
@@ -103,15 +111,21 @@ const isWater = (layer: AddLayerObject): boolean => WATER.has(sourceLayer(layer)
 
 /** `parts` with the land outside `us` in `theme`'s outside tone: over Protomaps' earth and land
  * cover, the earth again in that tone and `us` in the earth's colour; else the mask, just below
- * their first water layer (over them all when they have none). `parts` themselves when the outline
- * did not load. */
+ * their first water layer (over them all when they have none); and their labels but the water's
+ * drawing a point only within `us`. `parts` themselves when the outline did not load. */
 export function withOutside(
   parts: BasemapParts,
   us: MultiPolygon | null,
   theme: Theme,
 ): BasemapParts {
   if (us === null) return parts;
-  const layers = [...parts.layers];
+  const points = ["any", ["!=", ["geometry-type"], "Point"], ["within", us]];
+  const layers = parts.layers.map((layer): AddLayerObject => {
+    if (layer.type !== "symbol" || isWater(layer)) return layer;
+    const own = (layer as { filter?: FilterSpecification }).filter;
+    const filter = own === undefined ? points : ["all", asExpression(own), points];
+    return { ...layer, filter } as AddLayerObject;
+  });
   const earth = layers.findIndex(isEarth);
   if (earth >= 0) {
     const ground = layers[earth] as FillLayerSpecification;

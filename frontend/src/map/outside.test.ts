@@ -5,18 +5,20 @@
 // tone and the outline in the flavor's land colour, the rest of the basemap and the route's layers
 // above them, the land colour following the flavor through a change of variant; else the mask, a
 // ring round the world with each polygon a hole, just below the basemap's first water layer or on
-// top of the raster tiles; the outside tone the theme's.
+// top of the raster tiles; the basemap's labels but the water's drawing a point only within the
+// outline, their own filters kept, its lines as they are; the outside tone the theme's.
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { namedFlavor } from "@protomaps/basemaps";
-import type { AddLayerObject, StyleSpecification } from "maplibre-gl";
+import type { AddLayerObject, FilterSpecification, StyleSpecification } from "maplibre-gl";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BasemapConfig, LonLat } from "../api/types";
 import { night } from "../theme/presets/night";
 import { studio } from "../theme/presets/studio";
 import type { Theme } from "../theme/theme";
 import { type BasemapMap, Basemap, addBasemap, basemapParts } from "./basemap";
+import { asExpression } from "./filters";
 import {
   EARTH_OUTSIDE,
   MASK,
@@ -67,6 +69,10 @@ const US: MultiPolygon = {
   type: "MultiPolygon",
   coordinates: [[square(-100, 30, 10)], [[...square(-80, 40, 2)].reverse()]],
 };
+const POINTS = ["any", ["!=", ["geometry-type"], "Point"], ["within", US]];
+
+const filterOf = (layer: AddLayerObject | undefined): FilterSpecification | undefined =>
+  (layer as { filter?: FilterSpecification } | undefined)?.filter;
 
 /** A stand-in map keeping its layers in order, which refuses to remove a source a layer reads (as
  * MapLibre does). */
@@ -249,6 +255,59 @@ describe("withOutside on Protomaps' basemap", () => {
   });
 });
 
+describe("withOutside's labels", () => {
+  it("draws Protomaps' labels but the water's only within the outline, its lines as they are", () => {
+    for (const variant of ["grayscale", "light", "dark"] as const) {
+      const parts = basemapParts(VECTOR, ROOT, null, variant);
+      const drawn = withOutside(parts, US, studio).layers.filter(
+        (l) => l.id !== EARTH_OUTSIDE && l.id !== US_LAND,
+      );
+      expect(drawn.map((l) => l.id)).toEqual(parts.layers.map((l) => l.id));
+      let filtered = 0;
+      parts.layers.forEach((layer, k) => {
+        const water = "source-layer" in layer && layer["source-layer"] === "water";
+        if (layer.type === "symbol" && !water) {
+          const own = filterOf(layer);
+          const points = own === undefined ? POINTS : ["all", asExpression(own), POINTS];
+          expect(drawn[k], layer.id).toEqual({ ...layer, filter: points });
+          filtered += 1;
+        } else {
+          expect(drawn[k], layer.id).toBe(layer); // fills, lines, the water's labels
+        }
+      });
+      expect(filtered, variant).toBeGreaterThan(8);
+    }
+    const locality = withOutside(basemapParts(VECTOR, ROOT), US, studio).layers.find(
+      (l) => l.id === "places_locality",
+    );
+    expect(filterOf(locality)).toEqual(["all", ["==", ["get", "kind"], "locality"], POINTS]);
+  });
+
+  it("filters OpenFreeMap's city labels, not its lines or its water's names", () => {
+    const style: StyleSpecification = {
+      version: 8,
+      sources: { openmaptiles: { type: "vector", url: "https://ofm/planet" } },
+      layers: [
+        { id: "water", type: "fill", source: "openmaptiles", "source-layer": "water" },
+        {
+          id: "highway",
+          type: "line",
+          source: "openmaptiles",
+          "source-layer": "transportation",
+          filter: ["==", ["get", "class"], "motorway"],
+        },
+        { id: "water_name", type: "symbol", source: "openmaptiles", "source-layer": "water_name" },
+        { id: "label_city", type: "symbol", source: "openmaptiles", "source-layer": "place" },
+      ],
+    };
+    const parts = withOutside(basemapParts(ONLINE, ROOT, style), US, studio);
+    const filters = Object.fromEntries(parts.layers.map((l) => [l.id, filterOf(l)]));
+    expect(filters.label_city).toEqual(POINTS);
+    expect(filters.highway).toEqual(["==", ["get", "class"], "motorway"]);
+    expect(filters.water_name).toBeUndefined();
+  });
+});
+
 describe("withOutside on another basemap", () => {
   it("puts OpenFreeMap's mask just below its first water layer, over its land's", () => {
     const style: StyleSpecification = {
@@ -323,6 +382,11 @@ describe("the land outside through a change of variant", () => {
     ]);
     expect(layers.get(EARTH_OUTSIDE)).toMatchObject({ paint: { "fill-color": "#141a30" } });
     expect(layers.get(US_LAND)).toMatchObject({ paint: { "fill-color": "#1f1f1f" } });
+    expect(filterOf(layers.get("places_locality"))).toEqual([
+      "all",
+      ["==", ["get", "kind"], "locality"],
+      POINTS,
+    ]);
     expect([...sources]).toEqual(["protomaps", US_LAND]);
   });
 });

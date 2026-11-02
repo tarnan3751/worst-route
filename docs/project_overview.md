@@ -1095,12 +1095,17 @@ brief):
   mode, 80–250 km; strict no-left, 100–300 km; bridges, 30–200 km; a pilgrimage to one of twenty
   chains by wikidata id with at least six locations in the trip's area, 30–250 km; hard mode,
   100–300 km; four towns in the worst order, every two 25–200 km apart), then today's route made
-  worse, today's only. Each bar is 80 % of the trip's own plan, rounded down: a job with no client
-  in a worker, as the daily route's, with 2,500 attempts (hard mode 8,000), so every server sets
-  the same bar; no-left's is 1.0× (strict no-left converges at 1.2–1.8×, where the soft constraint
-  keeps hundreds of left turns), and hard mode is never under 1.5× (a draw below it passed over).
-  A date is made on its first call (about a minute on `us-t3`) and kept in memory and in the route
-  store; today and the 30 days before are answered, a public server making only today's. This
+  worse, today's only, each titled with its towns ("Cross 600 bridges between Hanover, OH and
+  Milford, OH"). Each bar is 80 % of the trip's own plan, rounded down: a job with no client in a
+  worker, as the daily route's, with 2,500 attempts (hard mode 8,000), so every server sets the
+  same bar, a count of 100 or more down to the ten (606 asks for 600); no-left's is 90 % of its
+  strict plan's ratio, down to the tenth, a draw whose plan makes under 1.35× passed over, so at
+  least 1.2× (strict no-left converges at 1.2–1.8×, where the soft constraint keeps hundreds of
+  left turns), and hard mode is never under 1.5× (a draw below it passed over). A date is made on
+  its first call (about a minute on `us-t3`), today's by every server as it starts
+  (`ApiSettings.challenges_at_start`, on by default), so the first call afterwards is answered at
+  once, and kept in memory and in the route store; today and the 30 days before are answered, a
+  public server making only today's. This
   replaced the fixed list of ten bundled in the frontend (on the Portland, Oregon and national
   builds; the alphabet, roundabouts and a drawing among them), not served at first because a
   server-side list was an API shape: the Portland build left the app, and the alphabet and

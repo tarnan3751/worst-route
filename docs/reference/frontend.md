@@ -119,7 +119,9 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   (A to B with none, at the ratio), bridges (at least K crossed between A and B), a pilgrimage (at
   least K of a brand's locations), hard mode (A to B at N×), the worst order (four towns at N×),
   and today's route made worse once. Each has an id that carries its day (`long-way-2026-11-02`),
-  a title that carries its bar ("Bend, OR to Boise, ID at 16×", "Visit 12 McDonald's"), a blurb, a
+  a title that names the trip and carries its bar ("Losantville, IN to Wallace, IN at 15×", "Cross
+  600 bridges between Hanover, OH and Milford, OH", "Josephville, MO, West City, IL, Cambria, IL and
+  Stewardson, IL in the worst order at 11×"), a blurb, a
   setup (the stops, labelled with their towns; the mode with its item or brand; the turn
   constraints and hard mode; the worst order; as bad as possible; on the answer's region at the
   automatic tier and leash; none for today's route made worse) and a goal measured on a finished
@@ -127,8 +129,9 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   left turn at a ratio (`no_left`, `min_ratio`), a count of an item (`items`), a brand's visits
   (`brand`), a hard-mode route's ratio (`hard`), or today's route made worse once (`daily_worse`).
   The section asks for today's at start (`GET /challenges`, the day being the server's, the UTC
-  date of today's route) and says "Loading today's challenges…" meanwhile: a day's first answer
-  takes the server about half a minute, and the app waits it out. A server without them (404: no
+  date of today's route) and says "Loading today's challenges…" meanwhile: a server makes today's
+  as it starts (about a minute on `us-t3`), so a page opened later is answered at once, and one
+  opened sooner, or a link's of another day not made yet, waits it out. A server without them (404: no
   places index) shows no section; any other failure (the server out of reach, a proxy's 502) shows
   "Couldn't load today's challenges." and "Try again", which asks again. Each row has its badge (a
   green tick once completed, "Completed Saturday, October 31" in its tooltip), its title, its
@@ -164,7 +167,8 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   not an id ending in a date with a string is ignored, so the fixed list's badges of old no longer
   count and go at the next write), every read and write in a try, so the page works without it (a
   private window, storage blocked: the badges then last as long as the page); its toast,
-  "Challenge done. Cross 20 bridges.", is shown once (**Toasts**), and its badge turns on. Past
+  "Challenge done. Cross 600 bridges between Hanover, OH and Milford, OH.", is shown once
+  (**Toasts**), and its badge turns on. Past
   days' badges keep, as their ids are their days': under the list, "3 challenges done" counts
   every day's, and "Reset badges" forgets them all; a route still shown that meets a challenge (a
   reload of a page whose URL still names it, `?route=`) completes it again. **Short of the bar**:
@@ -546,10 +550,10 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   none (before its first snapshot, or a round trip), so the line shown never jumps when the
   ratio comes. Once the
   route is stored (or opened by a link), its document's `toasts`, from the first, in order,
-  looping. A notice, a challenge completed ("Challenge done. Cross 20 bridges.") or a run of the
-  one set up ending short of its bar ("12.3×, the challenge needs 15×. More time, another run or
-  Make it worse may get there.", **Challenges**), is shown once, for one period, before the lines go on where they were (several
-  notices in turn). The pointer over the strip holds the line shown; a click shows the next one at
+  looping. A notice, a challenge completed ("Challenge done. Make today's route worse.") or a run
+  of the one set up ending short of its bar ("12.3×, the challenge needs 15×. More time, another
+  run or Make it worse may get there.", **Challenges**), is shown once, for one period, before the
+  lines go on where they were (several notices in turn). The pointer over the strip holds the line shown; a click shows the next one at
   once and starts the 4 s again. Nothing is shown while no job runs, no route is shown and no
   notice waits.
 - **Errors.** Every API error shows its `message` in a banner over the map, as a sentence (its
@@ -1303,7 +1307,16 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
   and the toast "13 Dollar General, the challenge needs 40. More time, another run or Make it
   worse may get there." The 13 marks were drawn over the route in night's cyan ringed in its navy
   casing, and in studio's teal ringed in white once the Theme row changed it, no reload; the
-  pointer over one showed "Dollar General", gone once it left.
+  pointer over one showed "Dollar General", gone once it left. Then on the server's series, its
+  marks and its titles (the two series together, `serve` started fresh: today's eight made at start
+  in 49.3 s, `GET /challenges` answered at once afterwards, no stub):
+  `?challenge=pilgrimage-2026-11-02` set up "Visit 11 Dollar General between Glenfield, ND and
+  Webster, SD"; Go, the section shown again five seconds in: "14 of 11 Dollar General" on the row,
+  past the bar before the route was stored; the run ended on its 20 s budget at 21.3× (4,059 mi,
+  9,192 tries, 14 of the 15 within reach): the document's 14 marks, each a `brand` labelled "Dollar
+  General", drawn at the stores along the route (Jamestown, Fargo, Aberdeen, Brookings among them),
+  the row "Done" beside its badge, and the toast "Challenge done. Visit 11 Dollar General between
+  Glenfield, ND and Webster, SD."
 - **The seeds** (2026-11-01, headless Chrome on the lane's `npm run dev` and `serve --region
   portland --region us-t3`, ten workers, the tile hosts unresolvable, load 9–15): a link with
   `seed=40&seeds=4&budget=20` and Powell's → Reed showed the Seeds row at 4 with its note; Go ran

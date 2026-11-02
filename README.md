@@ -23,8 +23,9 @@ the same map data always produces the same route.
 
 ## Try it
 
-The desktop app runs entirely on your machine and ships with the national road network. Installers for macOS (Apple Silicon) and Windows, and a tarball for Linux, are
-attached to each release. On its first start the app downloads its offline map, about 700 MB;
+The desktop app runs entirely on your machine and ships with the national road network.
+Installers for macOS (Apple Silicon) and Windows, and a tarball for Linux, are attached to each
+release. On its first start the app downloads its offline map, about 700 MB;
 until then it draws OpenFreeMap's tiles.
 
 To run it from source you need Python 3.12, [uv](https://docs.astral.sh/uv/) and Node 22:

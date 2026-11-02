@@ -1,5 +1,7 @@
 """The pipeline's steps run in memory on a fixture, for the tests of the later steps."""
 
+import functools
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -8,13 +10,17 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pyproj
 
+from tests.pipeline.copies import META
+from worst_route.graph.data import GraphData
 from worst_route.pipeline.build import build_raw_graph
 from worst_route.pipeline.cleanup import run_cleanup
 from worst_route.pipeline.enrich import run_enrich
 from worst_route.pipeline.filter import POI_SCHEMA, filter_roads
+from worst_route.pipeline.save import graph_data
 from worst_route.pipeline.tiers import run_tiers
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "osm"
+OSM_FIXTURES = sorted(path.stem for path in FIXTURES.glob("*.osm"))
 UTM_10N = 32610
 TO_LONLAT = pyproj.Transformer.from_crs(UTM_10N, 4326, always_xy=True)
 
@@ -83,3 +89,15 @@ def enriched(source: Path, tmp: Path, *, allow_fragmented: bool = False) -> nx.M
 def tier_nodes(graph: nx.MultiDiGraph) -> list[list[int]]:
     """Each tier's kept nodes, fragmented or not."""
     return [t.node_ids for t in run_tiers(graph, allow_fragmented=True).tiers]
+
+
+@functools.cache
+def fixture_build(name: str) -> GraphData:
+    """An OSM fixture through cleanup (with its turn restrictions; a fragmented one's largest
+    component), enrich with no POIs, and save's arrays: one build per name, read-only."""
+    source = FIXTURES / f"{name}.osm"
+    with tempfile.TemporaryDirectory() as tmp:
+        table = restrictions_of(source, Path(tmp)) if name == "restrictions" else None
+    graph = cleaned(source, restrictions=table, allow_fragmented=True)
+    run_enrich(graph, poi_table([]))
+    return graph_data(graph, tier_nodes(graph), META)

@@ -520,9 +520,30 @@ The CLI's `plan` and `validate` keep their own loading, with its one-line errors
 
 ## Spatial
 
-`SpatialIndex(data)` builds, once per build, a `cKDTree` on every node's (x, y) and a pyproj
+`SpatialIndex(data)` builds, once per build, a grid of every node's (x, y) and a pyproj
 transformer from EPSG:4326 to `meta["crs_epsg"]` (`always_xy=True`). Masks filter at query
-time, so one tree serves every request.
+time, so one grid serves every request.
+
+**The grid**, which replaced scipy's `cKDTree` (2026-11-01; the app no longer carries scipy,
+`docs/reference/desktop.md`, **Building it**): square cells of side sqrt(area / n) over the
+nodes' bounding box, at least max(width, height) / n and 1 m, so about n cells and never more
+than 3n + 1, the nodes sorted by cell row by row (`order`, int32) with each cell's offset
+(`start`, int32): 8 bytes a node, 17 MB on `us-t3`. A ball, the nodes within r of a point, is
+read from the cells the square around it covers and a cell more on each side, so rounding at
+its edges never drops a node, each row's run of cells one slice of the sorted nodes; a node is
+within when dx * dx + dy * dy <= r * r in float64, unfused, its coordinates less the point's.
+Only balls were ever asked of the tree (`snap`'s nearest k are its own sort of a ball, by
+distance then node id), and this is the tree's leaf test, so the balls are the tree's, node for
+node: 10,000 random ones on every fixture build, on Portland, Oregon and `us-t3` (the tests
+below). The one difference is a node within a rounding of r: scipy on Apple Silicon fuses the
+test's last multiply-add, and of 7,500 radii set at a node's own distance on Portland it
+answered 438 otherwise than the unfused test, every one by the fusion; no radius the engine
+or the API uses is one. An empty build's grid is one empty cell. Measured against the tree
+(2026-11-01, the dev machine at a load average of 3–4; Portland, Oregon, `us-t3`): the index
+built in 4.9, 18.5 and 219 ms (the tree's 7.8, 30 and 347); a snap 0.36, 0.08 and 0.04 ms (0.42,
+0.15, 0.19); a 3 km bubble 23, 14 and 22 µs (66, 26, 19); a 400 m ball, the local exhaustive
+detour's, 8.3, 9.5 and 21 µs (5.8, 5.9, 13), the one place it is slower; a request's masks the
+same, 0.7, 2.0 and 17 ms.
 
 - `project(lat, lon) -> (x, y)` in the build's CRS.
 - `snap(lat, lon, role, node_mask=None, k=10, max_radius_m=5000, exclude=None) -> Snap`,
@@ -552,17 +573,18 @@ time, so one tree serves every request.
   (887,737 nodes) a two-stop leash takes 4–5 ms where shapely over the stops' bounding box grown
   by the leash took 22–159 ms, a three-stop one 8–10 ms; on Oregon 1 ms against 24–38 ms, the
   same masks on every request measured.
-- `bubble_mask(stops_xy, radius_m) -> bool[n]`: the nodes within `radius_m` of any stop.
+- `bubble_mask(stops_xy, radius_m) -> bool[n]`: the nodes within `radius_m` of any stop, a
+  ball of the grid's around each.
 - `nodes_within(center, radius_m, node_mask) -> intp[]` and `edges_from_within(center,
   radius_m, node_mask) -> intp[]`: the detours' balls, the nodes of the mask within `radius_m`
   of a point and the edges leaving them, ascending. A node is within when dx² + dy² ≤ r², the
-  same rule as `bubble_mask` up to floating point at the exact boundary, so the nodes are
-  `bubble_mask`'s within the mask (equal on every radius the tests try, lattice nodes on the
-  boundary included). They scan the mask's nodes and out-edges, kept for the last mask seen
-  (compared by content, after the mask's dtype and length are checked), instead of querying the
-  whole build: on Portland a request holds about 7,600 of 65,810 nodes, and the scan costs
-  0.04 ms where a KD-tree query covering the area cost 1.4 ms (it returns its hits as a Python
-  list). A mask of the wrong dtype or length is a `ValueError`.
+  grid's own expression, so the nodes are exactly `bubble_mask`'s within the mask (equal on
+  every radius the tests try, lattice nodes on the boundary included). They scan the mask's
+  nodes and out-edges, kept for the last mask seen (compared by content, after the mask's dtype
+  and length are checked), instead of querying the whole build: on Portland a request holds
+  about 7,600 of 65,810 nodes, and the scan costs 0.04 ms where a KD-tree query covering the
+  area cost 1.4 ms (it returned its hits as a Python list). A mask of the wrong dtype or length
+  is a `ValueError`.
 - `active_mask(tier_mask, leash, bubbles) = leash & (tier_mask | bubbles)`: a request's node
   mask (`docs/PLAN.md` §2.6).
 
@@ -612,7 +634,12 @@ arrays and outside `graph_version`; the digest's pin; a build read and loaded wi
 geometry, which is asked for only on use), `test_backends.py`, `test_edge_search.py`,
 `test_spatial.py` (snapping roles, masks, `exclude` and notes; leash and bubble masks, the leash
 shapely's at its boundary, nodes 1 µm either side of it included; the
-masked balls against `bubble_mask`, radii on lattice nodes included), and `test_loader.py`
+masked balls against `bubble_mask`, radii on lattice nodes included; an empty build's index;
+and, `slow`, the grid against scipy's KD-tree (`scipy_parity.py`): 10,000 random balls node for
+node, then 1,000 snaps (random roles, masks, exclusions and k) and bubble masks against an
+index whose balls are the tree's, on a lattice of whole metres, a cloud with a dense cluster
+and duplicate nodes, a line with no height, and every OSM fixture's build), `test_parity_data.py`
+(`data`: the same on Portland's, Oregon's and `us-t3`'s builds, balls up to 40 km), and `test_loader.py`
 (`latest`, the two builds kept, memory-mapped arrays, missing builds, a build missing an array,
 the geometry read on first use and kept).
 

@@ -3,9 +3,13 @@ import pytest
 import shapely
 from pyproj import Transformer
 
+from tests.pipeline.chain import OSM_FIXTURES, fixture_build
 from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import SnapError, SpatialIndex, active_mask
 from worst_route.graph.testing import GRID_ORIGIN, grid_graph, make_graph
+
+from ..engine.graphs import lattice
+from .scipy_parity import check_balls, check_snaps, cloud, line
 
 X0, Y0 = GRID_ORIGIN
 TO_LONLAT = Transformer.from_crs("EPSG:32610", "EPSG:4326", always_xy=True)
@@ -254,7 +258,7 @@ def test_active_mask_is_leash_and_tier_or_bubble() -> None:
 
 def test_the_masked_balls_are_the_bubbles_within_the_mask() -> None:
     # centres on nodes, mid-block and off the grid, radii landing exactly on lattice nodes:
-    # the scan measures as the KD-tree does
+    # the scan measures as the grid does
     rng = np.random.default_rng(0)
     masks = [np.ones(GRID.n, dtype=bool), rng.random(GRID.n) < 0.6]
     for mask in masks * 2:  # each mask twice in a row, then again after the other: the cache
@@ -272,3 +276,30 @@ def test_the_masked_balls_are_the_bubbles_within_the_mask() -> None:
     GRID_INDEX.nodes_within(np.array([X0, Y0]), 100.0, cached)
     with pytest.raises(ValueError, match="node_mask"):  # checked before the cache is consulted
         GRID_INDEX.nodes_within(np.array([X0, Y0]), 100.0, cached.astype(np.uint8))
+
+
+def test_an_empty_build_s_index_finds_nothing() -> None:
+    index = SpatialIndex(make_graph([], []))
+    assert index.bubble_mask(np.array([[X0, Y0]]), 1e6).shape == (0,)
+    with pytest.raises(SnapError):
+        index.snap(*at(0.0, 0.0), "start")
+
+
+SYNTHETIC = {
+    "town": TOWN,
+    "grid": GRID,
+    "lattice": lattice(20, 20),
+    "cloud": cloud(),
+    "line": line(),
+}
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("name", [*SYNTHETIC, *OSM_FIXTURES])
+def test_the_balls_snaps_and_bubbles_are_the_kd_tree_s(name: str) -> None:
+    # 10,000 random balls node for node, then 1,000 snaps and bubble masks, against scipy's
+    # KD-tree, on the synthetic builds (a lattice's nodes at whole metres, a cloud with a
+    # dense cluster and duplicate nodes, a line with no height) and every OSM fixture's build
+    g = SYNTHETIC[name] if name in SYNTHETIC else fixture_build(name)
+    check_balls(g, 10_000, seed=1)
+    check_snaps(g, 1_000, seed=2)

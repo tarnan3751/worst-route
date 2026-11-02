@@ -94,7 +94,7 @@ worst-route/
 │   │   ├── csr_backend.py      # NumPy CSR + Numba kernels (M2+)
 │   │   ├── backends.py         # make_backend: csr, python, or auto (csr when numba imports)
 │   │   ├── kernels.py          # numba: masked bounded dijkstra (node-based), edge-state dijkstra (turn-aware), bounded DFS
-│   │   ├── spatial.py          # cKDTree snapping, leash mask, bubble mask
+│   │   ├── spatial.py          # grid snapping, leash mask, bubble mask
 │   │   ├── testing.py          # hand-built graphs for tests (make_graph, grid_graph)
 │   │   └── loader.py           # LRU of loaded builds over store.read_build
 │   ├── engine/
@@ -325,7 +325,7 @@ Rules enforced by `Route.splice()` and re-checked by the validator:
 
 ### 3.2 Snapping stops
 
-- KD-tree on every node's projected coordinates (cKDTree built at load, ~2 s for 5M nodes; cached per build), filtered by the active mask at query time.
+- A grid of every node's projected coordinates (built at load, 0.2 s for `us-t3`'s 2.15M nodes; cached per build; scipy's cKDTree until 2026-11-01, `docs/reference/graph.md`, **Spatial**), filtered by the active mask at query time.
 - Start needs `out_degree ≥ 1`, end needs `in_degree ≥ 1`, intermediate stops need `pass_through` (exists `u→v→w`, `u ≠ w`). A stop at the end of a cul-de-sac cannot be passed through without reusing the mouth node, so it snaps to the nearest pass-through node and the response says so: `"Stop 2 moved 140 m to the nearest through street"`.
 - Dead-end *neighbourhoods* (a subdivision with one entrance) cannot be detected cheaply per node, so the seed-route step handles them: if a leg cannot be built, re-snap its earlier stop if it is a via, then its later stop (a via or the end; the start never moves), each to its next-nearest candidates (k = 1..10, expanding radius), retrying after each. After those candidates, fail with `STOP_UNREACHABLE_WITHOUT_REPEAT` and name the stop. A via trapped in such a subdivision walks out, and the stops after it stay.
 - Stops stay on distinct nodes: a via avoids the other stops' nodes, and so does the end, except in a round trip: a request whose start and end points are identical, where the end may take the start's node. A point-to-point request never becomes a round trip.
@@ -784,7 +784,7 @@ Engine throughput:
 - Whole runs, measured on a 10k-node grid corner to corner: **1100–1160 attempts/s** with CSR against 1000–1070 with the reference, the same routes. The searches are now ~3% of a run; the loop's own NumPy work (`Route.release`, `bubble_mask`) is the rest (`docs/reference/engine.md`, **The loop**). On Portland, Powell's → Reed converges at **~1,700 attempts/s** with CSR against ~1,560 with the reference, the same route, the searches ~7% of the run once each weights array is checked only once. Then the route kept its ban counts and the detours' balls scanned the request's nodes (`docs/reference/engine.md`, **Routes**, **Detours**): on the same grid 3,240–3,700 attempts/s on the reference and 5,120–5,400 on CSR, the same routes. With the transition tables searched (engine version 2) and CSR's edge-state kernels, Powell's → Reed converges after 82,841 attempts at **~8,200 attempts/s** on CSR against ~7,100 on the reference, the same route; the searches are a quarter of the CSR run and a third of the reference's, mostly small ones (`docs/reference/engine.md`, **On Portland with `CsrBackend`**).
 - 20 s budget → CSR: 100–200 accepted splices, ratios of 20–100× for a cross-town trip. networkx: ~5–10 splices, enough to prove the approach, not enough for a satisfying demo, which is why the CSR backend is the first task of M2.
 - At state/national leashes the search ball grows (100 km on T2 ≈ 300k nodes ≈ 0.3 s/search). The ambition radius bounds searches, not the leash, so attempts stay ~50–100 ms; the number of splices needed for a "9 hour" route is only a few hundred.
-- Leash mask: ~0.5 s for 5M nodes (shapely 2 vectorised). Snapping: µs after the KD-tree exists; tree build ~2 s for 5M nodes, cached.
+- Leash mask: ~0.5 s for 5M nodes (shapely 2 vectorised). Snapping: µs after the spatial index exists; its grid's build 0.2 s for 2.15M nodes, cached.
 
 Expected bottlenecks, in order of likelihood:
 

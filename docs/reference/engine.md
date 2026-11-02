@@ -677,9 +677,9 @@ otherwise the draw is 2/3 waypoint, 1/3 random weight. `strategy` forces one (te
 round-trip seed).
 
 - **Waypoint.** A waypoint w is drawn from the nodes the search may enter within 4 × radius of
-  the midpoint of a and b (`SpatialIndex.nodes_within`, a scan of the request's nodes: a
-  KD-tree query over the whole build cost a millisecond per attempt once the ball covered the
-  area). The pool is the objective's when it has one and the ball holds some of it, else every
+  the midpoint of a and b (`SpatialIndex.nodes_within`, a scan of the request's nodes: a query
+  of the whole build's KD-tree, the index before the grid, cost a millisecond per attempt once
+  the ball covered the area). The pool is the objective's when it has one and the ball holds some of it, else every
   node of the ball (so a pool steers, and never starves the search); a and b are never
   drawn. Half the draws (`WAYPOINT_UNIFORM_PROBABILITY`) are uniform over those nodes, the
   others ∝ exp(−distance / radius), so a waypoint often lands far out in the ball. Then a → w,

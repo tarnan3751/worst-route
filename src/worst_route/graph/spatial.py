@@ -2,9 +2,19 @@
 
 `docs/reference/graph.md`, **Spatial**; `docs/PLAN.md` §2.6, §3.2, §3.9.
 
-`SpatialIndex(data)` builds, once per build, a cKDTree on every node's projected (x, y) and a
+`SpatialIndex(data)` builds, once per build, a grid of the nodes' projected (x, y) and a
 transformer from lon/lat (EPSG:4326) to the build's CRS. Masks filter at query time, so one
-tree serves every request.
+grid serves every request.
+
+The grid (`_Grid`) cuts the nodes' bounding box into square cells of side sqrt(area / n), at
+least max(width, height) / n and 1 m (about n cells, never more than 3n + 1), and sorts the
+nodes by cell, row by row. A ball, the nodes within r of a point, is read from the cells the
+square around it covers, a cell more on each side (so rounding at its edges never drops a
+node), each row's run of cells one slice of the sorted nodes; of those, a node is within when
+dx * dx + dy * dy <= r * r in float64, unfused. That is the leaf test of scipy's cKDTree, which
+the grid replaced, so the balls are the tree's but for a node within a rounding of r, which
+scipy on Apple Silicon tests with the last multiply-add fused (`docs/reference/graph.md`,
+**Spatial**). An empty build's grid is one empty cell, and its balls are empty.
 
 `snap(lat, lon, role, node_mask, k, max_radius_m, exclude)` picks the node a stop goes to. The
 candidates are the nodes in the mask and not in `exclude` within `max_radius_m`, nearest first
@@ -31,15 +41,15 @@ radius_m)`: the nodes within `radius_m` of any stop. `active_mask(tier, leash, b
 
 `nodes_within(center, radius_m, node_mask)` and `edges_from_within(...)` are the detours'
 balls: the nodes of a mask within `radius_m` of a point, and the edges leaving them, ascending.
-A node is within when dx² + dy² ≤ r², the same rule as `bubble_mask` up to floating point at
-the exact boundary (the KD-tree computes its own distances), so the nodes are `bubble_mask`'s
-within the mask. They scan the mask's nodes and their out-edges, kept for the last mask seen
-(compared by content, after the mask's dtype and length are checked), instead of querying the
-whole build: a request's mask holds a few thousand nodes at city scale where the build holds
-tens of thousands, and a KD-tree query returns its hits as a Python list, which a ball
-covering the area makes cost a millisecond.
+A node is within when dx² + dy² ≤ r², the grid's own expression, so the nodes are exactly
+`bubble_mask`'s within the mask. They scan the mask's nodes and their out-edges, kept for the
+last mask seen (compared by content, after the mask's dtype and length are checked), instead of
+querying the whole build: a request's mask holds a few thousand nodes at city scale where the
+build holds tens of thousands, and a KD-tree query (the index before the grid) returned its
+hits as a Python list, which a ball covering the area made cost a millisecond.
 """
 
+import math
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import Literal
@@ -84,11 +94,10 @@ class SpatialIndex:
     def __init__(self, data: GraphData) -> None:
         # imported when an index is made, not with the module, which the API imports at its start
         from pyproj import Transformer
-        from scipy.spatial import cKDTree
 
         self.data = data
         self._xy = np.column_stack([data.node_x, data.node_y])
-        self._tree = cKDTree(self._xy)
+        self._grid = _Grid(data.node_x, data.node_y)
         self._masked: _Masked | None = None
         crs = f"EPSG:{data.meta['crs_epsg']}"
         self._to_xy = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
@@ -114,7 +123,7 @@ class SpatialIndex:
             if mask is not None and (mask.dtype != np.bool_ or mask.shape != (n,)):
                 raise ValueError(f"{name}: need bool of shape ({n},)")
         point = np.array(self.project(lat, lon))
-        near = np.array(self._tree.query_ball_point(point, r=max_radius_m), dtype=np.int64)
+        near = self._ball(point, max_radius_m)
         if node_mask is not None:
             near = near[node_mask[near]]
         if exclude is not None:
@@ -160,9 +169,13 @@ class SpatialIndex:
         """The nodes within `radius_m` of any stop."""
         stops = np.asarray(stops_xy, dtype=np.float64).reshape(-1, 2)
         mask = np.zeros(self.data.n, dtype=np.bool_)
-        for hits in self._tree.query_ball_point(stops, r=radius_m):
-            mask[hits] = True
+        for stop in stops:
+            mask[self._ball(stop, radius_m)] = True
         return mask
+
+    def _ball(self, point: NDArray[np.float64], radius_m: float) -> NDArray[np.int32]:
+        """The nodes within `radius_m` of `point` (x, y), in the grid's order."""
+        return self._grid.ball(float(point[0]), float(point[1]), float(radius_m))
 
     def nodes_within(
         self, center: NDArray[np.float64], radius_m: float, node_mask: NDArray[np.bool_]
@@ -211,6 +224,45 @@ class SpatialIndex:
         if role == "end":
             return bool(tails.size)
         return bool(heads.size and tails.size and np.union1d(heads, tails).size >= 2)
+
+
+class _Grid:
+    """The nodes in square cells of side `side` from (x0, y0), row by row: the nodes of cell
+    (row, col) are `order[start[row * cols + col] : start[row * cols + col + 1]]`."""
+
+    def __init__(self, x: NDArray[np.float64], y: NDArray[np.float64]) -> None:
+        n = len(x)
+        self.x, self.y = x, y
+        if n:
+            self.x0, self.y0 = float(x.min()), float(y.min())
+            width, height = float(x.max()) - self.x0, float(y.max()) - self.y0
+        else:
+            self.x0 = self.y0 = width = height = 0.0
+        per = max(n, 1)
+        self.side = max(math.sqrt(width * height / per), max(width, height) / per, 1.0)
+        col = ((x - self.x0) // self.side).astype(np.int64)
+        row = ((y - self.y0) // self.side).astype(np.int64)
+        self.cols = int(col.max()) + 1 if n else 1
+        self.rows = int(row.max()) + 1 if n else 1
+        cell = row * self.cols + col
+        self.order = np.argsort(cell, kind="stable").astype(np.int32)
+        self.start = np.zeros(self.rows * self.cols + 1, dtype=np.int32)
+        np.cumsum(np.bincount(cell, minlength=self.rows * self.cols), out=self.start[1:])
+
+    def ball(self, px: float, py: float, r: float) -> NDArray[np.int32]:
+        """The nodes with (x − px)² + (y − py)² ≤ r², in the grid's order."""
+        side, cols, start, order = self.side, self.cols, self.start, self.order
+        first = max(int((px - r - self.x0) // side) - 1, 0)
+        last = min(int((px + r - self.x0) // side) + 1, cols - 1)
+        low = max(int((py - r - self.y0) // side) - 1, 0)
+        high = min(int((py + r - self.y0) // side) + 1, self.rows - 1)
+        if first > last or low > high:
+            return order[:0]
+        runs = range(low * cols, (high + 1) * cols, cols)
+        nodes = np.concatenate([order[start[c + first] : start[c + last + 1]] for c in runs])
+        dx, dy = self.x[nodes] - px, self.y[nodes] - py
+        within: NDArray[np.int32] = nodes[dx * dx + dy * dy <= r * r]
+        return within
 
 
 @dataclass(frozen=True, eq=False)

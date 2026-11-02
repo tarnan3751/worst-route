@@ -585,10 +585,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         manifest = replace(manifest, contact=settings().contact)
     agent = user_agent(manifest.contact)
-    install_assets(data / "basemap", user / "basemap")
     log.info("%s %s: data %s, regions %s, %s", PRODUCT, __version__, data, manifest.regions, mode)
 
     def build() -> LocalServer:
+        install_assets(data / "basemap", user / "basemap")  # a first start's, once the window is up
         site, _ = build_site(
             data,
             user,

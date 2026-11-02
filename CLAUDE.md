@@ -75,7 +75,7 @@ attribution with its notices page (`notices.html`).
 So is the desktop app (M6, `docs/reference/desktop.md`): `worst-route-desktop`, the
 API and the frontend on 127.0.0.1 in a window of the system's own web view (pywebview; macOS on
 Apple Silicon and Windows, the browser on Linux), frozen by PyInstaller with the national T3
-build and Portland's inside, OpenFreeMap's vector tiles until its own Protomaps extract of the
+build inside, OpenFreeMap's vector tiles until its own Protomaps extract of the
 US (zoom 11) has been fetched on its first start, and a release workflow that builds, smoke-tests
 and attaches the installers to a draft release on a tag.
 The compact build format (format 4, pipeline version 6) is built too: a build's `arrays/`

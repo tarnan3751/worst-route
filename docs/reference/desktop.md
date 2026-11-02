@@ -108,7 +108,7 @@ basemap/fonts/, sprites/           the basemap's labels (tools/fetch_basemap.sh 
 **The manifest**, `desktop.json` (`read_manifest`; written by `tools/desktop_data.py`):
 
 ```
-{"format": 1, "regions": ["us-t3", "portland"], "builds": {"us-t3": "<id>", "portland": "<id>"},
+{"format": 1, "regions": ["us-t3"], "builds": {"us-t3": "<id>"},
  "basemap": {"name": "us", "url": "<where it is fetched from, or null>", "size": <bytes>,
              "sha256": "<hex>"},
  "contact": "<the contact in the User-Agent, or null>"}

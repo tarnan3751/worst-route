@@ -1,14 +1,14 @@
 """The desktop app's data (`docs/reference/desktop.md`, **Its data**): packed once by a person,
 staged by every build.
 
-    uv run python tools/desktop_data.py pack OUT.tar.gz [--region us-t3 --region portland]
+    uv run python tools/desktop_data.py pack OUT.tar.gz [--region us-t3]
         [--basemap FILE.pmtiles --basemap-name us] [--basemap-url URL]
     uv run python tools/desktop_data.py stage PACK.tar.gz DIR [--sha256 HEX] [--replace]
         [--basemap-url URL] [--contact EMAIL]
     uv run python tools/desktop_data.py conus OUT.geojson
 
 `pack` writes, from `WORST_ROUTE_DATA`, what the app serves and nothing else: for each region (by
-default `us-t3`, the default region, then `portland`) its latest build's `meta.json`,
+default `us-t3`) its latest build's `meta.json`,
 `strings.json`, `arrays/` and `geometry/` (not its `qa/` or `stages/`) and its `latest` file; the
 places index's states, outlines and each region's towns (format 2's files, with a `places.json` of
 the regions packed); the basemap's fonts and icons
@@ -87,7 +87,7 @@ def pack(args: argparse.Namespace) -> None:
     data = settings().data_dir
     builds: dict[str, str] = {}
     members: list[tuple[Path, str]] = []
-    for region in args.region or ("us-t3", "portland"):
+    for region in args.region or ("us-t3",):
         latest = data / "graphs" / region / "latest"
         build_id = latest.read_text().strip()
         builds[region] = build_id

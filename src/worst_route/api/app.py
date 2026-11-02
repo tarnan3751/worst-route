@@ -2,10 +2,11 @@
 
 `create_app(settings)` loads each served region's build (memory-mapped, `graph.loader`) and its
 geometry, which drawing a route needs, when it is called, so `worst-route serve` fails before it
-listens when a build or its geometry is missing; it opens the route store, builds the geocoding
-service (Nominatim, with its cache `geocode.sqlite` beside the route store; none when the geocoder
-is `none`; a test passes its own), loads each region's places index (`presentation.places`; none for
-a region `worst-route aux places` has not written one for, whose routes then use a served region's
+listens when a build or its geometry is missing, or a places index is one it cannot read
+(`places.PlacesFormatError`); it opens the route store, builds the geocoding service (Nominatim,
+with its cache `geocode.sqlite` beside the route store; none when the geocoder is `none`; a test
+passes its own), loads each region's places index (`presentation.places`; none for a region
+`worst-route aux places` has not written one for, whose routes then use a served region's
 that covers its states, `routes_api.places_of`) and mounts the endpoints (`routes_api`, `pick_api`,
 which picks the build a trip runs on, `geocode_api`, `share_api`, whose images are cached in
 `share/` beside the route store, `directions_api`, `ready_api`, `daily_api`, the daily route, and
@@ -156,6 +157,7 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
         except MissingArray as error:
             raise BuildNotFound(str(error)) from None
         builds[region] = loaded
+    places = {region: PlaceIndex.load(region, settings.data_dir) for region in builds}
     store_path = settings.store_path or settings.data_dir / "routes.sqlite"
     store = RouteStore(store_path)
     limits = PUBLIC if settings.public else LOCAL
@@ -188,7 +190,6 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
                 await service.aclose()
 
     app = FastAPI(title="worst-route", version=__version__, lifespan=lifespan)
-    places = {region: PlaceIndex.load(region, settings.data_dir) for region in builds}
     share_dir = store_path.parent / "share"
     quota = GeocodeQuota(limits.geocode_per_minute) if limits.geocode_per_minute else None
     picks = GeocodeQuota(limits.pick_per_minute) if limits.pick_per_minute else None

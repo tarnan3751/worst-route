@@ -28,7 +28,7 @@ async def http(tmp_path: Path) -> AsyncIterator[httpx.AsyncClient]:
     for region in ("portland", "oregon", "us-t1"):
         if not layout.latest_file(region).exists():
             pytest.skip(f"no {region} build under {settings().data_dir}")
-    if not (places_dir() / "us-t1.parquet").exists():
+    if not (places_dir() / "us-t1.places.json").exists():
         pytest.skip("no national places index")
     config = ApiSettings(
         data_dir=settings().data_dir,

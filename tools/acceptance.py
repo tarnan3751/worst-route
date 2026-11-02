@@ -49,8 +49,6 @@ from pathlib import Path
 from typing import Any, get_args
 
 import numpy as np
-import pyarrow.parquet as pq
-import shapely
 from scipy.spatial import cKDTree
 
 from worst_route.config import DEFAULT_BACKEND, LEASH_MAX_KM, REGIONS, BackendName
@@ -65,7 +63,7 @@ from worst_route.graph.data import GraphData
 from worst_route.graph.spatial import SnapError, SpatialIndex
 from worst_route.graph.store import MissingArray, read_build
 from worst_route.pipeline import layout
-from worst_route.presentation.places import places_dir
+from worst_route.presentation.places import PlaceIndex
 
 UNLIMITED = 10**9  # attempts: the budget in seconds bounds a run
 RESNAP_NOTE = "nearer nodes cannot be reached"
@@ -73,11 +71,11 @@ RESNAP_NOTE = "nearer nodes cannot be reached"
 type Point = tuple[float, float]  # (lat, lon)
 
 
-def place_points(region: str) -> np.ndarray:
-    """(lon, lat) of each place of the region's places index, inside its polygon."""
-    table = pq.read_table(places_dir() / f"{region}.parquet", columns=["geometry"])
-    shapes = shapely.from_wkb(np.array(table.column("geometry").to_pylist(), dtype=object))
-    return shapely.get_coordinates(shapely.point_on_surface(shapes))
+def place_points(region: str) -> np.ndarray | None:
+    """(lon, lat) of each place of the region's places index, inside its polygon; None without
+    an index."""
+    index = PlaceIndex.load(region)
+    return None if index is None else np.array([(p.lon, p.lat) for p in index.town_points()])
 
 
 def draw_pairs(
@@ -187,9 +185,8 @@ def main(args: argparse.Namespace) -> int:
     )
     places = None
     if args.places:
-        try:
-            places = place_points(args.region)
-        except FileNotFoundError:
+        places = place_points(args.region)
+        if places is None:
             print(f"no places index: run `worst-route aux places --region {args.region}`")
             return 1
     pairs = draw_pairs(data, spatial, bbox, args, places)

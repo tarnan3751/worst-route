@@ -49,7 +49,7 @@ def test_a_region_is_built_checked_pruned_and_given_its_places(
     assert row["prune"].startswith(f"prune {row['build_id']}: removed build, cleanup, enrich")
     directory = layout.build_dir("portland", row["build_id"])
     assert not (directory / "stages" / "cleanup").exists() and (directory / "arrays").is_dir()
-    assert row["places"].startswith("wrote ") and "portland.parquet" in row["places"]
+    assert row["places"].startswith("wrote ") and "portland.places.json" in row["places"]
     printed = capsys.readouterr().out
     assert f"| portland | {row['build_id']} | {row['nodes']:,} | " in printed
     assert printed.rstrip().endswith(f"wrote {out}")

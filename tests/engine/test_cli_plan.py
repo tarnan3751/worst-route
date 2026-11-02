@@ -98,6 +98,26 @@ def test_planning_and_validating_never_read_the_geometry(data_dir: Path, tmp_pat
     assert "search:" not in stdout and "validator:" not in stdout
 
 
+def test_plan_refuses_a_places_index_of_format_1_before_the_search(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    save(data_dir, GRID, "b1")
+    places = data_dir / "aux" / "places"
+    places.mkdir(parents=True)
+    (places / "portland.parquet").write_bytes(b"PAR1")  # format 1's, which plan no longer reads
+    out = tmp_path / "route.json"
+    trip = ["--from", latlon(GRID, 0), "--to", latlon(GRID, 99), "--seed", "3"]
+    code, stdout, stderr = plan(*trip, "--max-iterations", "20", "--out", str(out))
+    assert code == 1 and not out.exists()
+    assert stderr == (
+        f"the places index of portland in {places} is at format 1 (parquet), and this version "
+        "reads format 2: run `worst-route aux places --region portland` again\n"
+    )
+    assert "search:" not in stdout and "validator:" not in stdout
+    code, stdout, stderr = plan(*trip, "--max-iterations", "20")  # without --out, no index read
+    assert code == 0, stdout + stderr
+
+
 def test_the_same_seed_plans_the_same_route(data_dir: Path, tmp_path: Path) -> None:
     save(data_dir, GRID, "b1")
     files = []

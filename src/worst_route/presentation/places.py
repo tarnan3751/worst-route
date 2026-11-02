@@ -3,30 +3,36 @@
 
 `worst-route aux places --region R` runs `write_places`: it reads the Census files a person
 fetched with `tools/fetch_census.sh` (`<data>/aux/census/`, `config.CENSUS_VINTAGE`) and writes
-three GeoParquet files under `<data>/aux/places/`, geometry as WKB in EPSG:4326 (the Census
-files are NAD83, EPSG:4269, taken as equal):
+three tables under `<data>/aux/places/`, polygons in EPSG:4326 (the Census files are NAD83,
+EPSG:4269, taken as equal), each as three files (`table_files`): `<table>.places.json`, its
+columns, `<table>.places.npy`, its polygons as WKB one after another in one uint8 array, and
+`<table>.places.offsets.npy`, where each polygon starts (int64, a row more than the table, the
+last the total length):
 
-    states.parquet          STATEFP, STUSPS, NAME: the 5m state polygons, by STATEFP
-    states_outline.parquet  the same columns from the 20m file, for drawing
-    <region>.parquet        GEOID, NAME, NAMELSAD, LSAD, STUSPS: every place of every
-                            cb_<vintage>_<FIPS>_place_500k.zip present whose polygon meets the
-                            region's bbox, CDPs (LSAD 57) included, by GEOID
+    states          STATEFP, STUSPS, NAME: the 5m state polygons, by STATEFP
+    states_outline  the same columns from the 20m file, for drawing
+    <region>        GEOID, NAME, NAMELSAD, LSAD, STUSPS: every place of every
+                    cb_<vintage>_<FIPS>_place_500k.zip present whose polygon meets the region's
+                    bbox, CDPs (LSAD 57) included, by GEOID
 
+and then `places.json`, `{"format": 2, "regions": [...]}`, every region written at this format.
 The region's bbox is its build's (`params.bbox`), else its own in `config.REGIONS`, else the
 bounds of its states' polygons. A state whose polygon meets the bbox without a places file
 present is reported as missing, not an error.
 
-`PlaceIndex.load(region)` reads the three files (None when one is absent: callers then know no
-states or towns and draw no outlines) and answers `states_at`, the state each point lies in (the
-API's pick of a build for a trip's stops), `town_points`, each town at a point inside it (the
-daily route's draw of two towns), and, for a route's line in lon/lat, `states_crossed`
-and `towns_passed`: every polygon the line intersects (a touch counts), ordered
-by where the route first meets it. That is the first of the route's segments, in route order,
-that intersects the polygon, then the point of their intersection nearest that segment's start
-(its start itself for a zero-length segment, a point repeated); polygons met at the same point
-keep the files' order. Segment by segment, so a route crossing itself on an overpass is never
-located at its other pass. geopandas is imported only to write; the index reads with pyarrow
-and shapely.
+`PlaceIndex.load(region)` reads the three tables with NumPy, json and shapely, never pandas or
+pyarrow (the desktop app carries neither for it). It returns None when the region has no index (or
+a file is missing): callers then know no states or towns and draw no outlines; an index this
+version cannot read, a region's format 1 (`<region>.parquet`) or an index `places.json` does not
+list at format 2, raises `PlacesFormatError`, which names the command to write it again. The index
+answers `states_at`, the state each point lies in (the API's pick of a build for a trip's stops),
+`town_points`, each town at a point inside it (the daily route's draw of two towns), and, for a
+route's line in lon/lat, `states_crossed` and `towns_passed`: every polygon the line intersects (a
+touch counts), ordered by where the route first meets it. That is the first of the route's
+segments, in route order, that intersects the polygon, then the point of their intersection
+nearest that segment's start (its start itself for a zero-length segment, a point repeated);
+polygons met at the same point keep the tables' order. Segment by segment, so a route crossing
+itself on an overpass is never located at its other pass. geopandas is imported only to write.
 
 The polygons are prepared (`shapely.prepare`) when the index loads, and each segment is tested
 only against the polygons whose bounds it meets: on Portland, a 9,642-point route against the
@@ -36,14 +42,16 @@ and GEOS 3.14, whether or not they have been used before (sixteen threads asking
 the process), so the index answers one lookup at a time.
 """
 
+import json
 import threading
-from collections.abc import Sequence
+from collections import Counter
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
-import pyarrow.parquet as pq
 import shapely
 from numpy.typing import NDArray
 
@@ -55,8 +63,15 @@ from worst_route.presentation.geojson import line_coordinates
 
 STATE_COLUMNS = ("STATEFP", "STUSPS", "NAME")
 PLACE_COLUMNS = ("GEOID", "NAME", "NAMELSAD", "LSAD", "STUSPS")
+PLACES_FORMAT = 2  # the index's format, which places.json records
+MANIFEST = "places.json"
 
 Shapes = NDArray[np.object_]
+Columns = dict[str, list[str]]
+
+
+class PlacesFormatError(ValueError):
+    """A region's places index this version cannot read: run `worst-route aux places` again."""
 
 
 @dataclass(frozen=True)
@@ -91,8 +106,8 @@ class TownPoint:
 
 @dataclass(frozen=True)
 class PlacesWritten:
-    """What `write_places` wrote: each file and its row count, the places by state, and the
-    states the bbox meets whose places file was not given."""
+    """What `write_places` wrote: each table (its columns' file) and its row count, the places by
+    state, and the states the bbox meets whose places file was not given."""
 
     states: Path
     n_states: int
@@ -124,13 +139,94 @@ def place_files(directory: Path) -> list[Path]:
     return sorted(directory.glob(f"cb_{CENSUS_VINTAGE}_[0-9][0-9]_place_500k.zip"))
 
 
-def _read(path: Path, columns: Sequence[str]) -> Any:
+def table_files(directory: Path, table: str) -> tuple[Path, Path, Path]:
+    """A table's files: its columns (JSON), its polygons as WKB (uint8) and where each starts."""
+    stem = f"{table}.places"
+    return directory / f"{stem}.json", directory / f"{stem}.npy", directory / f"{stem}.offsets.npy"
+
+
+def write_manifest(directory: Path, regions: Iterable[str]) -> Path:
+    """`places.json`: the index's format and the regions whose tables it holds."""
+    path = directory / MANIFEST
+    path.write_text(json.dumps({"format": PLACES_FORMAT, "regions": sorted(regions)}) + "\n")
+    return path
+
+
+def _read(path: Path, columns: Sequence[str]) -> tuple[Columns, Shapes]:
+    """A Census file's (or any file's with its columns) columns and polygons."""
     import geopandas as gpd
 
     source = f"zip://{path}" if path.suffix == ".zip" else str(path)
     frame = gpd.read_file(source, columns=list(columns))
-    frame = frame.set_crs(4326, allow_override=True)
-    return frame[[*columns, "geometry"]]
+    return {c: frame[c].tolist() for c in columns}, frame.geometry.to_numpy()
+
+
+def _sorted(table: tuple[Columns, Shapes], key: str) -> tuple[Columns, Shapes]:
+    """The table's rows by `key`'s values (unique: FIPS codes, GEOIDs)."""
+    columns, shapes = table
+    order = sorted(range(len(shapes)), key=columns[key].__getitem__)
+    return {c: [v[k] for k in order] for c, v in columns.items()}, shapes[order]
+
+
+def _rows(columns: Columns, names: Sequence[str]) -> Iterator[tuple[str, ...]]:
+    return zip(*(columns[c] for c in names), strict=True)
+
+
+def _write(directory: Path, table: str, columns: Mapping[str, list[str]], shapes: Shapes) -> Path:
+    """A table's three files (`table_files`); its columns' file, the path returned."""
+    names, wkb, offsets = table_files(directory, table)
+    blobs = shapely.to_wkb(shapes).tolist()
+    starts = np.cumsum([0, *map(len, blobs)], dtype=np.int64)
+    np.save(wkb, np.frombuffer(b"".join(blobs), dtype=np.uint8))
+    np.save(offsets, starts)
+    names.write_text(json.dumps(dict(columns)) + "\n")
+    return names
+
+
+def read_table(directory: Path, table: str, region: str) -> tuple[Columns, Shapes]:
+    """A table `_write` wrote: its columns and its polygons; `PlacesFormatError`, naming the
+    command that writes `region`'s index again, when its three files disagree."""
+    names, wkb, offsets = table_files(directory, table)
+    columns = json.loads(names.read_bytes())
+    blob = np.load(wkb, allow_pickle=False)
+    starts = np.load(offsets, allow_pickle=False)
+    lengths = {len(v) for v in columns.values()} if isinstance(columns, dict) else set()
+    rows = lengths.pop() if len(lengths) == 1 else -1
+    if (
+        rows < 0
+        or blob.dtype != np.uint8
+        or blob.ndim != 1
+        or starts.dtype != np.int64
+        or starts.shape != (rows + 1,)
+        or starts[0] != 0
+        or starts[-1] != len(blob)
+        or (np.diff(starts) < 0).any()
+    ):
+        raise _unreadable(region, directory, f"has a table, {table}, whose three files disagree")
+    blobs = [blob[a:b].tobytes() for a, b in pairwise(starts.tolist())]
+    return columns, shapely.from_wkb(np.array(blobs, object))
+
+
+def _manifest(directory: Path, region: str) -> dict[str, Any] | None:
+    """`places.json` in `directory`, None without one; `PlacesFormatError` for one that is not an
+    object with a format (and at format 2, a list of regions)."""
+    path = directory / MANIFEST
+    if not path.exists():
+        return None
+    try:
+        listed = json.loads(path.read_bytes())
+    except ValueError:  # empty, or not JSON
+        listed = None
+    if (
+        not isinstance(listed, dict)
+        or "format" not in listed
+        or (listed["format"] == PLACES_FORMAT and not isinstance(listed.get("regions"), list))
+    ):
+        raise PlacesFormatError(
+            f"{path} is malformed: delete it, then run `worst-route aux places --region {region}` "
+            "again, and for each other region whose index is there"
+        )
+    return listed
 
 
 def write_places(
@@ -144,55 +240,51 @@ def write_places(
 ) -> PlacesWritten:
     """Write the places index for `region` from the Census files (or any files with their
     columns): the states, the outlines, and the places meeting `bbox` (west, south, east,
-    north; None: the bounds of the region's states)."""
-    import pandas as pd
-
+    north; None: the bounds of the region's states); then add the region to `places.json`
+    (`PlacesFormatError`, before anything is written, for a malformed one)."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    state_frame = _read(states, STATE_COLUMNS).sort_values("STATEFP", ignore_index=True)
-    outline_frame = _read(outlines, STATE_COLUMNS).sort_values("STATEFP", ignore_index=True)
+    listed = _manifest(out_dir, region)
+    state_columns, state_shapes = _sorted(_read(states, STATE_COLUMNS), "STATEFP")
+    outline_columns, outline_shapes = _sorted(_read(outlines, STATE_COLUMNS), "STATEFP")
     if bbox is None:
-        fips = [STATES[state][1] for state in REGIONS[region].states]
-        box = shapely.envelope(
-            shapely.union_all(state_frame.geometry[state_frame["STATEFP"].isin(fips)])
-        )
+        fips = {STATES[state][1] for state in REGIONS[region].states}
+        own = [f in fips for f in state_columns["STATEFP"]]
+        box = shapely.envelope(shapely.union_all(state_shapes[own]))
     else:
         box = shapely.box(*bbox)
     covered: set[str] = set()
+    place_columns: Columns = {c: [] for c in PLACE_COLUMNS}
     kept = []
     for path in places:
-        frame = _read(path, (*PLACE_COLUMNS, "STATEFP"))
-        covered.update(frame["STATEFP"])
-        kept.append(frame[frame.intersects(box)][[*PLACE_COLUMNS, "geometry"]])
-    place_frame = (
-        pd.concat(kept, ignore_index=True).sort_values("GEOID", ignore_index=True)
-        if kept
-        else _empty_places(state_frame)
+        columns, shapes = _read(path, (*PLACE_COLUMNS, "STATEFP"))
+        covered.update(columns["STATEFP"])
+        meets = shapely.intersects(shapes, box)
+        for c in PLACE_COLUMNS:
+            place_columns[c] += [v for v, m in zip(columns[c], meets, strict=True) if m]
+        kept.append(shapes[meets])
+    place_columns, place_shapes = _sorted(
+        (place_columns, np.concatenate(kept) if kept else np.empty(0, object)), "GEOID"
     )
-    paths = (out_dir / "states.parquet", out_dir / "states_outline.parquet")
-    state_frame.to_parquet(paths[0], index=False)
-    outline_frame.to_parquet(paths[1], index=False)
-    place_path = out_dir / f"{region}.parquet"
-    place_frame.to_parquet(place_path, index=False)
-    met = state_frame[state_frame.intersects(box)]
-    missing = [
-        State(r.STATEFP, r.STUSPS, r.NAME) for r in met.itertuples() if r.STATEFP not in covered
-    ]
-    counts = place_frame["STUSPS"].value_counts()
+    written = (
+        _write(out_dir, "states", state_columns, state_shapes),
+        _write(out_dir, "states_outline", outline_columns, outline_shapes),
+        _write(out_dir, region, place_columns, place_shapes),
+    )
+    regions = listed["regions"] if listed and listed["format"] == PLACES_FORMAT else []
+    write_manifest(out_dir, {region, *regions})
+    met = shapely.intersects(state_shapes, box)
+    rows = _rows(state_columns, STATE_COLUMNS)
+    missing = [State(*r) for r, m in zip(rows, met, strict=True) if m and r[0] not in covered]
+    counts = Counter(place_columns["STUSPS"])
     return PlacesWritten(
-        states=paths[0],
-        n_states=len(state_frame),
-        outlines=paths[1],
-        n_outlines=len(outline_frame),
-        places=place_path,
-        by_state={str(k): int(counts[k]) for k in sorted(counts.index)},
+        states=written[0],
+        n_states=len(state_shapes),
+        outlines=written[1],
+        n_outlines=len(outline_shapes),
+        places=written[2],
+        by_state={k: counts[k] for k in sorted(counts)},
         missing=missing,
     )
-
-
-def _empty_places(like: Any) -> Any:
-    import geopandas as gpd
-
-    return gpd.GeoDataFrame({c: [] for c in PLACE_COLUMNS}, geometry=[], crs=like.crs)
 
 
 def route_line(data: GraphData, geometry: Geometry, edges: IntArray) -> shapely.LineString:
@@ -224,20 +316,30 @@ class PlaceIndex:
 
     @classmethod
     def load(cls, region: str, data_dir: Path | None = None) -> "PlaceIndex | None":
-        """The index `write_places` wrote for `region`, or None when a file is missing."""
+        """The index `write_places` wrote for `region`, or None when it has none or a file is
+        missing; `PlacesFormatError` for one this version cannot read."""
         directory = places_dir(data_dir)
-        files = [directory / n for n in ("states.parquet", "states_outline.parquet")]
-        files.append(directory / f"{region}.parquet")
-        if not all(f.exists() for f in files):
+        listed = _manifest(directory, region)
+        reads = f"and this version reads format {PLACES_FORMAT}"
+        if listed is not None and listed["format"] != PLACES_FORMAT:
+            raise _unreadable(region, directory, f"is at format {listed['format']}, {reads}")
+        if listed is None or region not in listed["regions"]:
+            if (directory / f"{region}.parquet").exists():
+                raise _unreadable(region, directory, f"is at format 1 (parquet), {reads}")
+            if table_files(directory, region)[0].exists():
+                raise _unreadable(region, directory, f"is not listed in {MANIFEST}, {reads}")
             return None
-        state_rows, state_shapes = _load(files[0], STATE_COLUMNS)
-        _, outlines = _load(files[1], STATE_COLUMNS)
-        town_rows, town_shapes = _load(files[2], PLACE_COLUMNS)
+        tables = ("states", "states_outline", region)
+        if not all(f.exists() for t in tables for f in table_files(directory, t)):
+            return None
+        states, state_shapes = read_table(directory, "states", region)
+        _, outlines = read_table(directory, "states_outline", region)
+        towns, town_shapes = read_table(directory, region, region)
         return cls(
-            [State(fips, usps, name) for fips, usps, name in state_rows],
+            [State(*row) for row in _rows(states, STATE_COLUMNS)],
             state_shapes,
             outlines,
-            [Town(name, lsad, usps, geoid) for geoid, name, _, lsad, usps in town_rows],
+            [Town(*row) for row in _rows(towns, ("NAME", "LSAD", "STUSPS", "GEOID"))],
             town_shapes,
         )
 
@@ -277,11 +379,11 @@ class PlaceIndex:
             return [self.towns[k] for k in _entered(line, *self._towns)]
 
 
-def _load(path: Path, columns: Sequence[str]) -> tuple[list[tuple[str, ...]], Shapes]:
-    table = pq.read_table(path, columns=[*columns, "geometry"])
-    rows = list(zip(*(table.column(c).to_pylist() for c in columns), strict=True))
-    shapes = shapely.from_wkb(np.array(table.column("geometry").to_pylist(), dtype=object))
-    return rows, shapes
+def _unreadable(region: str, directory: Path, why: str) -> PlacesFormatError:
+    return PlacesFormatError(
+        f"the places index of {region} in {directory} {why}: run `worst-route aux places "
+        f"--region {region}` again"
+    )
 
 
 def _entered(line: shapely.LineString, shapes: Shapes, tree: shapely.STRtree) -> list[int]:

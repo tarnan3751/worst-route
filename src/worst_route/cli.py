@@ -1302,7 +1302,10 @@ def plan(
     if out is not None:
         from worst_route.presentation import places as place_index
 
-        places = place_index.PlaceIndex.load(data.meta["region"])
+        try:
+            places = place_index.PlaceIndex.load(data.meta["region"])
+        except place_index.PlacesFormatError as error:
+            _fail(str(error))
     geometry = _load_geometry(data) if geojson is not None or places is not None else None
 
     last = time.monotonic()
@@ -1619,6 +1622,7 @@ def serve(
     from worst_route.api.logs import json_log_config
     from worst_route.api.static import create_site
     from worst_route.graph.loader import BuildNotFound
+    from worst_route.presentation.places import PlacesFormatError
 
     first, *others = region
     config = ApiSettings(
@@ -1639,7 +1643,7 @@ def serve(
         _fail(f"no frontend build at {frontend}: run `npm run build` under frontend/")
     try:
         application = create_app(config)
-    except BuildNotFound as error:
+    except (BuildNotFound, PlacesFormatError) as error:
         _fail(str(error))
     except ImportError as error:  # only csr needs numba; auto falls back to python
         _fail(f"the csr backend needs numba, which did not import: {error}")
@@ -1716,14 +1720,17 @@ def aux_places(
     states, outlines = places.state_files(directory)
     for path in (states, outlines):
         _require(path, "run `tools/fetch_census.sh` first")
-    written = places.write_places(
-        region,
-        _region_bbox(region),
-        states=states,
-        outlines=outlines,
-        places=places.place_files(directory),
-        out_dir=places.places_dir(),
-    )
+    try:
+        written = places.write_places(
+            region,
+            _region_bbox(region),
+            states=states,
+            outlines=outlines,
+            places=places.place_files(directory),
+            out_dir=places.places_dir(),
+        )
+    except places.PlacesFormatError as error:
+        _fail(str(error))
     typer.echo(f"wrote {written.states} ({written.n_states} states)")
     typer.echo(f"wrote {written.outlines} ({written.n_outlines} outlines)")
     for state in written.missing:

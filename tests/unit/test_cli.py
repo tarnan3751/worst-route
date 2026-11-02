@@ -103,6 +103,41 @@ def test_serve_on_a_build_without_its_geometry_is_one_line(
     )
 
 
+@pytest.mark.parametrize(
+    ("name", "refusal"),
+    [
+        (  # format 1's parquet files, which this version no longer reads
+            "portland.parquet",
+            "the places index of portland in {places} is at format 1 (parquet), and this version "
+            "reads format 2: run `worst-route aux places --region portland` again\n",
+        ),
+        (  # an empty manifest
+            "places.json",
+            "{places}/places.json is malformed: delete it, then run `worst-route aux places "
+            "--region portland` again, and for each other region whose index is there\n",
+        ),
+    ],
+)
+def test_serve_on_a_places_index_it_cannot_read_is_one_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, refusal: str
+) -> None:
+    # Serve refuses before it listens, and before it opens the route store.
+    g = grid_graph(3, 3, 100)
+    g = replace(g, meta={**g.meta, "region": "portland", "build_id": "b1"})
+    write_build(g, tmp_path / "graphs" / "portland" / "b1")
+    places = tmp_path / "aux" / "places"
+    places.mkdir(parents=True)
+    (places / name).write_bytes(b"PAR1" if name.endswith(".parquet") else b"")
+    monkeypatch.setenv("WORST_ROUTE_DATA", str(tmp_path))
+    settings.cache_clear()
+    args = ["serve", "--region", "portland", "--build-id", "b1", "--store", str(tmp_path / "r")]
+    result = runner.invoke(app, [*args, "--backend", "python", "--geocoder", "none"])
+    settings.cache_clear()
+    assert result.exit_code == 1
+    assert result.stderr == refusal.format(places=places)
+    assert not (tmp_path / "r").exists()
+
+
 def test_serve_runs_the_app_for_its_options(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -176,7 +176,7 @@ async def test_a_region_clipped_to_a_bbox_covers_no_other_but_is_covered(
         }
         document = (await http.get(f"/routes/{await planned(http, WEST_TRIP)}")).json()
         assert document["metrics"]["states"] is None and document["metrics"]["towns"] is None
-    (lands / "aux" / "places" / "portland.parquet").unlink()
+    (lands / "aux" / "places" / "portland.places.json").unlink()
     write_fixture_places(lands, region="lands")
     async with hosted(lands, builds=(("portland", "latest"), ("lands", "latest"))) as (_, app):
         api = app.state.api

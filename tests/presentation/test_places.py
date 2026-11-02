@@ -1,13 +1,15 @@
-"""The places index on the fixture (`support.py`): what `write_places` keeps, the states and
-towns a route passes through in route order, the state each point lies in, `aux places`, and the
-STATES table."""
+"""The places index on the fixture (`support.py`): what `write_places` keeps and its files, the
+states and towns a route passes through in route order, the state each point lies in, the indexes
+it refuses, `aux places`, and the STATES table."""
 
+import json
 import zipfile
+from collections.abc import Callable
+from itertools import pairwise
 from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
-import pyarrow.parquet as pq
 import pytest
 import shapely
 from typer.testing import CliRunner
@@ -16,7 +18,14 @@ from worst_route.cli import app
 from worst_route.config import REGIONS, STATES
 from worst_route.graph.geometry import straight
 from worst_route.presentation import places
-from worst_route.presentation.places import PlaceIndex, State, Town, route_line
+from worst_route.presentation.places import (
+    PlaceIndex,
+    PlacesFormatError,
+    State,
+    Town,
+    route_line,
+    table_files,
+)
 
 from ..api.support import save_build
 from .support import (
@@ -188,22 +197,148 @@ def test_without_a_bbox_a_region_of_two_states_takes_both_bounds(
 
 def test_the_files_have_the_documented_columns(tmp_path: Path) -> None:
     written = write_fixture_places(tmp_path)
-    for path, columns in [
-        (written.states, ["STATEFP", "STUSPS", "NAME", "geometry"]),
-        (written.outlines, ["STATEFP", "STUSPS", "NAME", "geometry"]),
-        (written.places, ["GEOID", "NAME", "NAMELSAD", "LSAD", "STUSPS", "geometry"]),
+    out = tmp_path / "aux" / "places"
+    for table, path, columns, rows in [
+        ("states", written.states, ["STATEFP", "STUSPS", "NAME"], 2),
+        ("states_outline", written.outlines, ["STATEFP", "STUSPS", "NAME"], 2),
+        ("portland", written.places, ["GEOID", "NAME", "NAMELSAD", "LSAD", "STUSPS"], 4),
     ]:
-        assert pq.read_schema(path).names == columns
-        assert gpd.read_parquet(path).crs.to_epsg() == 4326
-    towns = gpd.read_parquet(written.places).set_index("GEOID")
-    assert towns.loc["9200200", "NAMELSAD"] == "Middlefield CDP"
+        names, wkb, offsets = table_files(out, table)
+        assert path == names == out / f"{table}.places.json"
+        assert wkb == out / f"{table}.places.npy"
+        assert offsets == out / f"{table}.places.offsets.npy"
+        table_columns = json.loads(names.read_text())
+        assert list(table_columns) == columns
+        assert all(len(v) == rows for v in table_columns.values())
+        blob, starts = np.load(wkb), np.load(offsets)
+        assert blob.dtype == np.uint8 and blob.ndim == 1
+        assert starts.dtype == np.int64 and starts.shape == (rows + 1,)
+        assert starts[0] == 0 and starts[-1] == len(blob)
+        shapes = shapely.from_wkb([blob[a:b].tobytes() for a, b in pairwise(starts)])
+        assert shapely.get_type_id(shapes).tolist() == [3] * rows  # polygons
+    towns = json.loads(written.places.read_text())
+    assert towns["GEOID"] == ["9100100", "9100400", "9200200", "9200300"]
+    assert towns["NAMELSAD"][2] == "Middlefield CDP"
+    manifest = json.loads((out / "places.json").read_text())
+    assert manifest == {"format": 2, "regions": ["portland"]}
+
+
+def test_the_polygons_are_the_files_polygons(tmp_path: Path) -> None:
+    write_fixture_places(tmp_path)
+    index = PlaceIndex.load("portland", tmp_path)
+    assert index is not None
+    towns = gpd.read_file(PLACES["91"]).set_index("GEOID")
+    assert shapely.equals_exact(index._towns[0][0], towns.loc["9100100"].geometry, tolerance=0)
+    states = gpd.read_file(STATES_FILE).sort_values("STATEFP")
+    assert shapely.equals_exact(index._states[0], states.geometry.to_numpy(), tolerance=0).all()
+    assert shapely.equals_exact(index.outlines, states.geometry.to_numpy(), tolerance=0).all()
+
+
+def test_the_manifest_lists_every_region_written(tmp_path: Path) -> None:
+    write_fixture_places(tmp_path)
+    write_fixture_places(tmp_path, region="lands")
+    write_fixture_places(tmp_path, bbox=(-122.69, 45.50, -122.66, 45.53))
+    manifest = tmp_path / "aux" / "places" / "places.json"
+    assert json.loads(manifest.read_text()) == {"format": 2, "regions": ["lands", "portland"]}
+    lands, portland = PlaceIndex.load("lands", tmp_path), PlaceIndex.load("portland", tmp_path)
+    assert lands is not None and portland is not None
+    assert len(lands.towns) == 4 and len(portland.towns) == 3
 
 
 def test_a_missing_file_gives_no_index(tmp_path: Path) -> None:
     write_fixture_places(tmp_path)
     assert PlaceIndex.load("elsewhere", tmp_path) is None
-    (tmp_path / "aux" / "places" / "states_outline.parquet").unlink()
+    (tmp_path / "aux" / "places" / "states_outline.places.offsets.npy").unlink()
     assert PlaceIndex.load("portland", tmp_path) is None
+    assert PlaceIndex.load("portland", tmp_path / "nothing") is None
+
+
+def test_an_index_this_version_cannot_read_is_refused(tmp_path: Path) -> None:
+    write_fixture_places(tmp_path)
+    out = tmp_path / "aux" / "places"
+    (out / "oregon.parquet").write_bytes(b"PAR1")  # format 1's
+    with pytest.raises(PlacesFormatError) as refused:
+        PlaceIndex.load("oregon", tmp_path)
+    assert str(refused.value) == (
+        f"the places index of oregon in {out} is at format 1 (parquet), and this version reads "
+        "format 2: run `worst-route aux places --region oregon` again"
+    )
+    (out / "places.json").unlink()  # format 2's files without the manifest
+    with pytest.raises(PlacesFormatError, match="portland .* is not listed in places.json"):
+        PlaceIndex.load("portland", tmp_path)
+    (out / "places.json").write_text('{"format": 3, "regions": ["portland"]}')
+    with pytest.raises(PlacesFormatError, match="portland .* is at format 3, and"):
+        PlaceIndex.load("portland", tmp_path)
+    for name in out.iterdir():
+        name.unlink()
+    (out / "portland.parquet").write_bytes(b"PAR1")  # format 1 alone, as it was written
+    with pytest.raises(PlacesFormatError, match="at format 1 .*--region portland` again$"):
+        PlaceIndex.load("portland", tmp_path)
+
+
+OFFSET_DAMAGE: dict[str, Callable[[np.ndarray], np.ndarray]] = {
+    "one offset short": lambda starts: starts[:-1],
+    "the last offset past the polygons": lambda starts: np.append(starts[:-1], starts[-1] + 1),
+    "the first offset not 0": lambda starts: np.insert(starts[1:], 0, 1),
+    "offsets going back": lambda starts: starts[[0, 2, 1, *range(3, len(starts))]],
+    "offsets as floats": lambda starts: starts.astype(np.float64),
+}
+
+
+@pytest.mark.parametrize("table", ["states", "states_outline", "portland"])
+@pytest.mark.parametrize("damage", [*OFFSET_DAMAGE, "a column short"])
+def test_a_table_whose_files_disagree_is_refused(tmp_path: Path, table: str, damage: str) -> None:
+    write_fixture_places(tmp_path)
+    out = tmp_path / "aux" / "places"
+    names, _, offsets = table_files(out, table)
+    if damage == "a column short":
+        columns = json.loads(names.read_text())
+        columns["NAME"] = columns["NAME"][:-1]
+        names.write_text(json.dumps(columns))
+    else:
+        np.save(offsets, OFFSET_DAMAGE[damage](np.load(offsets)))
+    with pytest.raises(PlacesFormatError) as refused:
+        PlaceIndex.load("portland", tmp_path)
+    assert str(refused.value) == (
+        f"the places index of portland in {out} has a table, {table}, whose three files "
+        "disagree: run `worst-route aux places --region portland` again"
+    )
+
+
+@pytest.mark.parametrize(
+    "text", ["", "not json", "[]", '"places"', '{"regions": ["portland"]}', '{"format": 2}']
+)
+def test_a_malformed_manifest_is_refused_by_the_reader_and_the_writer(
+    tmp_path: Path, text: str
+) -> None:
+    write_fixture_places(tmp_path)
+    out = tmp_path / "aux" / "places"
+    (out / "places.json").write_text(text)
+    message = (
+        f"{out / 'places.json'} is malformed: delete it, then run `worst-route aux places --region "
+        "portland` again, and for each other region whose index is there"
+    )
+    with pytest.raises(PlacesFormatError) as refused:
+        PlaceIndex.load("portland", tmp_path)
+    assert str(refused.value) == message
+    files = {path.name: path.read_bytes() for path in out.iterdir()}
+    with pytest.raises(PlacesFormatError) as refused:
+        write_fixture_places(tmp_path, bbox=(-122.69, 45.50, -122.66, 45.53))
+    assert str(refused.value) == message
+    assert {path.name: path.read_bytes() for path in out.iterdir()} == files  # nothing written
+
+
+def test_a_region_without_a_town_loads_and_answers(tmp_path: Path) -> None:
+    written = write_fixture_places(tmp_path, bbox=(-100.0, 40.0, -99.9, 40.1))  # far from both
+    assert written.by_state == {} and written.missing == []
+    index = PlaceIndex.load("portland", tmp_path)
+    assert index is not None
+    assert index.states == (WESTLAND, EASTLAND) and len(index.outlines) == 2
+    assert index.towns == () and index.town_points() == ()
+    line = route_line(GRID, straight(GRID.m), EAST_THEN_NORTH_EDGES)
+    assert index.towns_passed(line) == []
+    assert index.states_crossed(line) == [WESTLAND, EASTLAND]
+    assert index.states_at(np.array([(-122.68, 45.515), (-100.0, 40.0)])) == [WESTLAND, None]
 
 
 def _census_zips(directory: Path) -> None:
@@ -235,14 +370,31 @@ def test_aux_places_writes_the_index_from_the_census_zips(data_dir: Path, tmp_pa
     assert result.exit_code == 0, result.output
     out = data_dir / "aux" / "places"
     assert result.stdout.splitlines() == [
-        f"wrote {out / 'states.parquet'} (2 states)",
-        f"wrote {out / 'states_outline.parquet'} (2 outlines)",
-        f"wrote {out / 'portland.parquet'} (1 places: WL 1)",
+        f"wrote {out / 'states.places.json'} (2 states)",
+        f"wrote {out / 'states_outline.places.json'} (2 outlines)",
+        f"wrote {out / 'portland.places.json'} (1 places: WL 1)",
     ]
     assert result.stderr == "missing places for EL: run tools/fetch_census.sh 92\n"
     index = PlaceIndex.load("portland")
     assert index is not None
     assert index.states == (WESTLAND, EASTLAND) and index.towns == (WESTVILLE,)
+
+
+def test_aux_places_on_a_malformed_manifest_is_one_line(data_dir: Path, tmp_path: Path) -> None:
+    census = tmp_path / "census"
+    _census_zips(census)
+    manifest = data_dir / "aux" / "places" / "places.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("")
+    result = CliRunner().invoke(
+        app, ["aux", "places", "--region", "portland", "--census-dir", str(census)]
+    )
+    assert result.exit_code == 1 and result.stdout == ""
+    assert result.stderr == (
+        f"{manifest} is malformed: delete it, then run `worst-route aux places --region "
+        "portland` again, and for each other region whose index is there\n"
+    )
+    assert [path.name for path in manifest.parent.iterdir()] == ["places.json"]
 
 
 def test_aux_places_without_the_state_files_is_one_line(data_dir: Path, tmp_path: Path) -> None:

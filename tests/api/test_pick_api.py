@@ -131,7 +131,7 @@ async def test_a_region_clipped_to_a_bbox_comes_first_the_smallest_first(
             "build_id": "l1",
             "reason": "stops in Westland and Eastland",
         }
-    (lands / "aux" / "places" / "lands.parquet").unlink()  # no places index: the bbox decides
+    (lands / "aux" / "places" / "lands.places.json").unlink()  # no places index: the bbox decides
     async with hosted(lands, builds=served) as (http, _):
         assert (await picked(http, ACROSS))["region"] == "downtown"
 

@@ -7,7 +7,7 @@ reference's order, so a bad argument raises the same error; answers the trivial 
 reference does; then
 hands the CSR arrays (`out_indptr`, `out_edges`, `edge_u`, `edge_v`), the weights and the masks,
 as zero-copy uint8 views, to a kernel in `kernels.py`. `largest_scc_mask` is the reference's
-scipy call. Nothing is copied at construction; the transition table is precomputed once into
+own, shared. Nothing is copied at construction; the transition table is precomputed once into
 the two arrays the turn kernels read (`trans_indptr`, `trans_key`, `kernels.py`).
 
 `dijkstra_edges` is always the edge-state kernel, and `dijkstra_edges_tree` its kernel without a

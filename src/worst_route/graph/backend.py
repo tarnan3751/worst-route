@@ -70,7 +70,9 @@ turn along a path is allowed (by the transition table and `banned_turn_classes`,
 `exit_edge` included (both optional).
 
 `largest_scc_mask` is the node mask of the largest strongly connected component of the graph
-restricted to `edge_mask` (default: every edge); ties go to the component scipy labels first.
+restricted to `edge_mask` (default: every edge); ties go to the component completed first, the
+one scipy's `connected_components` labels first, whose algorithm `_scc_labels` ports (Pearce's
+iterative one, scipy's form of it, in pure Python: nothing that serves a route calls it).
 
 A `Path` is `(nodes, edges)`, `edges[k]` going from `nodes[k]` to `nodes[k + 1]`; from a node
 to itself it is that one node and no edge.
@@ -292,19 +294,77 @@ def largest_scc_mask(
     data: GraphData, edge_mask: NDArray[np.bool_] | None = None
 ) -> NDArray[np.bool_]:
     """The nodes of the largest strongly connected component over `edge_mask`."""
-    # imported on first use, not with the module, which the API imports at its start
-    from scipy.sparse import csr_array
-    from scipy.sparse.csgraph import connected_components
-
     n, u, v = data.n, data.edge_u, data.edge_v
     if edge_mask is not None:
         keep = _checked("edge_mask", edge_mask, data.m)
         u, v = u[keep], v[keep]
-    graph = csr_array((np.ones(len(u), dtype=np.int32), (u, v)), shape=(n, n))
-    _, labels = connected_components(graph, directed=True, connection="strong")
+    labels = _scc_labels(n, u, v)
     largest = np.argmax(np.bincount(labels))
     mask: NDArray[np.bool_] = labels == largest
     return mask
+
+
+_VOID, _END = -1, -2
+
+
+def _scc_labels(n: int, u: NDArray[np.int32], v: NDArray[np.int32]) -> NDArray[np.int64]:
+    """Each node's strongly connected component over the edges u → v, labelled in the order the
+    components are completed: scipy's `connected_components(..., connection="strong")`, whose
+    iterative Pearce search this follows step for step, over scipy's form of the graph (each
+    node's heads once, ascending), roots taken in ascending order and a node's unvisited heads
+    pushed in descending order (the lowest is visited first)."""
+    key = np.unique(u.astype(np.int64) * n + v)
+    indptr = np.zeros(n + 1, dtype=np.int64)
+    np.cumsum(np.bincount(key // n, minlength=n), out=indptr[1:])
+    starts, heads = indptr.tolist(), (key % n).tolist()
+    # A node's lowlink while its component is open, its label once closed: labels count down
+    # from n - 1, above every open lowlink, so a closed node never lowers one. `down` is the
+    # search stack's link below a node, then the open component's stack's (a node joins that
+    # once off the search stack); `up` the search stack's link above it.
+    lowlink, down, up = [_VOID] * n, [_VOID] * n, [_VOID] * n
+    index, label, open_top = 0, n - 1, _END
+    for root in range(n):
+        if lowlink[root] != _VOID:
+            continue
+        top, down[root], up[root] = root, _END, _END
+        while top != _END:
+            node = top
+            if lowlink[node] == _VOID:  # first reached: numbered, its unreached heads pushed
+                lowlink[node] = index
+                index += 1
+                for j in range(starts[node + 1] - 1, starts[node] - 1, -1):
+                    w = heads[j]
+                    if lowlink[w] != _VOID:
+                        continue
+                    if down[w] != _VOID:  # already on the stack: lifted out, to the top
+                        below, above = down[w], up[w]
+                        if above != _END:
+                            down[above] = below
+                        if below != _END:
+                            up[below] = above
+                    down[w], up[w], up[top] = top, _END, w
+                    top = w
+            else:  # backtracked: off the stack, and a component closed if it is a root
+                top = down[node]
+                if top >= 0:
+                    up[top] = _END
+                down[node] = up[node] = _VOID
+                own = least = lowlink[node]
+                for w in heads[starts[node] : starts[node + 1]]:
+                    least = min(least, lowlink[w])
+                lowlink[node] = least
+                if least < own:
+                    down[node], open_top = open_top, node
+                    continue
+                index -= 1
+                while open_top != _END and least <= lowlink[open_top]:
+                    w, open_top = open_top, down[open_top]
+                    down[w], lowlink[w] = _VOID, label
+                    index -= 1
+                lowlink[node] = label
+                label -= 1
+    labels: NDArray[np.int64] = (n - 1) - np.array(lowlink, dtype=np.int64)
+    return labels
 
 
 def _checked(name: str, mask: NDArray[np.bool_], size: int) -> NDArray[np.bool_]:

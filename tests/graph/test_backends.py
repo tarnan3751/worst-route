@@ -14,6 +14,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from tests.pipeline.chain import OSM_FIXTURES, fixture_build
 from worst_route.config import DEFAULT_BACKEND
 from worst_route.graph.backend import GraphBackend, Path
 from worst_route.graph.backends import backend_name, make_backend
@@ -21,6 +22,8 @@ from worst_route.graph.csr_backend import CsrBackend
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
 from worst_route.graph.testing import edge_id, grid_graph, make_graph
+
+from .scipy_parity import check_scc
 
 EXAMPLES = settings(max_examples=200, deadline=None)
 BACKENDS = {"python": PythonBackend, "csr": CsrBackend}
@@ -283,6 +286,27 @@ def test_largest_scc_matches_networkx(backend_type, case: Case) -> None:
     assert set(np.flatnonzero(mask).tolist()) in components
     if len(components) == 1 or len(components[1]) < len(components[0]):
         assert set(np.flatnonzero(mask).tolist()) == components[0]
+
+
+@EXAMPLES
+@given(cases(max_nodes=12, max_edges=36))
+def test_the_scc_labels_are_scipy_s(case: Case) -> None:
+    # self-loops, parallel edges and ties among the largest components are common here
+    check_scc(case.g, None if case.banned is None else ~case.banned)
+
+
+@pytest.mark.slow
+def test_the_scc_labels_are_scipy_s_on_random_graphs_and_every_fixture_build() -> None:
+    rng = np.random.default_rng(4)
+    for k in range(300):  # 1 to 60 nodes, or up to 400, with up to four edges a node
+        n = int(rng.integers(1, 61 if k % 10 else 401))
+        pairs = rng.integers(0, n, (int(rng.integers(0, 4 * n + 1)), 2)).tolist()
+        g = make_graph([(100.0 * i, 0.0) for i in range(n)], [(u, v, 1.0) for u, v in pairs])
+        check_scc(g, rng.random(g.m) < 0.8 if k % 2 else None)
+    for name in OSM_FIXTURES:
+        g = fixture_build(name)
+        check_scc(g)
+        check_scc(g, rng.random(g.m) < 0.7)
 
 
 def test_the_backends_are_graph_backends() -> None:

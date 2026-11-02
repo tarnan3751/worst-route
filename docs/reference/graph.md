@@ -271,8 +271,14 @@ included, raises `TypeError`) and clamps them to the int64 range (a huge limit i
   given), in ascending edge-id order (lexicographic in their edge ids), stopping after
   `max_paths`.
 - `largest_scc_mask(edge_mask=None) -> bool[n]`: the nodes of the largest strongly connected
-  component of the graph restricted to `edge_mask` (scipy's `connected_components`,
-  `connection="strong"`); on a tie, the component scipy labels first.
+  component of the graph restricted to `edge_mask`; on a tie, the component completed first,
+  the one scipy's `connected_components` (`connection="strong"`) labels first. `_scc_labels`
+  labels the components as scipy did for this call until 2026-11-01, label for label: its
+  iterative Pearce search ported step for step, in pure Python, over scipy's form of the graph
+  (each node's heads once, ascending), roots in ascending order and a node's unreached heads
+  pushed in descending order, so the lowest is visited first (pushed ascending, the labels
+  differ from scipy's on a third of random graphs). Nothing that serves a route calls it: 43 ms
+  on Portland, 0.18 s on Oregon, 2.4 s on `us-t3` (scipy's 3 ms, 17 ms, 0.18 s).
 
 A `Path` is `(nodes, edges)`, both int32, `edges[k]` going from `nodes[k]` to `nodes[k + 1]`;
 from a node to itself (when it may be entered) it is that node and no edge, for both searches.
@@ -372,8 +378,8 @@ arrays, the weights, and the masks as zero-copy uint8 views (`mask.view(np.uint8
 `dijkstra_edges` is always the edge-state kernel, and `dijkstra_edges_tree` its kernel without a
 destination; `simple_paths_dfs` is the turn kernel on a
 build with transition rows or when a turn edge is given, and the plain kernel otherwise, where
-every turn is allowed and the two give the same paths. `largest_scc_mask` is the shared scipy
-call.
+every turn is allowed and the two give the same paths. `largest_scc_mask` is the reference's,
+shared.
 
 - `dijkstra_masked(out_indptr, out_edges, edge_u, edge_v, weights, enter_u8, banned_u8, src,
   dst, max_cost) -> (found, nodes, edges)`: the tie rule exactly, with a binary heap of
@@ -646,6 +652,11 @@ the geometry read on first use and kept).
 `test_backends.py` runs the reference's tests on both backends through the `backend_type`
 fixture:
 - hypothesis parity with networkx for the node-state calls and the SCC mask, 200 examples each;
+- the SCC labels against scipy's (`scipy_parity.py`), label for label, and the mask against the
+  component scipy labels first among the largest, on 200 hypothesis graphs (self-loops,
+  parallel edges, ties), 300 random graphs of up to 400 nodes and every OSM fixture's build,
+  over every edge and a random part of them (`test_parity_data.py` again on Portland, Oregon
+  and `us-t3`, over every edge and 70% of them);
 - the exact path against a heap-free implementation of the tie rule, on graphs where equal
   costs are common, also 200 examples;
 - the tie rule, masks, `max_cost`, bad arguments, and depth and count limits on crafted graphs.

@@ -37,11 +37,12 @@ Coordinates are `[lon, lat]` in GeoJSON and `{lat, lon}` in requests; every numb
 
 `GeocodeOut`, with its `GeocodeCandidateOut`s, answers `GET /geocode`, and `DirectionsOut`
 `GET /routes/{id}/directions`; `RegionPickIn` is the body of `POST /regions/pick`, which
-`RegionPickOut` answers, and `DailyOut`, with its `DailyStop`s, answers `GET /daily`; `DrawIn` is
-the body of `POST /draw` and `POST /draw/finish` (a request as `POST /jobs` takes it and the path
-drawn), which `DrawOut` (with `DrawAt` and its `DrawMove`s) and `DrawFinished` answer (at the end
-of the module). A route drawn by hand stops because it was `drawn`, which only its run says, and a
-certified route the solver proved because it is `optimal`.
+`RegionPickOut` answers, `DailyOut`, with its `DailyStop`s, answers `GET /daily`, and
+`ChallengesOut` (its `ChallengeOut`s, each with a `ChallengeSetup` and one of the goals)
+`GET /challenges`; `DrawIn` is the body of `POST /draw` and `POST /draw/finish` (a request as
+`POST /jobs` takes it and the path drawn), which `DrawOut` (with `DrawAt` and its `DrawMove`s) and
+`DrawFinished` answer (at the end of the module). A route drawn by hand stops because it was
+`drawn`, which only its run says, and a certified route the solver proved because it is `optimal`.
 """
 
 from datetime import datetime
@@ -680,7 +681,8 @@ class RegionPickOut(_Out):
 
 
 class DailyStop(_Out):
-    """One of the day's two towns: where the trip starts or ends, and its name ("Bend, OR")."""
+    """A town of the day: where a trip (the daily route's, a challenge's) starts, passes or ends,
+    and its name ("Bend, OR")."""
 
     lat: float
     lon: float
@@ -705,6 +707,136 @@ class DailyOut(_Out):
     ratio: float | None = None
     stopped_because: StopReason | None = None
     attempts: int | None = None
+
+
+# --- The daily challenges (`GET /challenges`) ------------------------------------------------
+
+ChallengeType = Literal[
+    "long-way",
+    "slow-way",
+    "no-left",
+    "bridges",
+    "pilgrimage",
+    "hard-mode",
+    "worst-order",
+    "daily-worse",
+]
+
+
+class ChallengeBrand(_Out):
+    """The chain a pilgrimage visits: its id in the build's brand index, its name and wikidata
+    id."""
+
+    id: int
+    name: str
+    wikidata: str
+
+
+class ChallengeConstraints(_Out):
+    """The turn constraints and hard mode a challenge sets, each named."""
+
+    no_left: bool = False
+    no_right: bool = False
+    strict: bool = False
+    hard: bool = False
+
+
+class ChallengeTarget(_Out):
+    """A challenge's target: as bad as possible."""
+
+    kind: Literal["max"] = "max"
+
+
+class ChallengeSetup(_Out):
+    """What setting a challenge up puts in, as `POST /jobs` names it: its towns (labelled), the
+    objective with its item or brand, the constraints, the worst order and the target; the tier
+    and the leash automatic, on the answer's region."""
+
+    stops: list[DailyStop]
+    objective: Literal["distance", "time", "collect", "brand"] = "distance"
+    item: CollectItem | None = None
+    brand: ChallengeBrand | None = None
+    constraints: ChallengeConstraints = ChallengeConstraints()
+    reorder: bool = False
+    target: ChallengeTarget = ChallengeTarget()
+
+
+class RatioGoal(_Out):
+    """The route's ratio at least `min`."""
+
+    kind: Literal["ratio"] = "ratio"
+    min: float
+
+
+class DurationGoal(_Out):
+    """The route's experienced time (driving and delays) at least `min_s` seconds."""
+
+    kind: Literal["duration"] = "duration"
+    min_s: int
+
+
+class NoLeftGoal(_Out):
+    """No left turn on the route, and its ratio at least `min_ratio`."""
+
+    kind: Literal["no_left"] = "no_left"
+    min_ratio: float
+
+
+class ItemsGoal(_Out):
+    """At least `min` of `item` on the route."""
+
+    kind: Literal["items"] = "items"
+    item: CollectItem
+    min: int
+
+
+class BrandGoal(_Out):
+    """At least `min_visits` of the brand's locations on the route."""
+
+    kind: Literal["brand"] = "brand"
+    min_visits: int
+
+
+class HardGoal(_Out):
+    """A route under hard mode, its ratio at least `min_ratio`."""
+
+    kind: Literal["hard"] = "hard"
+    min_ratio: float
+
+
+class DailyWorseGoal(_Out):
+    """Today's route made worse once: a route continuing it, its ratio at least the day's."""
+
+    kind: Literal["daily_worse"] = "daily_worse"
+
+
+ChallengeGoal = Annotated[
+    RatioGoal | DurationGoal | NoLeftGoal | ItemsGoal | BrandGoal | HardGoal | DailyWorseGoal,
+    Field(discriminator="kind"),
+]
+
+
+class ChallengeOut(_Out):
+    """One of the day's challenges: its id (its type and the date), title and blurb, what setting
+    it up puts in (none for today's route made worse, which opens it) and the goal a route must
+    reach."""
+
+    id: str
+    type: ChallengeType
+    title: str
+    blurb: str
+    setup: ChallengeSetup | None
+    goal: ChallengeGoal
+
+
+class ChallengesOut(_Out):
+    """`GET /challenges`: the day's challenges (the UTC date) on the region and build they were
+    drawn on, in the order of their types."""
+
+    date: str  # YYYY-MM-DD
+    region: str
+    build_id: str
+    challenges: list[ChallengeOut]
 
 
 # --- A route drawn by hand (`POST /draw`, `POST /draw/finish`) --------------------------------

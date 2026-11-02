@@ -1082,32 +1082,29 @@ brief):
   such a run reheats and ends on its cap instead: the same route bytes there, its `run.attempts`
   and `stopped_because` ("budget" for "converged") not.
 
-- **Challenges as built** (2026-10-31, the coordinator's brief; `docs/reference/frontend.md`,
-  **Challenges**): a list bundled in the frontend (`challenges/list.ts`), not served (a
-  server-side list would be an API shape); each challenge a region, its stops or none (any trip
-  in the region), the settings it fixes (named as the panel's, a brand by its wikidata id and
-  name since a brand's id is its build's) and one goal: a ratio, a count of an item, a brand's
-  visits, the alphabet's first letters, a drawing that beats the engine (judged on the verdict
-  in the browser), a hard-mode ratio, or today's route made worse once (its `base_route_id`
-  today's, its ratio at least the day's, on the region of today's route, the challenge listed
-  whenever `GET /daily` answers with a day); stops and thresholds picked from measured runs so
-  each is reachable at the panel's defaults with room for a run on a busy (public) server: on
-  Portland 20 bridges, 40 roundabouts (44–61 measured), any trip at 30×, under hard mode at 8×
-  (10.4–13.3× on Powell's to Reed College), and the alphabet A to W rather than A to Z, since
-  Portland's only X roads are dead ends; on Oregon 10 Starbucks and Portland to Bend at 8×
-  (10.4–15.2×); on `us-t3` Portland to Chicago at 4× (5.5–6.5×); the coordinator's rulings on
-  the measured runs (from 8, 10×, 10× and 5×); graded on every route the store shows, a link's
-  included, by the region, the mode with its item or brand, the worst order as the challenge
-  sets it (a challenge's request is its own, `reorder` included; none of the ten takes it), and
-  the stops within 500 m when fixed; completions kept with the day in `localStorage`
-  (`worst-route.challenges`), every access guarded so the page works without it, a toast shown
-  once and a badge, "Reset badges" to forget them; "Set it up" pins the region, puts in the
-  stops (any trip's kept when inside the region) and the settings, the rest of the fixed ones at
-  their defaults, today's opening today's route; `?challenge=<id>` sets one up at load and is
-  written while it stays set up; the desktop app on a fixed port (`DESKTOP_PORT`, 17429) so its
-  storage lasts: on macOS and Linux bound with `SO_REUSEADDR` only once a probe connection to it
-  is refused (a free port otherwise), on Windows bound plainly (a free port when that fails),
-  the review's ruling. Out of scope: scores, leaderboards, accounts, new modes.
+- **Challenges as built** (2026-10-31; served since 2026-11-02, the coordinator's briefs and
+  rulings; `docs/reference/api.md`, **The daily challenges**; `docs/reference/frontend.md`,
+  **Challenges**): eight a day, served by `GET /challenges` (an API shape, tier A), the same on
+  every server with the main build: seven drawn from the date between towns of the daily route's
+  pool, each passing the pre-flight (the long way, 150–500 km; the slow way under the slowest
+  mode, 80–250 km; strict no-left, 100–300 km; bridges, 30–200 km; a pilgrimage to one of twenty
+  chains by wikidata id with at least six locations in the trip's area, 30–250 km; hard mode,
+  100–300 km; four towns in the worst order, every two 25–200 km apart), then today's route made
+  worse, today's only. Each bar is 80 % of the trip's own plan, rounded down: a job with no client
+  in a worker, as the daily route's, with 2,500 attempts (hard mode 8,000), so every server sets
+  the same bar; no-left's is 1.0× (strict no-left converges at 1.2–1.8×, where the soft constraint
+  keeps hundreds of left turns), and hard mode is never under 1.5× (a draw below it passed over).
+  A date is made on its first call (about a minute on `us-t3`) and kept in memory and in the route
+  store; today and the 30 days before are answered, a public server making only today's. This
+  replaced the fixed list of ten bundled in the frontend (on the Portland, Oregon and national
+  builds; the alphabet, roundabouts and a drawing among them), not served at first because a
+  server-side list was an API shape: the Portland build left the app, and the alphabet and
+  roundabouts are thin on the national build. Graded in the browser on every route shown, the
+  completions kept with the day in `localStorage` (`worst-route.challenges`), every access guarded
+  so the page works without it; the desktop app on a fixed port (`DESKTOP_PORT`, 17429) so its
+  storage lasts: on macOS and Linux bound with `SO_REUSEADDR` only once a probe connection to it is
+  refused (a free port otherwise), on Windows bound plainly (a free port when that fails), the
+  review's ruling. Out of scope: scores, leaderboards, accounts, new modes.
 - **Portfolio runs as built** (2026-10-31, the coordinator's brief and its rulings on the plan;
   `docs/reference/api.md`, **Portfolios**): `portfolio` on `POST /jobs`, 1 by default (left out of
   the stored request then, so a job of one search sends and stores exactly what it did before), at

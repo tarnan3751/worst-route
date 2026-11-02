@@ -609,6 +609,62 @@ DAILY_MAX_ITERATIONS = 5_000
 DAILY_MPG = 24.0
 DAILY_GAS_PRICE_USD = 3.89
 
+# The daily challenges (`docs/reference/api.md`, **The daily challenges**): seven a day between
+# towns of the daily route's pool, each type's drawn within its band of straight-line distances
+# (CHALLENGE_BANDS_KM, km; the worst order's four towns every two CHALLENGE_ORDER_KM apart), at
+# most CHALLENGE_DRAWS draws and CHALLENGE_TRIES pre-flights a type. Each setup but no-left's is
+# planned once with CHALLENGE_ATTEMPTS attempts (hard mode's, which converges slowly, with
+# CHALLENGE_HARD_ATTEMPTS; the iterations, not the clock, end the run, so every server with the
+# build sets the same bars), and its bar is CHALLENGE_BAR_SHARE of what that run reached, rounded
+# down; a draw whose run collects fewer than CHALLENGE_MIN_FOUND bridges or visits, or whose
+# hard-mode bar would be under CHALLENGE_HARD_MIN_RATIO, is passed over, a count's bar is at least
+# CHALLENGE_MIN_ITEMS, and no-left's bar is CHALLENGE_NO_LEFT_RATIO (strict: no left turn at
+# all). A pilgrimage visits one of
+# CHALLENGE_BRANDS (wikidata ids) with at least CHALLENGE_MIN_LOCATIONS locations in the trip's
+# area. GET /challenges answers for today and the CHALLENGE_DAYS days before.
+CHALLENGE_BANDS_KM: dict[str, tuple[float, float]] = {
+    "long-way": (150.0, 500.0),
+    "slow-way": (80.0, 250.0),
+    "no-left": (100.0, 300.0),
+    "bridges": (30.0, 200.0),
+    "pilgrimage": (30.0, 250.0),
+    "hard-mode": (100.0, 300.0),
+}
+CHALLENGE_ORDER_KM = (25.0, 200.0)
+CHALLENGE_DRAWS = 10_000
+CHALLENGE_TRIES = 20
+CHALLENGE_ATTEMPTS = 2_500
+CHALLENGE_HARD_ATTEMPTS = 8_000
+CHALLENGE_BAR_SHARE = 0.8
+CHALLENGE_HARD_MIN_RATIO = 1.5
+CHALLENGE_MIN_FOUND = 4
+CHALLENGE_MIN_ITEMS = 3
+CHALLENGE_NO_LEFT_RATIO = 1.0
+CHALLENGE_MIN_LOCATIONS = 6
+CHALLENGE_DAYS = 30
+CHALLENGE_BRANDS = (
+    "Q37158",  # Starbucks
+    "Q38076",  # McDonald's
+    "Q2940968",  # Casey's General Store
+    "Q145168",  # Dollar General
+    "Q483551",  # Walmart
+    "Q244457",  # Subway
+    "Q752941",  # Taco Bell
+    "Q550258",  # Wendy's
+    "Q177054",  # Burger King
+    "Q847743",  # Dunkin'
+    "Q1701206",  # Waffle House
+    "Q491516",  # Chick-fil-A
+    "Q1872496",  # Love's
+    "Q64128179",  # Pilot
+    "Q1141226",  # Dairy Queen ("DQ Grill & Chill" in the build)
+    "Q7561808",  # Sonic
+    "Q1591889",  # Walgreens
+    "Q2078880",  # CVS Pharmacy
+    "Q153417",  # Kroger
+    "Q259340",  # 7-Eleven
+)
+
 # The desktop app (`docs/reference/desktop.md`) listens on 127.0.0.1 at DESKTOP_PORT unless another
 # program listens there, so that the page's origin, and with it the web view's storage (the
 # challenges' badges), is the same at every start; on a free port otherwise.

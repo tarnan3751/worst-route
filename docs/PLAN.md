@@ -575,6 +575,7 @@ FastAPI, JSON bodies validated by pydantic. All coordinates are `[lon, lat]` in 
 | GET | `/routes/{route_id}/share.png` | server-rendered share image, 1200 × 630, cached (built, M4) |
 | POST | `/routes/{route_id}/validate` | runs the validator, returns the report (debug/CI) |
 | GET | `/daily` | today's route: one trip a day, the same for everyone on the server, planned once (built, M6) |
+| GET | `/challenges` | `?date=`: the day's challenges, seven drawn from the date on the main build and today's route made worse, the same on every server with it, made once and kept (built, M6) |
 | POST | `/draw` | `{request, path}` → a route drawn by hand so far, its legal next moves (built, M6) |
 | POST | `/draw/finish` | `{request, path}` → `{route_id, ratio}`: the drawing validated and stored as a route (built, M6) |
 

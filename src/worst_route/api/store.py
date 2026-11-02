@@ -22,7 +22,15 @@ The daily route's rows (`api/daily_api.py`) are a second table:
 
 one row per UTC date (YYYY-MM-DD), region and `graph_version` (a build replaced under its id by
 `pipeline save --force` has another, and so its own row), `status` planning (`job_id` names its
-job), done (`route_id` its route) or failed; `put_daily` replaces the day's row.
+job), done (`route_id` its route) or failed; `put_daily` replaces the day's row. The daily
+challenges (`api/challenges_api.py`) are a third:
+
+    challenges(date, region, graph_version, build_id, challenges_json)
+
+one row per date, region and `graph_version` once that day's challenges are made, `challenges_json`
+the seven as `GET /challenges` answers them (the list of `ChallengeOut`s, today's route made worse
+left out); `put_challenges` replaces it. A store from before them gains the table when it is
+opened, and code from before them never reads it.
 
 A store made before the worst order gains `order_json` when it is opened (`ALTER TABLE`, the
 check and the change under one write lock, `BEGIN IMMEDIATE`, so servers opening it at once add
@@ -84,6 +92,11 @@ _DAILY_COLUMNS = ("date", "region", "build_id", "graph_version", "route_id", "st
 _DAILY_SCHEMA = (
     f"CREATE TABLE IF NOT EXISTS daily ({', '.join(_DAILY_COLUMNS)}, "
     "PRIMARY KEY (date, region, graph_version))"
+)
+
+_CHALLENGES_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS challenges (date, region, graph_version, build_id, "
+    "challenges_json, PRIMARY KEY (date, region, graph_version))"
 )
 
 DailyStatus = Literal["planning", "done", "failed"]
@@ -148,6 +161,7 @@ class RouteStore:
             con.execute("PRAGMA journal_mode=WAL")
             con.execute(_SCHEMA)
             con.execute(_DAILY_SCHEMA)
+            con.execute(_CHALLENGES_SCHEMA)
         self._add_order_column()
 
     def _add_order_column(self) -> None:
@@ -250,6 +264,24 @@ class RouteStore:
         marks = ", ".join("?" for _ in _DAILY_COLUMNS)
         with closing(sqlite3.connect(self.path, timeout=10)) as con, con:
             con.execute(f"INSERT OR REPLACE INTO daily VALUES ({marks})", values)
+
+    def challenges(self, date: str, region: str, graph_version: str) -> str | None:
+        """The challenges of `date` on `region`'s build at `graph_version`, as JSON, or None."""
+        with closing(sqlite3.connect(self.path, timeout=10)) as con:
+            row = con.execute(
+                "SELECT challenges_json FROM challenges "
+                "WHERE date = ? AND region = ? AND graph_version = ?",
+                (date, region, graph_version),
+            ).fetchone()
+        return None if row is None else str(row[0])
+
+    def put_challenges(
+        self, date: str, region: str, graph_version: str, build_id: str, challenges: str
+    ) -> None:
+        """Record the challenges of `date` on the build (JSON), in place of any kept."""
+        values = (date, region, graph_version, build_id, challenges)
+        with closing(sqlite3.connect(self.path, timeout=10)) as con, con:
+            con.execute("INSERT OR REPLACE INTO challenges VALUES (?, ?, ?, ?, ?)", values)
 
 
 def _columns(con: sqlite3.Connection, table: str) -> set[str]:

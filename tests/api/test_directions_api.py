@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 import pytest
 
-from worst_route.api.app import ApiSettings, create_app
+from worst_route.api.app import create_app
 from worst_route.api.jobs import JobSettings
 from worst_route.api.store import RouteStore
 from worst_route.config import TOASTS_MAX
@@ -21,7 +21,7 @@ from worst_route.engine.io import route_document
 from worst_route.engine.plan import plan_route
 
 from ..presentation.support import write_fixture_places
-from .support import GRID, PORTLAND, api_input, loaded, request
+from .support import GRID, PORTLAND, api_input, api_settings, loaded, request
 
 pytestmark = pytest.mark.anyio
 
@@ -42,8 +42,8 @@ def store_route(data: Path, *, vehicle: dict[str, float] | None = None, **docume
 
 @asynccontextmanager
 async def serving(data: Path) -> AsyncIterator[httpx.AsyncClient]:
-    config = ApiSettings(
-        data_dir=data,
+    config = api_settings(
+        data,
         builds=PORTLAND,
         backend="python",
         jobs=JobSettings(inline_workers=True),

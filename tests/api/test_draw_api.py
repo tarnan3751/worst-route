@@ -15,7 +15,7 @@ import pytest
 from fastapi import FastAPI
 
 from worst_route.api import draw_api
-from worst_route.api.app import ApiSettings, create_app
+from worst_route.api.app import create_app
 from worst_route.api.draw_api import DrawContexts
 from worst_route.api.jobs import JobSettings
 from worst_route.api.store import route_id
@@ -23,7 +23,7 @@ from worst_route.config import MAX_DRAW_EDGES
 from worst_route.graph.testing import edge_id
 
 from ..engine.graphs import at_node, board
-from .support import PORTLAND, save_build
+from .support import PORTLAND, api_settings, save_build
 
 pytestmark = pytest.mark.anyio
 
@@ -47,8 +47,8 @@ def drawn(tmp_path: Path) -> Path:
 @asynccontextmanager
 async def serving(data: Path, **settings: Any) -> AsyncIterator[tuple[httpx.AsyncClient, FastAPI]]:
     jobs = JobSettings(inline_workers=True, coalesce_s=0.0)
-    config = ApiSettings(
-        data_dir=data, builds=PORTLAND, backend="python", jobs=jobs, geocoder="none", **settings
+    config = api_settings(
+        data, builds=PORTLAND, backend="python", jobs=jobs, geocoder="none", **settings
     )
     app = create_app(config)
     async with app.router.lifespan_context(app):

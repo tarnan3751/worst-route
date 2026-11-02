@@ -622,7 +622,9 @@ DAILY_GAS_PRICE_USD = 3.89
 # left turn at all) is passed over under CHALLENGE_NO_LEFT_MIN_RATIO, and its bar is
 # CHALLENGE_NO_LEFT_SHARE of its ratio, down to the tenth. A pilgrimage visits one of
 # CHALLENGE_BRANDS (wikidata ids) with at least CHALLENGE_MIN_LOCATIONS locations in the trip's
-# area. GET /challenges answers for today and the CHALLENGE_DAYS days before.
+# area. GET /challenges answers for today and the CHALLENGE_DAYS days before. A server asks for
+# today's itself once it has started, unless it has fewer than CHALLENGE_START_MIN_WORKERS workers
+# (a route asked for meanwhile would wait on the day's plans).
 CHALLENGE_BANDS_KM: dict[str, tuple[float, float]] = {
     "long-way": (150.0, 500.0),
     "slow-way": (80.0, 250.0),
@@ -645,6 +647,7 @@ CHALLENGE_NO_LEFT_MIN_RATIO = 1.35
 CHALLENGE_NO_LEFT_SHARE = 0.9
 CHALLENGE_MIN_LOCATIONS = 6
 CHALLENGE_DAYS = 30
+CHALLENGE_START_MIN_WORKERS = 2
 CHALLENGE_BRANDS = (
     "Q37158",  # Starbucks
     "Q38076",  # McDonald's

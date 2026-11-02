@@ -42,7 +42,8 @@ executable started again, which that call turns into the worker. Then:
   never returns), stops the server: pywebview's `closing` event comes before either.
 - **The browser** (Linux, and `--browser`, `run_browser`): the server in the foreground, the
   system's browser opened on it, until Ctrl+C (or the terminal closes). `--headless` is the same
-  without the browser or the download: what `tools/desktop_smoke.py` drives.
+  without the browser, the download or today's challenges made at start (logged): what
+  `tools/desktop_smoke.py` drives.
 
 The basemap's file is fetched in the background (`desktop_basemap.fetch`), resumed where a
 previous start left it, checked against the manifest's sha256, and used from the next start.
@@ -295,9 +296,11 @@ def build_site(
     contact: str | None,
     geocoder: "GeocoderName" = "nominatim",
     backend: "BackendName | None" = None,
+    challenges_at_start: bool = True,
 ) -> tuple["Starlette", "FastAPI"]:
     """The site (the frontend at `/`, the API under `/api`) and its API, over `data`'s builds of
-    `regions`, writing into `user`."""
+    `regions`, writing into `user`; with `challenges_at_start`, today's challenges asked for once
+    it has started (`ApiSettings.challenges_at_start`)."""
     from starlette.middleware.trustedhost import TrustedHostMiddleware
 
     from worst_route.api.app import ApiSettings, create_app
@@ -316,6 +319,7 @@ def build_site(
         basemap=choose_basemap(basemap, manifest.basemap),
         basemap_name=manifest.basemap.name if manifest.basemap else None,
         basemap_dir=basemap,
+        challenges_at_start=challenges_at_start,
     )
     api = create_app(settings)
     site = create_site(api, frontend)
@@ -586,6 +590,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         manifest = replace(manifest, contact=settings().contact)
     agent = user_agent(manifest.contact)
     log.info("%s %s: data %s, regions %s, %s", PRODUCT, __version__, data, manifest.regions, mode)
+    if mode == "headless":  # the smoke: its trips, not a day's plans, on the runner's workers
+        log.info("headless: today's challenges are not made at start")
 
     def build() -> LocalServer:
         install_assets(data / "basemap", user / "basemap")  # a first start's, once the window is up
@@ -597,6 +603,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             frontend=args.frontend or frontend_dir(),
             contact=manifest.contact,
             geocoder=args.geocoder,
+            challenges_at_start=mode != "headless",
         )
         return LocalServer(site, app_socket(args.port))
 

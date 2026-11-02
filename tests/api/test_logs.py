@@ -11,12 +11,12 @@ import httpx
 import pytest
 from starlette.types import Scope
 
-from worst_route.api.app import ApiSettings, create_app
+from worst_route.api.app import create_app
 from worst_route.api.limits import client_hash, client_of
 from worst_route.api.logs import ContextFilter, JsonFormatter, request_id
 
 from .hosting import hosted, job_body
-from .support import PORTLAND, slow_splices
+from .support import PORTLAND, api_settings, slow_splices
 
 pytestmark = pytest.mark.anyio
 
@@ -140,7 +140,7 @@ async def test_an_unhandled_error_is_a_500_with_the_request_s_id(
     data: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO, logger="worst_route")
-    settings = ApiSettings(data_dir=data, builds=PORTLAND, backend="python", geocoder="none")
+    settings = api_settings(data, builds=PORTLAND, backend="python", geocoder="none")
     app = create_app(settings)
 
     def boom() -> None:

@@ -51,7 +51,8 @@ uv run --no-sync worst-route-desktop --headless --port 0 --region portland --geo
   system's WebKitGTK, which the frozen app cannot carry (its helper processes are found at paths
   compiled into the library, PyGObject has no wheels, and WebGL 2 there is recent and often
   software), so the browser, which works everywhere, is the floor.
-- **`--headless`**: the server alone, without the browser or the basemap's download, printing
+- **`--headless`**: the server alone, without the browser, the basemap's download or today's
+  challenges made at start (logged: "headless: today's challenges are not made at start"), printing
   `Worst Route is running at <url>`, until SIGINT or SIGTERM (exit 0). `tools/desktop_smoke.py`
   drives the frozen app so; a lane runs it so from a checkout, on its own port, with
   `--geocoder none` and `WORST_ROUTE_DESKTOP_HOME` in its scratch directory.
@@ -150,8 +151,12 @@ both. The kernels compile in a thread of the API once the server listens (its li
 `warm_builds`, `docs/reference/api.md`, **Running it**), after each build's spatial index is made,
 so the window shows the map and takes stops meanwhile; a route planned before they are ready starts
 once they are (2.7–3.4 s after it listens, on the dev machine), and a later start loads them in
-that thread in under a second. The basemap's labels (**The basemap**) are copied into `basemap/` on a
-first start too, once the window is up.
+that thread in under a second. Once they are, the API asks for today's challenges itself
+(`docs/reference/api.md`, **The daily challenges**), so the panel finds them kept; headless (the
+smoke) it does not, nor with fewer than two workers (a computer of three cores or fewer, the
+release's runners among them: `API_MAX_JOBS`, cores − 2), whose only one a route planned meanwhile
+would wait on for about a minute. The basemap's labels (**The basemap**) are copied into `basemap/`
+on a first start too, once the window is up.
 `NUMBA_CACHE_DIR`, `MPLBACKEND` and `MPLCONFIGDIR` are set before either package is imported
 (`desktop.py` imports neither at its top), and the job workers inherit them; one already set is
 kept, but not in a frozen app, where PyInstaller's runtime hook sets `MPLCONFIGDIR` to a new

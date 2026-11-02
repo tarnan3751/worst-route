@@ -11,10 +11,12 @@ from typing import Any
 import httpx
 import pytest
 
-from worst_route.api.app import ApiSettings, create_app
+from worst_route.api.app import create_app
 from worst_route.api.jobs import JobSettings
 from worst_route.config import settings
 from worst_route.pipeline import layout
+
+from .support import api_settings
 
 pytestmark = [pytest.mark.data, pytest.mark.anyio]
 
@@ -26,8 +28,8 @@ WAYPOINTS = [(45.5265, -122.6790), (45.5262, -122.6720), (45.5215, -122.6725)]
 async def http(tmp_path: Path) -> AsyncIterator[httpx.AsyncClient]:
     if not layout.latest_file("portland").exists():
         pytest.skip(f"no portland build under {settings().data_dir}")
-    config = ApiSettings(
-        data_dir=settings().data_dir,
+    config = api_settings(
+        settings().data_dir,
         builds=(("portland", "latest"),),
         store_path=tmp_path / "routes.sqlite",
         jobs=JobSettings(inline_workers=True),

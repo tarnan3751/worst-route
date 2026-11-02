@@ -21,7 +21,7 @@ from worst_route.api.jobs import JobSettings
 from worst_route.api.static import IMMUTABLE, create_site
 
 from .hosting import job_body
-from .support import PORTLAND
+from .support import PORTLAND, api_settings
 
 pytestmark = pytest.mark.anyio
 
@@ -41,7 +41,7 @@ SCRIPT = b"console.log('the worst route');\n" * 8000  # 256 kB: four of a file's
 def settings_of(data: Path, **fields: Any) -> ApiSettings:
     jobs = JobSettings(inline_workers=True, coalesce_s=0.0)
     values: dict[str, Any] = {"builds": PORTLAND, "backend": "python", "geocoder": "none"}
-    return ApiSettings(data_dir=data, jobs=jobs, **{**values, **fields})
+    return api_settings(data, jobs=jobs, **{**values, **fields})
 
 
 def varies(response: httpx.Response) -> list[str]:
@@ -97,9 +97,7 @@ async def test_the_frontend_at_the_root_and_the_api_under_api(
 ) -> None:
     caplog.set_level(logging.INFO, logger="worst_route")
     jobs = JobSettings(inline_workers=True, coalesce_s=0.0)
-    settings = ApiSettings(
-        data_dir=data, builds=PORTLAND, backend="python", jobs=jobs, geocoder="none"
-    )
+    settings = api_settings(data, builds=PORTLAND, backend="python", jobs=jobs, geocoder="none")
     site = create_site(create_app(settings), write_dist(tmp_path))
     async with site.router.lifespan_context(site):
         transport = httpx.ASGITransport(app=site)

@@ -9,11 +9,13 @@ from pathlib import Path
 import httpx
 import pytest
 
-from worst_route.api.app import ApiSettings, create_app
+from worst_route.api.app import create_app
 from worst_route.api.jobs import JobSettings
 from worst_route.config import settings
 from worst_route.pipeline import layout
 from worst_route.presentation.places import places_dir
+
+from .support import api_settings
 
 pytestmark = [pytest.mark.data, pytest.mark.anyio]
 
@@ -30,8 +32,8 @@ async def http(tmp_path: Path) -> AsyncIterator[httpx.AsyncClient]:
             pytest.skip(f"no {region} build under {settings().data_dir}")
     if not (places_dir() / "us-t1.places.json").exists():
         pytest.skip("no national places index")
-    config = ApiSettings(
-        data_dir=settings().data_dir,
+    config = api_settings(
+        settings().data_dir,
         builds=(("portland", "latest"), ("oregon", "latest"), ("us-t1", "latest")),
         store_path=tmp_path / "routes.sqlite",
         jobs=JobSettings(inline_workers=True),

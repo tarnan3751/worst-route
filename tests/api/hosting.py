@@ -12,12 +12,12 @@ from typing import Any
 import httpx
 from fastapi import FastAPI
 
-from worst_route.api.app import ApiSettings, create_app
+from worst_route.api.app import create_app
 from worst_route.api.jobs import JobSettings
 from worst_route.geocode.service import GeocodeService
 
 from ..engine.graphs import at_node
-from .support import GRID, PORTLAND
+from .support import GRID, PORTLAND, api_settings
 
 
 def stop(v: int) -> dict[str, float]:
@@ -44,10 +44,9 @@ async def hosted(
         "builds": PORTLAND,
         "backend": "python",
         "geocoder": "none",
-        "challenges_at_start": False,
         **settings,
     }
-    config = ApiSettings(data_dir=data, jobs=job_settings, **values)
+    config = api_settings(data, jobs=job_settings, **values)
     app = create_app(config, geocode=geocode)
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app, client=client)

@@ -31,9 +31,11 @@ index and then its backend in a thread (`warm_builds`; `graph.loader`): on a fir
 kernels compile then, into their cache, while the server already listens, and a request that needs
 one before it is made waits for the kernels' import or makes its own. Once they are made, it asks
 for today's challenges in a task (`challenges_api.today_at_start`: kept, else made, as
-`GET /challenges` would; on every server, the desktop app's and a public one included, unless
-`ApiSettings.challenges_at_start` is off), so a panel opened a minute later finds them kept; the
-lifespan's stop cancels it with the others.
+`GET /challenges` would; on every server, the desktop app's and a public one included), so a panel
+opened a minute later finds them kept; the lifespan's stop cancels it with the others. It does not
+when `ApiSettings.challenges_at_start` is off (the tests', the desktop app's headless), nor, logging
+why, with fewer than `CHALLENGE_START_MIN_WORKERS` workers (2), whose only one a route asked for
+meanwhile would wait on.
 
 Every error answers an `ErrorBody` (`{code, message, ...}`): an endpoint refuses with
 `routes_api.ApiError(status, code, message, **fields)`, a malformed request is 422
@@ -82,6 +84,7 @@ from worst_route.api.routes_api import ApiError
 from worst_route.api.schemas import ChallengeOut, ErrorBody
 from worst_route.api.store import RouteStore
 from worst_route.config import (
+    CHALLENGE_START_MIN_WORKERS,
     DEFAULT_BACKEND,
     DRAW_CONTEXTS,
     GZIP_EXCLUDED_TYPES,
@@ -126,7 +129,8 @@ class ApiSettings:
     basemap: BasemapName = "raster"  # what `/config` offers (WORST_ROUTE_BASEMAP)
     basemap_name: str | None = None  # its file, basemap/<name>.pmtiles; None: the first region
     basemap_dir: Path | None = None  # the basemap's files; None: <data_dir>/basemap
-    challenges_at_start: bool = True  # today's challenges asked for once the builds are warm
+    # today's challenges asked for once the builds are warm (with two workers or more)
+    challenges_at_start: bool = True
 
 
 @dataclass(frozen=True, eq=False)
@@ -223,7 +227,13 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
 
         threading.Thread(target=warm, name="warm-builds", daemon=True).start()
         starting: list[asyncio.Task[None]] = []
-        if settings.challenges_at_start:
+        if settings.challenges_at_start and jobs.settings.max_jobs < CHALLENGE_START_MIN_WORKERS:
+            log.info(
+                "today's challenges are not made at start: %d worker, which a route asked for "
+                "meanwhile would wait on",
+                jobs.settings.max_jobs,
+            )
+        elif settings.challenges_at_start:
             starting.append(asyncio.create_task(challenges_at_start()))
         try:
             yield

@@ -26,7 +26,8 @@ export function dayOf(date: string, today: boolean): ChallengeList {
       id: `long-way-${date}`,
       type: "long-way",
       title: "Losantville, IN to Wallace, IN at 16×",
-      blurb: "The long way round: 16 times the sensible drive, or worse.",
+      blurb:
+        "Set it up fills in the two towns and the longest route; press Go and finish at 16× the sensible drive or worse.",
       setup: LONGEST,
       goal: { kind: "ratio", min: 16 },
     },
@@ -34,7 +35,8 @@ export function dayOf(date: string, today: boolean): ChallengeList {
       id: `slow-way-${date}`,
       type: "slow-way",
       title: "Bend, OR to Boise, ID in 29 h",
-      blurb: "Take your time: 29 hours on the road, or more.",
+      blurb:
+        "Set it up fills in the two towns and the slowest route; press Go and spend 29 hours or more at the wheel, signals and stop signs included.",
       setup: { ...LONGEST, stops: [BEND, BOISE], objective: "time" },
       goal: { kind: "duration", min_s: 29 * 3600 },
     },
@@ -42,7 +44,8 @@ export function dayOf(date: string, today: boolean): ChallengeList {
       id: `no-left-${date}`,
       type: "no-left",
       title: "Bend, OR to Boise, ID with no left turns at 1.4×",
-      blurb: "Right turns only, and no shortcuts.",
+      blurb:
+        "Set it up fills in the two towns and strict no-left; press Go and reach 1.4× the sensible drive on right turns and straight on alone.",
       setup: {
         ...LONGEST,
         stops: [BEND, BOISE],
@@ -54,7 +57,8 @@ export function dayOf(date: string, today: boolean): ChallengeList {
       id: `bridges-${date}`,
       type: "bridges",
       title: "Cross 20 bridges between Losantville, IN and Wallace, IN",
-      blurb: "Twenty bridges or more from Losantville, IN to Wallace, IN.",
+      blurb:
+        "Set it up fills in the two towns and the bridge collector; press Go and cross 20 bridges or more on the way.",
       setup: { ...LONGEST, objective: "collect", item: "bridge" },
       goal: { kind: "items", item: "bridge", min: 20 },
     },
@@ -62,7 +66,8 @@ export function dayOf(date: string, today: boolean): ChallengeList {
       id: `pilgrimage-${date}`,
       type: "pilgrimage",
       title: "Visit 12 McDonald's between Losantville, IN and Wallace, IN",
-      blurb: "A pilgrimage past twelve McDonald's on the way.",
+      blurb:
+        "Set it up fills in the two towns and a pilgrimage to McDonald's; press Go and pass 12 of them or more on the way.",
       setup: {
         ...LONGEST,
         objective: "brand",
@@ -74,7 +79,8 @@ export function dayOf(date: string, today: boolean): ChallengeList {
       id: `hard-mode-${date}`,
       type: "hard-mode",
       title: "Hard mode: Bend, OR to Boise, ID at 3×",
-      blurb: "Each road in one stretch, three times the sensible drive or worse.",
+      blurb:
+        "Set it up fills in the two towns and hard mode; press Go and reach 3× the sensible drive with each road driven in one stretch.",
       setup: {
         ...LONGEST,
         stops: [BEND, BOISE],
@@ -86,7 +92,8 @@ export function dayOf(date: string, today: boolean): ChallengeList {
       id: `worst-order-${date}`,
       type: "worst-order",
       title: "Losantville, IN, Bend, OR, Boise, ID and Wallace, IN in the worst order at 5.5×",
-      blurb: "Visit all four, in whatever order is worst.",
+      blurb:
+        "Set it up fills in the four towns and the worst order; press Go and finish at 5.5× the sensible drive or worse.",
       setup: { ...LONGEST, stops: [LOSANTVILLE, BEND, BOISE, WALLACE], reorder: true },
       goal: { kind: "ratio", min: 5.5 },
     },

@@ -272,7 +272,9 @@ def test_headless_it_serves_until_terminated_and_exits_0(tmp_path: Path) -> None
         if process.poll() is None:
             process.kill()
     assert (tmp_path / "user" / "routes.sqlite").exists()
-    assert (tmp_path / "user" / "worst-route.log").exists()
+    logged = (tmp_path / "user" / "worst-route.log").read_text()
+    assert "headless: today's challenges are not made at start" in logged  # the smoke's trips'
+    assert "today's challenges (" not in logged  # the workers, not a day's plans
 
 
 @pytest.mark.slow
@@ -302,7 +304,9 @@ def test_the_server_serves_the_site_to_this_machine_only_and_stops_with_its_work
         contact=None,
         geocoder="none",
         backend="python",
+        challenges_at_start=False,
     )
+    assert not api.state.api.settings.challenges_at_start
     server = desktop.LocalServer(site, desktop.free_socket())
     server.start()
     port = server.sock.getsockname()[1]

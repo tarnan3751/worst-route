@@ -18,7 +18,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from worst_route.api.app import Api, ApiSettings, create_app
+from worst_route.api.app import Api, create_app
 from worst_route.api.jobs import JobSettings
 from worst_route.api.store import RouteStore
 from worst_route.engine.io import route_document
@@ -27,7 +27,7 @@ from worst_route.presentation import share_image
 from worst_route.presentation.share_palettes import PALETTES
 
 from ..presentation.support import write_fixture_places
-from .support import PORTLAND, SLOW, api_input, loaded, request, save_build
+from .support import PORTLAND, SLOW, api_input, api_settings, loaded, request, save_build
 
 pytestmark = pytest.mark.anyio
 
@@ -47,8 +47,8 @@ def store_route(
 
 @asynccontextmanager
 async def serving(data: Path) -> AsyncIterator[tuple[httpx.AsyncClient, FastAPI]]:
-    config = ApiSettings(
-        data_dir=data,
+    config = api_settings(
+        data,
         builds=PORTLAND,
         backend="python",
         jobs=JobSettings(inline_workers=True),

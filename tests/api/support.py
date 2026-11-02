@@ -1,5 +1,6 @@
 """Builds and helpers shared by the API tests: lattice builds written into a data directory, the
-job manager with inline workers, submitting a job, reading its events, waiting on a condition."""
+app's settings for a test, the job manager with inline workers, submitting a job, reading its
+events, waiting on a condition."""
 
 import asyncio
 import time
@@ -12,6 +13,7 @@ from typing import Any
 import pytest
 
 from worst_route.api import worker as worker_module
+from worst_route.api.app import ApiSettings
 from worst_route.api.jobs import Job, JobManager, JobSettings, Subscription, prepare
 from worst_route.api.sse import Event
 from worst_route.api.store import RouteStore
@@ -53,6 +55,12 @@ def save_build(
     write_build(g, data_dir / "graphs" / region / build_id, geometry)
     if latest:
         (data_dir / "graphs" / region / "latest").write_text(f"{build_id}\n")
+
+
+def api_settings(data_dir: Path, **values: Any) -> ApiSettings:
+    """The app's settings for a test over `data_dir`: no challenges asked for at its start unless
+    told (`challenges_at_start`), so no test's jobs or store see a day made in the background."""
+    return ApiSettings(data_dir=data_dir, **{"challenges_at_start": False, **values})
 
 
 def request(g: GraphData, stops: list[int], seed: int = 3, **fields: Any) -> RouteRequest:

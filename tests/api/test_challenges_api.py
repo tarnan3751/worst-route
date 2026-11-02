@@ -13,8 +13,8 @@ concurrent first calls, today's route made worse today's only), kept in the stor
 restart, a date being made holding up no other, the same on two servers, the window of dates, a
 public server making only today's, a full server, the server's stop ending a date's making, and
 none without a places index; today's asked for when the server starts (made, logged, then kept
-across a restart), not when told not to, none without a places index, and the server's stop
-ending that making."""
+across a restart), not when told not to nor with one worker (logged), none without a places index,
+and the server's stop ending that making."""
 
 import asyncio
 import json
@@ -674,7 +674,7 @@ async def test_a_full_server_makes_nothing(served: Path, monkeypatch: pytest.Mon
 def at_start(caplog: pytest.LogCaptureFixture) -> list[str]:
     """What the start's ask for today's challenges logged."""
     lines = [r.getMessage() for r in caplog.records]
-    return [line for line in lines if line.startswith("today's challenges (")]
+    return [line for line in lines if line.startswith("today's challenges ")]
 
 
 async def test_today_s_challenges_are_made_when_the_server_starts(
@@ -695,6 +695,21 @@ async def test_today_s_challenges_are_made_when_the_server_starts(
         await until(lambda: bool(at_start(caplog)))
         assert at_start(caplog)[0].startswith("today's challenges (2026-11-02) are ready: 7 drawn")
         assert days == [DAY] and len(api.challenge_days) == 1
+
+
+async def test_a_server_of_one_worker_makes_nothing_at_start(
+    served: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="worst_route")
+    days = counted(monkeypatch)
+    async with app_on(served, challenges_at_start=True, jobs={"max_jobs": 1}) as (_, api):
+        await until(lambda: "the builds are ready to plan on" in caplog.text)
+        await asyncio.sleep(0.05)
+        assert api.challenge_tasks == {} and api.challenge_days == {}
+    assert days == [] and at_start(caplog) == [
+        "today's challenges are not made at start: 1 worker, which a route asked for meanwhile "
+        "would wait on"
+    ]
 
 
 async def test_a_server_asks_for_nothing_at_start_when_told_or_without_towns(

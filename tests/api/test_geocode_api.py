@@ -12,7 +12,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from worst_route.api.app import ApiSettings, create_app
+from worst_route.api.app import create_app
 from worst_route.api.geocode_api import BUSY
 from worst_route.config import settings as machine_settings
 from worst_route.geocode.base import Bbox, Candidate, GeocodeError, Geocoder
@@ -24,7 +24,7 @@ from worst_route.geocode.service import GeocodeService
 
 from ..engine.graphs import at_node
 from ..geocode.support import offline_clients
-from .support import GRID, GRID_BBOX, PORTLAND
+from .support import GRID, GRID_BBOX, PORTLAND, api_settings
 
 pytestmark = pytest.mark.anyio
 
@@ -55,7 +55,7 @@ async def _no_sleep(seconds: float) -> None:
 async def serving(
     data: Path, geocode: GeocodeService | None = None, **settings: Any
 ) -> AsyncIterator[tuple[httpx.AsyncClient, FastAPI]]:
-    config = ApiSettings(data_dir=data, builds=PORTLAND, backend="python", **settings)
+    config = api_settings(data, builds=PORTLAND, backend="python", **settings)
     app = create_app(config, geocode=geocode)
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)

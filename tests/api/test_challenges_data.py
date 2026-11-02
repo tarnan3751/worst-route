@@ -18,7 +18,7 @@ import httpx
 import pytest
 
 from worst_route.api import daily_api
-from worst_route.api.app import ApiSettings, create_app
+from worst_route.api.app import create_app
 from worst_route.api.challenges_api import TYPES
 from worst_route.api.jobs import prepare
 from worst_route.api.schemas import ChallengesOut
@@ -29,6 +29,8 @@ from worst_route.graph.loader import Loaded
 from worst_route.pipeline import layout
 from worst_route.presentation.places import places_dir
 
+from .support import api_settings
+
 pytestmark = [pytest.mark.data, pytest.mark.anyio]
 
 FIRST = date(2026, 11, 2)
@@ -37,12 +39,11 @@ DAYS = [FIRST + timedelta(days=k) for k in range(3)]
 
 @asynccontextmanager
 async def national(store: Path) -> AsyncIterator[tuple[httpx.AsyncClient, Loaded]]:
-    config = ApiSettings(
-        data_dir=settings().data_dir,
+    config = api_settings(
+        settings().data_dir,
         builds=(("us-t3", "latest"),),
         store_path=store,
         geocoder="none",
-        challenges_at_start=False,  # the days asked for here, in turn
     )
     app = create_app(config)
     async with app.router.lifespan_context(app):

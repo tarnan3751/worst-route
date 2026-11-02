@@ -131,25 +131,25 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   The section asks for today's at start (`GET /challenges`, the day being the server's, the UTC
   date of today's route) and says "Loading today's challenges…" meanwhile: a server makes today's
   as it starts (about a minute on `us-t3`), so a page opened later is answered at once, and one
-  opened sooner, or a link's of another day not made yet, waits it out. A server without them (404: no
-  places index) shows no section; any other failure (the server out of reach, a proxy's 502) shows
-  "Couldn't load today's challenges." and "Try again", which asks again. Each row has its badge (a
-  green tick once completed, "Completed Saturday, October 31" in its tooltip), its title, its
-  blurb, its standing (below) and "Set it up". **Set it up** pins the answer's region, puts in the stops with their
-  towns' names (each shown under its role, as a city's clicked on the map is, **Stops**) and gives
-  the settings: the mode with its item, the turns (Avoid left turns and strict for no left turns),
-  hard mode, the worst order, as bad as possible, the automatic tier and leash, Certified unticked
-  (the seed, the budget, the vehicle, the departure and the units stay the panel's); its brand is
-  picked once the region's brands are known, by its wikidata id, else its name (a brand's id is
-  its build's). It forgets the route shown and a drawing (as an edit of the stops does), scrolls
-  the stop list into view and fits the map to the stops, and the row says "Set up. Press Go."
-  Today's route made worse instead opens today's route as "Open it" does ("Set up. Press Make it
-  worse."; its button disabled until the day's route is done), and another day's is refused ("Only
-  today's route can be made worse."). A challenge stays set up (the store's `challenge`, the row
-  highlighted, `?challenge=` in the URL) while its region, stops and settings are the store's (a
-  run, its seed and the snaps change none of them), and today's route made worse while that route
-  is shown. **Grading** (`challenges/progress.ts`): every route the store shows (a run's, a
-  drawing's, one opened by link; a certified route's like any other) is graded against each
+  opened sooner, or a link's of another day not made yet, waits it out. A server without them (404:
+  no places index) shows no section; any other failure (the server out of reach, a proxy's 502)
+  shows "Couldn't load today's challenges." and "Try again", which asks again. Each row has its
+  badge (a green tick once completed, "Completed Saturday, October 31" in its tooltip), its title,
+  its blurb, its standing (below) and "Set it up". **Set it up** pins the answer's region, puts in
+  the stops with their towns' names (each shown under its role, as a city's clicked on the map is,
+  **Stops**) and gives the settings: the mode with its item, the turns (Avoid left turns and strict
+  for no left turns), hard mode, the worst order, as bad as possible, the automatic tier and leash,
+  Certified unticked (the seed, the budget, the vehicle, the departure and the units stay the
+  panel's); its brand is picked once the region's brands are known, by its wikidata id, else its
+  name (a brand's id is its build's). It forgets the route shown and a drawing (as an edit of the
+  stops does), scrolls the stop list into view and fits the map to the stops, and the row says "Set
+  up. Press Go." Today's route made worse instead opens today's route as "Open it" does ("Set up.
+  Press Make it worse."; its button disabled until the day's route is done), and another day's is
+  refused ("Only today's route can be made worse."). A challenge stays set up (the store's
+  `challenge`, the row highlighted, `?challenge=` in the URL) while its region, stops and settings
+  are the store's (a run, its seed and the snaps change none of them), and today's route made worse
+  while that route is shown. **Grading** (`challenges/progress.ts`): every route the store shows (a
+  run's, a drawing's, one opened by link; a certified route's like any other) is graded against each
   challenge listed and not yet completed whose trip it is (`sameTrip`: the same region; the same
   objective, with the same item, or the same brand by its wikidata id through the loaded brands
   when they are the route's region's, else by its name; the worst order as the challenge sets it
@@ -553,9 +553,9 @@ carries none, and no font is fetched from anywhere but the app's own origin.
   looping. A notice, a challenge completed ("Challenge done. Make today's route worse.") or a run
   of the one set up ending short of its bar ("12.3×, the challenge needs 15×. More time, another
   run or Make it worse may get there.", **Challenges**), is shown once, for one period, before the
-  lines go on where they were (several notices in turn). The pointer over the strip holds the line shown; a click shows the next one at
-  once and starts the 4 s again. Nothing is shown while no job runs, no route is shown and no
-  notice waits.
+  lines go on where they were (several notices in turn). The pointer over the strip holds the line
+  shown; a click shows the next one at once and starts the 4 s again. Nothing is shown while no job
+  runs, no route is shown and no notice waits.
 - **Errors.** Every API error shows its `message` in a banner over the map, as a sentence (its
   first letter a capital, a full stop at its end when it has none; its `code` when it has no
   message), its `code` in the banner's tooltip, closed by its × or the next action (a place
@@ -631,11 +631,11 @@ route the store shows: drawn once it is stored (on `done`, or opened by a link),
 (a run starting, an edit of the stops, a drawing); a route of another objective has none, and so
 does one from a server older than them. The stat line is the same with them as without.
 
-A route drawn by hand has its own layers over these and the marks (`DrawLayer`, **Drawing**): `wr-drawn` (the
-drawing, in the theme's draw colour over its casing), `wr-choices` (the next moves, in its par
-colour and dashed, with a dot where each leads, and a wide transparent line under them for the
-pointer) and `wr-at` (the node
-the drawing is at). Each answer of the server replaces them whole; nothing of them is spliced.
+A route drawn by hand has its own layers over these and the marks (`DrawLayer`, **Drawing**):
+`wr-drawn` (the drawing, in the theme's draw colour over its casing), `wr-choices` (the next moves,
+in its par colour and dashed, with a dot where each leads, and a wide transparent line under them
+for the pointer) and `wr-at` (the node the drawing is at). Each answer of the server replaces them
+whole; nothing of them is spliced.
 
 The route is kept as the stream sends it (`api.md`, **Applying the stream**): its `[lon, lat]`
 points and `index`, the position among them of each route node. `subscribe` calls, per event:
@@ -877,10 +877,10 @@ uses, and a face that exists at one weight only (arcade's pixel faces) must not 
 fake bold; a slant may still be synthesized, since no theme loads an italic face and the
 directions' jokes are in italics. The map's layers take theirs from the theme too: `paintRoute` (the baseline, the casing,
 the route's gradient and width, the flash, the highlight), `paintMarks` (the route's marks),
-`paintDrawing` (the drawing, its next moves, the node it is at) and `paintOutside` (the land outside the US, **Basemap**), as the
-layers are added and again by `setPaintProperty` whenever the theme changes; and `Basemap.show(theme.basemap)` swaps the basemap's layers and sources in
-place when the variant changes (**Basemap**), not `setStyle`, which would drop the route's layers
-and their data.
+`paintDrawing` (the drawing, its next moves, the node it is at) and `paintOutside` (the land outside
+the US, **Basemap**), as the layers are added and again by `setPaintProperty` whenever the theme
+changes; and `Basemap.show(theme.basemap)` swaps the basemap's layers and sources in place when the
+variant changes (**Basemap**), not `setStyle`, which would drop the route's layers and their data.
 
 **The setting** (`settings.theme`, `theme/resolve.ts`) is a theme's id or `auto`, the default:
 studio while the system is light and night while it is dark (`prefers-color-scheme`, followed as it

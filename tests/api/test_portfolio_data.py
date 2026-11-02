@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from worst_route.api.app import ApiSettings, create_app
+from worst_route.api.app import create_app
 from worst_route.api.jobs import JobSettings
 from worst_route.api.store import route_id
 from worst_route.config import settings
@@ -16,6 +16,7 @@ from worst_route.engine.request import RouteRequest
 from worst_route.graph.loader import load_build
 from worst_route.pipeline import layout
 
+from .support import api_settings
 from .test_routes_api import events_of
 
 pytestmark = [pytest.mark.data, pytest.mark.anyio]
@@ -40,8 +41,8 @@ async def test_a_portfolio_on_portland_stores_the_better_of_its_seeds_routes(
         for seed in (1, 2)
     ]
     best = max(plans, key=lambda p: p.route.score)  # the first of the best
-    config = ApiSettings(
-        data_dir=settings().data_dir,
+    config = api_settings(
+        settings().data_dir,
         builds=(("portland", "latest"),),
         store_path=tmp_path / "routes.sqlite",
         jobs=JobSettings(inline_workers=False),

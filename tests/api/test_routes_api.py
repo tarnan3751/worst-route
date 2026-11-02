@@ -18,7 +18,7 @@ import pytest
 from fastapi import FastAPI, Request
 
 from worst_route.api import routes_api
-from worst_route.api.app import Api, ApiSettings, create_app
+from worst_route.api.app import Api, create_app
 from worst_route.api.jobs import JobSettings
 from worst_route.engine import request as request_module
 from worst_route.engine.constraints import Constraints, returning
@@ -42,7 +42,7 @@ from ..engine.graphs import (
     named_roads,
     two_rings,
 )
-from .support import GRID, GRID_BBOX, PORTLAND, SLOW, save_build, slow_splices, until
+from .support import GRID, GRID_BBOX, PORTLAND, SLOW, api_settings, save_build, slow_splices, until
 
 pytestmark = pytest.mark.anyio
 
@@ -66,9 +66,7 @@ def job_body(**fields: Any) -> dict[str, Any]:
 @asynccontextmanager
 async def serving(data: Path, **jobs: Any) -> AsyncIterator[tuple[httpx.AsyncClient, FastAPI]]:
     settings = JobSettings(**{"inline_workers": True, "coalesce_s": 0.0, **jobs})
-    config = ApiSettings(
-        data_dir=data, builds=PORTLAND, backend="python", jobs=settings, geocoder="none"
-    )
+    config = api_settings(data, builds=PORTLAND, backend="python", jobs=settings, geocoder="none")
     app = create_app(config)
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
@@ -125,7 +123,7 @@ async def test_the_lifespan_makes_each_build_ready_to_plan_on(
     data: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO, logger="worst_route")
-    config = ApiSettings(data_dir=data, builds=PORTLAND, backend="python", geocoder="none")
+    config = api_settings(data, builds=PORTLAND, backend="python", geocoder="none")
     app = create_app(config)
     loaded = app.state.api.builds["portland"]
     assert "spatial" not in vars(loaded) and "backend" not in vars(loaded)  # not with the app

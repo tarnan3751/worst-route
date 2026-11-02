@@ -1030,9 +1030,10 @@ the challenge when its setup's request, as the frontend sends it, passes the pre
 runs (`jobs.prepare`, in a thread) and its plan finds enough (below); a refusal is logged and the
 next draw tried, and a type whose draws all fail is left out of the day (logged).
 
-**The bars** come from the trip itself. Each setup is planned once, as the daily route is: a job of the job manager with no client, in one of its worker processes (it takes one of the
-server's slots, never a client's share), followed to its end by the generation, its route stored
-like any other; with the type's seed, `CHALLENGE_ATTEMPTS` attempts, 2,500, hard mode's 8,000
+**The bars** come from the trip itself. Each setup is planned once, as the daily route is: a job of
+the job manager with no client, in one of its worker processes (it takes one of the server's slots,
+never a client's share), followed to its end by the generation, its route stored like any other;
+with the type's seed, `CHALLENGE_ATTEMPTS` attempts, 2,500, hard mode's 8,000
 (`CHALLENGE_HARD_ATTEMPTS`, since it converges slowly), and the largest budget, 120 s, as a safety
 net. A plan the clock ended short of its attempts logs a warning naming the date and the type
 (another server may set another bar). Its bar is 80 % (`CHALLENGE_BAR_SHARE`) of what the plan
@@ -1066,27 +1067,31 @@ draw the same towns and plans on any server, and the engine's rule (`docs/refere
 converges) within its budget, as for the daily route; the backends give the same paths, so the
 pre-flight's verdicts are the same on either.
 
-**Making and keeping.** A date's seven are kept in memory (`Api.challenge_days`, by date, region
-and `graph_version`; a few kilobytes a date, those of dates no longer answered dropped as another
-is kept) and in the route store (its `challenges` table, **The store**), so a restart, or a desktop
+**Making and keeping.** A date's seven are kept in memory (`Api.challenge_days`, by date, region and
+`graph_version`; a few kilobytes a date, those of dates no longer answered dropped as another is
+kept) and in the route store (its `challenges` table, **The store**), so a restart, or a desktop
 app's next start, never makes a day again. A call reads memory, then the store, before it waits on
 anything. A date kept in neither is made on its first call by a task of its own
 (`Api.challenge_tasks`), which every call for that date waits for (a caller gone leaves it to
-finish) while calls for other dates are answered, kept or made by tasks of their own: the town
-pool and the draws and pre-flights in threads, the plans in the job manager's workers (about a
-minute on `us-t3`, below), then stored and kept. Today's is asked for by the server itself once it has started: when its
-builds are ready to plan on (`warm_builds`), a task of the lifespan's (`today_at_start`) asks for
-today's as a call would, kept or made, on every server, a public one and the desktop app's
-included (`ApiSettings.challenges_at_start`, on but in the tests), so a panel opened a minute
-later finds them kept; it logs "today's challenges (2026-11-02) are ready: 7 drawn (58.3 s)", or
-why they were not made ("... were not made at start: no challenges: us-t3 has no places index to
-draw their towns from", a full server, a plan that failed). Stopping the server ends a date's
-making within
-5 s: `serve` (as the desktop app's server) gives uvicorn a graceful shutdown of 5 s, after which
-the open requests close, the lifespan cancels the tasks and the job manager's stop kills the
-workers; nothing of the date is kept then. The dates answered are today
-and the 30 days before it (`CHALLENGE_DAYS`), so a link to an earlier day's challenge keeps working
-for a month; a public server makes only today's (**Public limits**).
+finish) while calls for other dates are answered, kept or made by tasks of their own: the town pool
+and the draws and pre-flights in threads, the plans in the job manager's workers (about a minute on
+`us-t3`, below), then stored and kept. Today's is asked for by the server itself once it has
+started: when its builds are ready to plan on (`warm_builds`), a task of the lifespan's
+(`today_at_start`) asks for today's as a call would, kept or made, on every server, a public one and
+the desktop app's included, so a panel opened a minute later finds them kept; it logs "today's
+challenges (2026-11-02) are ready: 7 drawn (58.3 s)", or why they were not made ("... were not made
+at start: no challenges: us-t3 has no places index to draw their towns from", a full server, a plan
+that failed). It does not ask when `ApiSettings.challenges_at_start` is off, as in the tests and in
+the desktop app's headless start, the smoke (which logs "headless: today's challenges are not made
+at start"), nor with fewer than two workers (`CHALLENGE_START_MIN_WORKERS`: `--workers 1`, or by
+default a machine of three cores or fewer, the release's runners among them), whose only one a route
+asked for meanwhile would wait on for about a minute ("today's challenges are not made at start: 1
+worker, which a route asked for meanwhile would wait on"). Stopping the server ends a date's making
+within 5 s: `serve` (as the desktop app's server) gives uvicorn a graceful shutdown of 5 s, after
+which the open requests close, the lifespan cancels the tasks and the job manager's stop kills the
+workers; nothing of the date is kept then. The dates answered are today and the 30 days before it
+(`CHALLENGE_DAYS`), so a link to an earlier day's challenge keeps working for a month; a public
+server makes only today's (**Public limits**).
 
 **Refusals.** A date outside the window is 422 `INVALID_REQUEST` on `field: "date"` ("challenges
 are for the days from 2026-10-03 to 2026-11-02, not 2026-11-03"); one that does not parse is 422
@@ -1723,7 +1728,8 @@ their place. In the text format uvicorn's access lines stay and `worst_route.acc
 ## Tests
 
 `tests/api/` (`support.py` writes lattice builds into a temporary data directory and holds the
-helpers; the async tests run on anyio's pytest plugin, asyncio only):
+helpers, `api_settings` among them, the app's settings for a test, which asks for no challenges at
+its start unless told; the async tests run on anyio's pytest plugin, asyncio only):
 
 | Test file | What it covers |
 |---|---|
@@ -1738,7 +1744,7 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 | `test_static.py` | the site: the build at `/` and its caching, a module's media type, `/health` not at the root, the API under `/api` with its errors, a job run to its end through it (the lifespan ran), the access lines' whole paths; compression: a 256 kB script gzipped to a client accepting it (one `Vary`, its caching, the bytes on the wire gzip's), plain without `Accept-Encoding` (one `Vary` and its length), its 304 with the one `Vary` whatever the client accepts; a page under a kilobyte and a WOFF2 font plain, without a `Vary`, their 304s too; a job's stream, accepting gzip, driven at the ASGI level: plain `text/event-stream`, one event a message from `snapped` to `done`; the route's document gzipped, with its compressed length, and plain; the share image and a whole `.pmtiles` not gzipped |
 | `test_store.py` | the round trip (the stored route validates), unknown ids, the first record kept, what the id covers; a day's row, its graph_version's (the same build id at another one has another), replaced in place; a route's order kept, and a store from before the worst order gaining `order_json`, its rows the identity, once however often it is opened, a column another server added meanwhile counting as there and any other error raised |
 | `test_daily_api.py` | the daily route on the 20 × 20 lattice with a places index of towns placed on it, the day fixed: the draw (every trip within the band, two towns closer than its lower bound never drawn, between incorporated places of the kinds drawn, inside the build's bbox, never a town without a node within 5 km; the same seed the same trips; none when nothing fits), the region with the most states; `GET /daily` planning, then done with the stored route's ratio, stop and attempts, the same answer call after call, the route's labels, seed, attempts, budget, default vehicle and departure (UTC, to the second), with its fuel and arrival, its `/validate` ok; two servers on two stores answering alike, the iterations having ended the run; concurrent first calls planning once; a failed job recorded and submitted again, the day drawn once; a trip the pre-flight refuses giving way to the next, and a day whose ten trips it refuses failed and answered so again without a pre-flight; a full server answering 429 `TOO_MANY_JOBS` with nothing drawn or recorded until a slot frees; a client's `DELETE` refused with `DAILY_JOB` while the job runs, and only reporting it once ended; a job the server cancels failing the day, then planned again; the job outliving a viewer that leaves (no orphan); a call after the job's end recording it before its follower, and a follower never overwriting a later plan; a planning row of a restarted server planned again; a build replaced under its id (`save --force`) planned again on its own row, its route served, the old row kept; a public server's job without a client, at its budget; an index without incorporated places, and no places index, 404 |
-| `test_challenges_api.py` | the daily challenges on the 20 × 20 lattice, its rows and columns named, with bridges on three rows, four brands (two listed chains with enough locations, one listed with three, one without a wikidata id), a places index of towns placed on it and the bands scaled to it, the day fixed, each plan a job of the app's manager on inline workers: the seven in order with their ids and setups (objective, item, constraints, worst order, four stops for it, labels, 6 decimals, the target); the titles naming each trip and its bar, the blurbs one sentence each; every draw within its band and the worst order's every two apart, over three days; each bar the plan of its setup by the engine itself (written out in the test) rounded down; hard mode planned with its own attempts, a bar under its least passed over; no-left planned with the others' attempts, its bar 90 % of its ratio down to the tenth, a run under 1.35× passed over; the rounding itself (a count of 100 or more to the ten); the same day twice the same, another day other towns; a refused pre-flight taking the next draw; a type without a fitting draw left out; too few bridges passed over; the pilgrimage's chain one with enough locations, none from the chains without; a chain visited too little falling back to the other, then the next draw; a plan the clock ended logged with its date and type; `GET /challenges` made once for two concurrent first calls and kept, its shape, today's route made worse today's only (another date made once more, without it; both forgotten a month on); a day kept in the store answered after a restart without being made; a date being made holding up no other; the server's stop cancelling a date's making; the same on two servers; the window's refusals and a malformed date (no `field`); a public server making only today's and answering an earlier date only when kept; a full server's 429 before anything is made and from a plan meanwhile, nothing kept, then made; `NOT_FOUND` without a places index; today's asked for by the server at its start (made and logged, then answered with no plan, and kept across a restart), nothing asked when told not to, the log line without a places index, the server's stop ending the making it asked for |
+| `test_challenges_api.py` | the daily challenges on the 20 × 20 lattice, its rows and columns named, with bridges on three rows, four brands (two listed chains with enough locations, one listed with three, one without a wikidata id), a places index of towns placed on it and the bands scaled to it, the day fixed, each plan a job of the app's manager on inline workers: the seven in order with their ids and setups (objective, item, constraints, worst order, four stops for it, labels, 6 decimals, the target); the titles naming each trip and its bar, the blurbs one sentence each; every draw within its band and the worst order's every two apart, over three days; each bar the plan of its setup by the engine itself (written out in the test) rounded down; hard mode planned with its own attempts, a bar under its least passed over; no-left planned with the others' attempts, its bar 90 % of its ratio down to the tenth, a run under 1.35× passed over; the rounding itself (a count of 100 or more to the ten); the same day twice the same, another day other towns; a refused pre-flight taking the next draw; a type without a fitting draw left out; too few bridges passed over; the pilgrimage's chain one with enough locations, none from the chains without; a chain visited too little falling back to the other, then the next draw; a plan the clock ended logged with its date and type; `GET /challenges` made once for two concurrent first calls and kept, its shape, today's route made worse today's only (another date made once more, without it; both forgotten a month on); a day kept in the store answered after a restart without being made; a date being made holding up no other; the server's stop cancelling a date's making; the same on two servers; the window's refusals and a malformed date (no `field`); a public server making only today's and answering an earlier date only when kept; a full server's 429 before anything is made and from a plan meanwhile, nothing kept, then made; `NOT_FOUND` without a places index; today's asked for by the server at its start (made and logged, then answered with no plan, and kept across a restart), nothing asked when told not to, nor with one worker (logged), the log line without a places index, the server's stop ending the making it asked for |
 | `test_challenges_data.py` (`data`) | three days of challenges on `us-t3` from `WORST_ROUTE_DATA` with its places index, from 2026-11-02, through `GET /challenges` with the plans in worker processes: the seven each day and today's route made worse on the last (today) only, every challenge's towns within its band, its request accepted by the pre-flight, its bar at its floor or above (hard mode's 1.5×, no-left's 1.2×), its title naming its first town; the first day again on a server with a store of its own, the same (about a minute a day; a timeout of 900 s) |
 | `test_draw_api.py` | `POST /draw` and `POST /draw/finish` on the drawing board (`tests/engine/graphs.py`): an empty path the start with its legal ways out (the out-edges by hand: a one-way's absent), their names, lengths and shapes; steps with their turns, the stop a move reaches, done with its ratio and line; each refusal with its code and first illegal edge (a node passed, a twin, a turn the straight-only junction forbids, the end before a via, a one-way taken from its head, past the end, an id outside the graph, a strict turn, a road again under hard mode), the path before it drawn, a soft constraint's left turn taken; a finished drawing stored under its content hash with its run drawn by a human, its seed and labels, its document, directions, share image and `/validate`, the same id when finished again, and continued by make it worse; a round trip finished with a seed drawn for it and no ratio; an unfinished drawing and an illegal one refused at finish; the stops those a job's `snapped` event gives; the refusals of the request (an objective, a target, the worst order, a base route, a portfolio, a certificate, an item), an unknown region, a stop outside the bbox, a path over the cap and a negative id; a public server's 240 steps a minute over both endpoints and its ten finished drawings a minute (the same drawing the same route, steps going on); a request's context worked out once whatever the seed and the path, and the last ones kept |
 | `test_draw_data.py` (`data`) | on Portland's build, a route drawn by hand from Powell's round a few blocks to Pioneer Courthouse Square from the moves the server offers (backing up from dead ends), more than twice the sensible route, finished, stored, validated, its share image rendered |

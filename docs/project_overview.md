@@ -296,8 +296,9 @@ toast and a badge. Each row says how the route shown or the run going stands aga
 ("12.3× so far · needs 15×", "412 of 600 bridges", "Done"), a run of the challenge set up that
 ends short of it says so in a toast ("12.3×, the challenge needs 15×. More time, another run or
 Make it worse may get there."), a hint under the list says how to play, and a route's brand
-locations and items are marked on the map from the route document's `marks`. The first list, ten fixed in the frontend over Portland, Oregon and `us-t3`
-(the alphabet and beating the engine by hand among them), is gone.
+locations and items are marked on the map from the route document's `marks`. The first list, ten
+fixed in the frontend over Portland, Oregon and `us-t3` (the alphabet and beating the engine by hand
+among them), is gone.
 The desktop app is built (M6; `docs/reference/desktop.md`): `worst-route-desktop` serves the
 site's API and frontend on 127.0.0.1 at its own port (17429, a free one when another program has
 it, so the web view's storage lasts between starts), only to a `Host` of 127.0.0.1 or localhost,
@@ -1113,14 +1114,14 @@ brief):
   completions kept with the day in `localStorage` (`worst-route.challenges`), every access guarded
   so the page works without it; the standing on a row, a toast for a run short of the bar (none
   once the challenge is done: a badge holder gets no nag; a cancelled run and a Make it worse that
-  found nothing worse are toasted) and a hint under the list, and a route's brand locations and items marked on the map (the route
-  document's `marks`, since 2026-11-02, the coordinator's briefs): a ratio so far cut to the tenth
-  below and hours to the hour below, so a route never reads as at a bar it has not reached, no left
-  turns stood only under strict no-left and hard mode only under hard mode; the desktop app on a
-  fixed port (`DESKTOP_PORT`, 17429) so its
-  storage lasts: on macOS and Linux bound with `SO_REUSEADDR` only once a probe connection to it is
-  refused (a free port otherwise), on Windows bound plainly (a free port when that fails), the
-  review's ruling. Out of scope: scores, leaderboards, accounts, new modes.
+  found nothing worse are toasted) and a hint under the list, and a route's brand locations and
+  items marked on the map (the route document's `marks`, since 2026-11-02, the coordinator's
+  briefs): a ratio so far cut to the tenth below and hours to the hour below, so a route never reads
+  as at a bar it has not reached, no left turns stood only under strict no-left and hard mode only
+  under hard mode; the desktop app on a fixed port (`DESKTOP_PORT`, 17429) so its storage lasts: on
+  macOS and Linux bound with `SO_REUSEADDR` only once a probe connection to it is refused (a free
+  port otherwise), on Windows bound plainly (a free port when that fails), the review's ruling. Out
+  of scope: scores, leaderboards, accounts, new modes.
 - **Portfolio runs as built** (2026-10-31, the coordinator's brief and its rulings on the plan;
   `docs/reference/api.md`, **Portfolios**): `portfolio` on `POST /jobs`, 1 by default (left out of
   the stored request then, so a job of one search sends and stores exactly what it did before), at

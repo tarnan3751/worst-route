@@ -1,41 +1,47 @@
 // Which challenges are done (docs/reference/frontend.md, **Challenges**): every finished route the
 // store shows (its `route`, once stored: a run's, a drawing's, one opened by link) is graded
-// against each challenge not yet done whose trip it is (`sameTrip`: the region, the mode with its
-// item or brand, the worst order as the challenge sets it, its leash when it sets one, and the
-// stops within NEAR_M of the challenge's when it fixes them) by the challenge's goal (`reached`); a
-// drawing's verdict is graded against the drawing challenges (`drawn`). A challenge newly done is
-// recorded with the day under STORAGE_KEY in the browser's storage, every read and write of which
+// against each challenge listed and not yet done whose trip it is (`sameTrip`: the region, the mode
+// with its item or brand, the worst order as the challenge sets it, and the stops within NEAR_M of
+// the challenge's; today's route made worse only on today's challenge) by the challenge's goal
+// (`reached`), and graded again when the list changes, since a route may be shown before the list
+// comes. A challenge newly done is recorded with the day under STORAGE_KEY in the browser's
+// storage, by its id, which carries its day, so past days' badges keep (what is not a dated id,
+// as the fixed list's of old, is not counted and goes at the next write); every read and write
 // may fail (a private window, storage blocked), so the page works without it and the badges then
 // last as long as the page; "completed" says which, for its toast (`completedLine`). `reset`
 // forgets them all. No DOM, so the tests drive it.
-import type { BrandEntry, Daily, RouteDocument } from "../api/types";
-import { verdictOf, type Drawing } from "../draw/drawing";
+import type { BrandEntry, ChallengeBrand, ChallengeGoal, Daily, RouteDocument } from "../api/types";
 import { isoWithOffset } from "../format";
 import type { AppState, Store } from "../state";
-import { CHALLENGES, type Challenge, type ChallengeBrand, type Goal } from "./list";
+import { dateOf, type Challenge } from "./list";
 
 export const STORAGE_KEY = "worst-route.challenges";
 export const NEAR_M = 500; // a trip's stop counts as the challenge's within this
-const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 /** Where the completions are kept: the browser's localStorage, or a stand-in. */
 export type ChallengeStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
+/** The challenges to grade (the panel's list): "listed" when they change. */
+export interface ChallengeSource extends EventTarget {
+  readonly listed: readonly Challenge[];
+}
+
 /** A finished route as a challenge sees it: its region, objective, item and brand, whether in
- * the worst order, its leash, and stops. */
+ * the worst order, and its stops. */
 export interface Trip {
   region: string;
   objective: string;
   item: string | null;
   brand: { wikidata: string | null; name: string } | null;
   reorder: boolean;
-  leashKm: number | "auto";
   stops: { lat: number; lon: number }[];
 }
 
+type Point = { lat: number; lon: number };
+
 /** The distance in metres between two points (haversine, on a sphere of the Earth's mean
  * radius: close enough for "within 500 m"). */
-function metresBetween(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
+function metresBetween(a: Point, b: Point): number {
   const rad = Math.PI / 180;
   const dLat = (b.lat - a.lat) * rad;
   const dLon = (b.lon - a.lon) * rad;
@@ -45,31 +51,51 @@ function metresBetween(a: { lat: number; lon: number }, b: { lat: number; lon: n
   return 2 * 6_371_008.8 * Math.asin(Math.sqrt(h));
 }
 
+const near = (a: Point, b: Point): boolean => metresBetween(a, b) <= NEAR_M;
+
+/** Whether `stops` are `wanted`, as many, each within NEAR_M of its own; in the worst order
+ * (`anyOrder`) the start and the end in place and the stops between in any order, as a route's
+ * request lists them in the order it visits them. */
+function sameStops(wanted: Point[], stops: Point[], anyOrder: boolean): boolean {
+  if (stops.length !== wanted.length) return false;
+  if (!anyOrder) return wanted.every((stop, k) => near(stop, stops[k]));
+  const last = wanted.length - 1;
+  if (!near(wanted[0], stops[0]) || !near(wanted[last], stops[last])) return false;
+  const between = stops.slice(1, last);
+  return wanted.slice(1, last).every((stop) => {
+    const k = between.findIndex((other) => near(stop, other));
+    if (k < 0) return false;
+    between.splice(k, 1); // one of the challenge's each
+    return true;
+  });
+}
+
 /** Whether `brand` is the challenge's: by its wikidata id when it has one, else by its name. */
 function sameBrand(brand: Trip["brand"], wanted: ChallengeBrand): boolean {
   if (brand === null) return false;
   return brand.wikidata !== null ? brand.wikidata === wanted.wikidata : brand.name === wanted.name;
 }
 
-/** Whether `trip` is one `challenge` grades: its region (for today's challenge, today's route's,
- * from `today`, null while it is not done), its mode and item or brand, its worst order or none as
- * the challenge sets, its leash when the challenge sets one (that leash exactly: "auto" or any
- * other is not it), and, when the challenge fixes its stops, as many stops each within NEAR_M of
- * the challenge's. */
+/** Whether `trip` is one `challenge` grades: its region, its mode and item or brand, the worst
+ * order or none as the challenge sets, and its stops (`sameStops`); for today's route made worse
+ * (no setup), the longest route on the region of today's route (`today`, null while it is not
+ * done), the challenge today's. */
 export function sameTrip(challenge: Challenge, trip: Trip, today: Daily | null = null): boolean {
-  const { objective = "distance", item, brand, reorder = false, leashKm } = challenge.settings;
-  const region = challenge.region ?? today?.region;
-  if (trip.region !== region || trip.objective !== objective) return false;
-  if (trip.reorder !== reorder) return false;
-  if (leashKm !== undefined && trip.leashKm !== leashKm) return false;
-  if (objective === "collect" && trip.item !== item) return false;
-  if (objective === "brand" && (brand === undefined || !sameBrand(trip.brand, brand))) return false;
-  const { stops } = challenge;
-  if (stops === null) return true;
-  return (
-    trip.stops.length === stops.length &&
-    stops.every((stop, k) => metresBetween(stop, trip.stops[k]) <= NEAR_M)
-  );
+  const { setup } = challenge;
+  if (setup === null) {
+    return (
+      challenge.date === today?.date &&
+      trip.region === today.region &&
+      trip.objective === "distance" &&
+      !trip.reorder
+    );
+  }
+  if (trip.region !== challenge.region || trip.objective !== setup.objective) return false;
+  if (trip.reorder !== setup.reorder) return false;
+  if (setup.objective === "collect" && trip.item !== setup.item) return false;
+  if (setup.objective === "brand" && (setup.brand === null || !sameBrand(trip.brand, setup.brand)))
+    return false;
+  return sameStops(setup.stops, trip.stops, setup.reorder);
 }
 
 /** A stored route as a challenge sees it; its brand's wikidata id from `brands` when they are its
@@ -85,26 +111,26 @@ export function tripOf(route: RouteDocument, state: Readonly<AppState>): Trip {
     item: request.item ?? null,
     brand: visited && { wikidata: listed?.wikidata ?? null, name: visited.name },
     reorder: request.reorder === true,
-    leashKm: request.leash_km ?? "auto",
     stops: request.stops ?? route.stops,
   };
 }
 
 /** Whether stored route `route` reaches `goal`; `today` is today's route (for the goal of making
- * it worse), null while there is none done. A drawing's goal is judged on its verdict, never
- * here. */
-export function reached(goal: Goal, route: RouteDocument, today: Daily | null): boolean {
+ * it worse), null while there is none done. */
+export function reached(goal: ChallengeGoal, route: RouteDocument, today: Daily | null): boolean {
   const { metrics, request } = route;
   const ratio = metrics.ratio ?? 0; // a round trip has none
   switch (goal.kind) {
     case "ratio":
       return ratio >= goal.min;
+    case "duration":
+      return metrics.time_s + (metrics.delay_s ?? 0) >= goal.min_s;
+    case "no_left":
+      return metrics.turns?.left === 0 && ratio >= goal.min_ratio;
     case "items":
       return (metrics.items?.[goal.item] ?? 0) >= goal.min;
     case "brand":
       return (metrics.brand?.visits ?? 0) >= goal.min_visits;
-    case "alphabet":
-      return metrics.alphabet?.sequence.startsWith(ALPHABET.slice(0, goal.letters)) ?? false;
     case "hard":
       return request.constraints?.hard === true && ratio >= goal.min_ratio;
     case "daily_worse":
@@ -113,8 +139,6 @@ export function reached(goal: Goal, route: RouteDocument, today: Daily | null): 
         request.base_route_id === today.route_id &&
         ratio >= (today.ratio ?? Infinity)
       );
-    case "drawn":
-      return false;
   }
 }
 
@@ -128,57 +152,27 @@ export function completedLine(challenge: Challenge): string {
 export class ChallengeProgress extends EventTarget {
   done: Record<string, string>;
   readonly #store: Store;
+  readonly #source: ChallengeSource;
   readonly #storage: () => ChallengeStorage;
   readonly #today: () => Daily | null;
-  readonly #challenges: readonly Challenge[];
 
-  /** Grades every route `store` shows; `today` gives today's route once done, `storage` the
-   * storage (reaching it may throw too). */
+  /** Grades every route `store` shows against the challenges `source` lists, and the route shown
+   * again whenever they change; `today` gives today's route once done, `storage` the storage
+   * (reaching it may throw too). */
   constructor(
     store: Store,
+    source: ChallengeSource,
     today: () => Daily | null,
     storage: () => ChallengeStorage = () => localStorage,
-    challenges: readonly Challenge[] = CHALLENGES,
   ) {
     super();
     this.#store = store;
+    this.#source = source;
     this.#today = today;
     this.#storage = storage;
-    this.#challenges = challenges;
     this.done = this.#read();
-    store.watch(["route"], ({ route }) => {
-      if (route !== null) this.route(route);
-    });
-  }
-
-  /** Grade stored route `route`. */
-  route(route: RouteDocument): void {
-    const trip = tripOf(route, this.#store.state);
-    for (const challenge of this.#challenges) {
-      const today = this.#today();
-      if (sameTrip(challenge, trip, today) && reached(challenge.goal, route, today)) {
-        this.#record(challenge);
-      }
-    }
-  }
-
-  /** Grade a drawing once it has its verdict: a drawing that beat the engine completes the
-   * drawing challenges whose trip it is (a drawing is the longest route). */
-  drawn(drawing: Pick<Drawing, "request" | "finished" | "par">): void {
-    const { request } = drawing;
-    if (request === null || verdictOf(drawing, this.#store.state.settings.units) !== "you") return;
-    const trip: Trip = {
-      region: request.region,
-      objective: "distance",
-      item: null,
-      brand: null,
-      reorder: false, // a drawing takes the stops in their order
-      leashKm: request.leash_km ?? "auto",
-      stops: request.stops ?? [],
-    };
-    for (const challenge of this.#challenges) {
-      if (challenge.goal.kind === "drawn" && sameTrip(challenge, trip)) this.#record(challenge);
-    }
+    store.watch(["route"], () => this.#grade());
+    source.addEventListener("listed", () => this.#grade());
   }
 
   /** Forget every completion. */
@@ -190,6 +184,19 @@ export class ChallengeProgress extends EventTarget {
       // the badges were only the page's
     }
     this.dispatchEvent(new Event("change"));
+  }
+
+  /** Grade the route shown, if any. */
+  #grade(): void {
+    const { route } = this.#store.state;
+    if (route === null) return;
+    const trip = tripOf(route, this.#store.state);
+    const today = this.#today();
+    for (const challenge of this.#source.listed) {
+      if (sameTrip(challenge, trip, today) && reached(challenge.goal, route, today)) {
+        this.#record(challenge);
+      }
+    }
   }
 
   #record(challenge: Challenge): void {
@@ -204,7 +211,7 @@ export class ChallengeProgress extends EventTarget {
     this.dispatchEvent(new Event("change"));
   }
 
-  /** The completions stored, the challenges' only (none when there is no storage). */
+  /** The completions stored, of dated ids only (none when there is no storage). */
   #read(): Record<string, string> {
     let stored: unknown;
     try {
@@ -214,9 +221,8 @@ export class ChallengeProgress extends EventTarget {
     }
     const done: Record<string, string> = {};
     if (typeof stored !== "object" || stored === null) return done;
-    for (const { id } of this.#challenges) {
-      const day = (stored as Record<string, unknown>)[id];
-      if (typeof day === "string") done[id] = day;
+    for (const [id, day] of Object.entries(stored)) {
+      if (dateOf(id) !== null && typeof day === "string") done[id] = day;
     }
     return done;
   }

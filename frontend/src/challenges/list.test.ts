@@ -1,51 +1,25 @@
-// The challenges' list: ids, once each; regions among those the tests' builds serve (today's
-// challenge with none of its own: today's route's); every goal kind present; and each challenge's
-// own parts agreeing (an items goal collecting what its settings collect, a pilgrimage naming its
-// brand, a drawing on fixed stops).
+// The challenges of a day's answer, each with the answer's day and region, and the day an id ends
+// in.
 import { describe, expect, it } from "vitest";
-import { MODES } from "../state";
-import { CHALLENGES } from "./list";
-
-const SERVED = ["portland", "oregon", "us-t3"]; // the regions the recordings and tests serve
-const KINDS = ["ratio", "items", "brand", "alphabet", "drawn", "hard", "daily_worse"];
+import { ANSWER } from "../__fixtures__/challenges";
+import { challengesOf, dateOf } from "./list";
 
 describe("the challenges", () => {
-  it("have ids of lowercase letters, digits and hyphens, each once", () => {
-    const ids = CHALLENGES.map(({ id }) => id);
-    expect(new Set(ids).size).toBe(ids.length);
-    for (const id of ids) expect(id).toMatch(/^[a-z0-9][a-z0-9-]*$/);
+  it("are the answer's, in its order, each with its day and region", () => {
+    const challenges = challengesOf(ANSWER);
+    expect(challenges.map(({ id }) => id)).toEqual(ANSWER.challenges.map(({ id }) => id));
+    for (const [k, challenge] of challenges.entries()) {
+      expect(challenge).toEqual({ ...ANSWER.challenges[k], date: "2026-11-02", region: "us-t3" });
+    }
+    expect(challengesOf({ ...ANSWER, challenges: ANSWER.challenges.slice(0, 3) })).toHaveLength(3);
   });
 
-  it("are about ten, in the regions served, with every goal kind", () => {
-    expect(CHALLENGES.length).toBeGreaterThanOrEqual(8);
-    expect(CHALLENGES.length).toBeLessThanOrEqual(12);
-    for (const { region, goal } of CHALLENGES) {
-      if (goal.kind === "daily_worse") expect(region).toBeNull();
-      else expect(SERVED).toContain(region);
+  it("carry their day in their ids", () => {
+    for (const { id } of challengesOf(ANSWER)) expect(dateOf(id)).toBe("2026-11-02");
+    expect(dateOf("worst-order-2026-10-03")).toBe("2026-10-03");
+    for (const id of ["portland-bridges", "daily-worse", "us-chicago", "long-way-2026-11", ""]) {
+      expect(dateOf(id)).toBeNull();
     }
-    expect(new Set(CHALLENGES.map(({ goal }) => goal.kind))).toEqual(new Set(KINDS));
-    for (const region of SERVED) expect(CHALLENGES.some((c) => c.region === region)).toBe(true);
-  });
-
-  it("agree with themselves", () => {
-    for (const { title, blurb, stops, settings, goal } of CHALLENGES) {
-      expect(title.length).toBeGreaterThan(0);
-      expect(blurb.length).toBeGreaterThan(0);
-      expect(MODES).toContain(settings.objective ?? "distance");
-      if (stops !== null) expect(stops.length).toBeGreaterThanOrEqual(2);
-      if (goal.kind === "items") {
-        expect(settings).toMatchObject({ objective: "collect", item: goal.item });
-      }
-      if (goal.kind === "brand") {
-        expect(settings.objective).toBe("brand");
-        expect(settings.brand?.wikidata).toMatch(/^Q\d+$/);
-      }
-      if (goal.kind === "alphabet") expect(settings.objective).toBe("alphabet");
-      if (goal.kind === "hard") expect(settings.hard).toBe(true);
-      if (goal.kind === "drawn") expect(stops).not.toBeNull();
-      if (goal.kind === "ratio" || goal.kind === "drawn" || goal.kind === "hard") {
-        expect(settings.objective ?? "distance").toBe("distance"); // what a drawing plans
-      }
-    }
+    expect(dateOf("long-way-2026-11-02x")).toBeNull();
   });
 });

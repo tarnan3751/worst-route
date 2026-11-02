@@ -525,6 +525,71 @@ export interface Daily {
   attempts: number | null;
 }
 
+// --- The day's challenges (GET /challenges) --------------------------------------------------
+
+/** A challenge's kind, one of each a day at most, in this order. */
+export type ChallengeType =
+  | "long-way"
+  | "slow-way"
+  | "no-left"
+  | "bridges"
+  | "pilgrimage"
+  | "hard-mode"
+  | "worst-order"
+  | "daily-worse";
+
+/** The brand a pilgrimage visits: its id on the answer's build, its name and wikidata id. */
+export interface ChallengeBrand {
+  id: number;
+  name: string;
+  wikidata: string;
+}
+
+/** What Set it up applies: the stops, labelled with their towns ("Bend, OR"; two, or four for the
+ * worst order), the mode with its item or brand, the constraints, the worst order and the target
+ * (as bad as possible), on the answer's region at the automatic tier and leash. */
+export interface ChallengeSetup {
+  stops: DailyStop[];
+  objective: Objective;
+  item: CollectItem | null;
+  brand: ChallengeBrand | null;
+  constraints: Required<Constraints>;
+  reorder: boolean;
+  target: Target;
+}
+
+/** What a finished route must reach: a ratio; a drive time with its delays (seconds); no left
+ * turn at a ratio; a count of an item; a brand's visits; a hard-mode route's ratio; or today's
+ * route made worse (its ratio at least the day's). */
+export type ChallengeGoal =
+  | { kind: "ratio"; min: number }
+  | { kind: "duration"; min_s: number }
+  | { kind: "no_left"; min_ratio: number }
+  | { kind: "items"; item: CollectItem; min: number }
+  | { kind: "brand"; min_visits: number }
+  | { kind: "hard"; min_ratio: number }
+  | { kind: "daily_worse" };
+
+/** One challenge of the day: its id (`<type>-<date>`), its words, its setup (none for today's
+ * route made worse) and its goal. */
+export interface ChallengeEntry {
+  id: string;
+  type: ChallengeType;
+  title: string;
+  blurb: string;
+  setup: ChallengeSetup | null;
+  goal: ChallengeGoal;
+}
+
+/** `GET /challenges?date=`: a day's challenges (the UTC date, YYYY-MM-DD), on the region and build
+ * their setups pin; a type without a fitting trip that day left out. */
+export interface ChallengeList {
+  date: string;
+  region: string;
+  build_id: string;
+  challenges: ChallengeEntry[];
+}
+
 // --- A route drawn by hand (POST /draw, POST /draw/finish) --------------------------------
 
 /** The class of a turn from one edge into the next. */

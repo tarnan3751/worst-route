@@ -459,7 +459,7 @@ export function parLine(par: Par | null, units: Units): string {
 
 /** Who has won once the drawing is stored and the par done, by length (the same baseline): a tie
  * when the two read the same; null before. */
-export function verdictOf(
+function verdictOf(
   drawing: Pick<Drawing, "finished" | "par">,
   units: Units,
 ): "you" | "engine" | "tie" | null {

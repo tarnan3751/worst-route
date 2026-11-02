@@ -1,15 +1,17 @@
-// Grading without a DOM: each goal kind on the recordings' stored routes (the collect recording's
-// 18 bridges, the alphabet recording's A–O, the brand recording's 14 of 19 Starbucks, the max-mode
-// recording's 78×) and on a drawing's verdict; what makes a route a challenge's trip; the
-// completions kept in a stand-in storage (persisted, reset, junk ignored, a throwing storage
-// survived); and the toast line.
-import { readFileSync } from "node:fs";
+// Grading without a DOM: each goal kind on the recordings' stored routes, moved to the challenge's
+// region and stops (the max-mode recording's 78× and the ratio recording's 25×, the time
+// recording's 6.1 h with its delays, the directions recording's left turns, the collect
+// recording's 18 bridges, the brand recording's 14 of 19 Starbucks); what makes a route a
+// challenge's trip (the stops within 500 m, the worst order's in any order between); today's route
+// made worse only on today's challenge; and the completions kept in a stand-in storage (once each,
+// graded again when the list comes, past days' kept, the fixed list's of old dropped, reset, junk
+// ignored, a throwing storage survived), with the toast's line.
 import { describe, expect, it } from "vitest";
+import { ANSWER } from "../__fixtures__/challenges";
 import { loadStream } from "../__fixtures__/stream";
 import type { BrandEntry, Daily, RouteDocument, RouteRequest } from "../api/types";
-import type { Par } from "../draw/drawing";
 import { DEFAULT_SETTINGS, IDLE_RUN, Store } from "../state";
-import { CHALLENGES, type Challenge } from "./list";
+import { challengesOf, type Challenge } from "./list";
 import {
   ChallengeProgress,
   STORAGE_KEY,
@@ -17,26 +19,26 @@ import {
   reached,
   sameTrip,
   tripOf,
+  type ChallengeSource,
   type ChallengeStorage,
 } from "./progress";
 
-const challenge = (id: string): Challenge => CHALLENGES.find((c) => c.id === id) as Challenge;
-const collect = loadStream("portland-collect-stream").route;
-const alphabet = loadStream("portland-alphabet-stream").route;
-const brand = loadStream("portland-brand-stream").route;
-const max = loadStream("portland-stream").route;
+const CHALLENGES = challengesOf(ANSWER);
+const challenge = (type: string): Challenge => CHALLENGES.find((c) => c.type === type)!;
+const max = loadStream("portland-stream").route; // 78.0×, three stops, no turns recorded
 const ratio25 = loadStream("portland-ratio-stream").route;
-const REGION = loadStream().regions[0]; // Portland's
-const drawn = JSON.parse(
-  readFileSync(new URL("../__fixtures__/portland-draw.json", import.meta.url), "utf8"),
-) as { request: RouteRequest };
+const slow = loadStream("portland-time-stream").route;
+const turning = loadStream("portland-directions-stream").route;
+const collect = loadStream("portland-collect-stream").route;
+const brand = loadStream("portland-brand-stream").route;
+const US = { ...loadStream().regions[0], region: "us-t3" };
 const STARBUCKS: BrandEntry = { id: 229, name: "Starbucks", wikidata: "Q37158", locations: 19 };
 const TODAY: Daily = {
-  date: "2026-10-31",
+  date: "2026-11-02",
   region: "us-t3",
   build_id: "6adae6917be1",
   stops: [],
-  seed: 20261031,
+  seed: 20261102,
   max_iterations: 5000,
   status: "done",
   route_id: "a076702bbc25",
@@ -48,8 +50,8 @@ const TODAY: Daily = {
 
 function storeWith(brands: BrandEntry[] | null = null): Store {
   return new Store({
-    regions: [REGION],
-    region: REGION,
+    regions: [US],
+    region: US,
     pick: null,
     stops: [],
     settings: DEFAULT_SETTINGS,
@@ -75,20 +77,34 @@ function memory(fail = false): ChallengeStorage & { items: Map<string, string> }
   };
 }
 
-/** `route` as another route: its request and metrics patched. */
-function variant(
+/** A list the panel would hold: "listed" once `list` is called. */
+function source(listed: Challenge[] = CHALLENGES) {
+  const target = Object.assign(new EventTarget(), { listed }) satisfies ChallengeSource;
+  const list = (challenges: Challenge[]) => {
+    target.listed = challenges;
+    target.dispatchEvent(new Event("listed"));
+  };
+  return Object.assign(target, { list });
+}
+
+/** `route` driven as `c`'s trip: on its region, from its stops, its request and metrics patched. */
+function on(
+  c: Challenge,
   route: RouteDocument,
-  request: Partial<RouteRequest>,
+  request: Partial<RouteRequest> = {},
   metrics: Partial<RouteDocument["metrics"]> = {},
-  region = route.region,
 ): RouteDocument {
+  const stops = c.setup?.stops.map(({ lat, lon, label }) => ({ lat, lon, label }));
   return {
     ...route,
-    region,
-    request: { ...route.request, ...request },
+    region: c.region,
+    request: { ...route.request, stops: stops ?? route.request.stops, ...request },
     metrics: { ...route.metrics, ...metrics },
   };
 }
+
+/** `c` with another goal. */
+const aiming = (c: Challenge, goal: Challenge["goal"]): Challenge => ({ ...c, goal });
 
 const graded = (
   c: Challenge,
@@ -98,109 +114,111 @@ const graded = (
 ) => sameTrip(c, tripOf(route, store.state), today) && reached(c.goal, route, today);
 
 describe("grading a route", () => {
-  it("counts the collect recording's bridges against the threshold", () => {
-    const bridges = challenge("portland-bridges"); // Powell's → Reed, 20 bridges
-    expect(collect.metrics.items?.bridge).toBe(18);
-    expect(sameTrip(bridges, tripOf(collect, storeWith().state))).toBe(true); // within 500 m
-    expect(graded(bridges, collect)).toBe(false);
-    const low = { ...bridges, goal: { kind: "items", item: "bridge", min: 18 } } as Challenge;
-    expect(graded(low, collect)).toBe(true);
-    const roundabouts = { ...low, settings: { objective: "collect", item: "roundabout" } };
-    expect(graded(roundabouts as Challenge, collect)).toBe(false); // another item
+  it("takes a ratio on the challenge's trip, in its mode, on its region", () => {
+    const long = challenge("long-way"); // at 16×
+    expect(graded(long, on(long, max))).toBe(true); // 78.0×
+    expect(graded(long, on(long, ratio25))).toBe(true); // 25.0×
+    expect(graded(aiming(long, { kind: "ratio", min: 30 }), on(long, ratio25))).toBe(false);
+    expect(graded(long, max)).toBe(false); // Portland's region and stops
+    expect(graded(long, { ...on(long, max), region: "us-t1" })).toBe(false);
+    expect(graded(long, on(long, max, { objective: "time" }))).toBe(false);
+    expect(graded(long, on(long, max, { reorder: true }))).toBe(false); // the worst order
+    expect(graded(long, on(long, max, {}, { ratio: null }))).toBe(false); // a round trip
   });
 
-  it("does not complete the alphabet on the alphabet recording's A–O", () => {
-    const letters = challenge("portland-alphabet");
-    expect(alphabet.metrics.alphabet?.sequence).toBe("ABCDEFGHIJKLMNO");
-    expect(graded(letters, alphabet)).toBe(false);
-    const fifteen = { ...letters, goal: { kind: "alphabet", letters: 15 } } as Challenge;
-    expect(graded(fifteen, alphabet)).toBe(true);
-    const sixteen = { ...letters, goal: { kind: "alphabet", letters: 16 } } as Challenge;
-    expect(graded(sixteen, alphabet)).toBe(false);
+  it("takes a drive time with its delays", () => {
+    const hours = (h: number) =>
+      aiming(challenge("slow-way"), { kind: "duration", min_s: h * 3600 });
+    expect(slow.metrics.time_s + (slow.metrics.delay_s ?? 0)).toBeCloseTo(22_036, 0); // 6.1 h
+    expect(graded(hours(6), on(hours(6), slow))).toBe(true);
+    expect(graded(hours(7), on(hours(7), slow))).toBe(false);
+    expect(graded(hours(6), on(hours(6), slow, {}, { delay_s: undefined }))).toBe(false); // 4.1 h
+    expect(graded(hours(6), on(hours(6), slow, { objective: "distance" }))).toBe(false);
+  });
+
+  it("takes no left turn at the ratio", () => {
+    const right = challenge("no-left"); // at 1×
+    const turns = { ...turning.metrics.turns!, left: 0 };
+    expect(turning.metrics.turns?.left).toBe(259);
+    expect(graded(right, on(right, turning))).toBe(false);
+    expect(graded(right, on(right, turning, {}, { turns }))).toBe(true); // 14.5×
+    const longer = aiming(right, { kind: "no_left", min_ratio: 15 });
+    expect(graded(longer, on(right, turning, {}, { turns }))).toBe(false);
+    expect(graded(right, on(right, max))).toBe(false); // no turns recorded
+  });
+
+  it("counts the collect recording's bridges", () => {
+    const bridges = challenge("bridges"); // 20
+    expect(collect.metrics.items?.bridge).toBe(18);
+    expect(graded(bridges, on(bridges, collect))).toBe(false);
+    const low = aiming(bridges, { kind: "items", item: "bridge", min: 18 });
+    expect(graded(low, on(low, collect))).toBe(true);
+    expect(graded(low, on(low, collect, { item: "roundabout" }))).toBe(false); // another item
   });
 
   it("counts the brand recording's visits, its brand by wikidata id, else by name", () => {
-    const pilgrimage = { ...challenge("oregon-starbucks"), region: "portland" };
+    const mcdonalds = challenge("pilgrimage");
+    const starbucks = (min_visits: number): Challenge => ({
+      ...mcdonalds,
+      setup: { ...mcdonalds.setup!, brand: { id: 1, name: "Starbucks", wikidata: "Q37158" } },
+      goal: { kind: "brand", min_visits },
+    });
     expect(brand.metrics.brand).toEqual({ id: 229, name: "Starbucks", visits: 14, of: 19 });
-    const at = (min_visits: number) => ({ ...pilgrimage, goal: { kind: "brand", min_visits } });
-    expect(graded(at(14) as Challenge, brand)).toBe(true); // by name: no brands known
-    expect(graded(at(15) as Challenge, brand)).toBe(false);
-    expect(graded(at(14) as Challenge, brand, storeWith([STARBUCKS]))).toBe(true);
+    const route = on(mcdonalds, brand);
+    expect(graded(starbucks(14), route)).toBe(true); // by name: no brands known
+    expect(graded(starbucks(15), route)).toBe(false);
+    expect(graded(starbucks(14), route, storeWith([STARBUCKS]))).toBe(true);
     const other = [{ ...STARBUCKS, wikidata: "Q1" }]; // id 229 another brand on this build
-    expect(graded(at(14) as Challenge, brand, storeWith(other))).toBe(false);
-    expect(graded(challenge("oregon-starbucks"), brand)).toBe(false); // Portland's build
+    expect(graded(starbucks(14), route, storeWith(other))).toBe(false);
+    expect(graded(aiming(mcdonalds, { kind: "brand", min_visits: 1 }), route)).toBe(false);
   });
 
-  it("grades a ratio on any trip in the region, in the longest mode", () => {
-    const town = challenge("portland-30x");
-    expect(graded(town, max)).toBe(true); // 78.0×, three stops
-    expect(graded(town, ratio25)).toBe(false); // 25.0×
-    expect(graded(town, variant(max, { objective: "time" }))).toBe(false);
-    expect(graded(town, variant(max, {}, {}, "oregon"))).toBe(false);
-    expect(graded(town, variant(max, {}, { ratio: null }))).toBe(false); // a round trip
-    expect(graded(town, variant(max, { reorder: true }))).toBe(false); // the worst order
-    const reordered = { ...town, settings: { reorder: true } };
-    expect(graded(reordered, variant(max, { reorder: true }))).toBe(true);
-    expect(graded(reordered, max)).toBe(false);
-  });
-
-  it("grades hard mode's ratio only under hard mode", () => {
-    const hard = challenge("portland-hard");
+  it("takes hard mode's ratio only under hard mode", () => {
+    const hard = challenge("hard-mode"); // at 3×
     const constraints = { no_left: false, no_right: false, strict: false };
-    expect(graded(hard, variant(max, { constraints: { ...constraints, hard: true } }))).toBe(true);
-    expect(graded(hard, variant(max, { constraints }))).toBe(false);
-    const slow = variant(max, { constraints: { ...constraints, hard: true } }, { ratio: 7.9 });
-    expect(graded(hard, slow)).toBe(false);
+    expect(graded(hard, on(hard, max, { constraints: { ...constraints, hard: true } }))).toBe(true);
+    expect(graded(hard, on(hard, max, { constraints }))).toBe(false);
+    const short = on(hard, max, { constraints: { ...constraints, hard: true } }, { ratio: 2.9 });
+    expect(graded(hard, short)).toBe(false);
   });
 
-  it("grades today's route made worse once, on its own region, at least the day's ratio", () => {
+  it("takes today's route made worse once, on today's challenge only", () => {
     const worse = challenge("daily-worse");
-    const route = (base: string | null, ratio: number) =>
-      variant(max, { stops: [], base_route_id: base }, { ratio }, "us-t3");
+    const route = (base: string | null, ratio: number, region = "us-t3") => ({
+      ...on(worse, max, { stops: [], base_route_id: base }, { ratio }),
+      region,
+    });
     expect(graded(worse, route("a076702bbc25", 7.1))).toBe(true);
     expect(graded(worse, route("a076702bbc25", 6.0))).toBe(false); // shrunk toward a target
     expect(graded(worse, route("5ea844bffd40", 7.1))).toBe(false); // made worse twice
     expect(graded(worse, route(null, 7.1))).toBe(false);
     expect(graded(worse, route("a076702bbc25", 7.1), storeWith(), null)).toBe(false); // no day
+    const yesterday = { ...worse, id: "daily-worse-2026-11-01", date: "2026-11-01" }; // forged
+    expect(graded(yesterday, route("a076702bbc25", 7.1))).toBe(false);
     const elsewhere = { ...TODAY, region: "us-t1" }; // the day's route on another build
     expect(graded(worse, route("a076702bbc25", 7.1), storeWith(), elsewhere)).toBe(false);
-    const there = variant(
-      max,
-      { stops: [], base_route_id: "a076702bbc25" },
-      { ratio: 7.1 },
-      "us-t1",
-    );
-    expect(graded(worse, there, storeWith(), elsewhere)).toBe(true);
+    expect(graded(worse, route("a076702bbc25", 7.1, "us-t1"), storeWith(), elsewhere)).toBe(true);
   });
 
   it("takes a trip's stops within 500 m of the challenge's, as many of them", () => {
-    const bridges = challenge("portland-bridges");
-    const [start, end] = bridges.stops ?? [];
-    const trip = tripOf(collect, storeWith().state);
+    const long = challenge("long-way");
+    const trip = tripOf(on(long, max), storeWith().state);
+    const [start, end] = trip.stops;
     const moved = (dLat: number) => ({ ...trip, stops: [start, { ...end, lat: end.lat + dLat }] });
-    expect(sameTrip(bridges, moved(0.0044))).toBe(true); // 489 m north of Reed
-    expect(sameTrip(bridges, moved(0.0046))).toBe(false); // 512 m
-    expect(sameTrip(bridges, { ...trip, stops: [...trip.stops, end] })).toBe(false);
+    expect(sameTrip(long, moved(0.0044))).toBe(true); // 489 m north of Wallace
+    expect(sameTrip(long, moved(0.0046))).toBe(false); // 512 m
+    expect(sameTrip(long, { ...trip, stops: [start, end, end] })).toBe(false);
   });
 
-  it("takes a trip on the challenge's leash only when it sets one", () => {
-    const draw = challenge("portland-draw"); // a 300 m leash
-    const onLeash = variant(max, { stops: drawn.request.stops, leash_km: 0.3 });
-    const trip = tripOf(onLeash, storeWith().state);
-    expect(trip.leashKm).toBe(0.3);
-    expect(sameTrip(draw, trip)).toBe(true);
-    expect(sameTrip(draw, { ...trip, leashKm: "auto" })).toBe(false);
-    expect(sameTrip(draw, { ...trip, leashKm: 0.5 })).toBe(false);
-    const unset = tripOf(variant(max, { leash_km: undefined }), storeWith().state);
-    expect(unset.leashKm).toBe("auto"); // the API's default
-    const town = challenge("portland-30x"); // no leash
-    expect(graded(town, variant(max, { leash_km: 5 }))).toBe(true);
-    expect(graded(town, variant(max, { leash_km: "auto" }))).toBe(true);
-  });
-
-  it("never completes a drawing's challenge from a stored route", () => {
-    const route = variant(max, { stops: drawn.request.stops }, { ratio: 1000 });
-    expect(reached(challenge("portland-draw").goal, route, TODAY)).toBe(false);
+  it("takes the worst order's stops between in any order, the start and the end in place", () => {
+    const order = challenge("worst-order");
+    const trip = tripOf(on(order, max, { reorder: true }), storeWith().state);
+    const [a, b, c, d] = trip.stops;
+    expect(sameTrip(order, trip)).toBe(true);
+    expect(sameTrip(order, { ...trip, stops: [a, c, b, d] })).toBe(true); // as the route visits them
+    expect(sameTrip(order, { ...trip, stops: [d, b, c, a] })).toBe(false);
+    expect(sameTrip(order, { ...trip, stops: [a, b, b, d] })).toBe(false);
+    expect(sameTrip(order, { ...trip, reorder: false })).toBe(false);
   });
 });
 
@@ -210,6 +228,7 @@ describe("the completions", () => {
     const storage = memory();
     const progress = new ChallengeProgress(
       store,
+      source(),
       () => TODAY,
       () => storage,
     );
@@ -217,43 +236,81 @@ describe("the completions", () => {
     progress.addEventListener("completed", (event) => {
       completed.push(completedLine((event as CustomEvent<Challenge>).detail));
     });
-    store.update({ route: ratio25 });
+    const long = challenge("long-way");
+    store.update({ route: on(long, max, {}, { ratio: 12 }) });
     expect(completed).toEqual([]);
-    store.update({ route: max });
-    expect(completed).toEqual(["Challenge done. A 30× route in town."]);
-    expect(Object.keys(progress.done)).toEqual(["portland-30x"]);
-    expect(progress.done["portland-30x"]).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    store.update({ route: on(long, max) });
+    expect(completed).toEqual(["Challenge done. Losantville, IN to Wallace, IN at 16×."]);
+    expect(Object.keys(progress.done)).toEqual(["long-way-2026-11-02"]);
+    expect(progress.done["long-way-2026-11-02"]).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     store.update({ route: null });
-    store.update({ route: max });
+    store.update({ route: on(long, max) });
     expect(completed).toHaveLength(1); // done already
     expect(JSON.parse(storage.items.get(STORAGE_KEY) as string)).toEqual(progress.done);
   });
 
-  it("persist, are reset, and ignore what is not theirs", () => {
-    const storage = memory();
+  it("grade the route shown again when the list comes", () => {
     const store = storeWith();
-    new ChallengeProgress(
+    const list = source([]);
+    const progress = new ChallengeProgress(
       store,
+      list,
       () => TODAY,
-      () => storage,
-    ).route(max);
-    const again = new ChallengeProgress(
-      storeWith(),
+      () => memory(),
+    );
+    store.update({ route: on(challenge("long-way"), max) });
+    expect(progress.done).toEqual({});
+    list.list(CHALLENGES);
+    expect(Object.keys(progress.done)).toEqual(["long-way-2026-11-02"]);
+  });
+
+  it("keep past days', drop the fixed list's of old, and are reset", () => {
+    const storage = memory();
+    const old = { "portland-bridges": "2026-10-31", "daily-worse": "2026-10-31" };
+    const past = { "bridges-2026-10-20": "2026-10-20", "daily-worse-2026-10-21": "2026-10-21" };
+    storage.items.set(STORAGE_KEY, JSON.stringify({ ...old, ...past }));
+    const store = storeWith();
+    const progress = new ChallengeProgress(
+      store,
+      source(),
       () => TODAY,
       () => storage,
     );
-    expect(Object.keys(again.done)).toEqual(["portland-30x"]);
+    expect(progress.done).toEqual(past); // the old ones not counted
+    store.update({ route: on(challenge("long-way"), max) });
+    const written = JSON.parse(storage.items.get(STORAGE_KEY) as string) as object;
+    expect(Object.keys(written).sort()).toEqual(
+      [...Object.keys(past), "long-way-2026-11-02"].sort(),
+    );
+    const again = new ChallengeProgress(
+      storeWith(),
+      source(),
+      () => TODAY,
+      () => storage,
+    );
+    expect(again.done).toEqual(written);
     let changes = 0;
     again.addEventListener("change", () => changes++);
     again.reset();
     expect(again.done).toEqual({});
     expect(changes).toBe(1);
     expect(storage.items.has(STORAGE_KEY)).toBe(false);
-    for (const junk of ["not json", "[1]", "null", '{"nope": "2026-10-31", "us-chicago": 5}']) {
+  });
+
+  it("ignore junk in the storage", () => {
+    const storage = memory();
+    for (const junk of [
+      "not json",
+      "[1]",
+      "null",
+      '"x"',
+      '{"nope": "2026-10-31", "bridges-2026-10-20": 5}',
+    ]) {
       storage.items.set(STORAGE_KEY, junk);
       expect(
         new ChallengeProgress(
           storeWith(),
+          source(),
           () => TODAY,
           () => storage,
         ).done,
@@ -268,45 +325,16 @@ describe("the completions", () => {
         throw new Error("none");
       },
     ]) {
-      const progress = new ChallengeProgress(storeWith(), () => TODAY, storage);
+      const store = storeWith();
+      const progress = new ChallengeProgress(store, source(), () => TODAY, storage);
       expect(progress.done).toEqual({});
       let completed = 0;
       progress.addEventListener("completed", () => completed++);
-      progress.route(max);
-      expect(Object.keys(progress.done)).toEqual(["portland-30x"]);
+      store.update({ route: on(challenge("long-way"), max) });
+      expect(Object.keys(progress.done)).toEqual(["long-way-2026-11-02"]);
       expect(completed).toBe(1);
       progress.reset();
       expect(progress.done).toEqual({});
     }
-  });
-
-  it("complete the drawing's challenge when a drawing on its leash beats the engine, and only then", () => {
-    const progress = new ChallengeProgress(
-      storeWith(),
-      () => TODAY,
-      () => memory(),
-    );
-    const par = (lengthM: number): Par => ({
-      phase: "done",
-      target: 10,
-      jobId: "par1",
-      ratio: lengthM / 680,
-      lengthM,
-      routeId: "e1",
-      note: null,
-    });
-    const finished = { routeId: "d1", ratio: 16.9, lengthM: 11_492 };
-    // Powell's → Pioneer Courthouse Square, Portland's build, on the challenge's 300 m leash
-    const request = { ...drawn.request, leash_km: 0.3 };
-    progress.drawn({ request, finished: null, par: par(5000) }); // not finished
-    progress.drawn({ request, finished, par: { ...par(5000), phase: "planning" } });
-    progress.drawn({ request, finished, par: par(11_500) }); // a tie: 16.9× each
-    progress.drawn({ request, finished, par: par(12_000) }); // the engine wins
-    progress.drawn({ request: { ...request, region: "oregon" }, finished, par: par(5000) });
-    progress.drawn({ request: { ...request, leash_km: "auto" }, finished, par: par(5000) });
-    progress.drawn({ request: { ...request, leash_km: 1 }, finished, par: par(5000) });
-    expect(progress.done).toEqual({});
-    progress.drawn({ request, finished, par: par(10_000) });
-    expect(Object.keys(progress.done)).toEqual(["portland-draw"]);
   });
 });

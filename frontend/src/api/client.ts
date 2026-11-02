@@ -15,6 +15,7 @@
 import type {
   Baseline,
   BrandList,
+  ChallengeList,
   Daily,
   Done,
   DrawAnswer,
@@ -146,6 +147,12 @@ export function geocode(q: string, region: string): Promise<GeocodeResult> {
 /** Today's route: its trip, and how the server's plan of it stands. */
 export function getDaily(): Promise<Daily> {
   return call("/daily");
+}
+
+/** The challenges of `date` (YYYY-MM-DD, today or one of the 30 days before), else today's: the
+ * day's first call takes the server about half a minute. */
+export function getChallenges(date?: string): Promise<ChallengeList> {
+  return call(date === undefined ? "/challenges" : `/challenges?${new URLSearchParams({ date })}`);
 }
 
 /** A route drawn by hand so far, with its legal next moves. */

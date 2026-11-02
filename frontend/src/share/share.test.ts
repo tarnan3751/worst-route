@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeView, json, stubFetch } from "../__fixtures__/http";
 import { loadStream } from "../__fixtures__/stream";
 import type { RouteDocument, RouteRequest } from "../api/types";
-import { CHALLENGES } from "../challenges/list";
+import { ANSWER } from "../__fixtures__/challenges";
 import { JobRunner, countsTitle, statLines } from "../run/controls";
 import { followPortfolioMax } from "../settings/panel";
 import { DEFAULT_SETTINGS, IDLE_RUN, ITEMS, Store, type AppState, type Settings } from "../state";
@@ -140,14 +140,16 @@ describe("the URL state", () => {
   });
 
   it("carries ?challenge, the challenge to set up, written only while one is set up", () => {
-    const query = "?challenge=portland-bridges&stops=45.523475,-122.676653;45.481983,-122.626625";
+    const query = "?challenge=bridges-2026-11-02&stops=40.024,-85.18;39.986,-87.148";
     const set = decodeUrlState(query);
-    expect(set).toMatchObject({ challenge: "portland-bridges", route: null, daily: null });
+    expect(set).toMatchObject({ challenge: "bridges-2026-11-02", route: null, daily: null });
     expect(encodeUrlState(set)).toBe(query);
-    for (const id of ["", "Portland", "../x", "-bridges", "a b"]) {
+    for (const id of ["", "Bridges-2026-11-02", "../x", "-bridges-2026-11-02", "a b"]) {
       expect(decodeUrlState(`?challenge=${encodeURIComponent(id)}`).challenge).toBeNull();
     }
-    for (const { id } of CHALLENGES) expect(decodeUrlState(`?challenge=${id}`).challenge).toBe(id);
+    for (const { id } of ANSWER.challenges) {
+      expect(decodeUrlState(`?challenge=${id}`).challenge).toBe(id);
+    }
     const state: AppState = {
       regions: null,
       region: null,
@@ -161,16 +163,16 @@ describe("the URL state", () => {
       challenge: null,
     };
     expect(urlStateOf(state).challenge).toBeNull();
-    expect(encodeUrlState(urlStateOf({ ...state, challenge: "us-chicago" }))).toBe(
-      "?challenge=us-chicago&budget=20&tier=auto&leash=auto&target=max",
+    expect(encodeUrlState(urlStateOf({ ...state, challenge: "long-way-2026-11-02" }))).toBe(
+      "?challenge=long-way-2026-11-02&budget=20&tier=auto&leash=auto&target=max",
     );
     const written: string[] = [];
     const store = new Store(state);
     new UrlSync(store, (url) => written.push(url)).start(false);
-    store.update({ challenge: "portland-30x" });
+    store.update({ challenge: "hard-mode-2026-11-01" });
     store.update({ challenge: null });
     expect(written).toEqual([
-      "?challenge=portland-30x&budget=20&tier=auto&leash=auto&target=max",
+      "?challenge=hard-mode-2026-11-01&budget=20&tier=auto&leash=auto&target=max",
       "?budget=20&tier=auto&leash=auto&target=max",
     ]);
   });

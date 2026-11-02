@@ -1,11 +1,12 @@
 // Bootstrap and wiring (docs/reference/frontend.md): the store, from the URL's state; the map
-// and the panel's parts (today's route at the top, then the challenges, graded on every route
-// shown and every drawing's verdict, a toast for each one completed; the directions, which
+// and the panel's parts (today's route at the top, then the day's challenges, asked of the server
+// at start and graded on every route shown, a toast for each one completed; the directions, which
 // highlight their steps on the route layer, among them); the toasts under the map; the served
 // regions from /regions, the map fitted to all their bboxes, and the build each trip runs on
 // picked from its stops (RegionPicker); a stored route when the URL names one, or today's once it
 // is done for `?daily` (unless a run of the user's own has started first), the URL left alone
-// until then, or else the challenge `?challenge=` names set up once the regions are known;
+// until then, or else the challenge `?challenge=` names set up once the regions and its day's
+// challenges are known;
 // clicks on the map and a place search's picks add stops, the same way (placeStop), a click on a
 // city's label the city's point with its name (map/cities.ts), but in
 // drawing mode, where a click takes the move nearest it (draw/drawing.ts), Backspace takes the last
@@ -122,7 +123,10 @@ const challenges = new ChallengePanel(store, daily, {
   open: openDaily,
   fit: (bounds) => fitTo(map, bounds),
 });
-const progress = new ChallengeProgress(store, () => (daily.phase === "done" ? daily.daily : null));
+const progress = new ChallengeProgress(store, challenges, () =>
+  daily.phase === "done" ? daily.daily : null,
+);
+void challenges.load();
 progress.addEventListener("completed", (event) => {
   toasts.notify(completedLine((event as CustomEvent<Challenge>).detail));
 });
@@ -169,7 +173,6 @@ map.once("load", () => {
   });
   mountDraw(byId("draw"), drawing, store);
   const drawn = drawing;
-  drawn.addEventListener("change", () => progress.drawn(drawn));
   mountRunControls(byId("run"), store, runner, () => drawn.start());
   const directions = new DirectionsPanel(store, {
     highlight: (line) => layer.highlight(line),
@@ -197,7 +200,7 @@ getRegions()
     const all = unionBbox(regions.map(({ bbox }) => bbox));
     if (store.state.route === null && all) fitTo(map, bboxBounds(all)); // a route fits itself
     if (url.challenge !== null && url.route === null && url.daily === null) {
-      challenges.setUpLink(url.challenge);
+      void challenges.setUpLink(url.challenge);
     }
   })
   .catch((error: unknown) => store.update({ error: errorBody(error) }));

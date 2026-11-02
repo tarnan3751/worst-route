@@ -1,26 +1,31 @@
 // The challenges' section (docs/reference/frontend.md, **Challenges**), after today's route: the
-// challenges of the regions the server serves (list.ts; today's once GET /daily answers with one),
-// each with its badge (progress.ts), title and blurb, and "Set it up", which pins its region, puts
-// in its stops (or, for any trip in the region, keeps the stops when they all lie in its bbox, else
-// none), and gives the settings it fixes (the rest of those their defaults; its brand once the
-// region's brands are known), forgetting the route shown and a drawing; then the stops are shown
-// and the map fitted to them (or to the region), ready for Go, or Draw it. Today's challenge opens
-// today's route instead, for Make it worse. The challenge stays set up (the store's `challenge`,
-// which the link carries as `?challenge=`) while what it set is the store's, and today's while its
-// route is shown. The section collapses once a run or a drawing of the user's own starts, and
-// "Challenges" in the header shows it again; "Reset badges" forgets every completion.
+// day's challenges, asked of the server at start (GET /challenges: "Loading today's challenges…"
+// meanwhile, its first answer of a day taking about half a minute; "Couldn't load today's
+// challenges." and "Try again" when it fails, and no section on a server without them, a 404), and
+// first the challenge of another day a link names, "From <day>", asked for at once; each with its
+// badge (progress.ts), title and blurb, and "Set it up", which pins its region, puts in its stops
+// with their towns' names, and gives its mode, constraints and worst order (the other settings a
+// request takes of those its defaults; its brand once the region's brands are known), forgetting
+// the route shown and a drawing; then the stops are shown and the map fitted to them, ready for Go.
+// Today's route made worse opens today's route instead, for Make it worse, and another day's is
+// refused. The challenge stays set up (the store's `challenge`, which the link carries as
+// `?challenge=`) while what it set is the store's, and today's route made worse while its route is
+// shown. Under the list, how many challenges are done, all days', and "Reset badges", which forgets
+// them. The section collapses once a run or a drawing of the user's own starts, and "Challenges" in
+// the header shows it again.
 //
 // `ChallengePanel` holds the logic and no DOM, so the tests drive it (panel.test.ts);
 // `mountChallenges` draws it.
-import type { Bbox, BrandEntry, Daily } from "../api/types";
+import { ApiError, getChallenges } from "../api/client";
+import type { BrandEntry, ChallengeBrand, ChallengeSetup, Daily } from "../api/types";
 import type { DailyRoute } from "../daily/panel";
-import { formatDay } from "../format";
+import { formatCount, formatDay } from "../format";
 import { targetSettings } from "../share/share";
 import type { AppState, Settings, Stop, Store } from "../state";
 import { busy } from "../stops/stopList";
 import { el } from "../util/dom";
-import { bboxBounds, lineBounds, round6, type Bounds } from "../util/geo";
-import { CHALLENGES, type Challenge, type ChallengeBrand } from "./list";
+import { lineBounds, round6, type Bounds } from "../util/geo";
+import { challengesOf, dateOf, type Challenge } from "./list";
 import type { ChallengeProgress } from "./progress";
 
 /** What setting a challenge up asks of the rest of the app: to change the stops as an edit does
@@ -32,53 +37,64 @@ export interface SetupHooks {
   fit(bounds: Bounds): void;
 }
 
-/** The settings a challenge sets up over `settings`: its region pinned and the settings it fixes,
- * the rest of those (the mode, the tier, the leash, the turns, hard mode, the worst order, the
- * target) at their defaults, and Certified unticked; the brand, the seed, the budget, the vehicle,
- * the departure and the units left. */
-export function challengeSettings(challenge: Challenge, settings: Settings): Settings {
-  const fixed = challenge.settings;
+/** Where today's challenges stand: being asked for, listed, failed (to ask again), or none on
+ * this server (a 404: no places index). */
+export type ChallengesPhase = "loading" | "done" | "failed" | "none";
+
+/** The settings `setup` gives over `settings`: `region` pinned, its mode with its item, its turns,
+ * strict, hard mode, worst order and target, the automatic tier and leash, and Certified unticked;
+ * the brand, the seed, the budget, the vehicle, the departure and the units left. */
+export function challengeSettings(
+  region: string,
+  setup: ChallengeSetup,
+  settings: Settings,
+): Settings {
+  const { constraints } = setup;
   return {
     ...settings,
-    region: challenge.region,
-    objective: fixed.objective ?? "distance",
-    item: fixed.item ?? settings.item,
-    tier: fixed.tier ?? "auto",
-    leashKm: fixed.leashKm ?? "auto",
-    turns: fixed.turns ?? "any",
-    strict: fixed.strict ?? false,
-    hard: fixed.hard ?? false,
-    reorder: fixed.reorder ?? false,
+    region,
+    objective: setup.objective,
+    item: setup.item ?? settings.item,
+    tier: "auto",
+    leashKm: "auto",
+    turns: constraints.no_left ? "no_left" : constraints.no_right ? "no_right" : "any",
+    strict: constraints.strict,
+    hard: constraints.hard,
+    reorder: setup.reorder,
     certified: false,
-    ...targetSettings(fixed.target ?? { kind: "max" }),
+    ...targetSettings(setup.target),
   };
 }
 
-const inside = ([west, south, east, north]: Bbox, { lat, lon }: Stop): boolean =>
-  lon >= west && lon <= east && lat >= south && lat <= north;
+/** The stops `setup` puts in, each named for its town. */
+function stopsOf(setup: ChallengeSetup): Stop[] {
+  return setup.stops.map(({ lat, lon, label }) => ({
+    lat: round6(lat),
+    lon: round6(lon),
+    label,
+    snapped: null,
+  }));
+}
 
 /** Whether what `challenge` set up is still `state`'s: its stops, region and settings (its brand
- * unless still to be picked: `brandPending`), or for today's challenge today's route shown. */
+ * unless still to be picked: `brandPending`), or for today's route made worse that route shown. */
 export function stillSetUp(
   challenge: Challenge,
   state: Readonly<AppState>,
   today: Daily | null,
   brandPending: boolean,
 ): boolean {
-  if (challenge.goal.kind === "daily_worse") {
-    return state.route !== null && state.route.route_id === today?.route_id;
-  }
+  const { setup } = challenge;
+  if (setup === null) return state.route !== null && state.route.route_id === today?.route_id;
   const { settings, stops, brands } = state;
-  const wanted = challengeSettings(challenge, settings);
+  const wanted = challengeSettings(challenge.region, setup, settings);
   const keys = Object.keys(wanted) as (keyof Settings)[];
   if (keys.some((key) => wanted[key] !== settings[key])) return false;
-  const fixed = challenge.stops;
-  const same = (stop: Stop, k: number) =>
-    fixed !== null && stop.lat === round6(fixed[k].lat) && stop.lon === round6(fixed[k].lon);
-  if (fixed !== null && (stops.length !== fixed.length || !stops.every(same))) return false;
-  const brand = challenge.settings.brand;
-  if (brand === undefined || brandPending || brands === null) return true;
-  return brandOf(brands, brand)?.id === settings.brand;
+  const fixed = stopsOf(setup);
+  const same = (stop: Stop, k: number) => stop.lat === fixed[k].lat && stop.lon === fixed[k].lon;
+  if (stops.length !== fixed.length || !stops.every(same)) return false;
+  if (setup.brand === null || brandPending || brands === null) return true;
+  return brandOf(brands, setup.brand)?.id === settings.brand;
 }
 
 /** The brand of `brands` that `wanted` names: by its wikidata id, else by its name. */
@@ -89,11 +105,20 @@ function brandOf(brands: BrandEntry[], wanted: ChallengeBrand): BrandEntry | und
   );
 }
 
+/** The challenges of `date`, or null when the server does not answer (a day outside its window). */
+function dayOf(date: string): Promise<Challenge[] | null> {
+  return getChallenges(date).then(challengesOf, () => null);
+}
+
 export class ChallengePanel extends EventTarget {
   collapsed = false;
+  phase: ChallengesPhase = "loading";
   readonly #store: Store;
   readonly #daily: DailyRoute;
   readonly #hooks: SetupHooks;
+  #today: Challenge[] = []; // today's, once the server has answered
+  #date: string | null = null; // their day, once the server has answered
+  #other: Challenge | null = null; // another day's, a link's
   #brand: ChallengeBrand | null = null; // the brand to pick once the region's brands are known
 
   /** Collapsed whenever a run of the user's own starts in `store`. */
@@ -112,7 +137,7 @@ export class ChallengePanel extends EventTarget {
     store.watch(["route", "stops", "settings", "brands"], (state) => {
       const challenge = this.#current();
       if (challenge === null) return;
-      if (!stillSetUp(challenge, state, this.#today(), this.#brand !== null)) {
+      if (!stillSetUp(challenge, state, this.#todayRoute(), this.#brand !== null)) {
         this.#brand = null;
         store.update({ challenge: null });
       }
@@ -120,59 +145,80 @@ export class ChallengePanel extends EventTarget {
     daily.addEventListener("change", () => this.#changed());
   }
 
-  /** The challenges listed: those of the regions the server serves (none until it has said), and
-   * today's challenge once GET /daily has answered with a day, whichever region it runs on. */
+  /** Ask the server for today's challenges (again, after a failure). */
+  async load(): Promise<void> {
+    this.phase = "loading";
+    this.#changed();
+    try {
+      const answer = await getChallenges();
+      this.#today = challengesOf(answer);
+      this.#date = answer.date;
+      const other = this.#other;
+      if (other !== null && this.#today.some(({ id }) => id === other.id)) this.#other = null;
+      this.phase = "done";
+    } catch (error) {
+      this.phase = error instanceof ApiError && error.status === 404 ? "none" : "failed";
+    }
+    this.#listed();
+  }
+
+  /** The challenges listed: another day's a link named first, then today's. */
   get listed(): Challenge[] {
-    const { regions } = this.#store.state;
-    if (regions === null) return [];
-    const { phase } = this.#daily;
-    const today = phase === "planning" || phase === "done" || phase === "failed";
-    return CHALLENGES.filter(({ region }) =>
-      region === null ? today : regions.some((r) => r.region === region),
-    );
+    return this.#other === null ? this.#today : [this.#other, ...this.#today];
+  }
+
+  /** Whether `challenge` is another day's than today's (a link's). */
+  otherDay(challenge: Challenge): boolean {
+    return challenge === this.#other;
   }
 
   /** Why "Set it up" cannot be pressed for `challenge` now, or null. */
   refusal(challenge: Challenge): string | null {
     if (busy(this.#store)) return "A route is being planned or drawn.";
-    if (challenge.goal.kind === "daily_worse" && this.#daily.phase !== "done") {
-      return this.#daily.phase === "failed"
-        ? "Today's route could not be planned."
-        : "Today's route is not planned yet.";
-    }
-    return null;
+    if (challenge.setup !== null) return null;
+    if (this.otherDay(challenge)) return "Only today's route can be made worse.";
+    if (this.#daily.phase === "done") return null;
+    return this.#daily.phase === "failed"
+      ? "Today's route could not be planned."
+      : "Today's route is not planned yet.";
   }
 
-  /** Set `challenge` up: its region, stops and settings, or today's route opened (once it is
-   * done, unless the user has started a run or opened a route meanwhile). Nothing while a run or
-   * a drawing goes, nor for a region the server does not serve. */
+  /** Set `challenge` up: its region, stops and settings, or for today's route made worse that
+   * route opened (once it is done, unless the user has started a run or opened a route
+   * meanwhile). Nothing while a run or a drawing goes, nor for another day's route made worse. */
   setUp(challenge: Challenge): void {
     const store = this.#store;
     if (busy(store)) return;
-    if (challenge.goal.kind === "daily_worse") {
-      void this.#openToday(challenge);
+    const { setup } = challenge;
+    if (setup === null) {
+      if (!this.otherDay(challenge)) void this.#openToday(challenge);
       return;
     }
-    const region = store.state.regions?.find((r) => r.region === challenge.region);
-    if (region === undefined) return;
-    const { stops } = store.state;
-    const fixed = challenge.stops?.map(({ lat, lon }) => ({ lat, lon, snapped: null }));
-    this.#hooks.edit(fixed ?? (stops.every((stop) => inside(region.bbox, stop)) ? stops : []));
-    this.#brand = challenge.settings.brand ?? null;
+    const stops = stopsOf(setup);
+    this.#hooks.edit(stops);
+    this.#brand = setup.brand;
     store.update({
-      settings: challengeSettings(challenge, store.state.settings),
+      settings: challengeSettings(challenge.region, setup, store.state.settings),
       challenge: challenge.id,
     });
     if (store.state.brands !== null) this.#pickBrand(); // the region's already
-    const line = fixed && lineBounds(fixed.map(({ lat, lon }) => [lon, lat]));
-    this.#hooks.fit(line ?? bboxBounds(region.bbox));
+    const line = lineBounds(stops.map(({ lat, lon }) => [lon, lat]));
+    if (line !== null) this.#hooks.fit(line);
   }
 
-  /** Set up the challenge a link names (`?challenge=<id>`), as its Set it up does: today's waits
-   * for today's route (`setUp`); an id the list lacks sets nothing up. */
-  setUpLink(id: string): void {
-    const challenge = CHALLENGES.find((c) => c.id === id);
-    if (challenge !== undefined) this.setUp(challenge);
+  /** Set up the challenge a link names (`?challenge=<id>`), as its Set it up does, once it has
+   * come (`#find`), unless the user has started a run (a failed one too) or opened a route
+   * meanwhile. Nothing for an id without a day. */
+  async setUpLink(id: string): Promise<void> {
+    const date = dateOf(id);
+    if (date === null) return;
+    const shown = this.#store.state.route;
+    let moved = false;
+    this.#store.watch(["run", "route"], ({ run, route }) => {
+      moved ||= run.phase === "starting" || run.phase === "drawing" || route !== shown;
+    });
+    const challenge = await this.#find(id, date);
+    if (challenge !== undefined && !moved) this.setUp(challenge);
   }
 
   setCollapsed(collapsed: boolean): void {
@@ -181,12 +227,56 @@ export class ChallengePanel extends EventTarget {
     this.#changed();
   }
 
-  #current(): Challenge | null {
-    const id = this.#store.state.challenge;
-    return CHALLENGES.find((challenge) => challenge.id === id) ?? null;
+  /** The day today's challenges are of: the server's answer's, else today's route's, else the
+   * browser's UTC date. */
+  #todayDate(): string {
+    return this.#date ?? this.#daily.daily?.date ?? new Date().toISOString().slice(0, 10);
   }
 
-  #today(): Daily | null {
+  /** Today's challenges once the server has answered with them (after a Try again, when it
+   * failed), or null on a server without them. */
+  #todays(): Promise<Challenge[] | null> {
+    return new Promise((resolve) => {
+      const settled = (): boolean => {
+        if (this.phase === "loading" || this.phase === "failed") return false;
+        resolve(this.phase === "done" ? this.#today : null);
+        return true;
+      };
+      if (settled()) return;
+      const listener = () => {
+        if (settled()) this.removeEventListener("listed", listener);
+      };
+      this.addEventListener("listed", listener);
+    });
+  }
+
+  /** The challenge `id` of `date`: of today's, once they have come, when `date` is today; else
+   * (or when today's turn out to be of another day) of its day's, asked of the server at once,
+   * beside today's, and listed first, unless today's hold it after all. Undefined for a day the
+   * server does not answer (outside its window) or an id its day lacks. */
+  async #find(id: string, date: string): Promise<Challenge | undefined> {
+    if (date === this.#todayDate()) {
+      const today = await this.#todays();
+      const found = today?.find((c) => c.id === id);
+      if (found !== undefined || today === null || this.#date === date) return found;
+    }
+    const day = await dayOf(date);
+    const own = this.#today.find((c) => c.id === id);
+    if (own !== undefined) return own;
+    const found = day?.find((c) => c.id === id);
+    if (found !== undefined) {
+      this.#other = found;
+      this.#listed();
+    }
+    return found;
+  }
+
+  #current(): Challenge | null {
+    const id = this.#store.state.challenge;
+    return this.listed.find((challenge) => challenge.id === id) ?? null;
+  }
+
+  #todayRoute(): Daily | null {
     return this.#daily.phase === "done" ? this.#daily.daily : null;
   }
 
@@ -211,17 +301,25 @@ export class ChallengePanel extends EventTarget {
     if (await this.#hooks.open(id)) store.update({ challenge: challenge.id });
   }
 
+  /** The list has changed: "listed" (progress.ts grades the route shown again), then "change". */
+  #listed(): void {
+    this.dispatchEvent(new Event("listed"));
+    this.#changed();
+  }
+
   #changed(): void {
     this.dispatchEvent(new Event("change"));
   }
 }
 
 /** What to do once `challenge` is set up, under its title. */
-export function setUpLine(challenge: Challenge, state: Readonly<AppState>): string {
-  if (challenge.goal.kind === "daily_worse") return "Set up. Press Make it worse.";
-  if (challenge.goal.kind === "drawn") return "Set up. Press Draw it.";
-  if (state.stops.length >= 2) return "Set up. Press Go.";
-  return "Set up. Place a start and an end, then press Go.";
+export function setUpLine(challenge: Challenge): string {
+  return challenge.setup === null ? "Set up. Press Make it worse." : "Set up. Press Go.";
+}
+
+/** How many challenges are done, all days': "1 challenge done", "12 challenges done". */
+export function doneLine(count: number): string {
+  return `${formatCount(count)} challenge${count === 1 ? "" : "s"} done`;
 }
 
 /** The challenges' section in `root`, and its link in `header`, which shows it again once
@@ -237,27 +335,41 @@ export function mountChallenges(
   const show = el("button", "challenges-show", "Challenges");
   show.type = "button";
   header.append(show);
+  const loading = el("p", "hint", "Loading today's challenges…");
+  const again = el("button", "", "Try again");
+  again.type = "button";
+  const buttons = el("div", "buttons");
+  buttons.append(again);
+  const failed = el("div");
+  failed.append(el("p", "hint", "Couldn't load today's challenges."), buttons);
   const list = el("ul", "challenge-list");
+  const count = el("p", "hint");
   const reset = el("button", "challenges-reset", "Reset badges");
   reset.type = "button";
-  root.replaceChildren(el("h2", "", "Challenges"), list, reset);
+  root.replaceChildren(el("h2", "", "Challenges"), loading, failed, list, count, reset);
   show.addEventListener("click", () => panel.setCollapsed(false));
+  again.addEventListener("click", () => void panel.load());
   reset.addEventListener("click", () => progress.reset());
 
   let shown = "";
   const render = (): void => {
     const state = store.state;
     const listed = panel.listed;
-    root.hidden = listed.length === 0 || panel.collapsed;
-    show.hidden = listed.length === 0 || !panel.collapsed;
-    reset.hidden = Object.keys(progress.done).length === 0;
+    const absent = listed.length === 0 && panel.phase === "none";
+    root.hidden = absent || panel.collapsed;
+    show.hidden = absent || !panel.collapsed;
+    loading.hidden = panel.phase !== "loading";
+    failed.hidden = panel.phase !== "failed";
+    const done = Object.keys(progress.done).length;
+    count.textContent = doneLine(done);
+    count.hidden = done === 0;
+    reset.hidden = done === 0;
     const refusals = listed.map((challenge) => panel.refusal(challenge));
     const key = JSON.stringify([
       listed.map(({ id }) => id),
       progress.done,
       refusals,
       state.challenge,
-      state.stops.length,
     ]);
     if (key === shown) return;
     shown = key;
@@ -269,8 +381,11 @@ export function mountChallenges(
         const badge = el("span", "challenge-badge", day ? "✓" : "");
         badge.title = day ? `Completed ${formatDay(day)}` : "Not completed yet";
         const body = el("div", "body");
+        if (panel.otherDay(challenge)) {
+          body.append(el("p", "hint", `From ${formatDay(challenge.date)}`));
+        }
         body.append(el("strong", "", challenge.title), el("p", "hint", challenge.blurb));
-        if (current) body.append(el("p", "challenge-next", setUpLine(challenge, state)));
+        if (current) body.append(el("p", "challenge-next", setUpLine(challenge)));
         const button = el("button", "", "Set it up");
         button.type = "button";
         button.disabled = refusals[k] !== null;
@@ -286,5 +401,5 @@ export function mountChallenges(
   };
   panel.addEventListener("change", render);
   progress.addEventListener("change", render);
-  store.watch(["regions", "run", "stops", "challenge"], render);
+  store.watch(["run", "challenge"], render);
 }

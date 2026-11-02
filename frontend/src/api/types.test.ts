@@ -2,10 +2,11 @@
 // holds to the type's (`object<T>` needs exactly T's keys); the specs are checked against the
 // shapes docs/reference/api.md writes down (its JSON request example, and the field lists of
 // the events, /regions, /regions/pick, the 202, the job status, the route document, its
-// directions, /geocode, /config, /daily, /draw and /draw/finish) and against every payload of the
-// streams recorded from the server, and a drawing's answers recorded from it.
+// directions, /geocode, /config, /daily, /challenges, /draw and /draw/finish) and against every
+// payload of the streams recorded from the server, and a drawing's answers recorded from it.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { ANSWER } from "../__fixtures__/challenges";
 import { RECORDINGS, loadStream } from "../__fixtures__/stream";
 import type {
   AlphabetLetters,
@@ -16,6 +17,11 @@ import type {
   BrandVisits,
   CertifiedProgress,
   CertifiedRun,
+  ChallengeBrand,
+  ChallengeEntry,
+  ChallengeGoal,
+  ChallengeList,
+  ChallengeSetup,
   Constraints,
   Daily,
   DailyStop,
@@ -488,6 +494,59 @@ const daily = object<Daily>({
   attempts: nullable("integer"),
 });
 
+type GoalOf<K extends ChallengeGoal["kind"]> = Extract<ChallengeGoal, { kind: K }>;
+const challengeList = object<ChallengeList>({
+  date: "string",
+  region: "string",
+  build_id: "string",
+  challenges: array(
+    object<ChallengeEntry>({
+      id: "string",
+      type: literal(
+        "long-way",
+        "slow-way",
+        "no-left",
+        "bridges",
+        "pilgrimage",
+        "hard-mode",
+        "worst-order",
+        "daily-worse",
+      ),
+      title: "string",
+      blurb: "string",
+      setup: nullable(
+        object<ChallengeSetup>({
+          stops: array(object<DailyStop>({ lat: "number", lon: "number", label: "string" })),
+          objective: literal("distance", "time", "collect", "brand", "alphabet"),
+          item: nullable(collectItem),
+          brand: nullable(
+            object<ChallengeBrand>({ id: "integer", name: "string", wikidata: "string" }),
+          ),
+          constraints: object<Required<Constraints>>({
+            no_left: "boolean",
+            no_right: "boolean",
+            strict: "boolean",
+            hard: "boolean",
+          }),
+          reorder: "boolean",
+          target,
+        }),
+      ),
+      goal: {
+        anyOf: [
+          object<GoalOf<"ratio">>({ kind: literal("ratio"), min: "number" }),
+          object<GoalOf<"duration">>({ kind: literal("duration"), min_s: "number" }),
+          object<GoalOf<"no_left">>({ kind: literal("no_left"), min_ratio: "number" }),
+          object<GoalOf<"items">>({ kind: literal("items"), item: collectItem, min: "integer" }),
+          object<GoalOf<"brand">>({ kind: literal("brand"), min_visits: "integer" }),
+          object<GoalOf<"hard">>({ kind: literal("hard"), min_ratio: "number" }),
+          object<GoalOf<"daily_worse">>({ kind: literal("daily_worse") }),
+        ],
+      },
+    }),
+  ),
+});
+
 const drawMove = object<DrawMove>({
   edge: "integer",
   node: "integer",
@@ -710,6 +769,26 @@ describe("the types against docs/reference/api.md", () => {
     const planning = { ...shown, status: "planning", route_id: null, events_url: "/jobs/a/events" };
     expect(problems({ ...planning, ratio: null, stopped_because: null }, daily)).toEqual([]);
     expect(problems({ ...shown, status: "queued" }, daily)).not.toEqual([]);
+  });
+
+  it("has the fields of /challenges", () => {
+    const row = documentedOn("| GET | `/challenges` |");
+    expect(differences(row, challengeList, "challenges")).toEqual([]);
+    const example = /\*\*`GET \/challenges`\*\*[\s\S]*?```\n([\s\S]*?)```/.exec(reference)?.[1];
+    expect(example).toBeDefined();
+    // The example elides most challenges' fields ("..."); its first and its last are whole.
+    const head = /^(\{[^[]*?),\s*"challenges"/.exec(example!)?.[1];
+    const whole = /\{"id": "(?:long-way|daily-worse)-[\s\S]*?"goal": \{[^}]*\}\}/g;
+    const entries = [...example!.matchAll(whole)].map(([text]) => JSON.parse(text) as unknown);
+    expect(entries).toHaveLength(2);
+    const shown = { ...(JSON.parse(`${head}}`) as object), challenges: entries };
+    expect(problems(shown, challengeList)).toEqual([]);
+    expect(problems(ANSWER, challengeList)).toEqual([]); // the tests' day
+    const [first] = ANSWER.challenges;
+    const alphabet = { ...first, goal: { kind: "alphabet", letters: 26 } };
+    expect(problems({ ...ANSWER, challenges: [alphabet] }, challengeList)).not.toEqual([]);
+    const unnamed = { ...first, setup: { ...first.setup, constraints: { no_left: true } } };
+    expect(problems({ ...ANSWER, challenges: [unnamed] }, challengeList)).not.toEqual([]);
   });
 
   it("has the fields of /draw and /draw/finish", () => {

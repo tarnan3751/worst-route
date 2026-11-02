@@ -8,8 +8,8 @@
 // for at once, beside today's, and listed first, today's day taken from today's route, else the
 // browser's clock, until the server's answer says it, nothing set up once a run has started or a
 // route was opened meanwhile, nor for an id it cannot find; a failure asked for again; refusals
-// while busy or before today's route is done; the section collapsing when a run starts; and the
-// count of those done.
+// while busy or before today's route is done; the section collapsing when a run starts; the count
+// of those done, and the hint under the list.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ANSWER, dayOf } from "../__fixtures__/challenges";
 import { json, settle, stubFetch } from "../__fixtures__/http";
@@ -18,7 +18,7 @@ import type { BrandEntry, ChallengeList, Region, RouteDocument } from "../api/ty
 import type { DailyRoute } from "../daily/panel";
 import { DEFAULT_SETTINGS, IDLE_RUN, Store, type Settings, type Stop } from "../state";
 import type { Challenge } from "./list";
-import { ChallengePanel, doneLine, setUpLine, stillSetUp, type SetupHooks } from "./panel";
+import { ChallengePanel, HINT, doneLine, setUpLine, stillSetUp, type SetupHooks } from "./panel";
 
 const US: Region = {
   ...loadStream().regions[0],
@@ -483,5 +483,11 @@ describe("the section", () => {
     expect(doneLine(1)).toBe("1 challenge done");
     expect(doneLine(2)).toBe("2 challenges done");
     expect(doneLine(1200)).toBe("1,200 challenges done");
+  });
+
+  it("says how to play under the list", () => {
+    expect(HINT).toBe(
+      "Set it up, then Go. Short of the bar? More time, another run, or Make it worse.",
+    );
   });
 });

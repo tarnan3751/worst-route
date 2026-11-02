@@ -11,9 +11,10 @@
 // refused. The challenge stays set up (the store's `challenge`, which the link carries as
 // `?challenge=`) while what it set is the store's, and today's route made worse while its route is
 // shown. A row says "Done" once its challenge is, else how the route shown or the run going stands
-// against its bar while that is its trip (progress.ts, `progressLine`). Under the list, how many
-// challenges are done, all days', and "Reset badges", which forgets them. The section collapses
-// once a run or a drawing of the user's own starts, and "Challenges" in the header shows it again.
+// against its bar while that is its trip (progress.ts, `progressLine`). Under the list, a hint, how
+// many challenges are done, all days', and "Reset badges", which forgets them. The section
+// collapses once a run or a drawing of the user's own starts, and "Challenges" in the header shows
+// it again.
 //
 // `ChallengePanel` holds the logic and no DOM, so the tests drive it (panel.test.ts);
 // `mountChallenges` draws it.
@@ -28,6 +29,10 @@ import { el } from "../util/dom";
 import { lineBounds, round6, type Bounds } from "../util/geo";
 import { challengesOf, dateOf, type Challenge } from "./list";
 import { progressLine, type ChallengeProgress } from "./progress";
+
+/** The line under the list. */
+export const HINT =
+  "Set it up, then Go. Short of the bar? More time, another run, or Make it worse.";
 
 /** What setting a challenge up asks of the rest of the app: to change the stops as an edit does
  * (forgetting the route shown and a drawing), to open a stored route as a link does, and to fit the
@@ -344,10 +349,11 @@ export function mountChallenges(
   const failed = el("div");
   failed.append(el("p", "hint", "Couldn't load today's challenges."), buttons);
   const list = el("ul", "challenge-list");
+  const hint = el("p", "hint", HINT);
   const count = el("p", "hint");
   const reset = el("button", "challenges-reset", "Reset badges");
   reset.type = "button";
-  root.replaceChildren(el("h2", "", "Challenges"), loading, failed, list, count, reset);
+  root.replaceChildren(el("h2", "", "Challenges"), loading, failed, list, hint, count, reset);
   show.addEventListener("click", () => panel.setCollapsed(false));
   again.addEventListener("click", () => void panel.load());
   reset.addEventListener("click", () => progress.reset());
@@ -361,6 +367,7 @@ export function mountChallenges(
     show.hidden = absent || !panel.collapsed;
     loading.hidden = panel.phase !== "loading";
     failed.hidden = panel.phase !== "failed";
+    hint.hidden = listed.length === 0;
     const done = Object.keys(progress.done).length;
     count.textContent = doneLine(done);
     count.hidden = done === 0;

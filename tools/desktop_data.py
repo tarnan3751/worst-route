@@ -10,7 +10,8 @@ staged by every build.
 `pack` writes, from `WORST_ROUTE_DATA`, what the app serves and nothing else: for each region (by
 default `us-t3`, the default region, then `portland`) its latest build's `meta.json`,
 `strings.json`, `arrays/` and `geometry/` (not its `qa/` or `stages/`) and its `latest` file; the
-places index's states, outlines and each region's towns; the basemap's fonts and icons
+places index's states, outlines and each region's towns (format 2's files, with a `places.json` of
+the regions packed); the basemap's fonts and icons
 (`<data>/basemap/fonts/` and `sprites/`, from `tools/fetch_basemap.sh --assets`) when they are
 there; and `desktop.json`, the app's manifest: the regions in order, their build ids, the basemap
 file the app fetches on its first start (its name, size and sha256, read from `--basemap`, the
@@ -77,6 +78,8 @@ def manifest_of(args: argparse.Namespace, builds: dict[str, str]) -> dict[str, A
 
 
 def pack(args: argparse.Namespace) -> None:
+    from worst_route.presentation.places import places_dir, table_files, write_manifest
+
     data = settings().data_dir
     builds: dict[str, str] = {}
     members: list[tuple[Path, str]] = []
@@ -90,12 +93,14 @@ def pack(args: argparse.Namespace) -> None:
             if not path.exists():
                 sys.exit(f"{path} is missing: the build is not whole")
             members.append((path, f"graphs/{region}/{build_id}/{name}"))
-    places = data / "aux" / "places"
-    for name in ("states.parquet", "states_outline.parquet", *(f"{r}.parquet" for r in builds)):
-        if (places / name).exists():
-            members.append((places / name, f"aux/places/{name}"))
+    places, packed = places_dir(), []
+    for table in ("states", "states_outline", *builds):
+        files = table_files(places, table)
+        if all(f.exists() for f in files):
+            members += [(f, f"aux/places/{f.name}") for f in files]
+            packed.append(table)
         else:
-            print(f"no {places / name}: the app goes without it", file=sys.stderr)
+            print(f"no {files[0]}: the app goes without it", file=sys.stderr)
     for name in ("fonts", "sprites"):
         path = data / "basemap" / name
         if path.is_dir():
@@ -107,6 +112,8 @@ def pack(args: argparse.Namespace) -> None:
         written = Path(scratch) / MANIFEST
         written.write_text(json.dumps(manifest, indent=1) + "\n")
         members.append((written, MANIFEST))
+        index = write_manifest(Path(scratch), (r for r in builds if r in packed))
+        members.append((index, f"aux/places/{index.name}"))
         args.out.parent.mkdir(parents=True, exist_ok=True)
         with tarfile.open(args.out, "w:gz", compresslevel=6) as tar:
             for path, name in members:
@@ -137,16 +144,13 @@ def stage(args: argparse.Namespace) -> None:
 
 
 def conus(args: argparse.Namespace) -> None:
-    import pyarrow.parquet as pq
     import shapely
 
-    table = pq.read_table(settings().data_dir / "aux" / "places" / "states.parquet").to_pydict()
+    from worst_route.presentation.places import places_dir, read_table
+
+    columns, shapes = read_table(places_dir(), "states", "us-t3")
     fips = REGIONS["us-t3"].fips
-    states = [
-        shapely.from_wkb(g)
-        for g, f in zip(table["geometry"], table["STATEFP"], strict=True)
-        if f in fips
-    ]
+    states = shapes[[f in fips for f in columns["STATEFP"]]]
     area = shapely.union_all(states).buffer(0.1).simplify(0.05)  # about 10 km out, 5 km off
     args.out.write_text(shapely.to_geojson(area) + "\n")
     bounds = tuple(round(b, 3) for b in area.bounds)

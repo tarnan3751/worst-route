@@ -41,19 +41,19 @@ export function dayOf(date: string, today: boolean): ChallengeList {
     {
       id: `no-left-${date}`,
       type: "no-left",
-      title: "Bend, OR to Boise, ID with no left turns",
+      title: "Bend, OR to Boise, ID with no left turns at 1.4×",
       blurb: "Right turns only, and no shortcuts.",
       setup: {
         ...LONGEST,
         stops: [BEND, BOISE],
         constraints: { no_left: true, no_right: false, strict: true, hard: false },
       },
-      goal: { kind: "no_left", min_ratio: 1 },
+      goal: { kind: "no_left", min_ratio: 1.4 },
     },
     {
       id: `bridges-${date}`,
       type: "bridges",
-      title: "Cross 20 bridges",
+      title: "Cross 20 bridges between Losantville, IN and Wallace, IN",
       blurb: "Twenty bridges or more from Losantville, IN to Wallace, IN.",
       setup: { ...LONGEST, objective: "collect", item: "bridge" },
       goal: { kind: "items", item: "bridge", min: 20 },
@@ -61,7 +61,7 @@ export function dayOf(date: string, today: boolean): ChallengeList {
     {
       id: `pilgrimage-${date}`,
       type: "pilgrimage",
-      title: "Visit 12 McDonald's",
+      title: "Visit 12 McDonald's between Losantville, IN and Wallace, IN",
       blurb: "A pilgrimage past twelve McDonald's on the way.",
       setup: {
         ...LONGEST,
@@ -85,7 +85,7 @@ export function dayOf(date: string, today: boolean): ChallengeList {
     {
       id: `worst-order-${date}`,
       type: "worst-order",
-      title: "Four towns in the worst order at 5.5×",
+      title: "Losantville, IN, Bend, OR, Boise, ID and Wallace, IN in the worst order at 5.5×",
       blurb: "Visit all four, in whatever order is worst.",
       setup: { ...LONGEST, stops: [LOSANTVILLE, BEND, BOISE, WALLACE], reorder: true },
       goal: { kind: "ratio", min: 5.5 },

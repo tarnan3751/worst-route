@@ -137,7 +137,7 @@ describe("grading a route", () => {
   });
 
   it("takes no left turn at the ratio", () => {
-    const right = challenge("no-left"); // at 1×
+    const right = challenge("no-left"); // at 1.4×
     const turns = { ...turning.metrics.turns!, left: 0 };
     expect(turning.metrics.turns?.left).toBe(259);
     expect(graded(right, on(right, turning))).toBe(false);

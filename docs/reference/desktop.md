@@ -224,8 +224,14 @@ each platform builds on its own. The spec:
   PyInstaller's analysis and the hooks (hooks-contrib's for numba, llvmlite, shapely, pyproj and
   uvicorn; pywebview's own), without the pipeline's packages (geopandas, OSMnx, osmium, networkx),
   pyarrow (the app reads no Parquet: the places index is NumPy arrays and JSON; pandas, which
-  OR-Tools' CP-SAT imports at its own import, would bring it, and runs without it), the test and
-  type tools, pywebview's other platforms, and on Linux pywebview;
+  OR-Tools' CP-SAT imports at its own import, would bring it, and runs without it), scipy (only
+  the pipeline uses it: the spatial index's grid, the components' labels and the certified area's
+  reach are the app's own code, `docs/reference/graph.md`, **Spatial**; Numba imports it when it
+  is there, for its version check and its BLAS probe, and runs without it, its kernels using no
+  BLAS), the test and type tools, pywebview's other platforms, and on Linux pywebview. scipy
+  stays a dependency of the package, as the pipeline's other packages and pyarrow do, so a
+  checkout, the gate and the image keep it; `tests/unit/test_without_scipy.py` runs the app's
+  paths in a process that refuses to import it;
 - `worst_route.graph.kernels` as its source too (**The first start**);
 - OR-Tools whole (`collect_all("ortools")`: hooks-contrib 2026.9 has no hook for it, and the
   analysis alone would miss its native libraries), for the certified worst
@@ -430,6 +436,22 @@ other lanes kept the load average at 5–25:
   town proved optimal in 0.99 s (286 nodes, 594 edges, a 640 m leash, 28.47×). pyproj's 18.8 MB (its
   libraries 8.4 MB in `Frameworks`, `proj_dir` 10.2 MB in `Resources`) is left whole: `proj.db`
   (10.2 MB) is what its EPSG lookups read, and the rest of its share is 0.14 MB.
+- **Without scipy** (2026-11-01, the data pack `worst-route-data-20261102` staged; against the
+  app the coordinator built from bfde3bc an hour before, the same lockfile and spec but for the
+  exclusion): `Worst Route.app` 970,988 kB, from 1,007,680 (`Contents/Frameworks` 277,352 kB from
+  309,988: scipy's 32,636 kB gone, its BLAS and Fortran libraries with it; `Resources` within
+  0.1 MB, the data); the disk image 313,261,113 bytes, from 324,226,120; scipy was installed in
+  the build's environment and nothing of it is in the app, nor in `THIRD-PARTY-LICENSES.txt`.
+  Built in 153 s. The smoke test passed on a first start (3.56 s to `/health`; Powell's to Reed
+  62.31×, Portland to Bend 7.86×) and a second (0.64 s, `--long --budget 30`: 66.21×, 9.07× and
+  3.51×), every route validated, exit 0, nothing left behind, `/ready`'s places `us-t3: 31540
+  towns; portland: 68 towns`. In the app on a port of its own, `/api/snap` put Powell's on node
+  27694, 5.6 m away, and a certified route from Powell's to Pioneer Courthouse Square with the
+  automatic leash was proven (`optimal`, 19.12 km, 28.07×, 27 progress events). From a checkout,
+  the same trips at a fixed number of attempts gave the same route files on the series and on
+  711647e before it but for their seconds (Powell's to Reed at seeds 1 to 5, Portland to Bend on
+  Oregon's build, Portland to Chicago on `us-t3`), and a certified route the same area, leash and
+  proven length (283 nodes, 591 edges, 610 m, 18.85 km).
 - **Extract sizes**: **The basemap**.
 
 ## Limitations

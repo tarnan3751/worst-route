@@ -642,9 +642,10 @@ that the API process is alive (`multiprocessing.parent_process()`); when it is n
 has no reader left, it closes its end and exits (`os._exit`), so a crashed API never leaves
 workers searching. Spawn re-imports the parent's main script, so under `worst-route serve` a
 worker loads `worst_route.cli` (typer, pydantic-settings, `pipeline.layout`) besides the engine
-and the graph package (shapely, scipy); never FastAPI, uvicorn or sse-starlette, and no numba on
+and the graph package (shapely); never FastAPI, uvicorn or sse-starlette, and no numba on
 the python backend. Its own imports take about 0.4 s; on the csr backend, the default, loading
-numba and the cached kernels adds about 0.3 s.
+numba (and scipy, which numba imports when it is installed, as it is outside the desktop app)
+and the cached kernels adds about 0.3 s.
 
 **The follower**, an asyncio task per running job, reads its workers' pipes, each in a thread
 (`poll` for at most `API_READ_GRACE_S`, 0.1 s, then `recv`), and keeps each search's own copy of the

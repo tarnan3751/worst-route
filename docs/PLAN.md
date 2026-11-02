@@ -126,7 +126,7 @@ worst-route/
 
 ### 1.3 Python dependencies
 
-Core: `pyosmium` (4.x), `osmnx` (2.1, brings `networkx`, `geopandas`, `shapely` 2, `pandas`), `numpy`, `scipy` (cKDTree, sparse csgraph for SCC), `numba`, `pyarrow` (Parquet), `pydantic` 2, `fastapi`, `uvicorn`, `sse-starlette`, `httpx`, `typer`, `matplotlib` + `pillow` (share image), `pyproj`.
+Core: `pyosmium` (4.x), `osmnx` (2.1, brings `networkx`, `geopandas`, `shapely` 2, `pandas`), `numpy`, `scipy` (the pipeline's cKDTree and sparse csgraph; the app's own spatial grid and components since 2026-11-01), `numba`, `pyarrow` (Parquet), `pydantic` 2, `fastapi`, `uvicorn`, `sse-starlette`, `httpx`, `typer`, `matplotlib` + `pillow` (share image), `pyproj`.
 Dev: `pytest`, `hypothesis`, `ruff`, `mypy`, `pytest-benchmark`.
 Desktop (M6, a `desktop` dependency group, built): `pywebview` (the app's window on the system's web view), `pyinstaller` and `pyinstaller-hooks-contrib` (freezing it per platform).
 Certified worst (M6, built, the owner's approval 2026-11-01): `ortools` (9.15, CP-SAT; with `protobuf`, `absl-py` and `immutabledict`), imported only inside the certified driver.

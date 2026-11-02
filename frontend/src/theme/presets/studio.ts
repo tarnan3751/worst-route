@@ -21,6 +21,7 @@ export const studio: Theme = {
     accent: "#ff5a1f",
     accentInk: "#ffffff",
     mapBg: "#f2f4f7",
+    outside: "#dfe2e6", // outside the US: a cool grey a step lighter than the grayscale land
     start: "#0ea5a4",
     via: "#677383",
     end: "#ff5a1f",

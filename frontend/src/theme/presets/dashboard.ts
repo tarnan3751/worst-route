@@ -21,6 +21,7 @@ export const dashboard: Theme = {
     accent: "#f5a524",
     accentInk: "#141a22",
     mapBg: "#0e1319",
+    outside: "#131a22", // outside the US: a slate a step below the dark land
     start: "#4cc2ff",
     via: "#8d9aaa",
     end: "#ff5c5c",

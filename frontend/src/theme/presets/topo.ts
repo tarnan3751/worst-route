@@ -20,6 +20,7 @@ export const topo: Theme = {
     accent: "#2f5d3a",
     accentInk: "#ffffff",
     mapBg: "#e7ebe0",
+    outside: "#ccd1c4", // outside the US: a sage grey a step darker than the light land
     start: "#2f5d3a",
     via: "#5c6b5c",
     end: "#e07a1f",

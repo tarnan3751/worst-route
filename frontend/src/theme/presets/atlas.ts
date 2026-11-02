@@ -20,6 +20,7 @@ export const atlas: Theme = {
     accent: "#c8102e",
     accentInk: "#ffffff",
     mapBg: "#f3f1ea",
+    outside: "#d4d1c8", // outside the US: a warm grey a step darker than the light land
     start: "#006b3f",
     via: "#1b4f9c",
     end: "#c8102e",

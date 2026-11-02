@@ -23,6 +23,7 @@ export const sign: Theme = {
     accent: "#f7c600",
     accentInk: "#1a1a1a",
     mapBg: "#e9ecef",
+    outside: "#c9ced3", // outside the US: a cool grey a step darker than the light land
     start: "#f7c600",
     via: "#ffffff",
     end: "#c8102e",

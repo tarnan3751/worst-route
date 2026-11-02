@@ -22,6 +22,7 @@ export const transit: Theme = {
     accent: "#000000",
     accentInk: "#ffffff",
     mapBg: "#f0f0f0",
+    outside: "#d2d2d2", // outside the US: a flat grey a step darker than the light land
     start: "#ffffff",
     via: "#ffffff",
     end: "#f26b1d",

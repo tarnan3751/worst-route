@@ -22,6 +22,7 @@ export const classic: Theme = {
     accentInk: "#ffffff",
     link: "#2c7fb8",
     mapBg: "#ffffff",
+    outside: "#e2e2df", // outside the US: a plain grey a step lighter than the grayscale land
     start: "#1a9850",
     via: "#2c7fb8",
     end: "#d7191c",

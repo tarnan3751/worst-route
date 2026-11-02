@@ -19,6 +19,7 @@ export const ledger: Theme = {
     accent: "#111111",
     accentInk: "#ffffff",
     mapBg: "#f4f4f2",
+    outside: "#d3d3d0", // outside the US: a plain grey a step darker than the light land
     start: "#111111",
     via: "#666666",
     end: "#b3261e",

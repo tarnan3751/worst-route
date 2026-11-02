@@ -21,6 +21,7 @@ export const night: Theme = {
     accent: "#ff3d9a",
     accentInk: "#ffffff",
     mapBg: "#070b16",
+    outside: "#141a30", // outside the US: a navy a step below the dark land
     start: "#35e0ff",
     via: "#8b93b8",
     end: "#ff3d9a",

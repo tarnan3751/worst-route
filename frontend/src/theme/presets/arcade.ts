@@ -19,6 +19,7 @@ export const arcade: Theme = {
     accent: "#ffe14d",
     accentInk: "#0a1e5e",
     mapBg: "#061346",
+    outside: "#121b48", // outside the US: the nav unit's navy, a step below the dark land
     start: "#7fe7ff",
     via: "#9fb3ff",
     end: "#ff5e5e",

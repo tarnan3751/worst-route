@@ -1291,6 +1291,19 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
   ND, Bejou, MN and Amenia, ND under Start, Stop, Stop and End, Worst order ticked) was listed
   first under "From Saturday, October 31" and set up 48.5 s after the page loaded (81.8 s on a
   fresh server, which made today's first).
+- **The standing, the short toast and the marks** (2026-11-02 UTC; a lane's `serve --region
+  us-t3 --geocoder none` on build 6adae6917be1 with Protomaps' basemap from its file, behind a stub
+  of the lane's that answered `GET /daily` 404, `GET /challenges` with a day of three and added
+  marks made up along the route to `GET /routes/{id}`, the server's series not landed; the dev
+  server proxying to the stub, headless Chrome at 1400 × 1000 with the tile hosts unresolvable).
+  `?challenge=pilgrimage-2026-11-02` set up "Visit 40 Dollar General between Hustonville, KY and
+  Ravenna, KY" with the hint under the list, Dollar General picked (`mode=brand:858`); Go, the
+  section shown again six seconds in: "9 of 40 Dollar General" on the row; the run ended on its
+  20 s budget at 13.1× (786 mi, 13,792 tries, 13 of the 14 within reach): "13 of 40 Dollar General"
+  and the toast "13 Dollar General, the challenge needs 40. More time, another run or Make it
+  worse may get there." The 13 marks were drawn over the route in night's cyan ringed in its navy
+  casing, and in studio's teal ringed in white once the Theme row changed it, no reload; the
+  pointer over one showed "Dollar General", gone once it left.
 - **The seeds** (2026-11-01, headless Chrome on the lane's `npm run dev` and `serve --region
   portland --region us-t3`, ten workers, the tile hosts unresolvable, load 9–15): a link with
   `seed=40&seeds=4&budget=20` and Powell's → Reed showed the Seeds row at 4 with its note; Go ran

@@ -107,7 +107,9 @@ national build (`GET /challenges`: the long way, the slow way, no left turns, br
 pilgrimage, hard mode, the worst order, today's route made worse), set up from the panel or
 `?challenge=` (another day's too, an id carrying its day), graded in the browser on every route
 shown, their badges kept in its storage by dated id, which the desktop app's own port keeps between
-starts (`docs/reference/frontend.md`, **Challenges**).
+starts; each row says how the route shown or the run going stands against its bar, a run short of
+it says so in a toast, and a route's brand locations and items are marked on the map (the route
+document's `marks`; `docs/reference/frontend.md`, **Challenges**).
 OSM's turn restrictions are honoured (M6, pipeline version 8): `filter` keeps them and cleanup
 makes them turn tables at the junctions, which the engine, the splice and the validator read as
 they read a super-junction's (`docs/reference/pipeline.md`, **Turn restrictions**). So are

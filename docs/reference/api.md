@@ -55,8 +55,9 @@ which the frontend asks the server to pick (**Picking a build**) and names in it
 loads each region's build (`--build-id` names the first region's; the others, and the first
 without it, serve their `latest`) and its geometry before it listens, so a missing build, one saved before an array of the format existed
 (`docs/reference/graph.md`, **The build format**), or one without its geometry (the `save
---force` that writes it again) is one line on stderr and exit 1. Then uvicorn serves one process.
-Each build's spatial index and backend are made in a thread once it starts (`app.warm_builds`;
+--force` that writes it again) is one line on stderr and exit 1. Then uvicorn serves one process,
+which Ctrl+C stops within 5 s (a graceful shutdown of 5 s, as the desktop app's, so an open request
+or event stream does not hold the exit). Each build's spatial index and backend are made in a thread once it starts (`app.warm_builds`;
 `docs/reference/graph.md`, **Loading builds**), so it listens without waiting for them: on its
 first start after `kernels.py` changes, or with a new `NUMBA_CACHE_DIR`, the Numba kernels compile
 then, and a job asked for meanwhile starts once they have. The jobs live
@@ -1049,8 +1050,10 @@ anything. A date kept in neither is made on its first call by a task of its own
 (`Api.challenge_tasks`), which every call for that date waits for (a caller gone leaves it to
 finish) while calls for other dates are answered, kept or made by tasks of their own: the town
 pool and the draws and pre-flights in threads, the plans in the job manager's workers (about a
-minute on `us-t3`, below), then stored and kept. The server's stop cancels the tasks, and the job
-manager's stop the workers, at once; nothing of the date is kept then. The dates answered are today
+minute on `us-t3`, below), then stored and kept. Stopping the server ends a date's making within
+5 s: `serve` (as the desktop app's server) gives uvicorn a graceful shutdown of 5 s, after which
+the open requests close, the lifespan cancels the tasks and the job manager's stop kills the
+workers; nothing of the date is kept then. The dates answered are today
 and the 30 days before it (`CHALLENGE_DAYS`), so a link to an earlier day's challenge keeps working
 for a month; a public server makes only today's (**Public limits**).
 

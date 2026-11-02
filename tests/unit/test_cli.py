@@ -156,6 +156,7 @@ def test_serve_runs_the_app_for_its_options(
     settings.cache_clear()
     assert result.exit_code == 0, result.output
     assert (ran["host"], ran["port"]) == ("127.0.0.1", 0)
+    assert ran["timeout_graceful_shutdown"] == 5  # Ctrl+C stops it within 5 s, whatever is open
     assert ran["log_config"]["loggers"]["worst_route"]["level"] == "INFO"
     api = ran["app"].state.api
     assert api.settings.data_dir == tmp_path and api.settings.builds == (("portland", "b1"),)

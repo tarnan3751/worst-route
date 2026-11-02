@@ -74,7 +74,10 @@ json` logs a JSON object a line on stdout, with request ids and without uvicorn'
 basemap the frontend draws is `WORST_ROUTE_BASEMAP`'s (`raster`, `openfreemap` or `pmtiles`,
 whose file, `--basemap-name`'s, by default the first region's, it then names). `--frontend DIR`
 serves the frontend's build at `/` and the API under `/api` (`api/static.py`), from one process;
-a directory without `index.html` is one line and exit 1.
+a directory without `index.html` is one line and exit 1. Ctrl+C stops it within 5 s, as the
+desktop app's server: uvicorn gives the open requests and streams that long (a `GET /challenges`
+waiting on a date's making among them), then the app's lifespan cancels what it runs and stops
+the job workers.
 
 `aux places` writes the places index (`docs/reference/presentation.md`, **Places**) under
 `<WORST_ROUTE_DATA>/aux/places/` from the Census files `tools/fetch_census.sh` fetched into
@@ -1688,6 +1691,7 @@ def serve(
         log_config=log_config,
         access_log=log_format == "text",
         proxy_headers=False,
+        timeout_graceful_shutdown=5,  # an open request or stream does not hold the exit
     )
 
 

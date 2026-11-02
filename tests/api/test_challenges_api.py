@@ -591,21 +591,24 @@ async def test_a_public_server_makes_only_today_s(
 
 
 async def test_a_full_server_makes_nothing(served: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def filling(api: Api, *args: Any) -> list[ChallengeOut]:
+        raise TooManyJobs()  # a plan finding the server full
+
     async with app_on(served) as (http, api):
-        monkeypatch.setattr(api.jobs, "refusal", lambda *args: TooManyJobs())
-        busy = await http.get("/challenges")
-        assert (busy.status_code, busy.json()["code"]) == (429, "TOO_MANY_JOBS")
-        monkeypatch.undo()
-        real = challenges_api.generate_day
-
-        async def filling(api: Api, *args: Any) -> list[ChallengeOut]:
-            raise TooManyJobs()  # a plan finding the server full
-
-        monkeypatch.setattr(challenges_api, "generate_day", filling)
-        assert (await http.get("/challenges")).status_code == 429
+        version = str(api.builds[REGION].data.meta["graph_version"])
+        with monkeypatch.context() as full:  # its own patches undone, the fixture's kept
+            full.setattr(api.jobs, "refusal", lambda *args: TooManyJobs())
+            busy = await http.get("/challenges")
+            assert (busy.status_code, busy.json()["code"]) == (429, "TOO_MANY_JOBS")
+        with monkeypatch.context() as filled:
+            filled.setattr(challenges_api, "generate_day", filling)
+            assert (await http.get("/challenges")).status_code == 429
         assert api.challenge_days == {} and api.challenge_tasks == {}
-        monkeypatch.setattr(challenges_api, "generate_day", real)
-        assert (await http.get("/challenges")).status_code == 200
+        assert api.store.challenges("2026-11-02", REGION, version) is None  # nothing kept
+        made = await http.get("/challenges")
+        assert made.status_code == 200
+        assert [c["type"] for c in made.json()["challenges"]] == [*TYPES, "daily-worse"]
+        assert api.store.challenges("2026-11-02", REGION, version) is not None
 
 
 async def test_no_places_index_no_challenges(tmp_path: Path) -> None:

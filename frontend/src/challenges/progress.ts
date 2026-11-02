@@ -9,8 +9,10 @@
 // as the fixed list's of old, is not counted and goes at the next write); every read and write
 // may fail (a private window, storage blocked), so the page works without it and the badges then
 // last as long as the page; "completed" says which, for its toast (`completedLine`). `reset`
-// forgets them all. While the route shown or the run going is a challenge's trip, the challenge's
-// row says how it stands against the bar (`progressLine`). No DOM, so the tests drive it.
+// forgets them all. A run of the challenge set up that ends short of its bar says so once, "short",
+// for its toast (`shortLine`), unless the challenge is done already. While the route shown or the
+// run going is a challenge's trip, the challenge's row says how it stands against the bar
+// (`progressLine`). No DOM, so the tests drive it.
 import type {
   BrandEntry,
   BrandVisits,
@@ -241,14 +243,52 @@ export function progressLine(
   }
 }
 
+const SHORT_ADVICE = "More time, another run or Make it worse may get there.";
+
+/** The toast a run of `challenge` shows when its route ends short of the bar: "12.3×, the
+ * challenge needs 15×. More time, another run or Make it worse may get there."; null for today's
+ * route made worse. */
+export function shortLine(challenge: Challenge, route: RouteDocument): string | null {
+  const { goal, setup } = challenge;
+  const seen = route.metrics;
+  let have: string;
+  let needs: string;
+  switch (goal.kind) {
+    case "ratio":
+      [have, needs] = [ratioSoFar(seen.ratio ?? 0), barRatio(goal.min)];
+      break;
+    case "duration":
+      [have, needs] = [`${hoursOf(seen)} h`, `${formatCount(goal.min_s / 3600)} h`];
+      break;
+    case "items":
+      [have, needs] = [formatItems(seen.items?.[goal.item] ?? 0, goal.item), formatCount(goal.min)];
+      break;
+    case "brand":
+      if (!setup?.brand) return null; // a pilgrimage's always has one
+      have = `${formatCount(seen.brand?.visits ?? 0)} ${setup.brand.name}`;
+      needs = formatCount(goal.min_visits);
+      break;
+    case "no_left":
+    case "hard":
+      [have, needs] = [ratioSoFar(seen.ratio ?? 0), barRatio(goal.min_ratio)];
+      break;
+    case "daily_worse":
+      return null;
+  }
+  return `${have}, the challenge needs ${needs}. ${SHORT_ADVICE}`;
+}
+
 /** Which challenges are done, each with the day it was (YYYY-MM-DD, the browser's): "change" when
- * that changes, and "completed" (a CustomEvent with the challenge) for each one newly done. */
+ * that changes, and "completed" (a CustomEvent with the challenge) for each one newly done; and
+ * "short" (a CustomEvent with its toast's line) when a run of the challenge set up, not done yet,
+ * ends short. */
 export class ChallengeProgress extends EventTarget {
   done: Record<string, string>;
   readonly #store: Store;
   readonly #source: ChallengeSource;
   readonly #storage: () => ChallengeStorage;
   readonly #today: () => Daily | null;
+  #pending: string | null = null; // the challenge set up when the run going started
 
   /** Grades every route `store` shows against the challenges `source` lists, and the route shown
    * again whenever they change; `today` gives today's route once done, `storage` the storage
@@ -267,6 +307,15 @@ export class ChallengeProgress extends EventTarget {
     this.done = this.#read();
     store.watch(["route"], () => this.#grade());
     source.addEventListener("listed", () => this.#grade());
+    let phase = store.state.run.phase;
+    let shown = store.state.route;
+    store.watch(["run", "route"], ({ run, route, challenge }) => {
+      if (run.phase === "starting" && phase !== "starting") this.#pending = challenge;
+      else if (route !== shown && route !== null) this.#ended(route);
+      else if (run.phase !== "starting" && run.phase !== "running") this.#pending = null;
+      phase = run.phase;
+      shown = route;
+    });
   }
 
   /** Forget every completion. */
@@ -291,6 +340,20 @@ export class ChallengeProgress extends EventTarget {
         this.#record(challenge);
       }
     }
+  }
+
+  /** A run has ended on `route`: "short", once, when the challenge set up as it started, not done
+   * already (its badge holder gets no nag), is its trip and the route short of its bar. */
+  #ended(route: RouteDocument): void {
+    const id = this.#pending;
+    this.#pending = null;
+    const challenge = this.#source.listed.find((c) => c.id === id);
+    if (challenge === undefined || challenge.id in this.done) return;
+    const today = this.#today();
+    const trip = tripOf(route, this.#store.state);
+    if (!sameTrip(challenge, trip, today) || reached(challenge.goal, route, today)) return;
+    const line = shortLine(challenge, route);
+    if (line !== null) this.dispatchEvent(new CustomEvent<string>("short", { detail: line }));
   }
 
   #record(challenge: Challenge): void {

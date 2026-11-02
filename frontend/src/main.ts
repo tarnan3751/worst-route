@@ -1,13 +1,13 @@
 // Bootstrap and wiring (docs/reference/frontend.md): the store, from the URL's state; the map
 // and the panel's parts (today's route at the top, then the day's challenges, asked of the server
-// at start and graded on every route shown, a toast for each one completed; the directions, which
-// highlight their steps on the route layer, among them); the route's marks over its line (the
-// brand locations it visits, the items it collects); the toasts under the map; the served
-// regions from /regions, the map fitted to all their bboxes, and the build each trip runs on
-// picked from its stops (RegionPicker); a stored route when the URL names one, or today's once it
-// is done for `?daily` (unless a run of the user's own has started first), the URL left alone
-// until then, or else the challenge `?challenge=` names set up once the regions and its day's
-// challenges are known;
+// at start and graded on every route shown, a toast for each one completed and for a run of the
+// one set up that ends short of its bar; the directions, which highlight their steps on the route
+// layer, among them); the route's marks over its line (the brand locations it visits, the items it
+// collects); the toasts under the map; the served regions from /regions, the map fitted to all
+// their bboxes, and the build each trip runs on picked from its stops (RegionPicker); a stored
+// route when the URL names one, or today's once it is done for `?daily` (unless a run of the
+// user's own has started first), the URL left alone until then, or else the challenge
+// `?challenge=` names set up once the regions and its day's challenges are known;
 // clicks on the map and a place search's picks add stops, the same way (placeStop), a click on a
 // city's label the city's point with its name (map/cities.ts), but in
 // drawing mode, where a click takes the move nearest it (draw/drawing.ts), Backspace takes the last
@@ -133,6 +133,7 @@ void challenges.load();
 progress.addEventListener("completed", (event) => {
   toasts.notify(completedLine((event as CustomEvent<Challenge>).detail));
 });
+progress.addEventListener("short", (event) => toasts.notify((event as CustomEvent<string>).detail));
 mountChallenges(byId("challenges"), header, challenges, progress, store, ({ goal }) => {
   byId(goal.kind === "daily_worse" ? "run" : "stops").scrollIntoView({ block: "start" });
 });

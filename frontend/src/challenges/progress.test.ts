@@ -5,8 +5,9 @@
 // challenge's trip (the stops within 500 m, the worst order's in any order between); today's route
 // made worse only on today's challenge; and the completions kept in a stand-in storage (once each,
 // graded again when the list comes, past days' kept, the fixed list's of old dropped, reset, junk
-// ignored, a throwing storage survived), with the toast's line; and the standing a row shows for
-// each goal kind, of the route shown or the run going.
+// ignored, a throwing storage survived), with the toast's line; the standing a row shows for each
+// goal kind, of the route shown or the run going; and the toast of a run that ends short of the
+// bar of the challenge set up, once a run.
 import { describe, expect, it } from "vitest";
 import { ANSWER } from "../__fixtures__/challenges";
 import { loadStream } from "../__fixtures__/stream";
@@ -20,6 +21,7 @@ import {
   progressLine,
   reached,
   sameTrip,
+  shortLine,
   tripOf,
   type ChallengeSource,
   type ChallengeStorage,
@@ -441,5 +443,94 @@ describe("the standing on a challenge's row", () => {
       metrics: { ...metrics, brand: { id: 229, name: "Starbucks", visits: 8, of: 19 } },
     };
     expect(progressLine(pilgrimage, going(visiting), false)).toBe("8 of 19 Starbucks");
+  });
+});
+
+describe("a run of the challenge set up that ends short of the bar", () => {
+  /** A store with `c` set up, its progress, and the toasts' lines it says are short. */
+  function running(c: Challenge) {
+    const store = storeWith();
+    store.update({ challenge: c.id });
+    const progress = new ChallengeProgress(
+      store,
+      source(),
+      () => TODAY,
+      () => memory(),
+    );
+    const lines: string[] = [];
+    progress.addEventListener("short", (event) => lines.push((event as CustomEvent).detail));
+    /** A run that starts and ends on `route` (none: it fails). */
+    const run = (route: RouteDocument | null) => {
+      store.updateRun({ phase: "starting" });
+      store.update({ route: null, run: { ...IDLE_RUN, phase: "running", jobId: "j" } });
+      if (route === null) store.updateRun({ phase: "failed" });
+      else store.update({ route, run: { ...IDLE_RUN, phase: "done" } });
+    };
+    return { store, progress, lines, run };
+  }
+
+  it("says so once a run, with the standing and what may get there", () => {
+    const long = challenge("long-way"); // at 16×
+    const { store, lines, run } = running(long);
+    const route = on(long, max, {}, { ratio: 12.34 });
+    run(route);
+    expect(lines).toEqual([
+      "12.3×, the challenge needs 16×. More time, another run or Make it worse may get there.",
+    ]);
+    store.update({ route: { ...route } }); // shown again, no run
+    expect(lines).toHaveLength(1);
+    run(route); // Make it worse, nothing worse found
+    expect(lines).toHaveLength(2);
+  });
+
+  it("says nothing of a run that reaches the bar, fails, or had no challenge set up", () => {
+    const long = challenge("long-way");
+    const { store, lines, progress, run } = running(long);
+    let completed = 0;
+    progress.addEventListener("completed", () => completed++);
+    run(on(long, max)); // 78×
+    expect(completed).toBe(1);
+    run(null);
+    store.update({ challenge: null });
+    run(on(long, max, {}, { ratio: 12 }));
+    expect(lines).toEqual([]);
+  });
+
+  it("says nothing for a challenge done already, its badge on", () => {
+    const long = challenge("long-way");
+    const { lines, progress, run } = running(long);
+    run(on(long, max)); // 78×: done
+    expect(Object.keys(progress.done)).toEqual([long.id]);
+    run(on(long, max, {}, { ratio: 12.34 })); // short of 16× now
+    expect(lines).toEqual([]);
+  });
+
+  it("says nothing when the run is refused before it starts and a route is opened after", () => {
+    const long = challenge("long-way");
+    const { store, lines } = running(long);
+    store.updateRun({ phase: "starting" });
+    store.updateRun({ phase: "idle" }); // the POST refused
+    store.update({ route: on(long, max, {}, { ratio: 12 }), run: { ...IDLE_RUN, phase: "done" } });
+    expect(lines).toEqual([]);
+  });
+
+  it("writes each goal kind's standing", () => {
+    const advice = "More time, another run or Make it worse may get there.";
+    const short = (c: Challenge, route: RouteDocument) => shortLine(c, on(c, route));
+    const hours = aiming(challenge("slow-way"), { kind: "duration", min_s: 50 * 3600 });
+    expect(short(hours, slow)).toBe(`6 h, the challenge needs 50 h. ${advice}`);
+    expect(short(challenge("bridges"), collect)).toBe(
+      `18 bridges, the challenge needs 20. ${advice}`,
+    );
+    expect(short(starbucks(19), brand)).toBe(`14 Starbucks, the challenge needs 19. ${advice}`);
+    const right = challenge("no-left");
+    expect(shortLine(right, on(right, turning, {}, { ratio: 1.36 }))).toBe(
+      `1.3×, the challenge needs 1.4×. ${advice}`,
+    );
+    const hard = aiming(challenge("hard-mode"), { kind: "hard", min_ratio: 2 });
+    expect(shortLine(hard, on(hard, max, { constraints: HARD }, { ratio: 1.6 }))).toBe(
+      `1.6×, the challenge needs 2×. ${advice}`,
+    );
+    expect(shortLine(challenge("daily-worse"), max)).toBeNull();
   });
 });

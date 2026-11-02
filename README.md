@@ -1,31 +1,72 @@
 # Worst Route
 
-The long way. Then longer. Set a start, an end and some stops in the US; get a route that never
-repeats an intersection or a road and is as bad as the time budget allows.
+Worst Route plans deliberately terrible driving routes. Pick a start, an end and any stops in
+between, anywhere in the lower 48, and it finds a way to get there that never uses the same
+road or passes the same intersection twice, obeys one-way streets and turn restrictions, and is
+as long as it can make it in the time you give it. A 13-minute drive across Portland becomes a
+nine-hour tour of the city, with turn-by-turn directions to match.
 
-It is a joke that holds: every route is proved legal by a validator before it is shown, and a
-seed gives the same route on the same build forever. The pipeline turns an OpenStreetMap state
-extract into a cleaned, memory-mapped road graph (one-way streets, divided highways, interchanges
-and turn restrictions included); the engine is a splice loop under a time budget, with modes for
-the longest route, the slowest, no left (or right) turns, collecting bridges or roundabouts, brand
-pilgrimages, alphabet routes, hard mode and the worst order of the stops, and the certified worst:
-in a small area, the provably worst route, proven by a solver; the API streams the
-route as it grows over Server-Sent Events; the MapLibre frontend draws it with deadpan directions,
-a share image, a route of the day, a draw-it-yourself mode played against the engine, and
-challenges. Builds exist for Portland, Oregon and the contiguous US at primary roads and above,
-and a desktop app packs the national build for macOS and Windows.
+## What it can do
 
-## Running it
+- Longest route, slowest route, no left turns (or no right turns), collect as many bridges,
+  roundabouts, toll booths or level crossings as possible, visit every Starbucks it can find,
+  drive roads named A, B, C, … in order, and "hard mode" where each road is driven in one
+  stretch and never seen again.
+- Prove it. In a small enough area, a solver finds the longest legal route and certifies that
+  nothing longer exists.
+- Aim for a target: a given multiple of the sensible route, or a given drive time.
+- Draw your own route by hand and see if you can beat the engine.
+- A route of the day, a set of challenges, a share image, and ten colour themes.
 
-Build Portland with `uv run worst-route pipeline <step> --region portland` for each step from
-`download` to `qa` (the extract comes from Geofabrik), start the API with
-`uv run worst-route serve --region portland`, and the map with `cd frontend && npm ci && npm run dev`.
-`CLAUDE.md` is the map (where things live, the commands, the conventions, the agent workflow),
-`docs/PLAN.md` the design, `docs/reference/` how each built area works, and
-`docs/project_overview.md` the status, the roadmap and the decisions.
+Every route is checked by an independent validator before it is shown, and the same seed on
+the same map data always produces the same route.
+
+## Try it
+
+The desktop app runs entirely on your machine and ships with the national road network and
+Portland's. Installers for macOS (Apple Silicon) and Windows, and a tarball for Linux, are
+attached to each release. On its first start the app downloads its offline map, about 700 MB;
+until then it draws OpenFreeMap's tiles.
+
+To run it from source you need Python 3.12, [uv](https://docs.astral.sh/uv/) and Node 22:
+
+```sh
+uv sync
+cd frontend && npm ci && cd ..
+
+# Build the Portland road graph from a Geofabrik extract (a few minutes).
+for step in download filter build cleanup enrich tiers save qa; do
+  uv run worst-route pipeline $step --region portland
+done
+
+# Start the API, then the map in another terminal.
+uv run worst-route serve --region portland
+cd frontend && npm run dev
+```
+
+The same pipeline builds any state, or the whole contiguous US at primary roads and above
+(`--region us-t3`, about 20 minutes and a lot of RAM). There is also a CLI for planning routes
+without the browser: `uv run worst-route plan --help`.
+
+## How it works
+
+The pipeline reads an OpenStreetMap extract, keeps the drivable roads, merges divided highways
+and interchanges into single junctions, keeps the turn restrictions, and writes the result as
+memory-mapped NumPy arrays. The engine starts from a sensible route and repeatedly splices in
+detours, keeping only changes that stay legal and make things worse, until the time budget
+runs out. The API streams the route to the browser as it grows. The frontend is plain
+TypeScript on MapLibre GL.
+
+Alaska and Hawaii are not covered; neither is connected to the rest of the network by road.
+
+## Documentation
+
+`docs/PLAN.md` is the design, `docs/reference/` describes each part as built, and
+`docs/project_overview.md` tracks status and decisions. `CLAUDE.md` is the map of the
+repository and its conventions.
 
 ## Licence
 
-The code is under the MIT License (`LICENSE`). Map data is © OpenStreetMap contributors, under
-the ODbL; the basemap, the fonts and the other third-party notices are on the app's notices page
-(`frontend/public/notices.html`).
+MIT, see `LICENSE`. Map data © OpenStreetMap contributors, available under the Open Database
+License. Notices for the basemap, fonts and other third-party components are on the app's
+notices page.

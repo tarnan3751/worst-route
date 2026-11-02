@@ -1324,6 +1324,9 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
 
 ## Limitations
 
+- In the light and dark Protomaps flavors (eight themes) the states lose their land-cover tint at
+  zoom 7 and below: the flat tone's land fills sit above `landcover`, so Canada and Mexico stay flat
+  there at the cost of the US showing the flavor's plain land colour (**Basemap**).
 - **A challenge is completed by any route shown that meets it**, a route opened by someone else's
   link included: there are no accounts, and the badges are only this browser's.
 - **Today's challenge makes today's route worse on that route's budget**: opening a route puts its

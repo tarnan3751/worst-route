@@ -485,8 +485,9 @@ numpy < 2.6, so a numpy upgrade past 2.5 waits for numba.
 `make_backend(data, name=DEFAULT_BACKEND)` (`backends.py`) makes the backend `name` asks for:
 `"csr"`, `"python"`, or `"auto"`, which is `CsrBackend` when numba imports and `PythonBackend`
 otherwise (`csr_backend` is imported only when asked for); `backend_name(name)` says which
-one it makes without making it (auto: csr when numba's spec is found), as `serve` and the desktop
-app ask before the backend exists. `config.DEFAULT_BACKEND` is
+one it makes without making it (auto: csr when numba imports; it imports numba, not the kernels,
+so a broken numba counts as none and nothing compiles), as `serve` and the desktop app ask before
+the backend exists. `config.DEFAULT_BACKEND` is
 `"auto"`; `config.BackendName` lists the names. The backends give the same results, so the
 choice changes only the speed. `plan_route` uses
 `make_backend`'s default when it is given no backend, and `worst-route plan` and `validate`

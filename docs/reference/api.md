@@ -76,9 +76,9 @@ first, never one clipped to a bbox, whose index holds only its bbox's towns
 uvicorn's log line names. The job manager's own lines (a job cancelled for want of a subscriber,
 a worker's traceback) go to the same log. `--backend` is the engine's
 (`docs/reference/graph.md`, **Choosing a backend**), and `serve` prints the one it took as
-`plan` does (`backend: csr`), named without making it (`backends.backend_name`): `auto`, the
-default, is csr when numba is installed, and `csr` without numba is one line and exit 1, before
-it listens.
+`plan` does (`backend: csr`), named without making it (`backends.backend_name`, which imports
+numba, 0.1–0.2 s, but compiles nothing): `auto`, the default, is csr when numba imports, and
+`csr` without a numba that imports is one line and exit 1, before it listens.
 
 `--geocoder` is the place search's (**Geocoding**): `nominatim`, the default, asks
 `--nominatim-url` (default `https://nominatim.openstreetmap.org`); `none` turns `GET /geocode`

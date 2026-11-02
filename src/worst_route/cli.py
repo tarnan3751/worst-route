@@ -1613,7 +1613,6 @@ def serve(
 ) -> None:
     """Serve the API."""
     import copy
-    import importlib.util
 
     import uvicorn
     from starlette.applications import Starlette
@@ -1644,15 +1643,15 @@ def serve(
     if frontend is not None and not (frontend / "index.html").is_file():
         _fail(f"no frontend build at {frontend}: run `npm run build` under frontend/")
     try:
-        # the backends are made once it listens (`app.warm_builds`): refused now all the same
-        if config.backend == "csr" and importlib.util.find_spec("numba") is None:
-            raise ModuleNotFoundError("No module named 'numba'")
+        # numba imported now (the backends are made once it listens, `app.warm_builds`), so a
+        # missing or broken one refuses csr here and turns auto to python, as make_backend will
+        used = backend_name(config.backend)
         application = create_app(config)
     except (BuildNotFound, PlacesFormatError) as error:
         _fail(str(error))
     except ImportError as error:  # only csr needs numba; auto falls back to python
         _fail(f"the csr backend needs numba, which did not import: {error}")
-    typer.echo(f"backend: {backend_name(config.backend)}")  # named, not made
+    typer.echo(f"backend: {used}")
     if config.geocoder == "none":
         typer.echo("geocoder: none")
     else:

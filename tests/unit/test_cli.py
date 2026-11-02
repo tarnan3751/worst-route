@@ -164,18 +164,15 @@ def test_serve_runs_the_app_for_its_options(
     assert runner.invoke(app, [*args[:3], "--workers", "0"]).exit_code == 2
 
 
-def test_serve_with_csr_and_without_numba_is_one_line(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_serve_with_csr_and_a_broken_numba_is_one_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, broken_numba: None
 ) -> None:
-    import importlib.util
+    import uvicorn
 
     g = grid_graph(3, 3, 100)
     g = replace(g, meta={**g.meta, "region": "portland", "build_id": "b1"})
     write_build(g, tmp_path / "graphs" / "portland" / "b1")
-    found = importlib.util.find_spec
-    monkeypatch.setattr(
-        importlib.util, "find_spec", lambda name, *a: None if name == "numba" else found(name, *a)
-    )
+    monkeypatch.setattr(uvicorn, "run", lambda application, **kw: None)  # never a real server
     monkeypatch.setenv("WORST_ROUTE_DATA", str(tmp_path))
     settings.cache_clear()
     args = ["serve", "--region", "portland", "--build-id", "b1", "--backend", "csr"]
@@ -183,8 +180,26 @@ def test_serve_with_csr_and_without_numba_is_one_line(
     settings.cache_clear()
     assert result.exit_code == 1
     assert result.stderr == (
-        "the csr backend needs numba, which did not import: No module named 'numba'\n"
+        "the csr backend needs numba, which did not import: numba needs another NumPy\n"
     )
+
+
+def test_serve_with_auto_and_a_broken_numba_takes_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, broken_numba: None
+) -> None:
+    import uvicorn
+
+    g = grid_graph(3, 3, 100)
+    g = replace(g, meta={**g.meta, "region": "portland", "build_id": "b1"})
+    write_build(g, tmp_path / "graphs" / "portland" / "b1")
+    monkeypatch.setattr(uvicorn, "run", lambda application, **kw: None)
+    monkeypatch.setenv("WORST_ROUTE_DATA", str(tmp_path))
+    settings.cache_clear()
+    args = ["serve", "--region", "portland", "--build-id", "b1", "--geocoder", "none"]
+    result = runner.invoke(app, [*args, "--store", str(tmp_path / "r")])
+    settings.cache_clear()
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines()[0] == "backend: python"  # as make_backend will make
 
 
 def test_serve_listens_before_it_makes_the_backend(

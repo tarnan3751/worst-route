@@ -4,7 +4,6 @@ Every test of the reference's semantics runs on each backend (`backend_type`); t
 then ask `CsrBackend` for the reference's exact bytes, ties and Nones included.
 """
 
-import importlib.util
 import math
 import sys
 from dataclasses import dataclass
@@ -305,15 +304,14 @@ def test_make_backend_makes_the_one_asked_for(monkeypatch: pytest.MonkeyPatch) -
         make_backend(GRID, "csr")
 
 
-def test_the_backend_a_name_makes_is_named_without_making_it(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_the_backend_a_name_makes_is_named_without_making_it() -> None:
     assert [backend_name(), backend_name("csr"), backend_name("python")] == ["csr", "csr", "python"]
-    found = importlib.util.find_spec
-    monkeypatch.setattr(
-        importlib.util, "find_spec", lambda name, *a: None if name == "numba" else found(name, *a)
-    )
-    assert backend_name() == "python" and backend_name("csr") == "csr"  # as if no numba
+
+
+def test_a_broken_numba_makes_auto_python_and_refuses_csr(broken_numba: None) -> None:
+    assert backend_name() == "python" and backend_name("python") == "python"
+    with pytest.raises(ImportError, match="numba needs another NumPy"):
+        backend_name("csr")
 
 
 def test_auto_is_csr_on_a_build_with_turn_tables_too() -> None:

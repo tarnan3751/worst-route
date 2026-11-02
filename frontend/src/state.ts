@@ -35,10 +35,12 @@ export interface SnapInfo {
   note: string | null;
 }
 
-/** A stop as clicked (6 decimals), and where it was snapped once a job has said. */
+/** A stop as clicked (6 decimals), the name of the city whose label was clicked (map/cities.ts),
+ * and where it was snapped once a job has said. */
 export interface Stop {
   lat: number;
   lon: number;
+  label?: string;
   snapped: SnapInfo | null;
 }
 

@@ -71,15 +71,16 @@ export interface Finished {
   lengthM: number;
 }
 
-/** The request a drawing makes: the stops (each along the way labelled as Go labels it) and the
+/** The request a drawing makes: the stops (labelled as Go labels them: stopList.ts) and the
  * settings Go sends, as the longest route with no target; the turns and hard mode kept. */
 export function drawRequest(state: Readonly<AppState>): RouteRequest {
   const { settings, stops } = state;
   const { constraints } = modeOf(settings);
   const request: RouteRequest = {
     region: state.region?.region ?? "",
-    stops: stops.map(({ lat, lon }, k) => {
-      const label = stopLabel(k, stops.length);
+    stops: stops.map((stop, k) => {
+      const { lat, lon } = stop;
+      const label = stopLabel(stop, k, stops.length);
       return label === null ? { lat, lon } : { lat, lon, label };
     }),
     objective: "distance",

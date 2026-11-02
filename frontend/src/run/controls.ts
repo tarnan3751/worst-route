@@ -6,15 +6,15 @@
 // route's certificate; once stored, its arrival, the towns and states it passes through, its extra
 // fuel and its share of the roads within reach).
 //
-// Go posts the stops (each stop along the way labelled as its marker is numbered, "Stop 2") and
-// settings (the target, the objective with its item or brand, the turn constraints and hard mode,
-// the worst order when ticked and the seeds when more than one, neither under the alphabet route,
-// `certified` when ticked under the longest, with as bad as possible and none of the turns, hard
-// mode, the worst order or a second seed, the vehicle and the departure, now when none is set,
-// among them) to the region trips run on (the server's pick for the stops, or the one pinned:
-// stops/pick.ts; Go and Reroll wait for it), and
-// Reroll the same without a seed, so the server picks one; the 202's seed goes into the settings,
-// and a seed the user gave stays there once the route is stored, whatever record the store kept.
+// Go posts the stops (a city's by its name, each other stop along the way labelled as its marker
+// is numbered, "Stop 2") and settings (the target, the objective with its item or brand, the turn
+// constraints and hard mode, the worst order when ticked and the seeds when more than one, neither
+// under the alphabet route, `certified` when ticked under the longest, with as bad as possible and
+// none of the turns, hard mode, the worst order or a second seed, the vehicle and the departure,
+// now when none is set, among them) to the region trips run on (the server's pick for the stops,
+// or the one pinned: stops/pick.ts; Go and Reroll wait for it), and Reroll the same without a
+// seed, so the server picks one; the 202's seed goes into the settings, and a seed the user gave
+// stays there once the route is stored, whatever record the store kept.
 // Make it worse posts the shown route as `base_route_id` to the route's own region, with the seed
 // after the last one tried on it (its own at first), the base route giving the stops, tier and
 // leash and its recorded request the objective with its item or brand (a brand's id is its
@@ -107,8 +107,9 @@ function jobRequest(state: Readonly<AppState>, seed: number | null): RouteReques
   const { constraints, ...mode } = modeOf(settings);
   const request: RouteRequest = {
     region: state.region?.region ?? "",
-    stops: stops.map(({ lat, lon }, k) => {
-      const label = stopLabel(k, stops.length);
+    stops: stops.map((stop, k) => {
+      const { lat, lon } = stop;
+      const label = stopLabel(stop, k, stops.length);
       return label === null ? { lat, lon } : { lat, lon, label };
     }),
     ...mode,

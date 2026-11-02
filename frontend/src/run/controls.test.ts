@@ -795,6 +795,36 @@ describe("the vehicle and the stored route's rows", () => {
     });
   });
 
+  it("labels a city's stop with its name whatever its role, the clicked ones as before", async () => {
+    const calls = stubFetch((call) => created(call, "jc"));
+    const s = store();
+    const runner = new JobRunner(s, fakeView(), () => {});
+    s.update({
+      stops: [
+        { lat: 45.523064, lon: -122.676483, label: "Portland", snapped: null },
+        { lat: 45.5195, lon: -122.6625, snapped: null },
+        { lat: 45.498674, lon: -122.431481, label: "Gresham", snapped: null },
+        { lat: 45.4817, lon: -122.6263, snapped: null },
+      ],
+    });
+    await runner.go();
+    const sent = () => (calls.at(-1)!.body as RouteRequest).stops!;
+    expect(sent().map((stop) => stop.label)).toEqual(["Portland", "Stop 2", "Gresham", undefined]);
+    expect(sent()[0]).toEqual({ lat: 45.523064, lon: -122.676483, label: "Portland" });
+    s.update({
+      run: IDLE_RUN,
+      stops: [
+        { lat: 45.5231, lon: -122.6765, snapped: null },
+        { lat: 45.4462, lon: -122.6393, label: "Milwaukie", snapped: null },
+      ],
+    });
+    await runner.reroll();
+    expect(sent()).toEqual([
+      { lat: 45.5231, lon: -122.6765 },
+      { lat: 45.4462, lon: -122.6393, label: "Milwaukie" },
+    ]);
+  });
+
   it("sends the departure set, or now at the browser's offset", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-10-31T16:00:30Z"));

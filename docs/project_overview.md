@@ -897,7 +897,10 @@ brief):
   them from: 99.9 % of the steps' ends on their nodes exactly, the rest a point away, at any length,
   no API change. Each request labels its stops along the way as their markers are numbered
   ("Stop 2"), so the directions say "Arrive at Stop 2; continue", and not the start and the end,
-  which keep the API's "Arrive at your destination" and "Arrive back where you started". The toasts
+  which keep the API's "Arrive at your destination" and "Arrive back where you started". A stop
+  placed on a city's label is labelled with the city's name whatever its role, so the directions
+  name it ("Arrive at Portland; continue", "Arrive at Portland"); the start and the end of clicked
+  stops still go without a label (2026-11-02). The toasts
   sit in a strip under the map, every 4 s, waiting lines and the run's own live ratio in four fixed
   slots during a run, then the document's toasts in order. The vehicle (24 mpg and $3.89 by default,
   5–100 mpg, $0.50–20) is sent with every request, so every route has its fuel; in the URL only when

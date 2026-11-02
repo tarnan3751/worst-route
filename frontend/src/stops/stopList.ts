@@ -2,7 +2,9 @@
 // them, and the list in the panel.
 //
 // The first click is the start, the second the end, and later ones are stops along the way,
-// inserted before the end (`placeStop`, which a place search's pick goes through too). A stop
+// inserted before the end (`placeStop`, which a place search's pick goes through too). A click on
+// a city's label places the stop at the city's point with its name (map/cities.ts), which the
+// list shows and the request sends as the stop's label, until the stop is dragged. A stop
 // keeps its coordinates at 6 decimals (util/geo.ts, round6). An edit forgets where the last job
 // snapped the stops; once a job has run, the list shows each stop's node, how far it moved and
 // the API's note, and when its route visits them in another order than the list's (the worst
@@ -27,17 +29,18 @@ export function roleOf(index: number, count: number): Role {
 
 const forget = (stops: Stop[]): Stop[] => stops.map((stop) => ({ ...stop, snapped: null }));
 
-/** The stops after a click at (lat, lon). */
-export function withStopAdded(stops: Stop[], lat: number, lon: number): Stop[] {
-  const stop: Stop = { lat, lon, snapped: null };
+/** The stops after a click at (lat, lon), on the label of the city `label` names, if any. */
+export function withStopAdded(stops: Stop[], lat: number, lon: number, label?: string): Stop[] {
+  const stop: Stop =
+    label === undefined ? { lat, lon, snapped: null } : { lat, lon, label, snapped: null };
   const kept = forget(stops);
   if (kept.length < 2) return [...kept, stop];
   return [...kept.slice(0, -1), stop, kept[kept.length - 1]];
 }
 
-/** The stops after stop `index` was dragged to (lat, lon). */
+/** The stops after stop `index` was dragged to (lat, lon), where it is no longer its city. */
 export function withStopMoved(stops: Stop[], index: number, lat: number, lon: number): Stop[] {
-  return forget(stops).map((stop, k) => (k === index ? { ...stop, lat, lon } : stop));
+  return forget(stops).map((stop, k) => (k === index ? { lat, lon, snapped: null } : stop));
 }
 
 /** The stops without stop `index`. */
@@ -63,26 +66,30 @@ export function busy(store: Store): boolean {
   return phase === "starting" || phase === "running" || phase === "drawing";
 }
 
-/** Place the next stop at (lat, lon), as a click on the map does, through `edit`; nothing while
- * a job runs. Whether it was placed. */
+/** Place the next stop at (lat, lon), as a click on the map does, through `edit`, labelled with
+ * the name of the city whose label was clicked (`label`); nothing while a job runs. Whether it was
+ * placed. */
 export function placeStop(
   store: Store,
   edit: (stops: Stop[]) => void,
   lat: number,
   lon: number,
+  label?: string,
 ): boolean {
   if (busy(store)) return false;
-  edit(withStopAdded(store.state.stops, round6(lat), round6(lon)));
+  edit(withStopAdded(store.state.stops, round6(lat), round6(lon), label));
   return true;
 }
 
 const ROLE_NAMES: Record<Role, string> = { start: "Start", via: "Stop", end: "End" };
 
-/** The request's label for stop `index`: a stop along the way named as its marker numbers it,
- * "Stop 2", which the directions say ("Arrive at Stop 2; continue"); none for the start and the
- * end, whose words are the API's own ("Arrive at your destination", "Arrive back where you
- * started"). */
-export function stopLabel(index: number, count: number): string | null {
+/** The request's label for `stop`, at `index` of `count`: its city's name whatever its role, which
+ * the directions say ("Arrive at Portland; continue", "Arrive at Portland"); else a stop along the
+ * way named as its marker numbers it, "Stop 2" ("Arrive at Stop 2; continue"), and none for the
+ * start and the end, whose words are then the API's own ("Arrive at your destination", "Arrive
+ * back where you started"). */
+export function stopLabel(stop: Stop, index: number, count: number): string | null {
+  if (stop.label !== undefined) return stop.label;
   return roleOf(index, count) === "via" ? `${ROLE_NAMES.via} ${index + 1}` : null;
 }
 
@@ -148,7 +155,9 @@ export function mountStopList(
         const title = el("div", "title");
         title.append(el("span", "", ROLE_NAMES[role]), remove);
         const body = el("div", "body");
-        body.append(title, el("div", "coords", formatLatLon(stop.lat, stop.lon)));
+        body.append(title);
+        if (stop.label !== undefined) body.append(el("div", "city", stop.label));
+        body.append(el("div", "coords", formatLatLon(stop.lat, stop.lon)));
         const snapped = snapLine(stop, state.settings.units);
         if (snapped) body.append(el("div", "snap", snapped));
         const visited = visitLine(stop, k, order);

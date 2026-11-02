@@ -6,7 +6,8 @@
 // picked from its stops (RegionPicker); a stored route when the URL names one, or today's once it
 // is done for `?daily` (unless a run of the user's own has started first), the URL left alone
 // until then, or else the challenge `?challenge=` names set up once the regions are known;
-// clicks on the map and a place search's picks add stops, the same way (placeStop), but in
+// clicks on the map and a place search's picks add stops, the same way (placeStop), a click on a
+// city's label the city's point with its name (map/cities.ts), but in
 // drawing mode, where a click takes the move nearest it (draw/drawing.ts), Backspace takes the last
 // one back and Esc leaves; changing the stops forgets a drawing; leaving the page cancels a running
 // job, and a drawing's par.
@@ -26,6 +27,7 @@ import { DirectionsPanel, mountDirections } from "./directions/panel";
 import { Drawing } from "./draw/drawing";
 import { mountDraw } from "./draw/panel";
 import { Basemap } from "./map/basemap";
+import { CITY_LAYERS, cityAt } from "./map/cities";
 import { DrawLayer, paintDrawing } from "./map/drawLayer";
 import { createMap, fitTo } from "./map/map";
 import { RouteLayer, paintRoute } from "./map/routeLayer";
@@ -66,6 +68,7 @@ let drawLayer: DrawLayer | null = null;
 let runner: JobRunner | null = null;
 let drawing: Drawing | null = null;
 let basemap: Basemap | null = null;
+let cities: readonly string[] = []; // the layers drawing cities' labels, once /config has answered
 let theme!: Theme; // the theme shown, from followTheme's first call below
 let ready: (runner: JobRunner) => void = () => undefined;
 const loaded = new Promise<JobRunner>((resolve) => (ready = resolve)); // the runner, on the map
@@ -133,7 +136,9 @@ map.on("click", (event) => {
     if (move) void drawing.take(move.edge);
     return;
   }
-  place(event.lngLat.lat, event.lngLat.lng);
+  const city = cityAt(map, event.point, cities);
+  if (city) placeStop(store, edit, city.lat, city.lon, city.name);
+  else place(event.lngLat.lat, event.lngLat.lng);
 });
 
 addEventListener("keydown", (event) => {
@@ -173,6 +178,7 @@ map.once("load", () => {
   }
   config
     .then(async (answer) => {
+      cities = CITY_LAYERS[answer.basemap.kind];
       basemap = new Basemap(map, answer.basemap, location.origin + API_BASE);
       await basemap.show(theme.basemap);
     })

@@ -122,6 +122,24 @@ describe("a route drawn by hand", () => {
     });
   });
 
+  it("labels a city's stop with its name whatever its role, as Go does", () => {
+    const store = storeWith();
+    const [start, end] = store.state.stops;
+    const via = { lat: 45.52024, lon: -122.674198, snapped: null };
+    store.update({ stops: [{ ...start, label: "Portland" }, via, end] });
+    expect(drawRequest(store.state).stops).toEqual([
+      { lat: 45.5231, lon: -122.6765, label: "Portland" },
+      { lat: 45.52024, lon: -122.674198, label: "Stop 2" },
+      { lat: 45.5189, lon: -122.6793 },
+    ]);
+    store.update({ stops: [start, { ...via, label: "Portland" }, { ...end, label: "Gresham" }] });
+    expect(drawRequest(store.state).stops).toEqual([
+      { lat: 45.5231, lon: -122.6765 },
+      { lat: 45.52024, lon: -122.674198, label: "Portland" },
+      { lat: 45.5189, lon: -122.6793, label: "Gresham" },
+    ]);
+  });
+
   it("starts at the start, locks the run like a job, and plans the par aiming at 10×", async () => {
     const { store, calls, sources, shown, hooks, drawing } = setup();
     await drawing.start();

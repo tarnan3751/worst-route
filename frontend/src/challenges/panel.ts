@@ -10,9 +10,10 @@
 // Today's route made worse opens today's route instead, for Make it worse, and another day's is
 // refused. The challenge stays set up (the store's `challenge`, which the link carries as
 // `?challenge=`) while what it set is the store's, and today's route made worse while its route is
-// shown. Under the list, how many challenges are done, all days', and "Reset badges", which forgets
-// them. The section collapses once a run or a drawing of the user's own starts, and "Challenges" in
-// the header shows it again.
+// shown. A row says "Done" once its challenge is, else how the route shown or the run going stands
+// against its bar while that is its trip (progress.ts, `progressLine`). Under the list, how many
+// challenges are done, all days', and "Reset badges", which forgets them. The section collapses
+// once a run or a drawing of the user's own starts, and "Challenges" in the header shows it again.
 //
 // `ChallengePanel` holds the logic and no DOM, so the tests drive it (panel.test.ts);
 // `mountChallenges` draws it.
@@ -26,7 +27,7 @@ import { busy } from "../stops/stopList";
 import { el } from "../util/dom";
 import { lineBounds, round6, type Bounds } from "../util/geo";
 import { challengesOf, dateOf, type Challenge } from "./list";
-import type { ChallengeProgress } from "./progress";
+import { progressLine, type ChallengeProgress } from "./progress";
 
 /** What setting a challenge up asks of the rest of the app: to change the stops as an edit does
  * (forgetting the route shown and a drawing), to open a stored route as a link does, and to fit the
@@ -365,10 +366,12 @@ export function mountChallenges(
     count.hidden = done === 0;
     reset.hidden = done === 0;
     const refusals = listed.map((challenge) => panel.refusal(challenge));
+    const standings = listed.map((c) => progressLine(c, state, c.id in progress.done));
     const key = JSON.stringify([
       listed.map(({ id }) => id),
       progress.done,
       refusals,
+      standings,
       state.challenge,
     ]);
     if (key === shown) return;
@@ -385,6 +388,8 @@ export function mountChallenges(
           body.append(el("p", "hint", `From ${formatDay(challenge.date)}`));
         }
         body.append(el("strong", "", challenge.title), el("p", "hint", challenge.blurb));
+        const standing = standings[k];
+        if (standing !== null) body.append(el("p", "challenge-progress", standing));
         if (current) body.append(el("p", "challenge-next", setUpLine(challenge)));
         const button = el("button", "", "Set it up");
         button.type = "button";
@@ -401,5 +406,5 @@ export function mountChallenges(
   };
   panel.addEventListener("change", render);
   progress.addEventListener("change", render);
-  store.watch(["run", "challenge"], render);
+  store.watch(["run", "route", "region", "stops", "brands", "challenge"], render);
 }

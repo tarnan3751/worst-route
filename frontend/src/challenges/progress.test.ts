@@ -5,17 +5,19 @@
 // challenge's trip (the stops within 500 m, the worst order's in any order between); today's route
 // made worse only on today's challenge; and the completions kept in a stand-in storage (once each,
 // graded again when the list comes, past days' kept, the fixed list's of old dropped, reset, junk
-// ignored, a throwing storage survived), with the toast's line.
+// ignored, a throwing storage survived), with the toast's line; and the standing a row shows for
+// each goal kind, of the route shown or the run going.
 import { describe, expect, it } from "vitest";
 import { ANSWER } from "../__fixtures__/challenges";
 import { loadStream } from "../__fixtures__/stream";
 import type { BrandEntry, Daily, RouteDocument, RouteRequest } from "../api/types";
-import { DEFAULT_SETTINGS, IDLE_RUN, Store } from "../state";
+import { DEFAULT_SETTINGS, IDLE_RUN, Store, type AppState, type RunView } from "../state";
 import { challengesOf, type Challenge } from "./list";
 import {
   ChallengeProgress,
   STORAGE_KEY,
   completedLine,
+  progressLine,
   reached,
   sameTrip,
   tripOf,
@@ -336,5 +338,108 @@ describe("the completions", () => {
       progress.reset();
       expect(progress.done).toEqual({});
     }
+  });
+});
+
+/** `c` visiting Starbucks, as the brand recording does, `min_visits` of them. */
+const starbucks = (min_visits: number): Challenge => {
+  const pilgrimage = challenge("pilgrimage");
+  const brand = { id: 1, name: "Starbucks", wikidata: "Q37158" };
+  return {
+    ...pilgrimage,
+    setup: { ...pilgrimage.setup!, brand },
+    goal: { kind: "brand", min_visits },
+  };
+};
+
+const STRICT = { no_left: true, no_right: false, strict: true };
+const HARD = { no_left: false, no_right: false, strict: false, hard: true };
+
+describe("the standing on a challenge's row", () => {
+  const shown = (route: RouteDocument | null, run: Partial<RunView> = {}): Readonly<AppState> => ({
+    ...storeWith().state,
+    route,
+    run: { ...IDLE_RUN, ...run },
+  });
+  const line = (c: Challenge, route: RouteDocument) => progressLine(c, shown(route), false);
+
+  it("says Done once the challenge is, whatever is shown", () => {
+    expect(progressLine(challenge("long-way"), shown(null), true)).toBe("Done");
+    expect(progressLine(challenge("daily-worse"), shown(max), true)).toBe("Done");
+  });
+
+  it("stands a ratio against its bar, the ratio so far to the tenth below", () => {
+    const long = challenge("long-way"); // at 16×
+    expect(line(long, on(long, max, {}, { ratio: 12.34 }))).toBe("12.3× so far · needs 16×");
+    expect(line(long, on(long, max, {}, { ratio: 15.99 }))).toBe("15.9× so far · needs 16×");
+    const order = challenge("worst-order"); // at 5.5×
+    expect(line(order, on(order, max, { reorder: true }, { ratio: 4.2 }))).toBe(
+      "4.2× so far · needs 5.5×",
+    );
+  });
+
+  it("stands a drive time, items and a brand's visits against theirs", () => {
+    const slow = loadStream("portland-time-stream").route; // 6.1 h with its delays
+    const hours = aiming(challenge("slow-way"), { kind: "duration", min_s: 50 * 3600 });
+    expect(line(hours, on(hours, slow))).toBe("6 h of 50 h");
+    const bridges = challenge("bridges"); // 20
+    expect(line(bridges, on(bridges, collect))).toBe("18 of 20 bridges");
+    const tolls = aiming(bridges, { kind: "items", item: "toll_booth", min: 600 });
+    const tollRoute = on(bridges, collect, { item: "toll_booth" });
+    expect(line({ ...tolls, setup: { ...tolls.setup!, item: "toll_booth" } }, tollRoute)).toBe(
+      `${collect.metrics.items!.toll_booth} of 600 toll booths`,
+    );
+    expect(line(starbucks(19), on(starbucks(19), brand))).toBe("14 of 19 Starbucks");
+  });
+
+  it("stands no left turns under strict no-left only, and hard mode under hard mode only", () => {
+    const right = challenge("no-left"); // at 1.4×
+    const turns = { ...turning.metrics.turns!, left: 0 };
+    const strict = on(right, turning, { constraints: STRICT }, { turns, ratio: 1.34 });
+    expect(line(right, strict)).toBe("no lefts · 1.3× of 1.4×");
+    const soft = on(right, turning, { constraints: { ...STRICT, strict: false } }, { ratio: 1.3 });
+    expect(line(right, soft)).toBeNull();
+    expect(line(right, on(right, turning, {}, { ratio: 1.3 }))).toBeNull();
+    const hard = aiming(challenge("hard-mode"), { kind: "hard", min_ratio: 2 });
+    expect(line(hard, on(hard, max, { constraints: HARD }, { ratio: 1.6 }))).toBe(
+      "hard mode · 1.6× of 2×",
+    );
+    expect(line(hard, on(hard, max, {}, { ratio: 1.6 }))).toBeNull();
+  });
+
+  it("says nothing off the challenge's trip, nor for today's route made worse", () => {
+    const long = challenge("long-way");
+    expect(line(long, max)).toBeNull(); // Portland's stops
+    expect(line(long, on(long, max, { objective: "time" }))).toBeNull();
+    expect(progressLine(long, shown(null), false)).toBeNull();
+    const worse = challenge("daily-worse");
+    const today = on(worse, max, { stops: [], base_route_id: TODAY.route_id }, { ratio: 6.0 });
+    expect(line(worse, today)).toBeNull();
+  });
+
+  it("follows the run going, once it has numbers, on the challenge's trip", () => {
+    const bridges = challenge("bridges");
+    const stops = bridges.setup!.stops.map(({ lat, lon }) => ({ lat, lon, snapped: null }));
+    const items = { ...collect.metrics.items!, bridge: 7 };
+    const metrics = { length_m: 9e4, time_s: 5e3, ratio: 3.2, items };
+    const mode = { objective: "collect" as const, item: "bridge" as const };
+    const going = (run: Partial<RunView>) => ({ ...shown(null, run), stops });
+    expect(progressLine(bridges, going({ phase: "running", mode, metrics }), false)).toBe(
+      "7 of 20 bridges",
+    );
+    // no numbers yet, or the run not started
+    expect(progressLine(bridges, going({ phase: "running", mode }), false)).toBeNull();
+    expect(progressLine(bridges, going({ phase: "starting", mode, metrics }), false)).toBeNull();
+    const roundabouts = { ...mode, item: "roundabout" as const };
+    expect(
+      progressLine(bridges, going({ phase: "running", mode: roundabouts, metrics }), false),
+    ).toBeNull();
+    const pilgrimage = starbucks(19);
+    const visiting = {
+      phase: "running" as const,
+      mode: { objective: "brand" as const, brand: 229 },
+      metrics: { ...metrics, brand: { id: 229, name: "Starbucks", visits: 8, of: 19 } },
+    };
+    expect(progressLine(pilgrimage, going(visiting), false)).toBe("8 of 19 Starbucks");
   });
 });

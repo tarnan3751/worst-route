@@ -9,16 +9,19 @@
 // as the fixed list's of old, is not counted and goes at the next write); every read and write
 // may fail (a private window, storage blocked), so the page works without it and the badges then
 // last as long as the page; "completed" says which, for its toast (`completedLine`). `reset`
-// forgets them all. No DOM, so the tests drive it.
+// forgets them all. While the route shown or the run going is a challenge's trip, the challenge's
+// row says how it stands against the bar (`progressLine`). No DOM, so the tests drive it.
 import type {
   BrandEntry,
   BrandVisits,
   ChallengeBrand,
   ChallengeGoal,
+  Constraints,
   Daily,
+  DocumentMetrics,
   RouteDocument,
 } from "../api/types";
-import { isoWithOffset } from "../format";
+import { formatCount, formatItems, formatRatio, isoWithOffset } from "../format";
 import type { AppState, Store } from "../state";
 import { dateOf, type Challenge } from "./list";
 
@@ -160,6 +163,82 @@ export function reached(goal: ChallengeGoal, route: RouteDocument, today: Daily 
 /** The toast a challenge completed shows. */
 export function completedLine(challenge: Challenge): string {
   return `Challenge done. ${challenge.title}.`;
+}
+
+/** A route's numbers as a challenge's standing reads them: a stored route's, or a run's so far. */
+type Seen = Pick<DocumentMetrics, "ratio" | "time_s" | "delay_s" | "items" | "brand">;
+
+const compact = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
+
+/** A bar's ratio, as the titles write it: `15×`, `1.4×`. */
+const barRatio = (ratio: number): string => `${compact.format(ratio)}×`;
+
+/** A ratio so far, to the tenth below, so it never reads as a bar it has not reached. */
+const ratioSoFar = (ratio: number): string => formatRatio(Math.floor(ratio * 10 + 1e-9) / 10);
+
+/** Whole hours driven with the delays, the hour below. */
+const hoursOf = ({ time_s, delay_s }: Seen): string =>
+  formatCount(Math.floor((time_s + (delay_s ?? 0)) / 3600));
+
+/** The route shown, or the run going once it has numbers, as a challenge sees it: its trip, its
+ * numbers and its constraints; null for neither. */
+function shownOf(
+  state: Readonly<AppState>,
+): { trip: Trip; seen: Seen; constraints: Constraints } | null {
+  const { route, run, region } = state;
+  if (route !== null) {
+    const constraints = route.request.constraints ?? {};
+    return { trip: tripOf(route, state), seen: route.metrics, constraints };
+  }
+  if (run.phase !== "running" || run.metrics === null || region === null) return null;
+  const trip: Trip = {
+    region: region.region,
+    objective: run.mode.objective ?? "distance",
+    item: run.mode.item ?? null,
+    brand: brandSeen(run.metrics.brand ?? null, region.region, state),
+    reorder: run.reorder,
+    stops: state.stops,
+  };
+  return { trip, seen: run.metrics, constraints: run.mode.constraints ?? {} };
+}
+
+/** What `challenge`'s row says of its standing: "Done" once `done`; else, while the route shown
+ * (or the run going) is its trip, how it stands against the bar ("12.3× so far · needs 15×",
+ * "41 h of 50 h", "412 of 600 bridges", "7 of 11 Dollar General", "no lefts · 1.3× of 1.4×",
+ * "hard mode · 1.6× of 2×"), no left turns only under strict no-left and hard mode's only under
+ * hard mode, as nothing else can reach them; else null, and always for today's route made worse,
+ * whose bar is the route a run continues. */
+export function progressLine(
+  challenge: Challenge,
+  state: Readonly<AppState>,
+  done: boolean,
+): string | null {
+  if (done) return "Done";
+  const shown = shownOf(state);
+  if (challenge.setup === null || shown === null || !sameTrip(challenge, shown.trip)) return null;
+  const { seen, constraints } = shown;
+  const { goal } = challenge;
+  const ratio = ratioSoFar(seen.ratio ?? 0);
+  switch (goal.kind) {
+    case "ratio":
+      return `${ratio} so far · needs ${barRatio(goal.min)}`;
+    case "duration":
+      return `${hoursOf(seen)} h of ${formatCount(goal.min_s / 3600)} h`;
+    case "items":
+      return `${formatCount(seen.items?.[goal.item] ?? 0)} of ${formatItems(goal.min, goal.item)}`;
+    case "brand": {
+      const brand = challenge.setup.brand; // a pilgrimage's, whose trip has it
+      const visits = formatCount(seen.brand?.visits ?? 0);
+      return brand && `${visits} of ${formatCount(goal.min_visits)} ${brand.name}`;
+    }
+    case "no_left":
+      if (!constraints.no_left || !constraints.strict) return null;
+      return `no lefts · ${ratio} of ${barRatio(goal.min_ratio)}`;
+    case "hard":
+      return constraints.hard ? `hard mode · ${ratio} of ${barRatio(goal.min_ratio)}` : null;
+    case "daily_worse":
+      return null;
+  }
 }
 
 /** Which challenges are done, each with the day it was (YYYY-MM-DD, the browser's): "change" when

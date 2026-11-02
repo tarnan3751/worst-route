@@ -227,6 +227,13 @@ body {
   border-color: var(--start);
 }
 
+.challenge-progress {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 .challenge-next {
   margin: 4px 0 0;
   font-size: 12px;

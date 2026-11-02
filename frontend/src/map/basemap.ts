@@ -91,7 +91,11 @@ export function basemapParts(
   }
   const labelled = basemap.glyphs !== null && basemap.sprite !== null;
   const named = namedFlavor(variant);
-  const flavor = variant === SPRITE_FLAVOR ? named : { ...named, pois: undefined };
+  // The file is cut to the contiguous US, so past its tiles only the background shows: the
+  // flavor's water colour, so the sea beyond the edge stays sea (in the light flavor the flavor's
+  // own background is a grey). Land past the tiles (Baja, Vancouver Island) reads as sea too.
+  const seaBackground = { ...named, background: named.water };
+  const flavor = variant === SPRITE_FLAVOR ? seaBackground : { ...seaBackground, pois: undefined };
   const source: SourceSpecification = {
     type: "vector",
     url: `pmtiles://${apiRoot}${basemap.tiles}`,

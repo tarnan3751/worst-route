@@ -96,6 +96,12 @@ describe("basemapParts", () => {
     expect(parts.layers.length).toBeGreaterThan(40);
     expect(parts.layers.filter((l) => l.type === "symbol")).toEqual([]);
     expect(parts.layers[0]).toMatchObject({ id: "background", type: "background" });
+    for (const variant of ["grayscale", "light", "dark"] as const) {
+      const background = basemapParts(VECTOR, ROOT, null, variant).layers[0];
+      expect(background).toMatchObject({
+        paint: { "background-color": namedFlavor(variant).water },
+      }); // past the file's tiles the sea stays sea
+    }
     for (const layer of parts.layers.slice(1)) {
       expect(layer).toMatchObject({ source: "protomaps" });
     }
@@ -153,7 +159,7 @@ describe("the basemap's variants", () => {
       const parts = basemapParts(LABELLED, ROOT, null, variant);
       expect(parts.layers[0]).toMatchObject({
         id: "background",
-        paint: { "background-color": namedFlavor(variant).background },
+        paint: { "background-color": namedFlavor(variant).water }, // the sea past the tiles
       });
       expect(parts.layers.map((l) => l.id)).not.toContain("pois");
       expect(parts.sprite).toBe("http://test/api/basemap/sprites/grayscale");

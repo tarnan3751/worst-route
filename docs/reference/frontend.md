@@ -746,7 +746,8 @@ console) and the basemap as it is. The border effects (**Limitations**): the out
 from the borders and the coast, so a strip of Canada and Mexico along the border is drawn as the
 basemap has it (Windsor across from Detroit, Tijuana's edge, the towns facing the Great Lakes' US
 shore); islands the Census outline lacks (the Farallon Islands off San Francisco) take the outside
-tone; where a `pmtiles` file has no tiles, land and sea alike show its background, as before; the
+tone; where a `pmtiles` file has no tiles, land and sea alike show the background, painted the
+flavor's water colour so the sea past the edge stays sea; the
 roads, the boundaries, the road names and the shields outside the outline are drawn over the flat
 tone; and OpenFreeMap's Positron draws some land cover after its water (residential areas, woods,
 buildings), which shows over the flat tone outside.
@@ -1369,8 +1370,8 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
   go unnamed. Islands the Census outline lacks, beyond the margin, take the outside tone (the
   Farallon Islands off San Francisco). On the `pmtiles` basemap the light and dark flavors' land
   cover is under the flat tone, the US's too, so below zoom 7 the states show the flavor's plain
-  land colour; and past the file's tiles land and sea show its background (in the light flavor a
-  grey where the sea should be).
+  land colour; and past the file's tiles land and sea alike show the background, which is the
+  flavor's water colour, so Baja and Vancouver Island's far side read as sea.
 - **A city's name is kept only until the page reloads**: the URL keeps the stops' coordinates
   alone, so a reload, a link or a stored route opened lists a city's stop by its coordinates
   (a stored route's request and directions keep the name it was sent with).

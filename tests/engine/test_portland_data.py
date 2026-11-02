@@ -110,7 +110,8 @@ def test_strict_no_right_refuses_powells_to_reed_in_one_line(portland: GraphData
     with pytest.raises(InfeasibleTurnConstraint) as refused:
         plan_route(portland, request)
     message = str(refused.value)
-    assert "\n" not in message and message.endswith("under the strict no-right constraint")
+    assert "\n" not in message and "with no right turns" in message
+    assert message.endswith("after moving stop 2 up to 10 times.")
     assert refused.value.constraint == "no_right"
 
 

@@ -1312,11 +1312,14 @@ one file, a national extract, may serve every build.
 than the server's workers, so a server with one worker runs no portfolio); an auto leash on a trip of more than 750 km is longer than `leash_max_km`.
 `basemap.kind` is `raster`, `openfreemap` or `pmtiles`; with `raster` the other four are null,
 and with `openfreemap` all but `style`, the style's URL
-(`https://tiles.openfreemap.org/styles/positron`), which the frontend fetches. With `pmtiles`,
+(`https://tiles.openfreemap.org/styles/positron`), which the frontend fetches (under a theme
+with dark tiles, the same URL with `dark` for `positron`: `docs/reference/frontend.md`,
+**Themes**). With `pmtiles`,
 `style` is null and `tiles` is the file's path; `glyphs` (a MapLibre template of the labels'
 fonts) is given when the basemap's directory (`basemap_api.basemap_dir`: `<data>/basemap/`, or
 `ApiSettings.basemap_dir`) holds `fonts/`, and `sprite` (the base of the icons' files, of
-Protomaps' grayscale flavor, the one the frontend draws: `basemap_api.SPRITE`) when it holds
+Protomaps' grayscale flavor, the one the classic and studio themes draw, whose icons the light
+and dark flavors use too: `basemap_api.SPRITE`) when it holds
 `sprites/grayscale.json`, both from `tools/fetch_basemap.sh --assets`; null,
 the frontend draws the basemap without labels. Every path is the API's own: the frontend reaches
 it under `/api`.

@@ -165,7 +165,8 @@ compiles once.
 ## The basemap
 
 The map draws OpenFreeMap's vector tiles online (`WORST_ROUTE_BASEMAP=openfreemap`,
-`docs/reference/api.md`, **Basemap**; its Positron style, no key, no limits, attribution to
+`docs/reference/api.md`, **Basemap**; its Positron style, or its Dark under a theme with dark
+tiles, no key, no limits, attribution to
 OpenMapTiles and OpenStreetMap) until the app's own basemap is there: a Protomaps extract of the
 contiguous US to zoom 11 (the CONUS polygon, `tools/desktop_data.py conus`), a release asset the
 app fetches on its first start, in the background, into the user's `basemap/`

@@ -312,11 +312,14 @@ the search off, and `--nominatim-url` points the proxy at a self-hosted Nominati
   `THIRD-PARTY-LICENSES.txt`).
   It is the "(more)" the Protomaps maintainer suggests for the credits the attribution control
   has no room for.
-- **The land cover is not drawn**: `@protomaps/basemaps` 5.7's grayscale flavor has no
-  `landcover` colours, and its layers (with or without labels) read only the `earth`,
-  `landuse`, `roads`, `water`, `buildings`, `boundaries` and (with labels) `places` layers of the
-  tiles, never `landcover` (the light flavor draws it). ESA WorldCover's CC BY 4.0 credit is due
-  only where it is drawn; the notices page credits it anyway, since the tiles we serve carry it.
+- **The land cover is drawn by the light and dark flavors only**: `@protomaps/basemaps` 5.7's
+  grayscale flavor (the classic and studio themes', studio the default) has no `landcover`
+  colours, and its layers (with or without labels) read only the `earth`, `landuse`, `roads`,
+  `water`, `buildings`, `boundaries` and (with labels) `places` layers of the tiles, never
+  `landcover`; the light and dark flavors, a theme's whose tiles are light or dark, draw it
+  (`docs/reference/frontend.md`, **Themes**). ESA
+  WorldCover's CC BY 4.0 credit is due where it is drawn, and the notices page, linked from the
+  footer as "Data sources", carries it.
 - **On the share image**, its footer: "worst-route · © OpenStreetMap contributors (ODbL) ·
   Boundaries: U.S. Census Bureau" (`docs/reference/presentation.md`, **Share image**).
 - **Beside the assets**, the licences `--assets` copies: the fonts' SIL Open Font License

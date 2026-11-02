@@ -12,20 +12,25 @@ nothing there.
 
 | Module | What it holds |
 |---|---|
-| `main.ts` | bootstrap and wiring: the store from the URL's state, the panel's parts (today's route and the challenges among them), the served regions (`GET /regions`) and the map fitted to all their bboxes, the build each trip runs on (`RegionPicker`), the basemap the server names (`GET /config`), a stored route when the URL names one (or today's, for `?daily`; or else the challenge `?challenge=` names set up), the challenges graded on every route shown and every drawing's verdict, a toast for each one completed, clicks on the map, the cancel on `pagehide` |
+| `main.ts` | bootstrap and wiring: the store from the URL's state, the panel's parts (today's route and the challenges among them), the served regions (`GET /regions`) and the map fitted to all their bboxes, the build each trip runs on (`RegionPicker`), the basemap the server names (`GET /config`), a stored route when the URL names one (or today's, for `?daily`; or else the challenge `?challenge=` names set up), the challenges graded on every route shown and every drawing's verdict, a toast for each one completed, clicks on the map, the cancel on `pagehide`; the theme the settings name, on the page, the map's layers and the basemap (**Themes**) |
 | `state.ts` | `Store`, the app's state on an `EventTarget`; `Settings`, `Stop`, `RunView`, `targetOf`, `takesTarget` (the targets a mode takes), `certifies` (whether the settings ask for a certified route), `modeOf` (the request's objective, item, brand and constraints), `vehicleOf`, `departureOf`; the API's limits (tiers, budget, leash, targets), the vehicle's, and the modes and items it plans |
 | `api/types.ts` | the API's shapes, written by hand from `api.md` |
 | `api/client.ts` | the fetch wrappers (`getConfig`, `pickRegion`, `getBrands`, `geocode` and `getDaily` among them), `ApiError`, `errorBody`, `subscribe` (a job's events over `EventSource`) |
-| `map/basemap.ts` | `basemapParts` (the basemap `/config` names, as sources and layers), `fetchStyle` (OpenFreeMap's style), `addBasemap`, `EMPTY_STYLE` (**Basemap**) |
+| `map/basemap.ts` | `basemapParts` (the basemap `/config` names, as sources and layers, in a variant), `styleUrl` (OpenFreeMap's style for a variant), `fetchStyle` (OpenFreeMap's style), `addBasemap`, `Basemap` (the basemap drawn, its variant changed in place), `EMPTY_STYLE` (**Basemap**, **Themes**) |
 | `map/map.ts` | the MapLibre map, its controls, MapLibre's worker and the `pmtiles://` protocol, `fitTo` |
 | `map/bounds.ts` | `US_BOUNDS`, the box around the contiguous US the map's camera is held to; `fitZoom`, the zoom with the whole box in view; `holdToUs`, a camera held to the box (**Stops**) |
-| `map/routeLayer.ts` | `spliceLine` and `RouteLayer`: the baseline, the growing route, the flash (**Live growth**), and the highlight of a step of the directions |
+| `map/routeLayer.ts` | `spliceLine` and `RouteLayer`: the baseline, the growing route, the flash (**Live growth**), and the highlight of a step of the directions; `paintRoute`, their colours and widths from the theme (**Themes**) |
 | `map/stopsLayer.ts` | the stop markers and the snapped-position ghosts |
-| `map/drawLayer.ts` | `DrawLayer`: a route drawn by hand, its next moves, their names on hover, the move a click takes (**Drawing**) |
+| `map/drawLayer.ts` | `DrawLayer`: a route drawn by hand, its next moves, their names on hover, the move a click takes (**Drawing**); `paintDrawing`, their colours from the theme |
 | `stops/stopList.ts` | how a click, a drag or a removal changes the stops (`placeStop`: a click's, and a place search's pick); `stopErrored`, the stops an error names; `busy`, whether a job or a drawing locks them; the list in the panel |
 | `stops/pick.ts` | `RegionPicker` (the build a trip runs on, asked of `POST /regions/pick` as the stops change, no DOM), `pickLine` (the stop list's header), `regionLabel`, `regionName`, `roadsOf` (**Stops**) |
 | `stops/search.ts` | `PlaceSearch` (the place search, no DOM, so the tests drive it), `searchRegion` (the region it asks in) and `mountPlaceSearch`, its field, button and results |
 | `settings/panel.ts` | the request's settings (the region pinned, the mode with its item or brand, the turns, hard mode, the worst order and Certified, the vehicle and the departure among them; `regionOptions`, the region picker's; `loadBrands` and `brandOptions`, the brand picker's), the row an error's `field` names, and the units |
+| `settings/themeRow.ts` | the settings' Theme row, `themeOptions` (**Themes**) |
+| `theme/theme.ts` | `Theme` and its parts (`ThemeColors`, `ThemeFonts`, `ThemeShape`), `ThemeId`, `Scheme`, `BasemapVariant` (**Themes**) |
+| `theme/presets/` | one `Theme` a file (`classic.ts`, `studio.ts`), and `THEMES` (`index.ts`), the settings' order |
+| `theme/apply.ts` | `themeProperties` (a theme as CSS custom properties) and `applyTheme` (on `<html>`, its fonts loaded) |
+| `theme/resolve.ts` | `DEFAULT_THEME`, `resolveTheme` (a setting, `auto` by the system's scheme), `storedTheme` and `followTheme` (the setting kept in the browser's storage, followed as it or the scheme changes) |
 | `run/controls.ts` | `JobRunner`, a job's lifecycle (no DOM, so the tests drive it), and the retries without strict and without hard mode; `mountRunControls`, Go, Cancel, Reroll, Make it worse, Draw it and the stat line; `statLines`, `countsTitle` and `routeLines`, its rows; `awaitingBrand`, which holds the buttons under Brand until the brands are known, and `worseRefused`, which turns Make it worse off for an alphabet route and a certified one |
 | `directions/panel.ts` | `StepLocator` (where the steps lie along the route's geometry), `stepRows`, `DirectionsPanel` (the list's rows, a hover's highlight and a click's pan, no DOM) and `mountDirections` (**Directions**) |
 | `toasts.ts` | `Toasts`, the rotation and the notices shown once each (`notify`; no DOM), and `mountToasts`, the strip under the map (**Toasts**) |
@@ -77,7 +82,10 @@ desktop app does in its window (`docs/reference/desktop.md`). The bundle is abou
 is most of it), 330 kB gzipped, and MapLibre's worker a module of its own, 0.5 MB, in
 `dist/assets/`: MapLibre 6 looks for its worker beside its own module, which a bundle (or Vite's
 pre-bundled dependencies in the dev server) does not keep, so `map.ts` imports it as an asset
-(`maplibre-gl/dist/maplibre-gl-worker.mjs?url`) and names it with `setWorkerUrl`.
+(`maplibre-gl/dist/maplibre-gl-worker.mjs?url`) and names it with `setWorkerUrl`. A theme's
+fonts (fontsource packages, SIL OFL 1.1) are CSS chunks of their own and their `woff2` and `woff`
+files in `dist/assets/` too, imported only when the theme is chosen (**Themes**): the first load
+carries none, and no font is fetched from anywhere but the app's own origin.
 
 ## Using it
 
@@ -173,8 +181,8 @@ pre-bundled dependencies in the dev server) does not keep, so `map.ts` imports i
   to show (the desktop app's basemap is cut to it), so the box is a constant, not the served
   regions' extent. The first click sets the
   start, the second the end; later clicks add stops along the
-  way, inserted before the end. A marker is numbered and coloured by its role (start green, via
-  blue, end red) and dragged to move; the list shows each stop's coordinates and a remove button.
+  way, inserted before the end. A marker is numbered and coloured by its role (the theme's start,
+  via and end colours: green, blue and red under classic) and dragged to move; the list shows each stop's coordinates and a remove button.
   A stop keeps its coordinates at 6 decimals, so the request and the link that reproduces it
   carry the same numbers. **Searching for a place** is the other way to place a stop: a field
   and a Search button under the list's heading. Nothing is asked while typing (Nominatim's
@@ -237,7 +245,8 @@ pre-bundled dependencies in the dev server) does not keep, so `map.ts` imports i
   most 7 days; typing a number picks its kind, and each kind keeps its number while another is
   picked. A ratio target for a round trip is the API's `INVALID_REQUEST` (`field: "target"`),
   in the banner. The units (miles, kilometres) change what the panel shows; the API's numbers
-  are metric.
+  are metric. Last, the Theme row: "Auto (studio by day, night by night)", the default, then each
+  theme by its name, never locked, the browser's to keep (**Themes**).
 - **Vehicle.** Two numbers under the target: miles per gallon (24 by default, 5–100) and the gas
   price in dollars a gallon (3.89 by default, 0.50–20); a value outside them is put back. Every
   request carries them as its `vehicle` (`{mpg, gas_price_usd}`), so every stored route has its
@@ -346,9 +355,10 @@ pre-bundled dependencies in the dev server) does not keep, so `map.ts` imports i
   run is `drawing` (the stops, the settings, Go, Reroll and Make it worse locked as while a job
   runs, the stat line "Drawing by hand: click a highlighted road to take it."), today's route
   collapses, and the server's first answer (`POST /draw`, no edge yet) puts where the stops snapped
-  in the list and on the map. The map then shows the drawing (`wr-drawn`, violet over a white
-  casing), the node it is at (`wr-at`) and the legal next moves (`wr-choices`: each move's whole
-  edge, green and dashed, a dot where it leads); hovering one names it in a popup, "Northwest Couch
+  in the list and on the map. The map then shows the drawing (`wr-drawn`, the theme's draw colour
+  over its casing: violet over white under classic), the node it is at (`wr-at`) and the legal next
+  moves (`wr-choices`: each move's whole edge, in the theme's par colour (green under classic) and
+  dashed, a dot where it leads); hovering one names it in a popup, "Northwest Couch
   Street · 158 ft · straight" (its road, else "unnamed road", its length in the units set, the turn
   into it). A click on the map takes the move whose line passes nearest it within 8 pixels
   (`nearestMove`, on the screen, `PICK_PX`; a tie the first; the plan's 6 widened to a better
@@ -437,8 +447,9 @@ pre-bundled dependencies in the dev server) does not keep, so `map.ts` imports i
   · 0.3 mi · 2 min", its distance in the units set and its time as the stat line writes times;
   a stop ("Arrive at Stop 2; continue") and the arrival are bold, a joke is in italics, muted,
   without a number of its own: the numbers are the document's, so they skip where a joke is.
-  Hovering a driving step, or focusing it, draws its edges over the route in blue (a
-  `directions-highlight` line layer on top of the route layer's); a stop, the arrival and a
+  Hovering a driving step, or focusing it, draws its edges over the route in the theme's
+  highlight colour (blue under classic; a `directions-highlight` line layer on top of the route
+  layer's); a stop, the arrival and a
   joke drive nothing and draw nothing. Clicking a step, or Enter or Space on it, pans the map
   to where it starts. The list is built in a document fragment (2,026 steps in 41–69 ms) and
   its listeners are on the list, none on a step; one step is in the tab order at a time (the
@@ -525,15 +536,18 @@ challenges' badges: `ChallengeProgress` keeps them, and the browser's storage.
 
 ## Live growth
 
-`RouteLayer` has four GeoJSON sources: the baseline (grey, dashed), the route (with
-`lineMetrics: true`, drawn by a `line-gradient` on `line-progress` from yellow at the start to
-dark red at the end, over a white casing), the flash (cyan), and on top the directions'
-highlight (blue, `highlight(line)`, **Directions**). `line-gradient` cannot be
-combined with a dash pattern, hence the separate baseline layer.
+`RouteLayer` has four GeoJSON sources: the baseline (dashed), the route (with
+`lineMetrics: true`, drawn by a `line-gradient` on `line-progress` through the theme's route
+colours from the start to the end, over a casing), the flash, and on top the directions'
+highlight (`highlight(line)`, **Directions**); their colours and the route's widths are the
+theme's (`paintRoute`, **Themes**), under classic a grey baseline, yellow to dark red over white,
+a cyan flash and a blue highlight. `line-gradient` cannot be combined with a dash pattern, hence
+the separate baseline layer.
 
 A route drawn by hand has its own layers over these (`DrawLayer`, **Drawing**): `wr-drawn` (the
-drawing, violet over a white casing), `wr-choices` (the next moves, green and dashed, with a dot
-where each leads, and a wide transparent line under them for the pointer) and `wr-at` (the node
+drawing, in the theme's draw colour over its casing), `wr-choices` (the next moves, in its par
+colour and dashed, with a dot where each leads, and a wide transparent line under them for the
+pointer) and `wr-at` (the node
 the drawing is at). Each answer of the server replaces them whole; nothing of them is spliced.
 
 The route is kept as the stream sends it (`api.md`, **Applying the stream**): its `[lon, lat]`
@@ -593,7 +607,9 @@ The server names the basemap (`GET /config`, `docs/reference/api.md`, **Basemap*
 (`EMPTY_STYLE`); once it has loaded, the route's layers are added, and once `/config` has
 answered (and for `openfreemap` its style has loaded), `addBasemap` adds the basemap's sources
 and layers below them (before the first layer the map has), its fonts (`setGlyphs`) and icons
-(`setSprite`) when it has labels. If `/config` fails the banner shows the error and the map has
+(`setSprite`) when it has labels, in the variant the theme names (`Basemap.show`; **Themes**). A
+change of variant takes the last one's layers and sources away and adds the new one's in their
+place, below the route's layers, which keep their data. If `/config` fails the banner shows the error and the map has
 no basemap: it never falls back to another, and a `pmtiles` answer without its file, or an
 `openfreemap` style that does not load (offline), draws none either (and logs an error on the
 console).
@@ -603,11 +619,14 @@ console).
   the attribution "© OpenStreetMap contributors", at hobby volume, as the tile usage policy
   allows locally; the browser's own `User-Agent` and `Referer` are what the policy asks for.
   MapLibre GL JS 6 fetches only the tiles in view (it has no prefetch option) and nothing is
-  cached offline. The policy rules these tiles out for a public site.
+  cached offline. The policy rules these tiles out for a public site. One look, whatever the
+  theme's variant.
 - **`pmtiles`**: Protomaps' vector tiles from one file the server holds, read through
   `pmtiles://` (the `pmtiles` package's `Protocol`, registered in `map.ts` with `addProtocol`)
-  by HTTP byte ranges at `/api/basemap/<region>.pmtiles`; drawn by `@protomaps/basemaps` in its
-  `grayscale` flavor, muted so the route stands out, with labels (`layers(…, {lang: "en"})`) when
+  by HTTP byte ranges at `/api/basemap/<region>.pmtiles`; drawn by `@protomaps/basemaps` in the
+  flavor of the theme's variant: `grayscale` (classic's and studio's), muted so the route stands
+  out, `light` or `dark`, the last two without their points of interest, whose icons the server's
+  sprite (grayscale's) lacks, and with their land cover; with labels (`layers(…, {lang: "en"})`) when
   the server has their fonts and icons (`glyphs` and `sprite`) and without them otherwise, so a
   deployment without `fetch_basemap.sh --assets` still has a basemap. The labels ask for four
   fonts, the ones the script fetches (`basemap.test.ts` holds the style to them). The source's
@@ -615,8 +634,10 @@ console).
   metadata, whose HTML the attribution control would render.
 - **`openfreemap`**: OpenFreeMap's vector tiles (the OpenMapTiles schema) from its public
   instance, no key and no limits, drawn in the style the server names (`style`: OpenFreeMap's
-  Positron, light grey, so the route stands out), which `fetchStyle` fetches once: its layers as
-  they are, the sources they read (not the Natural Earth relief it declares and never draws), its
+  Positron, light grey, so the route stands out), or for the dark variant OpenFreeMap's Dark (the
+  same URL, `/styles/dark` for `/styles/positron`), which `fetchStyle` fetches the first time the
+  variant is drawn and `Basemap` keeps for the next (one that did not load is asked for again):
+  its layers as they are, the sources they read (not the Natural Earth relief it declares and never draws), its
   fonts and its icons from OpenFreeMap. The source's attribution is the app's own string,
   "OpenFreeMap © OpenMapTiles Data from OpenStreetMap", linked; Positron's design is CC BY 4.0,
   credited on the notices page. MapLibre fetches only the tiles in view, as with `raster`.
@@ -631,6 +652,87 @@ credit is in the map's attribution control, its "OpenStreetMap" linked to
 openstreetmap.org/copyright. Agents verifying the app block the
 tile server (**Seeing it**), so their screenshots show the route on a blank background with
 `raster`, or on a basemap of their own making with `pmtiles` (**Measured**).
+
+## Themes
+
+The app's look is a theme (`theme/`): every colour, font, radius and marker shape of the panel,
+the route's colours and widths on the map and the basemap's variant come from one `Theme`
+(`theme/theme.ts`):
+
+- `id`, `name` (the settings' option), `scheme` (`light` or `dark`: the page's `color-scheme`,
+  which native controls and scrollbars follow) and `basemap`, the tiles' variant (`grayscale`,
+  `light` or `dark`, **Basemap**);
+- `colors`: the panel's (`panel`, `ink`, `muted`, `line`, `hover`), `accent` and `accentInk` (Go,
+  the big ratio), `link` (links, the challenge set up, the focus ring; optional, the accent when
+  left out), `mapBg` (behind the tiles while they load), the markers' (`start`, `via`, `end`,
+  `markerInk`), the map's (`route`, one to four colours spread evenly from the start to the end,
+  one a flat line; `routeCasing`, under the route and the drawing and round a marker; `baseline`;
+  `flash`; `highlight`, a step of the directions; `draw`, a drawing; `par`, its next moves), the
+  toasts' strip (`toast`, `toastInk`) and the banner's (`errorBg`, `errorInk`);
+- `fonts`: three CSS font stacks, `display` (the brand, the section headings and Go), `body` (the
+  rest) and `numbers` (the big ratio), and `load`, which imports the theme's fontsource CSS
+  (`import("@fontsource/manrope/800.css")`): each is a chunk of its own, fetched when the theme is
+  first chosen, never before; classic's system stack loads nothing;
+- `shape`: `radius` (sections, buttons, fields; a step's at most 4 px) and `markerRadius` (stop
+  markers, their badges in the list and the challenges' badges: `50%` round), `routeWidth` and
+  `casingWidth` (the route's line widths, 4 and 7 under classic), `uppercase` (the brand and Go in
+  capitals; the section headings always are) and `glow` (the casing drawn in the route's first
+  colour, wide, translucent and blurred).
+
+**The presets** are `theme/presets/<id>.ts`, one `Theme` a file and nothing else, and `THEMES` in
+`presets/index.ts`, the settings' order. Built: `studio`, the default (white, ink and grey on
+Protomaps' grayscale flavor, one wrong-way orange for the route, Go and the ratio, its teal start
+also the flash and a step's highlight, which must read against the orange route; Manrope), and
+`classic`, the app's first look (the yellow-to-red gradient, the system's fonts, the grayscale
+flavor, blue links, the page's white behind the tiles), kept exactly but for MapLibre's zoom
+buttons and attribution and the share section's two links, which the themes colour (below). A
+preset changes values only: it adds no CSS, no selector and no layer, and what the interface does
+not name it cannot set (the buttons' and badges' background, `--field`, is white under a light
+scheme and the panel under a dark one; native inputs follow `color-scheme`; the shadows are
+black).
+
+**Putting one on the page** (`theme/apply.ts`): `applyTheme` sets `data-theme="<id>"` on
+`<html>` and writes `themeProperties(theme)` there as inline custom properties (`--panel`,
+`--ink`, `--muted`, `--line`, `--hover`, `--field`, `--accent`, `--accent-ink`, `--link`,
+`--map-bg`, `--start`, `--via`, `--end`, `--marker-ink`, `--route`, `--route-casing`, `--ghost`,
+`--attribution`, `--attribution-ink`, `--baseline`, `--flash`, `--highlight`, `--draw`, `--par`,
+`--toast`, `--toast-ink`, `--error-bg`, `--error-ink`, `--font-display`, `--font-body`,
+`--font-numbers`, `--radius`, `--marker-radius`, `--brand-case`) with `color-scheme`, then loads
+its fonts and resolves once they are in (`document.fonts.load` of each stack at the weight the
+page asks of it: 700, 400, 800). Fonts are at best: a font's chunk or file that does not load (an
+offline start, a hashed file replaced by a newer build) is said once on the console's debug level
+and the page keeps the stack's fallbacks; `applyTheme` never rejects. The translucent colours are
+derived as `rgb()` with an alpha, which every web view takes, where `color-mix()` is too new for
+an older macOS's WKWebView: `--ghost`, a snapped stop's dot (the casing at 70 %), and
+`--attribution` and `--attribution-ink`, the attribution's strip (`--field` at 50 %) and links
+(`--ink` at 75 %). `style.css` styles through these variables only, with no colour, font or
+radius of its own (but its two shadows) and no selector for a theme; `data-theme` tells a look
+apart, nothing styles by it. Its `:root` holds studio's values, the default theme's, so the page
+is styled before the script has run (a test holds them to `themeProperties(studio)`); the theme
+chosen is written over them. The variables cover MapLibre's controls too (`#map`'s rules outrank
+`maplibre-gl.css`, which the bundle puts after `style.css`): the zoom buttons on `--field` with
+`--line` between them, their icons in `--ink` (MapLibre's own shapes as CSS masks), and the
+attribution's strip and links; and the share section's two links, in `--link`.
+The root forbids a synthesized bold (`font-synthesis: style`): each theme loads the weights it
+uses, and a face that exists at one weight only (arcade's pixel faces) must not be smeared into a
+fake bold; a slant may still be synthesized, since no theme loads an italic face and the
+directions' jokes are in italics. The map's layers take theirs from the theme too: `paintRoute` (the baseline, the casing,
+the route's gradient and width, the flash, the highlight) and `paintDrawing` (the drawing, its
+next moves, the node it is at), as the layers are added and again by `setPaintProperty` whenever
+the theme changes; and `Basemap.show(theme.basemap)` swaps the basemap's layers and sources in
+place when the variant changes (**Basemap**), not `setStyle`, which would drop the route's layers
+and their data.
+
+**The setting** (`settings.theme`, `theme/resolve.ts`) is a theme's id or `auto`, the default:
+studio while the system is light and night while it is dark (`prefers-color-scheme`, followed as
+it changes; until the night preset is among `THEMES`, auto by night is studio, the default). An id
+no theme has gives the default. It is the device's own, kept in the browser's `localStorage`
+under `worst-route.theme`, read before anything is drawn and written when the row changes it,
+every read and write in a try (a private window, storage blocked: the setting lasts as long as the
+page). It is not in the URL, unlike the request's settings (**Links**), so a link carries no theme
+and opens in the receiver's own; nor is it in a request. The row (`settings/themeRow.ts`), last in the settings,
+lists "Auto (studio by day, night by night)", then each theme by its name; it is never locked, a
+theme changing nothing a job asks.
 
 ## Links
 
@@ -697,7 +799,7 @@ stat line, its directions and its toasts, from which Make it worse and Reroll wo
 run (an alphabet route's link sets Alphabet, and Make it worse is off for it). The URL is left as it
 came until the route has opened; then it is written whole. A link that does not open (a route
 not stored, a build gone) keeps its `route=` and shows the API's error in the banner; the URL
-follows the app again from the next change. The units are not in the URL.
+follows the app again from the next change. The units and the theme are not in the URL.
 
 ## Tests
 
@@ -705,9 +807,13 @@ follows the app again from the next change. The units are not in the URL.
 
 | Test file | What it covers |
 |---|---|
-| `map/routeLayer.test.ts` | `spliceLine` on hand-made lines (a longer and a shorter detour, either end, the input left alone); each recording replayed: it ends with the stored route's node count, every node where the job's final snapshot has it (whose stop positions are the route's), every drawn point a point of the stored geometry in order with the same ends; and at every snapshot after splices (the max-mode recording's after its 50th `progress`), the replayed nodes equal the snapshot's (the alphabet and certified recordings' snapshots follow none; the certified one's straight streets are drawn unsimplified); the alphabet recording through a `RouteLayer` on a stand-in map: each snapshot drawn whole, no flash ever, the stored geometry drawn at the end |
+| `map/routeLayer.test.ts` | `spliceLine` on hand-made lines (a longer and a shorter detour, either end, the input left alone); each recording replayed: it ends with the stored route's node count, every node where the job's final snapshot has it (whose stop positions are the route's), every drawn point a point of the stored geometry in order with the same ends; and at every snapshot after splices (the max-mode recording's after its 50th `progress`), the replayed nodes equal the snapshot's (the alphabet and certified recordings' snapshots follow none; the certified one's straight streets are drawn unsimplified); the alphabet recording through a `RouteLayer` on a stand-in map: each snapshot drawn whole, no flash ever, the stored geometry drawn at the end; `paintRoute`: classic's paint the first look's (yellow to dark red in four even stops, the route 4 wide over a white casing 7 wide, the grey baseline, the cyan flash, the blue highlight), one colour a flat gradient, a glow in the route's colour, wide and blurred |
+| `theme/apply.test.ts` | `themeProperties`: classic's the stylesheet's first values (the panel, the hover, white buttons, blue links, white behind the tiles, the ghost's and the attribution's translucent colours, 6 px, round markers, no capitals, the system's fonts); links in the accent unless a theme names them, a dark scheme's buttons and attribution on its panel, a bare 0 radius written 0px, capitals, a three-digit casing made translucent; `style.css`'s `:root` holding studio's values; every variable `style.css` reads written, for every theme; `applyTheme` on a stand-in root: `data-theme` and every property, then the fonts loaded and asked for at the three weights; a font chunk and a font file that fail, the properties set all the same, one debug line each, no error |
+| `map/drawLayer.test.ts` | `paintDrawing`: classic's paint the first look's (violet over white, the next moves green), another theme's draw, par and casing colours |
+| `theme/resolve.test.ts` | with a stand-in night after the presets: auto studio by day and night by night, an id its theme, an unknown id the default; `storedTheme`: an id or auto read back, anything else auto, and auto when the storage throws; `followTheme`: the theme shown at once, again when the system's scheme flips under auto and when the setting changes (kept in the storage), not for another setting nor a flip under an id; a storage that throws survived |
+| `settings/themeRow.test.ts` | the picker's options: auto first, then every theme by its name, in their order |
 | `api/types.test.ts` | each type's runtime spec, which the compiler holds to the type's keys; the specs against `api.md` (its JSON request example, and the field lists of the events, `done`'s metrics, `/regions` (its `name` optional: the recordings predate it), `/regions/pick`, the 202, the job status, the route document, `/routes/{id}/directions`, `/brands`, `/geocode`, `/config` `/daily`, with its example, `/draw` and `/draw/finish`) and against every payload of the eight recordings and the recorded drawing's answers, finish and refusal; the ratio recording's target reached in `done` and the document, its round-trip refusal; the slowest-time recording's time ratio, delays and turns in `done` and the document, its refusal of both turn constraints; the collect recording's bridges counted in every `progress`, in `done` and the document, its refusal of a ratio target; the directions recording's vehicle, fuel and cost, states and towns, its steps numbered from 1 with the driving steps' ranges covering the route's edges in order and adding up to its length, its first toast, its refusal of a vehicle of 0 mpg; the brand recording's visits never falling in its `progress` events (8, 13, 14 of 19), `done` and the document agreeing, its refusal of a ratio target; the alphabet recording's better routes, each a snapshot then a `progress` with no splice, the same metrics and a higher score, from "A" to "ABCDEFGHIJKLMNO", `done` and the document agreeing, its refusal of a stop along the way (`field: "stops"`); a payload that does not fit is caught; the request's `reorder` and the `order` of `snapped` and the route document (optional: the recordings predate them) |
-| `map/basemap.test.ts` | `basemapParts`: OSM's raster tiles for `raster`; nothing (an error on the console, never OSM's tiles) for `pmtiles` without its file; Protomaps' tiles from the server for `pmtiles`, its `pmtiles://` URL absolute under `/api`, the attribution the app's own, no symbol layer without the server's fonts; with them the fonts' and icons' URLs absolute with the template's braces kept, and the labels asking for no font but the four `tools/fetch_basemap.sh` fetches; `addBasemap` on a stand-in map: the fonts, icons and sources set, then every layer before the first layer the map already had (the route's), or on top of an empty map |
+| `map/basemap.test.ts` | `basemapParts`: OSM's raster tiles for `raster`; nothing (an error on the console, never OSM's tiles) for `pmtiles` without its file; Protomaps' tiles from the server for `pmtiles`, its `pmtiles://` URL absolute under `/api`, the attribution the app's own, no symbol layer without the server's fonts; with them the fonts' and icons' URLs absolute with the template's braces kept, and the labels asking for no font but the four `tools/fetch_basemap.sh` fetches; `addBasemap` on a stand-in map: the fonts, icons and sources set, then every layer before the first layer the map already had (the route's), or on top of an empty map; the light and dark flavors with their own background, without points of interest, on the grayscale sprite and the four fonts, grayscale the default; `styleUrl`: OpenFreeMap's Dark for dark, Positron otherwise; `Basemap` on a stand-in map: a new variant's layers and sources swapped in under the route's, nothing redone for the same look, OpenFreeMap's style fetched once for each look (Positron once for grayscale and light) and kept, a style that did not load asked for again, raster one look |
 | `map/bounds.test.ts` | `US_BOUNDS` runs west to east and south to north, and holds the national build's extent and Portland's bbox; `fitZoom` against the zooms MapLibre gave for the box filling a map of three sizes, the lesser of its two axes'; `holdToUs`: a view smaller than the box kept inside it (a centre outside put half a view from its edge), the whole box kept in a view larger than it on that axis (taller and wider maps at the fit zoom), a zoom below the fit raised to it, a camera already held unchanged |
 | `run/controls.test.ts` | `JobRunner` with `fetch` and `EventSource` stubbed: the stat line while drawing and for a route drawn by hand ("25 moves · drawn by hand · seed 1"); a TypeError from the client and an event the app cannot handle end the run as `CLIENT_ERROR` with the controls unlocked (the job cancelled), the server's `error` closes the stream; Make it worse keeps the route and its seed when nothing worse is found and tries the next seed, follows a worse route's seed; Go and Reroll send the settings' seed, then none; leaving the page cancels a job whose POST is in flight once it is answered, a running one at once; a ratio and a drive-time target sent, shown while running and with what was achieved (`target reached`), and Make it worse whose base already meets its target; the objective, the item only under collect and the constraints only with a side sent (and not by default), the brand only under brand, the alphabet route with no item nor brand, Brand waiting for the region's brands with the brand set among them (none, a link's before they answer, one they lack, an empty list) and no other mode waiting, hard mode's `hard: true` alone or beside a side (the key left out when off, strict sent only with a side), Make it worse in its route's own objective with its own item or brand, whatever the panel's mode and brand (a pilgrimage under hard mode, its whole body, the panel's brand another build's id), with the panel's turns and target (as bad as possible where the route's objective refuses it); the slowest-time recording replayed (the lengths' ratio while running, then the time ratio, the drive and delays, the turns) and the collect recording's bridges counted live, then the stored route's; the route's own mode shown when Make it worse, the panel in another, finds nothing; "no lefts" and "no rights" (not with a U-turn); `INFEASIBLE_TURN_CONSTRAINT` as the error, and the refused request sent again without strict: a Go with its seed, a Make it worse on the same route with its seed, a Reroll with none, hard mode kept; the counter row's "17 of 19 Starbucks" and "letters: 23 (A–W)", "letters: 1 (A)", "letters: 0", the laps past Z for 26, 27 and 29 letters ("(A–Z)", "(A–Z, A)", "(A–Z, A–C)"), the roads one a line in its tooltip, nothing under another mode; Make it worse off for an alphabet route with its reason, whatever the mode set, and for no other route; the brand recording's visits counted live (1, 8, 13, 14 of 19), then the stored route's; the alphabet recording replayed: every snapshot drawn, no splice, the ratio and letters following each better route (1.1× and 1, 1.0× and 2, ...), the stored route drawn, its fifteen roads in the tooltip; a refusal under hard mode sent again without it: a Go with its seed and no constraints left, a Make it worse with its base and seed and its strict side kept, a Reroll with none, and a Make it worse whose base hard mode refuses (`BASE_ROUTE_MISMATCH`) on the same route with the same seed; each stop along the way labelled as its marker is numbered ("Stop 2", "Stop 3"), the start and the end without a label; the vehicle set sent by Make it worse, Go and Reroll (the default in Make it worse's whole body); the departure set sent, or, empty, the time Go is pressed at the browser's offset (on a fake clock); "arrives Sat 17:42" from a document's arrival at its own offset, nothing without one; the directions recording replayed: no route rows while it runs, then its towns, states, fuel and share of the roads; the first two towns and how many more with every name in the tooltip, two states by their codes, no fuel without a vehicle, "under 1 %", and nothing from a document without them; the worst order sent only when ticked and never under the alphabet route, "Trying every order…" until `snapped`, its stops snapped onto the list in the order it names and the run's order kept with the stored route, Make it worse's stops through the base route's order, and no order for a run in the list's own, nor for a `snapped` without one (an older server's), whose stops say no place; the best's ratio beside the current one while the best route scores above it ("best 14.1×"), also when the two round alike and when the best's is the lower (a faster but longer current route under the slowest time), not when the current route is the best nor from a stream without the best's numbers; a certified route sent with as bad as possible and no constraints, worst order or portfolio, whatever the panel holds (kept), and Certified counting for nothing under another mode; the certified recording replayed: the bound live on the target row ("at most 6368 % longer" at first, "0.5 %" while proving), no splice, then "certified: no legal route in this area is longer · 182 nodes" and "proven"; a stored route's certificate when not proven, with its gap and without one ("longest found · no bound yet"), and Make it worse off for a certified route with the reason for each; a portfolio sent only above one seed and never under the alphabet route, the stat line's "best of 4 seeds" with its leader's seed from each `progress` event (after the leader's "best 3.2×" while its best scores above its current route), then the stored route's winner, the settings keeping the first seed, and Make it worse from the winner's next seed with no portfolio; `PORTFOLIO_TOO_LARGE` lowering the seeds to its `max`, the next Go passing; a route an earlier portfolio stored coming back to a Go of one seed (the user's seed kept on the panel and the stat line, no "best of") and to a portfolio's Go (its winner's seed shown, its first kept) |
 | `directions/panel.test.ts` | on the directions recording: a row per step classed by its kind, numbered as the document numbers them (none for the 40 jokes, the numbers skipping them), a driving step's distance and time in miles and kilometres, the arrival's and a stop's rows with none; `StepLocator`: the driving steps' lines ending on their first and last nodes (more than 99 % exactly, all within a metre; the job's last snapshot gives where the nodes are) and covering the geometry end to end, a step given at least one segment however short its distance, no line for a step that drives nothing, every step starting where it is; `DirectionsPanel` with a stand-in map: the rows of the route shown and none without one, the units followed, a hover highlighting the right edges, from node to node (once for the same step), a joke and none highlighting nothing, a click panning to the step's start, the highlight forgotten when the route changes, a document without directions listing nothing |
@@ -1016,6 +1122,28 @@ On Portland (build e4b3b4ad90db, the CSR backend), the dev server proxying to a 
   "the alphabet route runs one search", and with the seeds at 1 the same. On a server of Portland
   alone with one worker (`--workers 1`), a link with `seeds=4` showed neither the Seeds row nor the
   Region row.
+- **Themes** (2026-11-01, headless Chrome at 1400×900 on the lane's `npm run dev` and `serve
+  --region portland --geocoder none --basemap-name us`, `WORST_ROUTE_BASEMAP=pmtiles`, the main
+  tree's `us.pmtiles`, fonts and sprite read, the tile hosts unresolvable; a stored Powell's → Reed
+  route, seed 1, 56.6×): four views of the page at classic (the top of the panel, the route
+  opened, the run section with the directions, the stops and settings) were the same pixel for
+  pixel before the change and after it but for the toasts' strip, whose line rotates, and for a
+  challenge's badge completed between the two shots; so was the route opened again after
+  switching at classic → a dark stand-in → studio → classic with the row. Studio: the route a flat
+  orange line over white, Manrope (500 and 800 loaded, `document.fonts.check` true), the teal
+  start, the toasts' strip tinted. Then, themed after review, MapLibre's controls and the share
+  links (on main 7e7fd77, the same route): at classic the route view differed from the first
+  shots only in the zoom buttons (148 pixels, no channel by more than 20: the icon `--ink` for
+  MapLibre's #333, the divider `--line` for its #ddd), the attribution's links (912 pixels, at most
+  30: `--ink` at 75 % for black at 75 %), the share links (classic's blue for the browser's), and
+  in today's route, a new day's; studio on the grayscale flavor, a hover over the longest step
+  (1.7 mi on Southeast McLoughlin Boulevard) adding 1,336 teal pixels on the map; the dark
+  stand-in's zoom buttons on its panel (11, 16, 32) with icons in its ink (230, 233, 255), the
+  attribution a dark strip with light text. A stand-in dark theme
+  (night's palette, a glow, never committed) under auto with `prefers-color-scheme: dark`: the dark
+  flavor, the panel dark, buttons on it with light text. No error or warning on the console in any
+  of them; the grayscale sprite under the light and dark flavors asked for no missing icon. Drawing
+  mode took the next moves' colour from each theme (green under classic, as before).
 
 ## Limitations
 

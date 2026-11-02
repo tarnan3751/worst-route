@@ -123,6 +123,10 @@ nodes and 1,000 edges; the automatic leash narrowed to 600 edges), solved by OR-
 from the seed route, each better route streamed with the solver's bound, the route stored with
 `run.certified`, proven or how much longer the worst possible may be (`docs/reference/engine.md`,
 **Certified worst**).
+So are themes: the look is one `Theme` (every colour, font and shape of the page, the route's
+colours and widths, the basemap's light, dark or grayscale tiles), picked in the settings and kept
+by the device, `auto` by default (studio by day, night by night); `studio` and `classic`, the
+first look, are built (`docs/reference/frontend.md`, **Themes**).
 The plan (`docs/PLAN.md`,
 2026-10-30) is written and its open questions answered as far as `docs/project_overview.md` §3
 records. **M1 is built**: in the acceptance run on the

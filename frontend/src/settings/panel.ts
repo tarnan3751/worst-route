@@ -50,6 +50,7 @@ import {
 import { regionLabel } from "../stops/pick";
 import { busy } from "../stops/stopList";
 import { el } from "../util/dom";
+import { themeRow } from "./themeRow";
 
 const TARGETS: [TargetKind, string, boolean][] = [
   ["max", "As bad as possible", true],
@@ -349,6 +350,7 @@ export function mountSettings(
     vehicleRow,
     departureRow,
     field("Units", units.group),
+    themeRow(store),
   );
 
   const set = (patch: Partial<Settings>) => store.updateSettings(patch);

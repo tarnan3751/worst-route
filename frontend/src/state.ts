@@ -24,6 +24,7 @@ import type {
   Vehicle,
 } from "./api/types";
 import { isoWithOffset, type Units } from "./format";
+import type { ThemeSetting } from "./theme/resolve";
 
 /** Where the API put a stop: from a job's `snapped` event or a stored route's stops. */
 export interface SnapInfo {
@@ -82,7 +83,8 @@ export type TurnSetting = "any" | "no_left" | "no_right";
  * asks for the provably longest route in a small area, under the longest only, which then takes
  * no target, turn constraint, hard mode, worst order or second seed (`certifies`). `mpg` and
  * `gasPriceUsd` are the vehicle, for the route's extra fuel and its cost; `departure` an ISO 8601
- * time with its offset, null for now. */
+ * time with its offset, null for now. `theme` is the look, a theme's id or "auto" (theme/resolve.ts),
+ * the device's own: never in a request or a link. */
 export interface Settings {
   seed: number | null;
   region: string | null;
@@ -105,6 +107,7 @@ export interface Settings {
   gasPriceUsd: number;
   departure: string | null;
   units: Units;
+  theme: ThemeSetting;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -129,6 +132,7 @@ export const DEFAULT_SETTINGS: Settings = {
   gasPriceUsd: 3.89,
   departure: null,
   units: "mi",
+  theme: "auto",
 };
 
 /** Whether `objective` takes a target of `kind`: the alphabet route none but as bad as possible,

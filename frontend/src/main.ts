@@ -12,8 +12,9 @@
 // job, and a drawing's par.
 // The basemap the server names (GET /config) goes under the route's layers once the map has
 // loaded (OpenFreeMap's once its style has); the most seeds a job runs there goes to the settings.
-// The page's colours, fonts and shapes are a theme's, classic's (theme/), put on it at once, and
-// so are the map's layers' and the basemap's variant.
+// The theme the settings name (the device's, from the browser's storage; auto by default) is put
+// on the page at once and on the map's layers and basemap once they are there, and again
+// whenever it changes (theme/, docs/reference/frontend.md, **Themes**).
 import "./style.css";
 import { API_BASE, errorBody, getConfig, getRegions } from "./api/client";
 import { mountBanner } from "./banner";
@@ -25,9 +26,9 @@ import { DirectionsPanel, mountDirections } from "./directions/panel";
 import { Drawing } from "./draw/drawing";
 import { mountDraw } from "./draw/panel";
 import { Basemap } from "./map/basemap";
-import { DrawLayer } from "./map/drawLayer";
+import { DrawLayer, paintDrawing } from "./map/drawLayer";
 import { createMap, fitTo } from "./map/map";
-import { RouteLayer } from "./map/routeLayer";
+import { RouteLayer, paintRoute } from "./map/routeLayer";
 import { StopsLayer } from "./map/stopsLayer";
 import { JobRunner, mountRunControls } from "./run/controls";
 import { mountSettings } from "./settings/panel";
@@ -37,13 +38,12 @@ import { RegionPicker } from "./stops/pick";
 import { PlaceSearch, mountPlaceSearch } from "./stops/search";
 import { mountStopList, placeStop } from "./stops/stopList";
 import { applyTheme } from "./theme/apply";
-import { classic } from "./theme/presets/classic";
+import { followTheme, storedTheme } from "./theme/resolve";
+import type { Theme } from "./theme/theme";
 import { Toasts, mountToasts } from "./toasts";
 import { bboxBounds, unionBbox } from "./util/geo";
 
 const byId = (id: string): HTMLElement => document.getElementById(id) as HTMLElement;
-
-void applyTheme(classic);
 
 const url = decodeUrlState(location.search);
 const store = new Store({
@@ -51,7 +51,7 @@ const store = new Store({
   region: null,
   pick: null,
   stops: (url.stops ?? []).map(({ lat, lon }) => ({ lat, lon, snapped: null })),
-  settings: settingsFrom(url, DEFAULT_SETTINGS),
+  settings: settingsFrom(url, { ...DEFAULT_SETTINGS, theme: storedTheme() }),
   run: IDLE_RUN,
   route: null,
   error: null,
@@ -65,8 +65,19 @@ let routeLayer: RouteLayer | null = null;
 let drawLayer: DrawLayer | null = null;
 let runner: JobRunner | null = null;
 let drawing: Drawing | null = null;
+let basemap: Basemap | null = null;
+let theme!: Theme; // the theme shown, from followTheme's first call below
 let ready: (runner: JobRunner) => void = () => undefined;
 const loaded = new Promise<JobRunner>((resolve) => (ready = resolve)); // the runner, on the map
+
+followTheme(store, (next) => {
+  theme = next;
+  void applyTheme(next);
+  if (routeLayer === null) return; // the map's layers take it once it has loaded
+  paintRoute(map, next);
+  paintDrawing(map, next);
+  basemap?.show(next.basemap).catch((error: unknown) => store.update({ error: errorBody(error) }));
+});
 
 /** Change the stops; the route shown no longer goes through them, nor a drawing. */
 function edit(stops: Stop[]): void {
@@ -138,9 +149,9 @@ addEventListener("keydown", (event) => {
 });
 
 map.once("load", () => {
-  routeLayer = new RouteLayer(map, classic);
+  routeLayer = new RouteLayer(map, theme);
   runner = new JobRunner(store, routeLayer, (bounds) => fitTo(map, bounds));
-  drawLayer = new DrawLayer(map, store, classic);
+  drawLayer = new DrawLayer(map, store, theme);
   const shown = runner;
   const layer = routeLayer;
   drawing = new Drawing(store, drawLayer, {
@@ -161,9 +172,10 @@ map.once("load", () => {
     void openRoute(url.route, store, runner).then((opened) => urlSync.start(opened));
   }
   config
-    .then(({ basemap }) =>
-      new Basemap(map, basemap, location.origin + API_BASE).show(classic.basemap),
-    )
+    .then(async (answer) => {
+      basemap = new Basemap(map, answer.basemap, location.origin + API_BASE);
+      await basemap.show(theme.basemap);
+    })
     .catch((error: unknown) => store.update({ error: errorBody(error) }));
 });
 

@@ -35,7 +35,6 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
-from pyproj import Transformer
 
 from worst_route.config import TIERS, HighwayClass
 
@@ -221,6 +220,8 @@ class GraphData:
 
     @cached_property
     def _lonlat(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        from pyproj import Transformer  # on first use, not with the module (the API imports it)
+
         to_lonlat = Transformer.from_crs(
             f"EPSG:{self.meta['crs_epsg']}", "EPSG:4326", always_xy=True
         )

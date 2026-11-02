@@ -71,8 +71,6 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.sparse import csr_array
-from scipy.sparse.csgraph import breadth_first_order
 
 from worst_route.config import (
     CERTIFIED_AUTO_MAX_EDGES,
@@ -210,6 +208,10 @@ def certified_area(data: GraphData, masks: RequestMasks, stop_nodes: Sequence[in
 
 def _reached(n: int, source: int, tail: NDArray[np.intp], head: NDArray[np.intp]) -> BoolArray:
     """The nodes of [0, n) reached from `source` along the edges tail → head."""
+    # imported on first use, not with the module, which the API imports at its start
+    from scipy.sparse import csr_array
+    from scipy.sparse.csgraph import breadth_first_order
+
     graph = csr_array((np.ones(len(tail)), (tail, head)), shape=(n, n))
     reached = np.zeros(n, dtype=np.bool_)
     reached[breadth_first_order(graph, source, directed=True, return_predecessors=False)] = True

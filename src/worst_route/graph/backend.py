@@ -97,8 +97,6 @@ from typing import Protocol
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.sparse import csr_array
-from scipy.sparse.csgraph import connected_components
 
 from worst_route.config import TURN_STRAIGHT_DEG, TURN_UTURN_DEG
 from worst_route.graph.data import GraphData
@@ -294,6 +292,10 @@ def largest_scc_mask(
     data: GraphData, edge_mask: NDArray[np.bool_] | None = None
 ) -> NDArray[np.bool_]:
     """The nodes of the largest strongly connected component over `edge_mask`."""
+    # imported on first use, not with the module, which the API imports at its start
+    from scipy.sparse import csr_array
+    from scipy.sparse.csgraph import connected_components
+
     n, u, v = data.n, data.edge_u, data.edge_v
     if edge_mask is not None:
         keep = _checked("edge_mask", edge_mask, data.m)

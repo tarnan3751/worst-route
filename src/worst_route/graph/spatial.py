@@ -47,8 +47,6 @@ from typing import Literal
 import numpy as np
 import shapely
 from numpy.typing import NDArray
-from pyproj import Transformer
-from scipy.spatial import cKDTree
 
 from worst_route.graph.data import GraphData
 
@@ -84,6 +82,10 @@ class SpatialIndex:
     """The nodes of one build, indexed by projected position."""
 
     def __init__(self, data: GraphData) -> None:
+        # imported when an index is made, not with the module, which the API imports at its start
+        from pyproj import Transformer
+        from scipy.spatial import cKDTree
+
         self.data = data
         self._xy = np.column_stack([data.node_x, data.node_y])
         self._tree = cKDTree(self._xy)

@@ -33,14 +33,16 @@ import hashlib
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import NDArray
-from pyproj import Transformer
 
 from worst_route.graph.data import GraphData
 from worst_route.graph.store import MissingArray
+
+if TYPE_CHECKING:
+    from pyproj import Transformer
 
 MAX_STEP_M = 32_000  # a longer step is split: a rounded step stays within the int16 range
 MAX_POINTS = 2**31 - 1  # geom_indptr is int32
@@ -209,10 +211,14 @@ def _read_only(geometry: Geometry) -> Geometry:
 
 
 @cache
-def _to_lonlat(crs_epsg: int) -> Transformer:
+def _to_lonlat(crs_epsg: int) -> "Transformer":
+    from pyproj import Transformer  # on first use, not with the module (the API imports it)
+
     return Transformer.from_crs(f"EPSG:{crs_epsg}", "EPSG:4326", always_xy=True)
 
 
 @cache
-def _to_xy(crs_epsg: int) -> Transformer:
+def _to_xy(crs_epsg: int) -> "Transformer":
+    from pyproj import Transformer  # on first use, not with the module (the API imports it)
+
     return Transformer.from_crs("EPSG:4326", f"EPSG:{crs_epsg}", always_xy=True)

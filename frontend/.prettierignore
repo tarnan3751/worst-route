@@ -2,3 +2,5 @@ dist
 package-lock.json
 # Recorded from the server and kept one event per line (docs/reference/frontend.md, **Tests**)
 src/__fixtures__/*.json
+# Written by tools/desktop_data.py conus and kept as it writes it (docs/reference/frontend.md, **Basemap**)
+public/conus.json

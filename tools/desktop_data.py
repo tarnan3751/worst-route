@@ -29,7 +29,11 @@ DIR (`WORST_ROUTE_DESKTOP_DATA`).
 
 `conus` writes the contiguous US (the 48 states and DC of the national builds, from the places
 index's states, buffered 10 km and simplified) as GeoJSON, the area
-`tools/fetch_basemap.sh us --region OUT.geojson --maxzoom 11` cuts the desktop's basemap to.
+`tools/fetch_basemap.sh us --region OUT.geojson --maxzoom 11` cuts the desktop's basemap to. Its
+output is also the frontend's `frontend/public/conus.json`, the outline the map draws the land
+outside the contiguous US flat around (`docs/reference/frontend.md`, **Basemap**), committed as
+the command writes it and written again with `conus frontend/public/conus.json` when the Census
+outline changes.
 
 It never downloads, and is not part of the gate.
 """

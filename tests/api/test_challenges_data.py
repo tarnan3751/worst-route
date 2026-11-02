@@ -42,6 +42,7 @@ async def national(store: Path) -> AsyncIterator[tuple[httpx.AsyncClient, Loaded
         builds=(("us-t3", "latest"),),
         store_path=store,
         geocoder="none",
+        challenges_at_start=False,  # the days asked for here, in turn
     )
     app = create_app(config)
     async with app.router.lifespan_context(app):

@@ -1,7 +1,8 @@
 """The app as public hosting runs it, for the hosting tests (logs, limits, readiness, basemap,
 the site): `hosted` serves `create_app` in process over httpx, its requests from `client` (an
-address and a port, as uvicorn gives the peer), with inline workers and, given one, a geocoding
-service of the test's own (with `geocoder="nominatim"`)."""
+address and a port, as uvicorn gives the peer), with inline workers, no challenges asked for at its
+start unless told (`challenges_at_start`) and, given one, a geocoding service of the test's own
+(with `geocoder="nominatim"`)."""
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -43,6 +44,7 @@ async def hosted(
         "builds": PORTLAND,
         "backend": "python",
         "geocoder": "none",
+        "challenges_at_start": False,
         **settings,
     }
     config = ApiSettings(data_dir=data, jobs=job_settings, **values)

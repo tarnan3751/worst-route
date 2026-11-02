@@ -29,7 +29,11 @@ it (`GZipMiddleware`, `config.GZIP_MINIMUM`), but never the event stream or what
 already (`GZIP_EXCLUDED`). Once the job manager has started, the lifespan makes each build's spatial
 index and then its backend in a thread (`warm_builds`; `graph.loader`): on a first start the Numba
 kernels compile then, into their cache, while the server already listens, and a request that needs
-one before it is made waits for the kernels' import or makes its own.
+one before it is made waits for the kernels' import or makes its own. Once they are made, it asks
+for today's challenges in a task (`challenges_api.today_at_start`: kept, else made, as
+`GET /challenges` would; on every server, the desktop app's and a public one included, unless
+`ApiSettings.challenges_at_start` is off), so a panel opened a minute later finds them kept; the
+lifespan's stop cancels it with the others.
 
 Every error answers an `ErrorBody` (`{code, message, ...}`): an endpoint refuses with
 `routes_api.ApiError(status, code, message, **fields)`, a malformed request is 422
@@ -45,7 +49,7 @@ import logging
 import threading
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -122,6 +126,7 @@ class ApiSettings:
     basemap: BasemapName = "raster"  # what `/config` offers (WORST_ROUTE_BASEMAP)
     basemap_name: str | None = None  # its file, basemap/<name>.pmtiles; None: the first region
     basemap_dir: Path | None = None  # the basemap's files; None: <data_dir>/basemap
+    challenges_at_start: bool = True  # today's challenges asked for once the builds are warm
 
 
 @dataclass(frozen=True, eq=False)
@@ -202,14 +207,28 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await jobs.start()
-        threading.Thread(
-            target=warm_builds, args=(builds,), name="warm-builds", daemon=True
-        ).start()
+        api: Api = app.state.api
+        loop, warmed = asyncio.get_running_loop(), asyncio.Event()
+
+        def warm() -> None:
+            try:
+                warm_builds(builds)
+            finally:
+                with suppress(RuntimeError):  # the loop closed: the server stopped first
+                    loop.call_soon_threadsafe(warmed.set)
+
+        async def challenges_at_start() -> None:
+            await warmed.wait()
+            await challenges_api.today_at_start(api)
+
+        threading.Thread(target=warm, name="warm-builds", daemon=True).start()
+        starting: list[asyncio.Task[None]] = []
+        if settings.challenges_at_start:
+            starting.append(asyncio.create_task(challenges_at_start()))
         try:
             yield
         finally:
-            api: Api = app.state.api
-            following = [*api.daily_tasks, *api.challenge_tasks.values()]
+            following = [*starting, *api.daily_tasks, *api.challenge_tasks.values()]
             for task in following:
                 task.cancel()
             await asyncio.gather(*following, return_exceptions=True)

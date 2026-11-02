@@ -12,7 +12,9 @@ plan the clock ended; and over httpx in process, the answer kept per date (made 
 concurrent first calls, today's route made worse today's only), kept in the store across a
 restart, a date being made holding up no other, the same on two servers, the window of dates, a
 public server making only today's, a full server, the server's stop ending a date's making, and
-none without a places index."""
+none without a places index; today's asked for when the server starts (made, logged, then kept
+across a restart), not when told not to, none without a places index, and the server's stop
+ending that making."""
 
 import asyncio
 import json
@@ -46,7 +48,7 @@ from worst_route.presentation.places import TownPoint, places_dir, write_places
 from ..engine.graphs import at_node, lattice
 from ..presentation.support import STATES_FILE, WIDE
 from .hosting import hosted
-from .support import save_build
+from .support import save_build, until
 
 pytestmark = pytest.mark.anyio
 
@@ -167,7 +169,8 @@ def served(tmp_path: Path) -> Path:
 
 @asynccontextmanager
 async def app_on(data: Path, **settings: Any) -> AsyncIterator[tuple[httpx.AsyncClient, Api]]:
-    """The app serving the lattice from `data`, its jobs on inline workers."""
+    """The app serving the lattice from `data`, its jobs on inline workers, asking for no
+    challenges at its start unless told (`hosted`)."""
     async with hosted(data, builds=SERVED, **settings) as (http, app):
         yield http, app.state.api
 
@@ -666,6 +669,67 @@ async def test_a_full_server_makes_nothing(served: Path, monkeypatch: pytest.Mon
         assert made.status_code == 200
         assert [c["type"] for c in made.json()["challenges"]] == [*TYPES, "daily-worse"]
         assert api.store.challenges("2026-11-02", REGION, version) is not None
+
+
+def at_start(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """What the start's ask for today's challenges logged."""
+    lines = [r.getMessage() for r in caplog.records]
+    return [line for line in lines if line.startswith("today's challenges (")]
+
+
+async def test_today_s_challenges_are_made_when_the_server_starts(
+    served: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="worst_route.api.challenges_api")
+    days = counted(monkeypatch)
+    async with app_on(served, challenges_at_start=True) as (http, api):
+        await until(lambda: bool(at_start(caplog)))
+        [line] = at_start(caplog)
+        assert line.startswith("today's challenges (2026-11-02) are ready: 7 drawn (")
+        assert days == [DAY] and api.challenge_tasks == {}
+        answer = await http.get("/challenges")  # kept: answered with no plan
+        assert [c["type"] for c in answer.json()["challenges"]] == [*TYPES, "daily-worse"]
+        assert days == [DAY]
+    caplog.clear()
+    async with app_on(served, challenges_at_start=True) as (_, api):  # a restart, the same store
+        await until(lambda: bool(at_start(caplog)))
+        assert at_start(caplog)[0].startswith("today's challenges (2026-11-02) are ready: 7 drawn")
+        assert days == [DAY] and len(api.challenge_days) == 1
+
+
+async def test_a_server_asks_for_nothing_at_start_when_told_or_without_towns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="worst_route")
+    days = counted(monkeypatch)
+    async with app_on(served_data(tmp_path / "one")) as (_, api):  # told not to
+        await until(lambda: "the builds are ready to plan on" in caplog.text)
+        await asyncio.sleep(0.05)
+        assert api.challenge_tasks == {} and api.challenge_days == {} and at_start(caplog) == []
+    async with app_on(served_data(tmp_path / "two", index=False), challenges_at_start=True):
+        await until(lambda: bool(at_start(caplog)))
+        assert at_start(caplog) == [
+            "today's challenges (2026-11-02) were not made at start: no challenges: "
+            f"{REGION} has no places index to draw their towns from"
+        ]
+    assert days == []
+
+
+async def test_the_server_s_stop_ends_the_making_it_asked_for_at_start(
+    served: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = asyncio.Event()
+
+    async def endless(api: Api, loaded: Loaded, towns: Any, day: date) -> list[ChallengeOut]:
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("never")
+
+    monkeypatch.setattr(challenges_api, "generate_day", endless)
+    async with app_on(served, challenges_at_start=True) as (_, api):
+        await started.wait()
+        making = list(api.challenge_tasks.values())
+    assert len(making) == 1 and making[0].cancelled() and api.challenge_days == {}
 
 
 async def test_no_places_index_no_challenges(tmp_path: Path) -> None:

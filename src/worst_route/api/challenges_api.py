@@ -50,7 +50,9 @@ server when the attempts end each plan (or it converges) within the budget, as f
 `graph_version`), read before anything waits, with today's route made worse when the date is today.
 A date kept nowhere is made by a task of its own (`Api.challenge_tasks`), which the date's calls
 wait for while the others are answered, then stored and kept; the draws and pre-flights run in
-threads, the plans in the job manager's workers, and the server's stop cancels the task. The dates
+threads, the plans in the job manager's workers, and the server's stop cancels the task. A server
+asks for today's itself once it has started (`today_at_start`), so they are kept before a panel
+asks. The dates
 answered are today and the `CHALLENGE_DAYS` days before (another is 422 `INVALID_REQUEST` on
 `date`); a public server makes only today's, and answers an earlier date only when it is kept
 ("that day's challenges are not kept here", 422 on `date`). A full server is 429 `TOO_MANY_JOBS`
@@ -463,16 +465,38 @@ async def challenges(
     if not first <= day <= today:
         message = f"challenges are for the days from {first} to {today}, not {day}"
         raise ApiError(422, "INVALID_REQUEST", message, field="date")
-    region = daily_region(api)
-    loaded = api.builds[region]
-    key = (day.isoformat(), region, str(loaded.data.meta["graph_version"]))
+    key, loaded = _day_on(api, day)
     made = await _kept_or_made(api, key, loaded, day == today, first)
     return ChallengesOut(
         date=day.isoformat(),
-        region=region,
+        region=key[1],
         build_id=str(loaded.data.meta["build_id"]),
         challenges=made + ([_daily_worse(day)] if day == today else []),
     )
+
+
+async def today_at_start(api: "Api") -> None:
+    """Ask for today's challenges as `GET /challenges` does, kept or made, when the server has
+    started (`app.create_app`'s lifespan), so a panel opened later finds them kept; log what came
+    of it."""
+    started, today = time.monotonic(), daily_api.today()
+    key, loaded = _day_on(api, today)
+    try:
+        made = await _kept_or_made(api, key, loaded, True, today - timedelta(days=CHALLENGE_DAYS))
+    except ApiError as refused:
+        log.info("today's challenges (%s) were not made at start: %s", today, refused)
+    except Exception as error:  # the date's task logs its own failure too (`_made_or_not`)
+        log.warning("today's challenges (%s) were not made at start: %r", today, error)
+    else:
+        took = time.monotonic() - started
+        log.info("today's challenges (%s) are ready: %d drawn (%.1f s)", today, len(made), took)
+
+
+def _day_on(api: "Api", day: date) -> tuple[DayKey, Loaded]:
+    """The key of `day`'s challenges on the main build (`daily_region`), and the build."""
+    region = daily_region(api)
+    loaded = api.builds[region]
+    return (day.isoformat(), region, str(loaded.data.meta["graph_version"])), loaded
 
 
 async def _kept_or_made(

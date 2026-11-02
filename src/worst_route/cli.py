@@ -1613,6 +1613,7 @@ def serve(
 ) -> None:
     """Serve the API."""
     import copy
+    import importlib.util
 
     import uvicorn
     from starlette.applications import Starlette
@@ -1621,6 +1622,7 @@ def serve(
     from worst_route.api.jobs import JobSettings
     from worst_route.api.logs import json_log_config
     from worst_route.api.static import create_site
+    from worst_route.graph.backends import backend_name
     from worst_route.graph.loader import BuildNotFound
     from worst_route.presentation.places import PlacesFormatError
 
@@ -1642,13 +1644,15 @@ def serve(
     if frontend is not None and not (frontend / "index.html").is_file():
         _fail(f"no frontend build at {frontend}: run `npm run build` under frontend/")
     try:
+        # the backends are made once it listens (`app.warm_builds`): refused now all the same
+        if config.backend == "csr" and importlib.util.find_spec("numba") is None:
+            raise ModuleNotFoundError("No module named 'numba'")
         application = create_app(config)
     except (BuildNotFound, PlacesFormatError) as error:
         _fail(str(error))
     except ImportError as error:  # only csr needs numba; auto falls back to python
         _fail(f"the csr backend needs numba, which did not import: {error}")
-    loaded = application.state.api.builds[first]
-    typer.echo(f"backend: {loaded.backend.name}")
+    typer.echo(f"backend: {backend_name(config.backend)}")  # named, not made
     if config.geocoder == "none":
         typer.echo("geocoder: none")
     else:

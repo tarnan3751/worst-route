@@ -23,7 +23,10 @@ the drawing's steps and finishes, held as `Api.limits`, the job manager's settin
 `GET /config` offers the frontend (`basemap`, its file named by `basemap_name`, by default the first
 region), whose files it serves under `/basemap/` from `basemap_dir` (by default
 `<data_dir>/basemap`; `basemap_api`). Every request gets an id and an access line
-(`logs.RequestLog`).
+(`logs.RequestLog`). Once the job manager has started, the lifespan makes each build's spatial
+index and then its backend in a thread (`warm_builds`; `graph.loader`): on a first start the Numba
+kernels compile then, into their cache, while the server already listens, and a request that needs
+one before it is made waits for the kernels' import or makes its own.
 
 Every error answers an `ErrorBody` (`{code, message, ...}`): an endpoint refuses with
 `routes_api.ApiError(status, code, message, **fields)`, a malformed request is 422
@@ -36,6 +39,8 @@ request's `X-Request-ID` (Starlette answers it outside the middleware that adds 
 
 import asyncio
 import logging
+import threading
+import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
@@ -178,6 +183,9 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await jobs.start()
+        threading.Thread(
+            target=warm_builds, args=(builds,), name="warm-builds", daemon=True
+        ).start()
         try:
             yield
         finally:
@@ -257,6 +265,22 @@ def create_app(settings: ApiSettings, geocode: GeocodeService | None = None) -> 
         return JSONResponse(body.model_dump(), status_code=error.status_code)
 
     return app
+
+
+def warm_builds(builds: Mapping[str, Loaded]) -> None:
+    """Make each build's spatial index, then each one's backend (on a first start the Numba
+    kernels compile), and log how long it took; an error is logged, and met again by the first
+    request that needs what failed."""
+    started = time.monotonic()
+    try:
+        for loaded in builds.values():
+            _ = loaded.spatial
+        for loaded in builds.values():
+            _ = loaded.backend
+    except Exception:
+        log.exception("the builds could not be made ready to plan on")
+        return
+    log.info("the builds are ready to plan on (%.1f s)", time.monotonic() - started)
 
 
 def _one_field(errors: Sequence[Mapping[str, Any]]) -> dict[str, Any]:

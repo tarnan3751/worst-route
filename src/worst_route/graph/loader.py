@@ -3,8 +3,12 @@
 `load_build(data_dir, region, build_id="latest", backend=...)` reads
 `<data_dir>/graphs/<region>/<build_id>/` with `store.read_build`, every array memory-mapped, so
 worker processes share one copy through the OS page cache, and returns it as `Loaded`: the
-`GraphData`, its `SpatialIndex`, the backend `backend` names (`make_backend`) and the build's
-directory; `Loaded.bbox` is its area (its `params.bbox`, else its nodes' extent), worked out once.
+`GraphData` and the build's directory. Its `SpatialIndex` (`Loaded.spatial`) and the backend
+`backend` names (`Loaded.backend`, `make_backend`) are made on first use and kept: the CSR
+backend's first imports the Numba kernels, which compile then when their cache does not hold them
+(a first start), and the API process makes both in a thread once it starts (`api/app.py`), so it
+listens without waiting for them. Two threads that ask at once may each make one; either serves.
+`Loaded.bbox` is its area (its `params.bbox`, else its nodes' extent), worked out once.
 `Loaded.geometry` reads the build's geometry (`graph/geometry.py`) on first use,
 memory-mapped: the API process draws routes with it, a job's worker never touches it. "latest"
 is the id in `graphs/<region>/latest`, read on every call. The two builds used last stay
@@ -38,9 +42,19 @@ class Loaded:
     """One saved build, ready to plan on."""
 
     data: GraphData
-    spatial: SpatialIndex
-    backend: GraphBackend
     path: Path
+    backend_name: BackendName = DEFAULT_BACKEND
+
+    @cached_property
+    def spatial(self) -> SpatialIndex:
+        """The build's spatial index, made on first use."""
+        return SpatialIndex(self.data)
+
+    @cached_property
+    def backend(self) -> GraphBackend:
+        """The backend `backend_name` names, made on first use (the CSR backend's first imports
+        the Numba kernels, compiling them when their cache does not hold them)."""
+        return make_backend(self.data, self.backend_name)
 
     @cached_property
     def bbox(self) -> tuple[float, float, float, float]:
@@ -85,4 +99,4 @@ def _load(data_dir: Path, region: str, build_id: str, backend: BackendName) -> L
         data = read_build(path)
     except MissingArray as error:
         raise BuildNotFound(str(error)) from None
-    return Loaded(data, SpatialIndex(data), make_backend(data, backend), path)
+    return Loaded(data, path, backend)

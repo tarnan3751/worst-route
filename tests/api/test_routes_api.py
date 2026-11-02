@@ -3,6 +3,7 @@ over once the app has finished it, so an SSE stream is read whole, after its `do
 
 import asyncio
 import json
+import logging
 import shutil
 import sqlite3
 from collections.abc import AsyncGenerator, AsyncIterator
@@ -118,6 +119,20 @@ async def test_health_and_regions_describe_the_loaded_build(data: Path) -> None:
         assert region["tiers"][4] == {"tier": "T4", "nodes": 100, "edges": 360}
         missing = await client.get("/nowhere")
         assert missing.status_code == 404 and missing.json()["code"] == "NOT_FOUND"
+
+
+async def test_the_lifespan_makes_each_build_ready_to_plan_on(
+    data: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="worst_route")
+    config = ApiSettings(data_dir=data, builds=PORTLAND, backend="python", geocoder="none")
+    app = create_app(config)
+    loaded = app.state.api.builds["portland"]
+    assert "spatial" not in vars(loaded) and "backend" not in vars(loaded)  # not with the app
+    async with app.router.lifespan_context(app):
+        await until(lambda: any("ready to plan on" in r.getMessage() for r in caplog.records))
+    assert "spatial" in vars(loaded) and "backend" in vars(loaded)
+    assert loaded.backend.name == "python"
 
 
 async def test_snap_puts_a_stop_on_a_node_for_its_role(data: Path) -> None:

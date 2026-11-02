@@ -4,13 +4,24 @@
 Numba kernels), "python" (`PythonBackend`, the reference) or "auto", which is csr when numba
 imports and python otherwise. Both give the same results, so the choice changes only the
 speed; the backend's `name` says which one was made. `csr_backend` is imported only when it is
-asked for, so the reference never needs numba.
+asked for, so the reference never needs numba. `backend_name(name)` says which one a name makes
+without making it: auto is csr when numba is installed.
 """
+
+import importlib.util
 
 from worst_route.config import DEFAULT_BACKEND, BackendName
 from worst_route.graph.backend import GraphBackend
 from worst_route.graph.data import GraphData
 from worst_route.graph.python_backend import PythonBackend
+
+
+def backend_name(name: BackendName = DEFAULT_BACKEND) -> str:
+    """The `name` of the backend `make_backend` makes for `name`, without making it: auto is csr
+    when numba's spec is found, else python."""
+    if name == "auto":
+        return "csr" if importlib.util.find_spec("numba") is not None else "python"
+    return name
 
 
 def make_backend(data: GraphData, name: BackendName = DEFAULT_BACKEND) -> GraphBackend:

@@ -54,6 +54,16 @@ def test_a_build_without_an_array_names_its_remedy(tmp_path: Path) -> None:
         load_build(tmp_path, "portland", "b1", backend="python")
 
 
+def test_the_spatial_index_and_the_backend_are_made_on_first_use_and_kept(
+    tmp_path: Path,
+) -> None:
+    save(tmp_path, "b1")
+    loaded = load_build(tmp_path, "portland", "b1", backend="python")
+    assert "spatial" not in vars(loaded) and "backend" not in vars(loaded)  # not with the build
+    spatial, backend = loaded.spatial, loaded.backend
+    assert loaded.spatial is spatial and loaded.backend is backend
+
+
 def test_the_geometry_is_read_on_first_use_and_kept(tmp_path: Path) -> None:
     g = save(tmp_path, "b1")
     loaded = load_build(tmp_path, "portland", "b1", backend="python")

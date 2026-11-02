@@ -164,6 +164,55 @@ def test_serve_runs_the_app_for_its_options(
     assert runner.invoke(app, [*args[:3], "--workers", "0"]).exit_code == 2
 
 
+def test_serve_with_csr_and_without_numba_is_one_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import importlib.util
+
+    g = grid_graph(3, 3, 100)
+    g = replace(g, meta={**g.meta, "region": "portland", "build_id": "b1"})
+    write_build(g, tmp_path / "graphs" / "portland" / "b1")
+    found = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util, "find_spec", lambda name, *a: None if name == "numba" else found(name, *a)
+    )
+    monkeypatch.setenv("WORST_ROUTE_DATA", str(tmp_path))
+    settings.cache_clear()
+    args = ["serve", "--region", "portland", "--build-id", "b1", "--backend", "csr"]
+    result = runner.invoke(app, [*args, "--geocoder", "none", "--store", str(tmp_path / "r")])
+    settings.cache_clear()
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "the csr backend needs numba, which did not import: No module named 'numba'\n"
+    )
+
+
+def test_serve_listens_before_it_makes_the_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # On a cold cache, making the CSR backend compiles the kernels: uvicorn gets the app first.
+    import uvicorn
+
+    g = grid_graph(3, 3, 100)
+    g = replace(g, meta={**g.meta, "region": "portland", "build_id": "b1"})
+    write_build(g, tmp_path / "graphs" / "portland" / "b1")
+    made: list[bool] = []
+
+    def run(application: Any, **kw: Any) -> None:
+        loaded = application.state.api.builds["portland"]
+        made.append("backend" in vars(loaded) or "spatial" in vars(loaded))
+
+    monkeypatch.setattr(uvicorn, "run", run)
+    monkeypatch.setenv("WORST_ROUTE_DATA", str(tmp_path))
+    settings.cache_clear()
+    args = ["serve", "--region", "portland", "--build-id", "b1", "--geocoder", "none"]
+    result = runner.invoke(app, [*args, "--store", str(tmp_path / "r")])
+    settings.cache_clear()
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines()[0] == "backend: csr"  # auto, named and not made
+    assert made == [False]
+
+
 def test_serve_takes_several_regions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import uvicorn
 

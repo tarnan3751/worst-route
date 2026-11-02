@@ -1,7 +1,8 @@
 // Bootstrap and wiring (docs/reference/frontend.md): the store, from the URL's state; the map
 // and the panel's parts (today's route at the top, then the day's challenges, asked of the server
 // at start and graded on every route shown, a toast for each one completed; the directions, which
-// highlight their steps on the route layer, among them); the toasts under the map; the served
+// highlight their steps on the route layer, among them); the route's marks over its line (the
+// brand locations it visits, the items it collects); the toasts under the map; the served
 // regions from /regions, the map fitted to all their bboxes, and the build each trip runs on
 // picked from its stops (RegionPicker); a stored route when the URL names one, or today's once it
 // is done for `?daily` (unless a run of the user's own has started first), the URL left alone
@@ -32,6 +33,7 @@ import { Basemap } from "./map/basemap";
 import { CITY_LAYERS, cityAt } from "./map/cities";
 import { DrawLayer, paintDrawing } from "./map/drawLayer";
 import { createMap, fitTo } from "./map/map";
+import { MarksLayer, paintMarks } from "./map/marksLayer";
 import { fetchOutline, paintOutside, withOutside } from "./map/outside";
 import { RouteLayer, paintRoute } from "./map/routeLayer";
 import { StopsLayer } from "./map/stopsLayer";
@@ -82,6 +84,7 @@ followTheme(store, (next) => {
   void applyTheme(next);
   if (routeLayer === null) return; // the map's layers take it once it has loaded
   paintRoute(map, next);
+  paintMarks(map, next);
   paintDrawing(map, next);
   paintOutside(map, next);
   basemap?.show(next.basemap).catch((error: unknown) => store.update({ error: errorBody(error) }));
@@ -164,6 +167,7 @@ addEventListener("keydown", (event) => {
 map.once("load", () => {
   routeLayer = new RouteLayer(map, theme);
   runner = new JobRunner(store, routeLayer, (bounds) => fitTo(map, bounds));
+  new MarksLayer(map, store, theme);
   drawLayer = new DrawLayer(map, store, theme);
   const shown = runner;
   const layer = routeLayer;

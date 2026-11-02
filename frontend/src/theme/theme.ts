@@ -2,7 +2,8 @@
 // with, the route's colours and widths on the map, and the variant of the basemap's tiles. A
 // preset is one `Theme` under presets/, data only; theme/apply.ts writes it on the page as CSS
 // custom properties, and the map's layers take theirs from it (map/routeLayer.ts `paintRoute`,
-// map/drawLayer.ts `paintDrawing`, map/basemap.ts `Basemap`, map/outside.ts `paintOutside`).
+// map/marksLayer.ts `paintMarks`, map/drawLayer.ts `paintDrawing`, map/basemap.ts `Basemap`,
+// map/outside.ts `paintOutside`).
 
 export type ThemeId =
   | "classic"
@@ -33,12 +34,12 @@ export interface ThemeColors {
   link?: string;
   mapBg: string; // behind the tiles while they load
   outside: string; // the land outside the contiguous US, one flat tone (map/outside.ts)
-  start: string; // the stop markers
+  start: string; // the stop markers (the start's also the route's marks)
   via: string;
   end: string;
   markerInk: string;
   route: string[]; // 1 to 4 colours, the route's gradient from start to end
-  routeCasing: string; // the casing under the route and the drawing, the ring of a marker
+  routeCasing: string; // the casing under the route and the drawing; a marker's ring, a mark's
   baseline: string; // the sensible route
   flash: string; // a splice's flash
   highlight: string; // the directions' step

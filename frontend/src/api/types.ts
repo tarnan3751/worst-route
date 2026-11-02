@@ -305,6 +305,15 @@ export interface Validation {
   checked_at: string;
 }
 
+/** A brand location a route visits or an item it collects, in the order the route meets them:
+ * a brand's `label` its name, an item's null. */
+export interface Mark {
+  kind: "brand" | CollectItem;
+  lat: number;
+  lon: number;
+  label: string | null;
+}
+
 /** `GET /routes/{id}`. */
 export interface RouteDocument {
   route_id: string;
@@ -324,6 +333,7 @@ export interface RouteDocument {
   validation: Validation;
   directions?: DirectionStep[]; // absent from servers older than them
   toasts?: string[];
+  marks?: Mark[]; // empty for other objectives than collect and brand; absent from older servers
 }
 
 /** `GET /routes/{id}/directions`. */

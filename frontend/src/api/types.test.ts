@@ -42,6 +42,7 @@ import type {
   JobStatus,
   Leg,
   LineString,
+  Mark,
   Metrics,
   Portfolio,
   PortfolioRun,
@@ -436,6 +437,17 @@ const routeDocument = object<RouteDocument>({
   validation: object<Validation>({ ok: "boolean", checked_at: "string" }),
   directions: optional(array(directionStep)),
   toasts: optional(array("string")),
+  marks: optional(
+    // the recordings predate them
+    array(
+      object<Mark>({
+        kind: literal("brand", "bridge", "toll_booth", "roundabout", "level_crossing"),
+        lat: "number",
+        lon: "number",
+        label: nullable("string"),
+      }),
+    ),
+  ),
 });
 const directionsResult = object<DirectionsResult>({
   route_id: "string",
@@ -802,6 +814,18 @@ describe("the types against docs/reference/api.md", () => {
     const block = /\*\*The route document\*\*[^\n]*\n\n```\n([\s\S]*?)```/.exec(reference)?.[1];
     expect(block).toBeDefined();
     expect(differences(parseFields(block!), routeDocument, "route")).toEqual([]);
+  });
+
+  it("takes the route document's marks, a brand's with its name and an item's without", () => {
+    const route = loadStream("portland-brand-stream").route;
+    const marks = [
+      { kind: "brand", lat: 45.52, lon: -122.68, label: "Starbucks" },
+      { kind: "toll_booth", lat: 45.5, lon: -122.6, label: null },
+    ];
+    expect(problems({ ...route, marks }, routeDocument)).toEqual([]);
+    expect(problems({ ...route, marks: [] }, routeDocument)).toEqual([]);
+    const odd = [{ kind: "letter", lat: 45.52, lon: -122.68, label: "A" }];
+    expect(problems({ ...route, marks: odd }, routeDocument)).not.toEqual([]);
   });
 });
 

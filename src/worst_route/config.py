@@ -612,14 +612,15 @@ DAILY_GAS_PRICE_USD = 3.89
 # The daily challenges (`docs/reference/api.md`, **The daily challenges**): seven a day between
 # towns of the daily route's pool, each type's drawn within its band of straight-line distances
 # (CHALLENGE_BANDS_KM, km; the worst order's four towns every two CHALLENGE_ORDER_KM apart), at
-# most CHALLENGE_DRAWS draws and CHALLENGE_TRIES pre-flights a type. Each setup but no-left's is
-# planned once with CHALLENGE_ATTEMPTS attempts (hard mode's, which converges slowly, with
+# most CHALLENGE_DRAWS draws and CHALLENGE_TRIES pre-flights a type. Each setup is planned once
+# with CHALLENGE_ATTEMPTS attempts (hard mode's, which converges slowly, with
 # CHALLENGE_HARD_ATTEMPTS; the iterations, not the clock, end the run, so every server with the
 # build sets the same bars), and its bar is CHALLENGE_BAR_SHARE of what that run reached, rounded
 # down; a draw whose run collects fewer than CHALLENGE_MIN_FOUND bridges or visits, or whose
-# hard-mode bar would be under CHALLENGE_HARD_MIN_RATIO, is passed over, a count's bar is at least
-# CHALLENGE_MIN_ITEMS, and no-left's bar is CHALLENGE_NO_LEFT_RATIO (strict: no left turn at
-# all). A pilgrimage visits one of
+# hard-mode bar would be under CHALLENGE_HARD_MIN_RATIO, is passed over, and a count's bar is at
+# least CHALLENGE_MIN_ITEMS, from CHALLENGE_TENS_FROM down to the ten. No-left's run (strict: no
+# left turn at all) is passed over under CHALLENGE_NO_LEFT_MIN_RATIO, and its bar is
+# CHALLENGE_NO_LEFT_SHARE of its ratio, down to the tenth. A pilgrimage visits one of
 # CHALLENGE_BRANDS (wikidata ids) with at least CHALLENGE_MIN_LOCATIONS locations in the trip's
 # area. GET /challenges answers for today and the CHALLENGE_DAYS days before.
 CHALLENGE_BANDS_KM: dict[str, tuple[float, float]] = {
@@ -639,7 +640,9 @@ CHALLENGE_BAR_SHARE = 0.8
 CHALLENGE_HARD_MIN_RATIO = 1.5
 CHALLENGE_MIN_FOUND = 4
 CHALLENGE_MIN_ITEMS = 3
-CHALLENGE_NO_LEFT_RATIO = 1.0
+CHALLENGE_TENS_FROM = 100
+CHALLENGE_NO_LEFT_MIN_RATIO = 1.35
+CHALLENGE_NO_LEFT_SHARE = 0.9
 CHALLENGE_MIN_LOCATIONS = 6
 CHALLENGE_DAYS = 30
 CHALLENGE_BRANDS = (

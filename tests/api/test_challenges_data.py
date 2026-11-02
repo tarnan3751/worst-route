@@ -3,9 +3,10 @@
 # of the app's manager in a worker process: the seven each day (today's route made worse on the
 # last, today, only), every challenge's towns within its band (the worst order's every two apart),
 # its request as its setup asks accepted by the pre-flight `POST /jobs` runs (its stops snap, under
-# strict no-left and hard mode too), its bar at its floor or above (hard mode's 1.5×), and its
-# title naming it; the first day again on a server with a store of its own, the same. About a
-# minute a day. Run on demand with `uv run pytest -m data`; skipped without the build or its index.
+# strict no-left and hard mode too), its bar at its floor or above (hard mode's 1.5×, no-left's
+# 1.2×), and its title naming its first town; the first day again on a server with a store of its
+# own, the same. About a minute a day. Run on demand with `uv run pytest -m data`; skipped without
+# the build or its index.
 import math
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -73,11 +74,10 @@ def check_day(loaded: Loaded, day: ChallengesOut, today: bool) -> None:
         goal: dict[str, Any] = challenge.goal.model_dump()
         floors = {"ratio": ("min", 1.0), "hard": ("min_ratio", 1.5), "items": ("min", 3)}
         floors |= {"brand": ("min_visits", 3), "duration": ("min_s", 3600)}
-        floors |= {"no_left": ("min_ratio", 1.0)}
+        floors |= {"no_left": ("min_ratio", 1.2)}
         name, floor = floors[goal["kind"]]
         assert goal[name] >= floor, challenge.id
-        named = challenge.type in ("bridges", "pilgrimage", "worst-order")
-        assert named or setup.stops[0].label in challenge.title
+        assert setup.stops[0].label in challenge.title
 
 
 @pytest.mark.timeout(900)

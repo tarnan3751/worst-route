@@ -1,9 +1,11 @@
 """The daily challenges (`GET /challenges`) on the 20 × 20 lattice, its rows and columns named, with
 bridges on three rows, four brands (two listed chains with enough locations, one without, one
 unlisted), a places index of towns placed on it and the bands scaled to it, the day fixed, each
-plan a job of the app's manager on inline workers: the seven in order with their setups, every draw
-within its band (the worst order's four every two apart), the bars the plans' own rounded down
-(hard mode's planned longer, a bar under its least passed over), the same day twice the same and
+plan a job of the app's manager on inline workers: the seven in order with their setups, their
+titles naming the trip and their blurbs one sentence, every draw within its band (the worst
+order's four every two apart), the bars the plans' own rounded down (no-left's too, a run under
+its least passed over; hard mode's planned longer, a bar under its least passed over; a count of
+100 or more to the ten), the same day twice the same and
 another day others, the next draw when the pre-flight refuses one, a type without a fitting draw
 left out, too few bridges passed over, the pilgrimage's chain and its fallbacks, a warning for a
 plan the clock ended; and over httpx in process, the answer kept per date (made once for two
@@ -211,8 +213,46 @@ async def test_a_day_holds_the_seven_in_order_with_their_setups(served: Path) ->
     stop = setups["long-way"].stops[0]  # type: ignore[union-attr]
     assert (stop.lat, stop.lon) == (round(stop.lat, 6), round(stop.lon, 6))
     no_left = by_type(made)["no-left"]
-    assert no_left.goal.model_dump() == {"kind": "no_left", "min_ratio": 1.0}
-    assert no_left.title.endswith("with no left turns")
+    assert no_left.goal.model_dump()["kind"] == "no_left"
+    assert no_left.goal.model_dump()["min_ratio"] >= 1.2
+
+
+async def test_titles_name_the_trip_and_blurbs_say_how_to_play_it(served: Path) -> None:
+    async with app_on(served) as (_, api):
+        made = by_type(await generated(api))
+    names = {}
+    for kind, challenge in made.items():
+        assert challenge.setup is not None
+        names[kind] = [s.label for s in challenge.setup.stops]
+    goals = {kind: challenge.goal.model_dump() for kind, challenge in made.items()}
+
+    def trip(kind: str) -> str:
+        return f"{names[kind][0]} to {names[kind][1]}"
+
+    def between(kind: str) -> str:
+        return f"{names[kind][0]} and {names[kind][1]}"
+
+    brand = made["pilgrimage"].setup.brand  # type: ignore[union-attr]
+    assert brand is not None
+    first, *rest, last = names["worst-order"]
+    four = f"{', '.join([first, *rest])} and {last}"
+    assert {kind: challenge.title for kind, challenge in made.items()} == {
+        "long-way": f"{trip('long-way')} at {goals['long-way']['min']:g}×",
+        "slow-way": f"{trip('slow-way')} in {goals['slow-way']['min_s'] // 3600} h",
+        "no-left": f"{trip('no-left')} with no left turns at {goals['no-left']['min_ratio']:g}×",
+        "bridges": f"Cross {goals['bridges']['min']} bridges between {between('bridges')}",
+        "pilgrimage": (
+            f"Visit {goals['pilgrimage']['min_visits']} {brand.name} between "
+            f"{between('pilgrimage')}"
+        ),
+        "hard-mode": f"Hard mode: {trip('hard-mode')} at {goals['hard-mode']['min_ratio']:g}×",
+        "worst-order": f"{four} in the worst order at {goals['worst-order']['min']:g}×",
+    }
+    blurbs = {kind: challenge.blurb for kind, challenge in made.items()}
+    assert all(blurb.startswith("Set it up fills in the ") for blurb in blurbs.values())
+    assert all(blurb.endswith(".") and ". " not in blurb for blurb in blurbs.values())  # one
+    assert "the four towns and the worst order" in blurbs["worst-order"]
+    assert f"a pilgrimage to {brand.name}" in blurbs["pilgrimage"]
 
 
 async def test_every_draw_keeps_to_its_band(served: Path) -> None:
@@ -251,8 +291,6 @@ async def test_each_bar_is_its_own_plan_s_result_rounded_down(served: Path) -> N
         made = by_type(await generated(api))
         loaded = api.builds[REGION]
     for place, kind in enumerate(TYPES, start=1):
-        if kind == "no-left":
-            continue
         planned = plan_of(loaded, made[kind], challenge_seed(DAY, place))
         route, goal = planned.route, made[kind].goal.model_dump()
         share = 0.8 * route.metrics.length_m / planned.baseline.length_m
@@ -273,6 +311,10 @@ async def test_each_bar_is_its_own_plan_s_result_rounded_down(served: Path) -> N
             assert goal == {"kind": "brand", "min_visits": max(3, math.floor(0.8 * visits))}
         elif kind == "hard-mode":
             assert goal == {"kind": "hard", "min_ratio": bar} and bar >= 1.5
+        elif kind == "no-left":
+            ratio = route.metrics.length_m / planned.baseline.length_m
+            assert goal == {"kind": "no_left", "min_ratio": math.floor(9 * ratio) / 10}
+            assert ratio >= 1.35
         else:
             assert goal == {"kind": "ratio", "min": bar}
     long_way = made["long-way"]
@@ -291,7 +333,7 @@ def test_the_bars_round_down() -> None:
         20.0,
     ]
     count = challenges_api._count_bar
-    assert [count(n) for n in (4, 5, 10, 11, 683)] == [3, 4, 8, 8, 546]
+    assert [count(n) for n in (4, 5, 10, 11, 124, 125, 683, 758)] == [3, 4, 8, 8, 99, 100, 540, 600]
 
 
 async def test_the_same_day_twice_is_the_same_and_another_day_another(served: Path) -> None:
@@ -353,6 +395,19 @@ def counting(monkeypatch: pytest.MonkeyPatch) -> list[RouteRequestIn]:
     return planned
 
 
+async def test_no_left_is_planned_and_passes_over_a_run_under_its_least(
+    served: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    planned = counting(monkeypatch)
+    monkeypatch.setattr(challenges_api, "CHALLENGE_NO_LEFT_MIN_RATIO", 1000.0)  # none so high
+    monkeypatch.setattr(challenges_api, "CHALLENGE_TRIES", 2)
+    async with app_on(served) as (_, api):
+        assert "no-left" not in by_type(await generated(api))
+    no_left = [b for b in planned if b.constraints.no_left]
+    assert len(no_left) == 2 and {b.max_iterations for b in no_left} == {150}
+    assert all(b.constraints.strict for b in no_left)
+
+
 async def test_hard_mode_plans_longer_and_passes_over_a_bar_under_its_least(
     served: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -379,7 +434,9 @@ async def test_the_pilgrimage_visits_a_listed_chain_with_enough_locations(
             {"id": 0, "name": "Alpha Mart", "wikidata": "Q1"},
             {"id": 2, "name": "Gamma Gas", "wikidata": "Q3"},
         )
-        assert pilgrimage.title.startswith("Visit ") and pilgrimage.title.endswith(brand["name"])
+        assert pilgrimage.title.startswith("Visit ") and f" {brand['name']} between " in (
+            pilgrimage.title
+        )
         # Beta Burger (3 locations) and Local (no wikidata) alone: no pilgrimage at all.
         monkeypatch.setattr(challenges_api, "CHALLENGE_BRANDS", ("Q2",))
         assert "pilgrimage" not in by_type(await generated(api))

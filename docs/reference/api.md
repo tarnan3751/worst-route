@@ -952,7 +952,7 @@ main build, seven of them drawn from the date and the eighth today's route made 
  "challenges": [
   {"id": "long-way-2026-11-02", "type": "long-way",
    "title": "Losantville, IN to Wallace, IN at 15×",
-   "blurb": "The long way round: 15 times the sensible drive, or worse.",
+   "blurb": "Set it up fills in the two towns and the longest route; press Go and finish at 15× the sensible drive or worse.",
    "setup": {"stops": [{"lat": 40.02301, "lon": -85.183899, "label": "Losantville, IN"},
                        {"lat": 39.98733, "lon": -87.147376, "label": "Wallace, IN"}],
              "objective": "distance", "item": null, "brand": null,
@@ -961,19 +961,22 @@ main build, seven of them drawn from the date and the eighth today's route made 
    "goal": {"kind": "ratio", "min": 15.0}},
   {"id": "slow-way-2026-11-02", "type": "slow-way", "title": "Leawood, MO to Crowder, OK in 50 h",
    "setup": {"objective": "time", ...}, "goal": {"kind": "duration", "min_s": 180000}, ...},
-  {"id": "no-left-2026-11-02", "title": "Olive Hill, KY to Rising Sun, IN with no left turns",
+  {"id": "no-left-2026-11-02",
+   "title": "Olive Hill, KY to Rising Sun, IN with no left turns at 2×",
    "setup": {"constraints": {"no_left": true, "strict": true, ...}, ...},
-   "goal": {"kind": "no_left", "min_ratio": 1.0}, ...},
-  {"id": "bridges-2026-11-02", "title": "Cross 606 bridges",
+   "goal": {"kind": "no_left", "min_ratio": 2.0}, ...},
+  {"id": "bridges-2026-11-02", "title": "Cross 600 bridges between Hanover, OH and Milford, OH",
    "setup": {"objective": "collect", "item": "bridge", ...},
-   "goal": {"kind": "items", "item": "bridge", "min": 606}, ...},
-  {"id": "pilgrimage-2026-11-02", "title": "Visit 11 Dollar General",
+   "goal": {"kind": "items", "item": "bridge", "min": 600}, ...},
+  {"id": "pilgrimage-2026-11-02",
+   "title": "Visit 11 Dollar General between Glenfield, ND and Webster, SD",
    "setup": {"objective": "brand", "brand": {"id": 858, "name": "Dollar General",
                                              "wikidata": "Q145168"}, ...},
    "goal": {"kind": "brand", "min_visits": 11}, ...},
   {"id": "hard-mode-2026-11-02", "title": "Hard mode: Bondurant, IA to Brayton, IA at 2×",
    "setup": {"constraints": {"hard": true, ...}, ...}, "goal": {"kind": "hard", "min_ratio": 2.0}},
-  {"id": "worst-order-2026-11-02", "title": "Four towns in the worst order at 11×",
+  {"id": "worst-order-2026-11-02",
+   "title": "Josephville, MO, West City, IL, Cambria, IL and Stewardson, IL in the worst order at 11×",
    "setup": {"stops": [four towns], "reorder": true, ...}, "goal": {"kind": "ratio", "min": 11.0}},
   {"id": "daily-worse-2026-11-02", "type": "daily-worse", "title": "Make today's route worse",
    "blurb": "Open today's route and make it worse once.", "setup": null,
@@ -981,7 +984,12 @@ main build, seven of them drawn from the date and the eighth today's route made 
 ```
 
 - **A challenge** is its `id` (its type and the date: a link to it names its day), its `type`, its
-  `title` (with its bar) and `blurb` (one sentence), its `setup` and its `goal`. The challenges come
+  `title` (its trip, by its towns' labels, and its bar: "A to B at 15×", "A to B in 50 h", "A to B
+  with no left turns at 1.4×", "Cross 600 bridges between A and B", "Visit 11 Dollar General
+  between A and B", "Hard mode: A to B at 2×", "A, B, C and D in the worst order at 11×", the
+  four in the setup's order) and `blurb` (how to play it, one sentence: "Set it up fills in the two
+  towns and the longest route; press Go and finish at 15× the sensible drive or worse."), its
+  `setup` and its `goal`. The challenges come
   in the order of their types (`TYPES`, then `daily-worse`); a type with no draw that fits that day
   is left out, so a day may hold fewer. Today's route made worse is today's only: an earlier date's
   list holds the seven at most.
@@ -996,7 +1004,7 @@ main build, seven of them drawn from the date and the eighth today's route made 
 |---|---|---|---|
 | `long-way` | the longest | `{kind: "ratio", min}`: the route's ratio at least `min` | 150–500 km apart |
 | `slow-way` | the slowest (`objective: "time"`) | `{kind: "duration", min_s}`: its `time_s + delay_s` (driving and the delays at signals and stop signs) at least `min_s`, whole hours | 80–250 km |
-| `no-left` | the longest, `no_left` and `strict` | `{kind: "no_left", min_ratio}`: no left turn (`metrics.turns.left` 0), the ratio at least `min_ratio` (1.0) | 100–300 km |
+| `no-left` | the longest, `no_left` and `strict` | `{kind: "no_left", min_ratio}`: no left turn (`metrics.turns.left` 0), the ratio at least `min_ratio` (never under 1.2) | 100–300 km |
 | `bridges` | `collect` `bridge` | `{kind: "items", item: "bridge", min}`: at least `min` bridges (`metrics.items`) | 30–200 km |
 | `pilgrimage` | `brand`, one of the chains | `{kind: "brand", min_visits}`: at least `min_visits` of its locations (`metrics.brand.visits`) | 30–250 km |
 | `hard-mode` | the longest, `hard` | `{kind: "hard", min_ratio}`: a request under hard mode, its ratio at least `min_ratio` (never under 1.5) | 100–300 km |
@@ -1021,8 +1029,7 @@ the challenge when its setup's request, as the frontend sends it, passes the pre
 runs (`jobs.prepare`, in a thread) and its plan finds enough (below); a refusal is logged and the
 next draw tried, and a type whose draws all fail is left out of the day (logged).
 
-**The bars** come from the trip itself. Each setup but no-left's is planned once, as the daily route
-is: a job of the job manager with no client, in one of its worker processes (it takes one of the
+**The bars** come from the trip itself. Each setup is planned once, as the daily route is: a job of the job manager with no client, in one of its worker processes (it takes one of the
 server's slots, never a client's share), followed to its end by the generation, its route stored
 like any other; with the type's seed, `CHALLENGE_ATTEMPTS` attempts, 2,500, hard mode's 8,000
 (`CHALLENGE_HARD_ATTEMPTS`, since it converges slowly), and the largest budget, 120 s, as a safety
@@ -1031,11 +1038,14 @@ net. A plan the clock ended short of its attempts logs a warning naming the date
 reached, rounded down: a ratio
 (the long way, hard mode, the worst order, in its worst order's baseline) to the half below 10× and
 to the whole from 10×, at least 1×; the slowest route's driving and delays to the whole hour;
-bridges and visits to the whole, at least 3 (`CHALLENGE_MIN_ITEMS`), a draw whose plan finds fewer
-than 4 (`CHALLENGE_MIN_FOUND`) passed over, and so is a hard-mode draw whose bar would be under
-1.5× (`CHALLENGE_HARD_MIN_RATIO`: a plan under 1.875×), so no hard-mode challenge asks for less.
-No-left's bar is 1.0× (`CHALLENGE_NO_LEFT_RATIO`): strict no-left converges near the baseline
-(1.21–1.76× on four trips, below), so the goal is the left turns, none. A user's run at the
+bridges and visits to the whole, at least 3 (`CHALLENGE_MIN_ITEMS`), and from 100
+(`CHALLENGE_TENS_FROM`) to the ten (606 asks for 600), a draw whose plan finds fewer than 4
+(`CHALLENGE_MIN_FOUND`) passed over, and so is a hard-mode draw whose bar would be under 1.5×
+(`CHALLENGE_HARD_MIN_RATIO`: a plan under 1.875×), so no hard-mode challenge asks for less.
+Strict no-left converges near the baseline (1.21–1.76× on four trips, below), so its bar is 90 %
+(`CHALLENGE_NO_LEFT_SHARE`) of its plan's ratio, down to the tenth, and a draw whose plan makes
+less than 1.35× (`CHALLENGE_NO_LEFT_MIN_RATIO`) is passed over: a no-left challenge asks for at
+least 1.2× with no left turn. A user's run at the
 default 20 s budget makes several times 2,500 attempts, so a bar is within reach of the first run
 on the trip, with a fifth to spare for a seed's own luck.
 
@@ -1711,8 +1721,8 @@ helpers; the async tests run on anyio's pytest plugin, asyncio only):
 | `test_static.py` | the site: the build at `/` and its caching, a module's media type, `/health` not at the root, the API under `/api` with its errors, a job run to its end through it (the lifespan ran), the access lines' whole paths; compression: a 256 kB script gzipped to a client accepting it (one `Vary`, its caching, the bytes on the wire gzip's), plain without `Accept-Encoding` (one `Vary` and its length), its 304 with the one `Vary` whatever the client accepts; a page under a kilobyte and a WOFF2 font plain, without a `Vary`, their 304s too; a job's stream, accepting gzip, driven at the ASGI level: plain `text/event-stream`, one event a message from `snapped` to `done`; the route's document gzipped, with its compressed length, and plain; the share image and a whole `.pmtiles` not gzipped |
 | `test_store.py` | the round trip (the stored route validates), unknown ids, the first record kept, what the id covers; a day's row, its graph_version's (the same build id at another one has another), replaced in place; a route's order kept, and a store from before the worst order gaining `order_json`, its rows the identity, once however often it is opened, a column another server added meanwhile counting as there and any other error raised |
 | `test_daily_api.py` | the daily route on the 20 × 20 lattice with a places index of towns placed on it, the day fixed: the draw (every trip within the band, two towns closer than its lower bound never drawn, between incorporated places of the kinds drawn, inside the build's bbox, never a town without a node within 5 km; the same seed the same trips; none when nothing fits), the region with the most states; `GET /daily` planning, then done with the stored route's ratio, stop and attempts, the same answer call after call, the route's labels, seed, attempts, budget, default vehicle and departure (UTC, to the second), with its fuel and arrival, its `/validate` ok; two servers on two stores answering alike, the iterations having ended the run; concurrent first calls planning once; a failed job recorded and submitted again, the day drawn once; a trip the pre-flight refuses giving way to the next, and a day whose ten trips it refuses failed and answered so again without a pre-flight; a full server answering 429 `TOO_MANY_JOBS` with nothing drawn or recorded until a slot frees; a client's `DELETE` refused with `DAILY_JOB` while the job runs, and only reporting it once ended; a job the server cancels failing the day, then planned again; the job outliving a viewer that leaves (no orphan); a call after the job's end recording it before its follower, and a follower never overwriting a later plan; a planning row of a restarted server planned again; a build replaced under its id (`save --force`) planned again on its own row, its route served, the old row kept; a public server's job without a client, at its budget; an index without incorporated places, and no places index, 404 |
-| `test_challenges_api.py` | the daily challenges on the 20 × 20 lattice, its rows and columns named, with bridges on three rows, four brands (two listed chains with enough locations, one listed with three, one without a wikidata id), a places index of towns placed on it and the bands scaled to it, the day fixed, each plan a job of the app's manager on inline workers: the seven in order with their ids and setups (objective, item, constraints, worst order, four stops for it, labels, 6 decimals, the target); every draw within its band and the worst order's every two apart, over three days; each bar the plan of its setup by the engine itself (written out in the test) rounded down; hard mode planned with its own attempts, a bar under its least passed over; the rounding itself; the same day twice the same, another day other towns; a refused pre-flight taking the next draw; a type without a fitting draw left out; too few bridges passed over; the pilgrimage's chain one with enough locations, none from the chains without; a chain visited too little falling back to the other, then the next draw; a plan the clock ended logged with its date and type; `GET /challenges` made once for two concurrent first calls and kept, its shape, today's route made worse today's only (another date made once more, without it; both forgotten a month on); a day kept in the store answered after a restart without being made; a date being made holding up no other; the server's stop cancelling a date's making; the same on two servers; the window's refusals and a malformed date (no `field`); a public server making only today's and answering an earlier date only when kept; a full server's 429 before anything is made and from a plan meanwhile, nothing kept, then made; `NOT_FOUND` without a places index |
-| `test_challenges_data.py` (`data`) | three days of challenges on `us-t3` from `WORST_ROUTE_DATA` with its places index, from 2026-11-02, through `GET /challenges` with the plans in worker processes: the seven each day and today's route made worse on the last (today) only, every challenge's towns within its band, its request accepted by the pre-flight, its bar at its floor or above (hard mode's 1.5×), its title naming its towns; the first day again on a server with a store of its own, the same (about a minute a day; a timeout of 900 s) |
+| `test_challenges_api.py` | the daily challenges on the 20 × 20 lattice, its rows and columns named, with bridges on three rows, four brands (two listed chains with enough locations, one listed with three, one without a wikidata id), a places index of towns placed on it and the bands scaled to it, the day fixed, each plan a job of the app's manager on inline workers: the seven in order with their ids and setups (objective, item, constraints, worst order, four stops for it, labels, 6 decimals, the target); the titles naming each trip and its bar, the blurbs one sentence each; every draw within its band and the worst order's every two apart, over three days; each bar the plan of its setup by the engine itself (written out in the test) rounded down; hard mode planned with its own attempts, a bar under its least passed over; no-left planned with the others' attempts, its bar 90 % of its ratio down to the tenth, a run under 1.35× passed over; the rounding itself (a count of 100 or more to the ten); the same day twice the same, another day other towns; a refused pre-flight taking the next draw; a type without a fitting draw left out; too few bridges passed over; the pilgrimage's chain one with enough locations, none from the chains without; a chain visited too little falling back to the other, then the next draw; a plan the clock ended logged with its date and type; `GET /challenges` made once for two concurrent first calls and kept, its shape, today's route made worse today's only (another date made once more, without it; both forgotten a month on); a day kept in the store answered after a restart without being made; a date being made holding up no other; the server's stop cancelling a date's making; the same on two servers; the window's refusals and a malformed date (no `field`); a public server making only today's and answering an earlier date only when kept; a full server's 429 before anything is made and from a plan meanwhile, nothing kept, then made; `NOT_FOUND` without a places index |
+| `test_challenges_data.py` (`data`) | three days of challenges on `us-t3` from `WORST_ROUTE_DATA` with its places index, from 2026-11-02, through `GET /challenges` with the plans in worker processes: the seven each day and today's route made worse on the last (today) only, every challenge's towns within its band, its request accepted by the pre-flight, its bar at its floor or above (hard mode's 1.5×, no-left's 1.2×), its title naming its first town; the first day again on a server with a store of its own, the same (about a minute a day; a timeout of 900 s) |
 | `test_draw_api.py` | `POST /draw` and `POST /draw/finish` on the drawing board (`tests/engine/graphs.py`): an empty path the start with its legal ways out (the out-edges by hand: a one-way's absent), their names, lengths and shapes; steps with their turns, the stop a move reaches, done with its ratio and line; each refusal with its code and first illegal edge (a node passed, a twin, a turn the straight-only junction forbids, the end before a via, a one-way taken from its head, past the end, an id outside the graph, a strict turn, a road again under hard mode), the path before it drawn, a soft constraint's left turn taken; a finished drawing stored under its content hash with its run drawn by a human, its seed and labels, its document, directions, share image and `/validate`, the same id when finished again, and continued by make it worse; a round trip finished with a seed drawn for it and no ratio; an unfinished drawing and an illegal one refused at finish; the stops those a job's `snapped` event gives; the refusals of the request (an objective, a target, the worst order, a base route, a portfolio, a certificate, an item), an unknown region, a stop outside the bbox, a path over the cap and a negative id; a public server's 240 steps a minute over both endpoints and its ten finished drawings a minute (the same drawing the same route, steps going on); a request's context worked out once whatever the seed and the path, and the last ones kept |
 | `test_draw_data.py` (`data`) | on Portland's build, a route drawn by hand from Powell's round a few blocks to Pioneer Courthouse Square from the moves the server offers (backing up from dead ends), more than twice the sensible route, finished, stored, validated, its share image rendered |
 | `test_sse.py` | path points and node indices along a bent geometry, the per-edge simplification keeping nodes and original values, splices, metrics, the event encoding |

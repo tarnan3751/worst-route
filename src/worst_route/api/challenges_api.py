@@ -9,7 +9,7 @@ takes them (`daily_api.TownPool`), then, for today only, today's route made wors
 
 - `long-way`: A to B at a ratio or worse;
 - `slow-way`: A to B under the slowest mode, taking at least so many hours, delays included;
-- `no-left`: A to B under strict no-left, so no left turn at all (`CHALLENGE_NO_LEFT_RATIO`);
+- `no-left`: A to B under strict no-left, so no left turn at all, at a ratio or worse;
 - `bridges`: at least so many bridges between A and B (`collect`);
 - `pilgrimage`: at least so many locations between A and B of one of the chains of
   `CHALLENGE_BRANDS` (`brand`), one with at least `CHALLENGE_MIN_LOCATIONS` in the trip's area;
@@ -26,18 +26,22 @@ roles; the worst order's first town is drawn uniformly, then three among the tow
 `CHALLENGE_ORDER_KM` of it, kept when every two of the four are within it (start, via, via, end).
 Each draw kept, in order and at most `CHALLENGE_TRIES`, becomes the challenge when its setup's
 request (as the frontend sends it: the automatic tier and leash, as bad as possible) passes the
-pre-flight `POST /jobs` runs (`jobs.prepare`) and, but for no-left, its plan finds at least
-`CHALLENGE_MIN_FOUND` bridges or visits where it counts them, and for hard mode a bar of at least
-`CHALLENGE_HARD_MIN_RATIO`. A plan is a job of the job manager with no client, as the daily route's
-is: a worker process plans it with the type's seed, `CHALLENGE_ATTEMPTS` attempts (hard mode's
-`CHALLENGE_HARD_ATTEMPTS`) and the largest budget as a safety net, its route stored like any other
-(a warning logged when the clock, not the attempts, ended it). The bar is `CHALLENGE_BAR_SHARE` of
-what the plan reached, rounded down: a ratio to the half below 10× and to the whole above (at least
-1×), hours to the whole hour, bridges and visits to the whole (at least `CHALLENGE_MIN_ITEMS`). A
-pilgrimage's chain is drawn with the type's generator among those (each the build's most located
-brand of its wikidata id, worked out once a day) with at least `CHALLENGE_MIN_LOCATIONS` nodes in
-the request's area (`request_masks`, `brand_counts`), another of them when its plan visits too few,
-then the next draw. A type whose draws all fail is left out of the day.
+pre-flight `POST /jobs` runs (`jobs.prepare`) and its plan finds at least `CHALLENGE_MIN_FOUND`
+bridges or visits where it counts them, for hard mode a bar of at least
+`CHALLENGE_HARD_MIN_RATIO`, and for no-left a ratio of at least `CHALLENGE_NO_LEFT_MIN_RATIO`. A
+plan is a job of the job manager with no client, as the daily route's is: a worker process plans
+it with the type's seed, `CHALLENGE_ATTEMPTS` attempts (hard mode's `CHALLENGE_HARD_ATTEMPTS`) and
+the largest budget as a safety net, its route stored like any other (a warning logged when the
+clock, not the attempts, ended it). The bar is `CHALLENGE_BAR_SHARE` of what the plan reached,
+rounded down: a ratio to the half below 10× and to the whole above (at least 1×), hours to the
+whole hour, bridges and visits to the whole (at least `CHALLENGE_MIN_ITEMS`), and from
+`CHALLENGE_TENS_FROM` to the ten; no-left's is `CHALLENGE_NO_LEFT_SHARE` of its ratio, down to the
+tenth. A challenge's title names its trip and its bar ("Cross 600 bridges between A and B"), its
+blurb how to play it, in one sentence. A pilgrimage's chain is drawn with the type's generator
+among those (each the build's most located brand of its wikidata id, worked out once a day) with
+at least `CHALLENGE_MIN_LOCATIONS` nodes in the request's area (`request_masks`, `brand_counts`),
+another of them when its plan visits too few, then the next draw. A type whose draws all fail is
+left out of the day.
 
 The same date, build (`graph_version`), places index and settings give the same challenges on any
 server when the attempts end each plan (or it converges) within the budget, as for the daily route
@@ -99,8 +103,10 @@ from worst_route.config import (
     CHALLENGE_MIN_FOUND,
     CHALLENGE_MIN_ITEMS,
     CHALLENGE_MIN_LOCATIONS,
-    CHALLENGE_NO_LEFT_RATIO,
+    CHALLENGE_NO_LEFT_MIN_RATIO,
+    CHALLENGE_NO_LEFT_SHARE,
     CHALLENGE_ORDER_KM,
+    CHALLENGE_TENS_FROM,
     CHALLENGE_TRIES,
 )
 from worst_route.engine.constraints import Constraints
@@ -244,16 +250,20 @@ async def _made(
     day: date,
 ) -> tuple[ChallengeSetup, ChallengeGoal] | None:
     """The setup and goal of type `kind` on `stops` (pre-flighted, planned), or None when its plan
-    finds too few (or makes too low a hard-mode bar); raises what the pre-flight refuses."""
+    finds too few (or makes too low a hard-mode bar or no-left ratio); raises what the pre-flight
+    refuses."""
     if kind == "pilgrimage":
         return await _pilgrimage(api, loaded, chains, stops, rng, seed, day)
     setup = ChallengeSetup(stops=stops, **SETUPS.get(kind, {}))
     attempts = CHALLENGE_HARD_ATTEMPTS if kind == "hard-mode" else CHALLENGE_ATTEMPTS
     body = _body(loaded, setup, seed, attempts)
     prepared = await asyncio.to_thread(prepare, loaded, body.engine_request(seed))
-    if kind == "no-left":
-        return setup, NoLeftGoal(min_ratio=CHALLENGE_NO_LEFT_RATIO)
     metrics = await _plan(api, loaded, prepared, body, kind, day)
+    if kind == "no-left":
+        ratio = metrics["ratio"]
+        if ratio < CHALLENGE_NO_LEFT_MIN_RATIO:
+            return None
+        return setup, NoLeftGoal(min_ratio=math.floor(10 * CHALLENGE_NO_LEFT_SHARE * ratio) / 10)
     if kind == "slow-way":
         hours = (metrics["time_s"] + metrics["delay_s"]) / 3600
         return setup, DurationGoal(min_s=max(1, math.floor(CHALLENGE_BAR_SHARE * hours)) * 3600)
@@ -366,52 +376,62 @@ def _ratio_bar(ratio: float) -> float:
 
 
 def _count_bar(found: int) -> int:
-    """`CHALLENGE_BAR_SHARE` of `found`, down to the whole, at least `CHALLENGE_MIN_ITEMS`."""
-    return max(CHALLENGE_MIN_ITEMS, math.floor(CHALLENGE_BAR_SHARE * found))
+    """`CHALLENGE_BAR_SHARE` of `found`, down to the whole, at least `CHALLENGE_MIN_ITEMS`, and
+    from `CHALLENGE_TENS_FROM` down to the ten."""
+    bar = max(CHALLENGE_MIN_ITEMS, math.floor(CHALLENGE_BAR_SHARE * found))
+    return bar if bar < CHALLENGE_TENS_FROM else bar - bar % 10
 
 
 def _words(kind: str, setup: ChallengeSetup, goal: ChallengeGoal) -> tuple[str, str]:
-    """The title (with its bar) and the blurb of a challenge."""
+    """The title (the trip and its bar) and the blurb (how to play it) of a challenge."""
     names = [s.label for s in setup.stops]
     trip, between = f"{names[0]} to {names[-1]}", f"{names[0]} and {names[-1]}"
     match goal:
         case RatioGoal(min=bar) if kind == "worst-order":
             towns = f"{', '.join(names[:-1])} and {names[-1]}"
             return (
-                f"Four towns in the worst order at {bar:g}×",
-                f"{towns} in the worst order there is, {bar:g} times the sensible drive or worse.",
+                f"{towns} in the worst order at {bar:g}×",
+                "Set it up fills in the four towns and the worst order; press Go and finish at "
+                f"{bar:g}× the sensible drive or worse.",
             )
         case RatioGoal(min=bar):
             return (
                 f"{trip} at {bar:g}×",
-                f"The long way round: {bar:g} times the sensible drive, or worse.",
+                "Set it up fills in the two towns and the longest route; press Go and finish at "
+                f"{bar:g}× the sensible drive or worse.",
             )
         case DurationGoal(min_s=seconds):
             hours = seconds // 3600
             return (
                 f"{trip} in {hours} h",
-                f"The slow way: {hours} hours or more at the wheel, signals and stop signs "
-                "included.",
+                "Set it up fills in the two towns and the slowest route; press Go and spend "
+                f"{hours} hours or more at the wheel, signals and stop signs included.",
             )
-        case NoLeftGoal():
+        case NoLeftGoal(min_ratio=bar):
             return (
-                f"{trip} with no left turns",
-                "Right turns and straight on all the way: not a single left.",
+                f"{trip} with no left turns at {bar:g}×",
+                "Set it up fills in the two towns and strict no-left; press Go and reach "
+                f"{bar:g}× the sensible drive on right turns and straight on alone.",
             )
         case ItemsGoal(min=count):
-            return f"Cross {count} bridges", f"{count} bridges or more between {between}."
+            return (
+                f"Cross {count} bridges between {between}",
+                "Set it up fills in the two towns and the bridge collector; press Go and cross "
+                f"{count} bridges or more on the way.",
+            )
         case BrandGoal(min_visits=count):
             assert setup.brand is not None
             brand = setup.brand.name
             return (
-                f"Visit {count} {brand}",
-                f"A pilgrimage to {count} {brand} or more between {between}.",
+                f"Visit {count} {brand} between {between}",
+                f"Set it up fills in the two towns and a pilgrimage to {brand}; press Go and pass "
+                f"{count} of them or more on the way.",
             )
         case HardGoal(min_ratio=bar):
             return (
                 f"Hard mode: {trip} at {bar:g}×",
-                f"Each road in one stretch, never driven again once left, {bar:g} times the "
-                "sensible drive or worse.",
+                "Set it up fills in the two towns and hard mode; press Go and reach "
+                f"{bar:g}× the sensible drive with each road driven in one stretch.",
             )
     raise ValueError(f"no words for a {kind} challenge")
 

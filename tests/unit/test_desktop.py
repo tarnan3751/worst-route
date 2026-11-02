@@ -87,6 +87,7 @@ def test_the_loading_page_asks_a_translocated_app_to_move() -> None:
         "/private/var/folders/xy/abc/T/AppTranslocation/0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0/d/"
         "Worst Route.app/Contents/MacOS/Worst Route"
     )
+    assert desktop.translocated(moved) and not desktop.translocated(installed)
     assert desktop.loading_page(installed) == desktop.LOADING
     page = desktop.loading_page(moved)
     assert page.startswith(desktop.LOADING) and "Applications folder first" in page

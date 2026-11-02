@@ -28,10 +28,11 @@ executable started again, which that call turns into the worker. Then:
   (`app_socket`: `config.DESKTOP_PORT`, so the page's origin, and with it the web view's storage,
   is the same at every start; one the system picks when another program may be there, or the one
   `--port` names), and stops it, the job manager terminating the workers.
-- **The window** (macOS and Windows, `run_window`): pywebview on the system's web view
-  (WKWebView, WebView2), first a page saying the app is starting (the first start compiles the
-  kernels; `loading_page` asks to move the app into Applications first when macOS runs it
-  translocated, from a new place each start), then the app once the server listens, if the web
+- **The window** (macOS and Windows, `run_window`): pywebview on the system's web view (WKWebView,
+  WebView2), first a page saying the app is starting (when macOS runs the app translocated, from a
+  new place each start, `loading_page` asks to move it into Applications first, and the page stays
+  up while the kernels compile, as they then do at every start), then the app once the server
+  listens (a first start's kernels compile after it, in the API's thread, `api/app.py`), if the web
   view has WebGL 2, which MapLibre needs; without it the app opens in the system's browser and the
   window says so (closing it stops the engine), and without a web view at all (no WebView2) it opens
   there too, a dialog standing for the window on Windows (`message_box`). Downloads are allowed (the
@@ -49,6 +50,7 @@ previous start left it, checked against the manifest's sha256, and used from the
 
 import argparse
 import contextlib
+import importlib
 import json
 import logging
 import logging.handlers
@@ -84,9 +86,7 @@ HOSTS = ("127.0.0.1", "localhost")  # the only `Host`s the server answers
 Mode = Literal["window", "browser", "headless"]
 
 LOADING = """<!doctype html><meta charset="utf-8"><body style="font:15px system-ui,sans-serif;
-margin:48px;color:#1f2328;background:#f7f7f5"><h2>Worst Route</h2><p>Starting&hellip;</p>
-<p style="color:#6b7280">The first start prepares the route engine for this computer, which takes
-a minute at most; later starts take seconds.</p>"""
+margin:48px;color:#1f2328;background:#f7f7f5"><h2>Worst Route</h2><p>Starting&hellip;</p>"""
 TRANSLOCATED = """<p style="color:#b42318">Move Worst Route to your Applications folder first:
 opened from where it was downloaded, macOS runs it from a new place each time, and it prepares its
 engine again at every start.</p>"""
@@ -170,11 +170,16 @@ def prepare_environment(
         environ.setdefault("MPLCONFIGDIR", str(user / "matplotlib"))
 
 
+def translocated(executable: str = sys.executable) -> bool:
+    """Whether macOS runs the app translocated: an app opened where it was downloaded runs from a
+    random path each time, so Numba's cache, keyed by the path, is compiled again at every start."""
+    return "/AppTranslocation/" in executable
+
+
 def loading_page(executable: str = sys.executable) -> str:
-    """The window's first page; asking to move the app into Applications when macOS runs it
-    translocated (an app opened where it was downloaded runs from a random path each time, so
-    Numba's cache, stamped with the path, is compiled again at every start)."""
-    if "/AppTranslocation/" in executable:
+    """The window's first page; asking to move the app into Applications when it is
+    translocated."""
+    if translocated(executable):
         return LOADING + TRANSLOCATED
     return LOADING
 
@@ -446,6 +451,11 @@ def run_window(build: Callable[[], LocalServer], manifest: Manifest, user: Path,
             server = build()
             servers.append(server)
             server.start()
+            from worst_route.graph.backends import backend_name  # the server's already
+
+            if translocated() and backend_name() == "csr":
+                # its kernels compile at every start: its page (move the app) stays up meanwhile
+                importlib.import_module("worst_route.graph.kernels")  # waits on the API's import
         except Exception as error:  # shown in the window, and logged
             log.exception("the app did not start")
             log_file = _escape(str(user / "worst-route.log"))

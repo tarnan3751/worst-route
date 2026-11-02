@@ -1,20 +1,24 @@
-// The basemap (docs/reference/frontend.md, **Basemap**), the one the server's GET /config names.
+// The basemap (docs/reference/frontend.md, **Basemap**), the one the server's GET /config names,
+// in the variant the theme asks for (grayscale, light or dark; **Themes**).
 //
 // `raster`: OpenStreetMap's raster tiles, desaturated so the route stands out, at hobby volume and
 // with their attribution, as the tile usage policy allows for local use
-// (https://operations.osmfoundation.org/policies/tiles/); MapLibre fetches only the tiles in view.
-// `pmtiles`: Protomaps' vector tiles from a file the server holds, read by byte ranges through
-// the `pmtiles://` protocol (registered in map.ts), drawn in Protomaps' grayscale flavor, muted
-// for the same reason; with the labels when the server has their fonts and icons, without them
-// otherwise. A `pmtiles` basemap without its file draws nothing (and says so on the console):
-// never OSM's tiles in its place. `openfreemap`: OpenFreeMap's vector tiles from its public
-// instance (https://openfreemap.org), drawn in the style the server names (Positron, muted),
-// which `fetchStyle` fetches first: its layers, the sources they read, its fonts and its icons; a
-// style that does not load draws nothing either. The attribution strings are the app's own,
-// never a tileset's.
+// (https://operations.osmfoundation.org/policies/tiles/); MapLibre fetches only the tiles in view;
+// one look, whatever the variant. `pmtiles`: Protomaps' vector tiles from a file the server holds,
+// read by byte ranges through the `pmtiles://` protocol (registered in map.ts), drawn in Protomaps'
+// flavor of the variant (grayscale, muted for the same reason; light; dark); with the labels when
+// the server has their fonts and icons, without them otherwise. The light and dark flavors go
+// without their points of interest, whose icons the server's sprite (grayscale's) lacks. A
+// `pmtiles` basemap without its file draws nothing (and says so on the console): never OSM's tiles
+// in its place. `openfreemap`: OpenFreeMap's vector tiles from its public instance
+// (https://openfreemap.org), drawn in the style the server names (Positron, muted), or for the
+// dark variant OpenFreeMap's Dark (the same URL, `dark` for `positron`), which `fetchStyle` fetches
+// first: its layers, the sources they read, its fonts and its icons; a style that does not load
+// draws nothing either. The attribution strings are the app's own, never a tileset's.
 //
 // `basemapParts` is pure and imports MapLibre's types only, so the tests load it in Node;
-// `addBasemap` puts the parts under whatever the map draws already (the route's layers).
+// `addBasemap` puts the parts under whatever the map draws already (the route's layers), and
+// `Basemap` changes the variant drawn in place, the route's layers and their data kept.
 import { layers, namedFlavor } from "@protomaps/basemaps";
 import type {
   AddLayerObject,
@@ -23,6 +27,7 @@ import type {
   StyleSpecification,
 } from "maplibre-gl";
 import type { BasemapConfig } from "../api/types";
+import type { BasemapVariant } from "../theme/theme";
 
 const LINK = 'target="_blank" rel="noopener"';
 const OSM_COPYRIGHT = `<a href="https://www.openstreetmap.org/copyright" ${LINK}>OpenStreetMap</a>`;
@@ -32,7 +37,7 @@ const OPENFREEMAP_ATTRIBUTION =
   `<a href="https://openfreemap.org" ${LINK}>OpenFreeMap</a> ` +
   `<a href="https://www.openmaptiles.org/" ${LINK}>© OpenMapTiles</a> Data from ${OSM_COPYRIGHT}`;
 const SOURCE = "protomaps";
-const FLAVOR = "grayscale"; // the sprite the server offers is this flavor's (basemap_api.py)
+const SPRITE_FLAVOR = "grayscale"; // the sprite the server offers is this flavor's (basemap_api.py)
 
 /** The map's style before the basemap comes: nothing drawn. */
 export const EMPTY_STYLE: StyleSpecification = { version: 8, sources: {}, layers: [] };
@@ -47,13 +52,20 @@ export interface BasemapParts {
 
 const NO_BASEMAP: BasemapParts = { sources: {}, layers: [], glyphs: null, sprite: null };
 
-/** The parts of `basemap`, its server paths made absolute under `apiRoot` (the page's origin and
- * /api: MapLibre needs absolute URLs, and its templates' braces must stay as they are); for
- * `openfreemap`, those of `style`, its style as `fetchStyle` loaded it (none: nothing drawn). */
+/** The style OpenFreeMap's basemap `style` (Positron) has for `variant`: its Dark for dark. */
+export function styleUrl(style: string | null, variant: BasemapVariant): string | null {
+  return variant === "dark" ? (style?.replace(/\/positron$/, "/dark") ?? null) : style;
+}
+
+/** The parts of `basemap` in `variant`, its server paths made absolute under `apiRoot` (the page's
+ * origin and /api: MapLibre needs absolute URLs, and its templates' braces must stay as they are);
+ * for `openfreemap`, those of `style`, its style for the variant as `fetchStyle` loaded it (none:
+ * nothing drawn). */
 export function basemapParts(
   basemap: BasemapConfig,
   apiRoot: string,
   style: StyleSpecification | null = null,
+  variant: BasemapVariant = "grayscale",
 ): BasemapParts {
   if (basemap.kind === "openfreemap") return style === null ? NO_BASEMAP : styleParts(style);
   if (basemap.kind === "raster") {
@@ -77,7 +89,8 @@ export function basemapParts(
     return NO_BASEMAP;
   }
   const labelled = basemap.glyphs !== null && basemap.sprite !== null;
-  const flavor = namedFlavor(FLAVOR);
+  const named = namedFlavor(variant);
+  const flavor = variant === SPRITE_FLAVOR ? named : { ...named, pois: undefined };
   const source: SourceSpecification = {
     type: "vector",
     url: `pmtiles://${apiRoot}${basemap.tiles}`,
@@ -123,10 +136,16 @@ export async function fetchStyle(url: string | null): Promise<StyleSpecification
   }
 }
 
-/** What `addBasemap` asks of the map. */
+/** What `addBasemap` and `Basemap` ask of the map. */
 export type BasemapMap = Pick<
   MapLibreMap,
-  "addSource" | "addLayer" | "setGlyphs" | "setSprite" | "getLayersOrder"
+  | "addSource"
+  | "addLayer"
+  | "setGlyphs"
+  | "setSprite"
+  | "getLayersOrder"
+  | "removeLayer"
+  | "removeSource"
 >;
 
 /** Add the basemap below the layers the map has already; its style must be loaded. */
@@ -136,4 +155,49 @@ export function addBasemap(map: BasemapMap, parts: BasemapParts): void {
   for (const [id, source] of Object.entries(parts.sources)) map.addSource(id, source);
   const below = map.getLayersOrder()[0];
   for (const layer of parts.layers) map.addLayer(layer, below);
+}
+
+/** The basemap `config` names on `map`, in a variant: `show` draws it, and when the variant
+ * changes takes the last one's layers and sources away and adds the new one's under the route's
+ * layers, which keep their data; for `openfreemap` each variant's style is fetched the first time
+ * it is drawn and kept (one that did not load is asked for again the next time). */
+export class Basemap {
+  readonly #map: BasemapMap;
+  readonly #config: BasemapConfig;
+  readonly #apiRoot: string;
+  #parts: BasemapParts | null = null;
+  readonly #styles = new Map<string, StyleSpecification>(); // OpenFreeMap's, by their URLs
+  #shown: string | null = null; // the look asked for last: raster's one, a flavor, a style's URL
+
+  constructor(map: BasemapMap, config: BasemapConfig, apiRoot: string) {
+    this.#map = map;
+    this.#config = config;
+    this.#apiRoot = apiRoot;
+  }
+
+  /** Draw the basemap in `variant`, unless it looks the same as the one drawn or being drawn. */
+  async show(variant: BasemapVariant): Promise<void> {
+    const { kind } = this.#config;
+    const url = kind === "openfreemap" ? styleUrl(this.#config.style, variant) : null;
+    const look = kind === "raster" ? kind : kind === "pmtiles" ? variant : `${url}`;
+    if (look === this.#shown) return;
+    this.#shown = look;
+    const style = kind === "openfreemap" ? await this.#style(url) : null;
+    if (look !== this.#shown) return; // another variant was asked for meanwhile
+    const parts = basemapParts(this.#config, this.#apiRoot, style, variant);
+    if (this.#parts !== null) {
+      for (const layer of this.#parts.layers) this.#map.removeLayer(layer.id);
+      for (const id of Object.keys(this.#parts.sources)) this.#map.removeSource(id);
+    }
+    addBasemap(this.#map, parts);
+    this.#parts = parts;
+  }
+
+  async #style(url: string | null): Promise<StyleSpecification | null> {
+    const kept = url === null ? undefined : this.#styles.get(url);
+    if (kept !== undefined) return kept;
+    const style = await fetchStyle(url);
+    if (url !== null && style !== null) this.#styles.set(url, style);
+    return style;
+  }
 }

@@ -1,9 +1,10 @@
 // The route on the map (docs/reference/frontend.md, **Live growth**).
 //
-// Four GeoJSON sources: the baseline (the sensible route, grey and dashed), the worst route
-// (with `lineMetrics`, so a `line-gradient` colours it from warm at the start to hot at the end,
-// over a white casing), the flash (each new splice, bright, for 400 ms), and on top the stretch
-// of a step the directions panel points at (`highlight`).
+// Four GeoJSON sources: the baseline (the sensible route, dashed), the worst route (with
+// `lineMetrics`, so a `line-gradient` colours it from the start to the end, over a casing), the
+// flash (each new splice, bright, for 400 ms), and on top the stretch of a step the directions
+// panel points at (`highlight`). Their colours and widths are the theme's (`paintRoute`, at
+// creation and again when the theme changes; docs/reference/frontend.md, **Themes**).
 //
 // The route is kept as the stream sends it (docs/reference/api.md, **Applying the stream**): its
 // [lon, lat] points, and the index among them of each route node (consecutive edges share their
@@ -15,6 +16,7 @@
 // maplibre-gl is imported for its types only, so the tests load this module in Node.
 import type { GeoJSONSource, Map as MapLibreMap } from "maplibre-gl";
 import type { LineString, LonLat } from "../api/types";
+import type { Theme } from "../theme/theme";
 
 /** A route as drawn: its points, and the index among them of each route node. */
 export interface RouteLine {
@@ -45,10 +47,14 @@ export function spliceLine(
 
 const BASELINE = "wr-baseline";
 const ROUTE = "wr-route";
+const CASING = `${ROUTE}-casing`;
 const FLASH = "wr-flash";
 const HIGHLIGHT = "directions-highlight";
 const FLASH_MS = 400;
-const GRADIENT = ["#fdd049", "#f98e2b", "#e8452c", "#b10026"];
+
+/** A paint property of a layer, and its value, as `setPaintProperty` takes them. */
+export type PaintName = Parameters<MapLibreMap["setPaintProperty"]>[1];
+type PaintValue = Parameters<MapLibreMap["setPaintProperty"]>[2];
 
 function lines(coordinates: LonLat[][]) {
   return {
@@ -63,6 +69,27 @@ function lines(coordinates: LonLat[][]) {
   };
 }
 
+/** Colour the route's layers, and size the route and its casing, as `theme` says: the route's
+ * colours spread evenly from its start to its end (one colour, a flat line); a glowing casing in
+ * the route's first colour, wide, translucent and blurred. */
+export function paintRoute(map: Pick<MapLibreMap, "setPaintProperty">, theme: Theme): void {
+  const { colors, shape } = theme;
+  const route = colors.route.length > 1 ? colors.route : [colors.route[0], colors.route[0]];
+  const stops = route.flatMap((color, k) => [k / (route.length - 1), color]);
+  const paint: [string, PaintName, PaintValue][] = [
+    [BASELINE, "line-color", colors.baseline],
+    [CASING, "line-color", shape.glow ? colors.route[0] : colors.routeCasing],
+    [CASING, "line-width", shape.casingWidth],
+    [CASING, "line-opacity", shape.glow ? 0.35 : 0.85],
+    [CASING, "line-blur", shape.glow ? shape.casingWidth / 2 : 0],
+    [ROUTE, "line-width", shape.routeWidth],
+    [ROUTE, "line-gradient", ["interpolate", ["linear"], ["line-progress"], ...stops]],
+    [FLASH, "line-color", colors.flash],
+    [HIGHLIGHT, "line-color", colors.highlight],
+  ];
+  for (const [layer, name, value] of paint) map.setPaintProperty(layer, name, value);
+}
+
 export class RouteLayer {
   readonly #map: MapLibreMap;
   #line: RouteLine = { points: [], index: [] };
@@ -71,8 +98,8 @@ export class RouteLayer {
   #routeDirty = false;
   #flashTimer = 0;
 
-  /** Adds the sources and layers; the map's style must be loaded. */
-  constructor(map: MapLibreMap) {
+  /** Adds the sources and layers, painted as `theme` says; the map's style must be loaded. */
+  constructor(map: MapLibreMap, theme: Theme) {
     this.#map = map;
     for (const id of [BASELINE, FLASH, HIGHLIGHT]) {
       map.addSource(id, { type: "geojson", data: lines([]) });
@@ -84,40 +111,25 @@ export class RouteLayer {
       type: "line",
       source: BASELINE,
       layout: round,
-      paint: { "line-color": "#4b5563", "line-width": 3, "line-dasharray": [2, 1.5] },
+      paint: { "line-width": 3, "line-dasharray": [2, 1.5] },
     });
-    map.addLayer({
-      id: `${ROUTE}-casing`,
-      type: "line",
-      source: ROUTE,
-      layout: round,
-      paint: { "line-color": "#ffffff", "line-width": 7, "line-opacity": 0.85 },
-    });
-    const stops = GRADIENT.flatMap((color, k) => [k / (GRADIENT.length - 1), color]);
-    map.addLayer({
-      id: ROUTE,
-      type: "line",
-      source: ROUTE,
-      layout: round,
-      paint: {
-        "line-width": 4,
-        "line-gradient": ["interpolate", ["linear"], ["line-progress"], ...stops],
-      },
-    });
+    map.addLayer({ id: CASING, type: "line", source: ROUTE, layout: round });
+    map.addLayer({ id: ROUTE, type: "line", source: ROUTE, layout: round });
     map.addLayer({
       id: FLASH,
       type: "line",
       source: FLASH,
       layout: round,
-      paint: { "line-color": "#00e5ff", "line-width": 7, "line-blur": 1 },
+      paint: { "line-width": 7, "line-blur": 1 },
     });
     map.addLayer({
       id: HIGHLIGHT,
       type: "line",
       source: HIGHLIGHT,
       layout: round,
-      paint: { "line-color": "#2563eb", "line-width": 8, "line-opacity": 0.9 },
+      paint: { "line-width": 8, "line-opacity": 0.9 },
     });
+    paintRoute(map, theme);
   }
 
   /** The points drawn now. */

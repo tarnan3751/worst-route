@@ -12,7 +12,8 @@
 // job, and a drawing's par.
 // The basemap the server names (GET /config) goes under the route's layers once the map has
 // loaded (OpenFreeMap's once its style has); the most seeds a job runs there goes to the settings.
-// The page's colours, fonts and shapes are a theme's, classic's (theme/), put on it at once.
+// The page's colours, fonts and shapes are a theme's, classic's (theme/), put on it at once, and
+// so are the map's layers' and the basemap's variant.
 import "./style.css";
 import { API_BASE, errorBody, getConfig, getRegions } from "./api/client";
 import { mountBanner } from "./banner";
@@ -23,7 +24,7 @@ import { DailyRoute, mountDaily, openDailyAtStart } from "./daily/panel";
 import { DirectionsPanel, mountDirections } from "./directions/panel";
 import { Drawing } from "./draw/drawing";
 import { mountDraw } from "./draw/panel";
-import { addBasemap, basemapParts, fetchStyle } from "./map/basemap";
+import { Basemap } from "./map/basemap";
 import { DrawLayer } from "./map/drawLayer";
 import { createMap, fitTo } from "./map/map";
 import { RouteLayer } from "./map/routeLayer";
@@ -137,9 +138,9 @@ addEventListener("keydown", (event) => {
 });
 
 map.once("load", () => {
-  routeLayer = new RouteLayer(map);
+  routeLayer = new RouteLayer(map, classic);
   runner = new JobRunner(store, routeLayer, (bounds) => fitTo(map, bounds));
-  drawLayer = new DrawLayer(map, store);
+  drawLayer = new DrawLayer(map, store, classic);
   const shown = runner;
   const layer = routeLayer;
   drawing = new Drawing(store, drawLayer, {
@@ -160,10 +161,9 @@ map.once("load", () => {
     void openRoute(url.route, store, runner).then((opened) => urlSync.start(opened));
   }
   config
-    .then(async ({ basemap }) => {
-      const style = basemap.kind === "openfreemap" ? await fetchStyle(basemap.style) : null;
-      addBasemap(map, basemapParts(basemap, location.origin + API_BASE, style));
-    })
+    .then(({ basemap }) =>
+      new Basemap(map, basemap, location.origin + API_BASE).show(classic.basemap),
+    )
     .catch((error: unknown) => store.update({ error: errorBody(error) }));
 });
 

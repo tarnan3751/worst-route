@@ -1,14 +1,17 @@
 // A route drawn by hand on the map (docs/reference/frontend.md, **Drawing**): the line drawn so
-// far (`wr-drawn`, violet over a white casing) and, in drawing mode, the node it is at (`wr-at`)
-// and the legal next moves (`wr-choices`: each move's whole edge, green and dashed, a dot where it
-// leads), over the route's layers. Hovering a move names its road in a popup (text, never HTML),
-// its length and the turn into it; `pick` is the move a click at a point takes, the nearest within
-// a few pixels (draw/drawing.ts, `nearestMove`). The map follows the drawing when its end nears
-// the map's edge.
+// far (`wr-drawn`, the theme's draw colour over its casing) and, in drawing mode, the node it is at
+// (`wr-at`) and the legal next moves (`wr-choices`: each move's whole edge, in the theme's par
+// colour and dashed, a dot where it leads), over the route's layers; their colours the theme's
+// (`paintDrawing`, at creation and again when the theme changes). Hovering a move names its road
+// in a popup (text, never HTML), its length and the turn into it; `pick` is the move a click at a
+// point takes, the nearest within a few pixels (draw/drawing.ts, `nearestMove`). The map follows
+// the drawing when its end nears the map's edge.
 import { Popup, type GeoJSONSource, type Map as MapLibreMap } from "maplibre-gl";
 import type { DrawAnswer, DrawMove, LonLat } from "../api/types";
 import { moveLabel, nearestMove, type DrawView } from "../draw/drawing";
 import type { Store } from "../state";
+import type { Theme } from "../theme/theme";
+import type { PaintName } from "./routeLayer";
 
 const DRAWN = "wr-drawn";
 const CHOICES = "wr-choices";
@@ -19,13 +22,30 @@ const PICK_PX = 8;
 const EDGE_PX = 60; // the drawing's end this near the map's edge brings it back into view
 const EMPTY = { type: "FeatureCollection" as const, features: [] };
 
+/** Colour the drawing's layers as `theme` says: the drawing and the node it is at in its draw
+ * colour, the next moves in its par colour, over its casing. */
+export function paintDrawing(map: Pick<MapLibreMap, "setPaintProperty">, theme: Theme): void {
+  const { draw, par, routeCasing } = theme.colors;
+  const paint: [string, PaintName, string][] = [
+    [`${DRAWN}-casing`, "line-color", routeCasing],
+    [DRAWN, "line-color", draw],
+    [CHOICES, "line-color", par],
+    [ENDS, "circle-color", par],
+    [ENDS, "circle-stroke-color", routeCasing],
+    [AT, "circle-color", draw],
+    [AT, "circle-stroke-color", routeCasing],
+  ];
+  for (const [layer, name, value] of paint) map.setPaintProperty(layer, name, value);
+}
+
 export class DrawLayer implements DrawView {
   readonly #map: MapLibreMap;
   readonly #popup = new Popup({ closeButton: false, closeOnClick: false, offset: 10 });
   #moves: DrawMove[] = [];
 
-  /** Adds the sources and layers, over the route's; the map's style must be loaded. */
-  constructor(map: MapLibreMap, store: Store) {
+  /** Adds the sources and layers, over the route's, painted as `theme` says; the map's style
+   * must be loaded. */
+  constructor(map: MapLibreMap, store: Store, theme: Theme) {
     this.#map = map;
     for (const id of [DRAWN, CHOICES, AT]) map.addSource(id, { type: "geojson", data: EMPTY });
     const round = { "line-join": "round", "line-cap": "round" } as const;
@@ -34,14 +54,14 @@ export class DrawLayer implements DrawView {
       type: "line",
       source: DRAWN,
       layout: round,
-      paint: { "line-color": "#ffffff", "line-width": 8, "line-opacity": 0.9 },
+      paint: { "line-width": 8, "line-opacity": 0.9 },
     });
     map.addLayer({
       id: DRAWN,
       type: "line",
       source: DRAWN,
       layout: round,
-      paint: { "line-color": "#7c3aed", "line-width": 5 },
+      paint: { "line-width": 5 },
     });
     map.addLayer({
       id: HIT,
@@ -56,31 +76,22 @@ export class DrawLayer implements DrawView {
       source: CHOICES,
       filter: ["==", ["geometry-type"], "LineString"],
       layout: { "line-cap": "round" },
-      paint: { "line-color": "#059669", "line-width": 5, "line-dasharray": [1.5, 1] },
+      paint: { "line-width": 5, "line-dasharray": [1.5, 1] },
     });
     map.addLayer({
       id: ENDS,
       type: "circle",
       source: CHOICES,
       filter: ["==", ["geometry-type"], "Point"],
-      paint: {
-        "circle-radius": 4,
-        "circle-color": "#059669",
-        "circle-stroke-color": "#ffffff",
-        "circle-stroke-width": 1.5,
-      },
+      paint: { "circle-radius": 4, "circle-stroke-width": 1.5 },
     });
     map.addLayer({
       id: AT,
       type: "circle",
       source: AT,
-      paint: {
-        "circle-radius": 7,
-        "circle-color": "#7c3aed",
-        "circle-stroke-color": "#ffffff",
-        "circle-stroke-width": 2,
-      },
+      paint: { "circle-radius": 7, "circle-stroke-width": 2 },
     });
+    paintDrawing(map, theme);
     map.on("mousemove", HIT, (event) => {
       const edge = event.features?.[0]?.properties?.edge;
       const move = this.#moves.find((m) => m.edge === edge);

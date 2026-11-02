@@ -1,11 +1,20 @@
 // The basemap the server's GET /config names: OSM's raster tiles, Protomaps' vector tiles from
 // the server with or without labels, its URLs absolute under /api, or OpenFreeMap's tiles in the
-// style the server names, fetched first; the attribution the app's own; and addBasemap putting it
-// under the layers the map already draws.
+// style the server names, fetched first; the attribution the app's own; addBasemap putting it
+// under the layers the map already draws; and the theme's variant of it (grayscale, light or
+// dark), changed in place by Basemap.
+import { namedFlavor } from "@protomaps/basemaps";
 import type { StyleSpecification } from "maplibre-gl";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BasemapConfig } from "../api/types";
-import { type BasemapMap, addBasemap, basemapParts, fetchStyle } from "./basemap";
+import {
+  type BasemapMap,
+  Basemap,
+  addBasemap,
+  basemapParts,
+  fetchStyle,
+  styleUrl,
+} from "./basemap";
 
 const ROOT = "http://test/api";
 const NONE = { tiles: null, glyphs: null, sprite: null, style: null };
@@ -138,6 +147,31 @@ describe("basemapParts", () => {
   });
 });
 
+describe("the basemap's variants", () => {
+  it("draws Protomaps' light and dark flavors, without points of interest, in the same fonts", () => {
+    for (const variant of ["light", "dark"] as const) {
+      const parts = basemapParts(LABELLED, ROOT, null, variant);
+      expect(parts.layers[0]).toMatchObject({
+        id: "background",
+        paint: { "background-color": namedFlavor(variant).background },
+      });
+      expect(parts.layers.map((l) => l.id)).not.toContain("pois");
+      expect(parts.sprite).toBe("http://test/api/basemap/sprites/grayscale");
+      const symbols = parts.layers.filter((l) => l.type === "symbol");
+      const fonts = fontsOf(symbols.map((l) => (l as { layout?: Record<string, unknown> }).layout));
+      expect([...fonts].sort()).toEqual([...FETCHED_FONTS].sort());
+    }
+    expect(basemapParts(LABELLED, ROOT, null, "grayscale")).toEqual(basemapParts(LABELLED, ROOT));
+  });
+
+  it("names OpenFreeMap's Dark for the dark variant, Positron otherwise", () => {
+    expect(styleUrl(STYLE_URL, "dark")).toBe("https://tiles.openfreemap.org/styles/dark");
+    expect(styleUrl(STYLE_URL, "light")).toBe(STYLE_URL);
+    expect(styleUrl(STYLE_URL, "grayscale")).toBe(STYLE_URL);
+    expect(styleUrl(null, "dark")).toBeNull();
+  });
+});
+
 describe("fetchStyle", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -193,5 +227,84 @@ describe("addBasemap", () => {
     const { map, calls } = stubMap([]);
     addBasemap(map, basemapParts(RASTER, ROOT));
     expect(calls).toEqual(["source osm", "layer osm before -"]);
+  });
+});
+
+describe("Basemap", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubMap() {
+    const calls: string[] = [];
+    const map = {
+      addSource: (id: string) => void calls.push(`add source ${id}`),
+      addLayer: (layer: { id: string }, before?: string) =>
+        void calls.push(`add ${layer.id} before ${before}`),
+      removeLayer: (id: string) => void calls.push(`remove ${id}`),
+      removeSource: (id: string) => void calls.push(`remove source ${id}`),
+      setGlyphs: () => undefined,
+      setSprite: () => undefined,
+      getLayersOrder: () => ["wr-baseline"],
+    } as unknown as BasemapMap;
+    return { map, calls };
+  }
+
+  it("swaps the variant's layers and sources under the route's, once per look", async () => {
+    const { map, calls } = stubMap();
+    const basemap = new Basemap(map, VECTOR, ROOT);
+    await basemap.show("grayscale");
+    const grayscale = basemapParts(VECTOR, ROOT).layers.map((l) => l.id);
+    expect(calls.filter((c) => c.startsWith("add "))).toHaveLength(grayscale.length + 1);
+    calls.length = 0;
+    await basemap.show("grayscale");
+    expect(calls).toEqual([]);
+    await basemap.show("dark");
+    const dark = basemapParts(VECTOR, ROOT, null, "dark").layers.map((l) => l.id);
+    expect(calls).toEqual([
+      ...grayscale.map((id) => `remove ${id}`),
+      "remove source protomaps",
+      "add source protomaps",
+      ...dark.map((id) => `add ${id} before wr-baseline`),
+    ]);
+  });
+
+  it("fetches OpenFreeMap's style of the variant, and keeps one raster look", async () => {
+    const fetched: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      fetched.push(url);
+      return new Response(JSON.stringify(POSITRON));
+    });
+    const online = stubMap();
+    const basemap = new Basemap(online.map, ONLINE, ROOT);
+    await basemap.show("grayscale");
+    await basemap.show("light"); // Positron as well
+    await basemap.show("dark");
+    await basemap.show("grayscale"); // each style fetched once, then kept
+    expect(fetched).toEqual([STYLE_URL, "https://tiles.openfreemap.org/styles/dark"]);
+    expect(online.calls.filter((c) => c.startsWith("remove "))).toHaveLength(8);
+    const raster = stubMap();
+    const osm = new Basemap(raster.map, RASTER, ROOT);
+    await osm.show("grayscale");
+    await osm.show("dark");
+    expect(raster.calls).toEqual(["add source osm", "add osm before wr-baseline"]);
+  });
+
+  it("asks again for a style that did not load", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    let online = false;
+    const fetched = vi.fn(async () =>
+      online ? new Response(JSON.stringify(POSITRON)) : Promise.reject(new TypeError("offline")),
+    );
+    vi.stubGlobal("fetch", fetched);
+    const basemap = new Basemap(stubMap().map, ONLINE, ROOT);
+    await basemap.show("dark"); // nothing drawn
+    await basemap.show("grayscale");
+    online = true;
+    await basemap.show("dark");
+    await basemap.show("grayscale");
+    expect(fetched).toHaveBeenCalledTimes(4);
+    expect(logged).toHaveBeenCalledTimes(2);
+    logged.mockRestore();
   });
 });

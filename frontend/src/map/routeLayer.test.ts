@@ -5,7 +5,10 @@ import { RECORDINGS, loadStream } from "../__fixtures__/stream";
 import type { LonLat } from "../api/types";
 import { JobRunner } from "../run/controls";
 import { DEFAULT_SETTINGS, IDLE_RUN, Store } from "../state";
-import { RouteLayer, spliceLine, type RouteLine } from "./routeLayer";
+import { classic } from "../theme/presets/classic";
+import { studio } from "../theme/presets/studio";
+import type { Theme } from "../theme/theme";
+import { RouteLayer, paintRoute, spliceLine, type RouteLine } from "./routeLayer";
 
 // A route of `nodes` nodes, every edge drawn with one shape point between its nodes: node k is
 // point 2k, so node_index is [0, 2, 4, ...].
@@ -216,6 +219,7 @@ describe("the alphabet route's better routes on the map", () => {
     const map = {
       addSource: (id: string) => drawn.set(id, []),
       addLayer: () => undefined,
+      setPaintProperty: () => undefined,
       getSource: (id: string) => ({ setData: (data: never) => drawn.get(id)!.push(data) }),
     } as unknown as MapLibreMap;
     vi.stubGlobal("requestAnimationFrame", (draw: () => void) => {
@@ -240,7 +244,7 @@ describe("the alphabet route's better routes on the map", () => {
       regions: null,
       pick: null,
     });
-    const layer = new RouteLayer(map);
+    const layer = new RouteLayer(map, classic);
     await new JobRunner(store, layer, () => {}).go();
     const last = (id: string) => drawn.get(id)!.at(-1)!.features;
     let replaced = 0;
@@ -260,5 +264,53 @@ describe("the alphabet route's better routes on the map", () => {
       route.geometry.coordinates,
     ]);
     expect(layer.points).toEqual(route.geometry.coordinates);
+  });
+});
+
+describe("the route's paint", () => {
+  function painted(theme: Theme): Record<string, unknown> {
+    const paint: Record<string, unknown> = {};
+    const map = {
+      setPaintProperty: (id: string, name: string, value: unknown) => {
+        paint[`${id} ${name}`] = value;
+      },
+    } as unknown as MapLibreMap;
+    paintRoute(map, theme);
+    return paint;
+  }
+
+  it("is the first look's under classic: yellow to dark red over a white casing", () => {
+    expect(painted(classic)).toEqual({
+      "wr-baseline line-color": "#4b5563",
+      "wr-route-casing line-color": "#ffffff",
+      "wr-route-casing line-width": 7,
+      "wr-route-casing line-opacity": 0.85,
+      "wr-route-casing line-blur": 0,
+      "wr-route line-width": 4,
+      "wr-route line-gradient": [
+        "interpolate",
+        ["linear"],
+        ["line-progress"],
+        ...[0, "#fdd049", 1 / 3, "#f98e2b", 2 / 3, "#e8452c", 1, "#b10026"],
+      ],
+      "wr-flash line-color": "#00e5ff",
+      "directions-highlight line-color": "#2563eb",
+    });
+  });
+
+  it("draws one colour as a flat line, and a glow in the route's colour", () => {
+    const flat = painted(studio);
+    expect(flat["wr-route line-gradient"]).toEqual([
+      "interpolate",
+      ["linear"],
+      ["line-progress"],
+      ...[0, "#ff5a1f", 1, "#ff5a1f"],
+    ]);
+    expect(flat["wr-flash line-color"]).toBe("#0ea5a4");
+    const glow = painted({ ...studio, shape: { ...studio.shape, glow: true, casingWidth: 9 } });
+    expect(glow["wr-route-casing line-color"]).toBe("#ff5a1f");
+    expect(glow["wr-route-casing line-width"]).toBe(9);
+    expect(glow["wr-route-casing line-blur"]).toBe(4.5);
+    expect(glow["wr-route-casing line-opacity"]).toBeLessThan(0.85);
   });
 });

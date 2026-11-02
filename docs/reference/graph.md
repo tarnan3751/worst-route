@@ -484,7 +484,9 @@ numpy < 2.6, so a numpy upgrade past 2.5 waits for numba.
 
 `make_backend(data, name=DEFAULT_BACKEND)` (`backends.py`) makes the backend `name` asks for:
 `"csr"`, `"python"`, or `"auto"`, which is `CsrBackend` when numba imports and `PythonBackend`
-otherwise (`csr_backend` is imported only when asked for). `config.DEFAULT_BACKEND` is
+otherwise (`csr_backend` is imported only when asked for); `backend_name(name)` says which
+one it makes without making it (auto: csr when numba's spec is found), as `serve` and the desktop
+app ask before the backend exists. `config.DEFAULT_BACKEND` is
 `"auto"`; `config.BackendName` lists the names. The backends give the same results, so the
 choice changes only the speed. `plan_route` uses
 `make_backend`'s default when it is given no backend, and `worst-route plan` and `validate`
@@ -493,10 +495,15 @@ take `--backend` (`docs/reference/engine.md`).
 ## Loading builds
 
 `load_build(data_dir, region, build_id="latest", *, backend=DEFAULT_BACKEND) -> Loaded(data,
-spatial, backend, path)` (`loader.py`) is how the API process and each job's worker process
+path, backend_name)` (`loader.py`) is how the API process and each job's worker process
 load a build: `read_build` of `<data_dir>/graphs/<region>/<build_id>/`, every array
-memory-mapped (the workers share the OS page cache), its `SpatialIndex`, `make_backend(data,
-backend)` and the build's directory. `Loaded.geometry` reads the build's geometry on first use
+memory-mapped (the workers share the OS page cache), and the build's directory. Its
+`SpatialIndex` (`Loaded.spatial`) and `make_backend(data, backend)` (`Loaded.backend`) are made
+on first use and kept: the CSR backend's first imports the kernels, which compile then when their
+cache does not hold them (**Compilation**). The API process makes both in a thread once it starts
+(`api/app.py`, `warm_builds`: the spatial indexes first), so it listens without waiting for them; a
+request that needs one before then waits for the kernels' import (Python's import lock) or makes
+its own index, and either serves. `Loaded.geometry` reads the build's geometry on first use
 (`read_geometry`, memory-mapped) and keeps it: the API process draws with it, a worker never
 asks.
 `"latest"` is the id in `graphs/<region>/latest`, read on every call, so the cache never pins
@@ -505,7 +512,9 @@ by data directory, region, build id and backend: the region the API serves, and 
 stored route was planned on). A missing `latest` or `meta.json` raises `BuildNotFound` (a
 `FileNotFoundError`) naming the step to run, and so does a build missing an array, with
 `MissingArray`'s line; `make_backend`'s `ImportError` for `csr` without
-numba passes through. On Portland a load takes about 0.35 s in a fresh process, mostly imports.
+numba passes through, from `Loaded.backend`. On Portland, in a fresh process, a load takes about
+0.1 s with its imports (0.35 s when it made the index and the backend too), and the index and the
+backend about 0.25 s more on first use, the kernels loaded from their cache.
 The CLI's `plan` and `validate` keep their own loading, with its one-line errors.
 
 ## Spatial

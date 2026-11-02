@@ -54,7 +54,11 @@ which the frontend asks the server to pick (**Picking a build**) and names in it
 loads each region's build (`--build-id` names the first region's; the others, and the first
 without it, serve their `latest`) and its geometry before it listens, so a missing build, one saved before an array of the format existed
 (`docs/reference/graph.md`, **The build format**), or one without its geometry (the `save
---force` that writes it again) is one line on stderr and exit 1. Then uvicorn serves one process. The jobs live
+--force` that writes it again) is one line on stderr and exit 1. Then uvicorn serves one process.
+Each build's spatial index and backend are made in a thread once it starts (`app.warm_builds`;
+`docs/reference/graph.md`, **Loading builds**), so it listens without waiting for them: on its
+first start after `kernels.py` changes, or with a new `NUMBA_CACHE_DIR`, the Numba kernels compile
+then, and a job asked for meanwhile starts once they have. The jobs live
 in that process's memory, and each search of a job (one, or one a seed for a portfolio:
 **Portfolios**) runs in a worker process of its own, `--workers` at once (default
 `API_MAX_JOBS`, cores − 2). The routes go to `--store`, by default
@@ -72,7 +76,9 @@ first, never one clipped to a bbox, whose index holds only its bbox's towns
 uvicorn's log line names. The job manager's own lines (a job cancelled for want of a subscriber,
 a worker's traceback) go to the same log. `--backend` is the engine's
 (`docs/reference/graph.md`, **Choosing a backend**), and `serve` prints the one it took as
-`plan` does (`backend: csr`): `auto`, the default, is csr when numba imports.
+`plan` does (`backend: csr`), named without making it (`backends.backend_name`): `auto`, the
+default, is csr when numba is installed, and `csr` without numba is one line and exit 1, before
+it listens.
 
 `--geocoder` is the place search's (**Geocoding**): `nominatim`, the default, asks
 `--nominatim-url` (default `https://nominatim.openstreetmap.org`); `none` turns `GET /geocode`

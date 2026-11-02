@@ -33,18 +33,19 @@ uv run --no-sync worst-route-desktop --headless --port 0 --region portland --geo
 [--frontend DIR] [--geocoder nominatim|none]`:
 
 - **The window** (macOS and Windows, by default): pywebview on the system's web view (WKWebView,
-  WebView2). It opens at once on a page saying the app is starting (the first start prepares the
-  route engine: **The first start**), checks that the web view has WebGL 2 (MapLibre needs it), and
-  loads the app from the server once it listens. A web view without WebGL 2 sends the app to the
-  system's browser, and the window says so and that closing it stops the engine. Closing the window
-  stops the server, whose job manager terminates the workers, and so does quitting the app (Cmd+Q,
-  the app menu's Quit): AppKit ends the process then without returning from `webview.start`, but
-  asks pywebview's `closing` event first, on which the app stops its server and waits (a progress
-  stream still open ends at once). Downloads are allowed (the route's
-  GeoJSON), links that open a new tab (the notices page, the share image) open in the system's
-  browser (pywebview's way with them), and the web view's storage is kept between starts (not
-  pywebview's private mode), so the basemap's tiles stay cached. On Windows, an app that finds no
-  web view at all (no WebView2) opens the browser and shows a dialog whose OK stops it.
+  WebView2). It opens at once on a page saying the app is starting, checks that the web view has
+  WebGL 2 (MapLibre needs it), and loads the app from the server once it listens, about a second
+  after the window opens (a first start's kernels compile after that, while the map loads: **The
+  first start**). A web view without WebGL 2 sends the app to the system's browser, and the window
+  says so and that closing it stops the engine. Closing the window stops the server, whose job
+  manager terminates the workers, and so does quitting the app (Cmd+Q, the app menu's Quit): AppKit
+  ends the process then without returning from `webview.start`, but asks pywebview's `closing` event
+  first, on which the app stops its server and waits (a progress stream still open ends at once).
+  Downloads are allowed (the route's GeoJSON), links that open a new tab (the notices page, the
+  share image) open in the system's browser (pywebview's way with them), and the web view's storage
+  is kept between starts (not pywebview's private mode), so the basemap's tiles stay cached. On
+  Windows, an app that finds no web view at all (no WebView2) opens the browser and shows a dialog
+  whose OK stops it.
 - **The browser** (Linux, and `--browser`): the server in the foreground, the system's browser
   opened on it, until Ctrl+C or the terminal closes. Linux has no window: its web views are the
   system's WebKitGTK, which the frozen app cannot carry (its helper processes are found at paths
@@ -145,7 +146,13 @@ named by the app's bundle identifier, `io.github.tarnan3751.worst-route`.
 
 The engine's Numba kernels compile on a computer's first start, into `numba/`, and matplotlib
 builds its font cache into `matplotlib/` the first time a share image is drawn; later starts load
-both. `NUMBA_CACHE_DIR`, `MPLBACKEND` and `MPLCONFIGDIR` are set before either package is imported
+both. The kernels compile in a thread of the API once the server listens (its lifespan's
+`warm_builds`, `docs/reference/api.md`, **Running it**), after each build's spatial index is made,
+so the window shows the map and takes stops meanwhile; a route planned before they are ready starts
+once they are (2.7–3.4 s after it listens, on the dev machine), and a later start loads them in
+that thread in under a second. The basemap's labels (**The basemap**) are copied into `basemap/` on a
+first start too, once the window is up.
+`NUMBA_CACHE_DIR`, `MPLBACKEND` and `MPLCONFIGDIR` are set before either package is imported
 (`desktop.py` imports neither at its top), and the job workers inherit them; one already set is
 kept, but not in a frozen app, where PyInstaller's runtime hook sets `MPLCONFIGDIR` to a new
 temporary directory at every start (with it, the font cache was built again each time, and the
@@ -162,8 +169,9 @@ Downloads, or on its disk image) from a random read-only path, a new one at each
 Translocation); Numba's cache is keyed by its source file's path, so such an app compiles its
 kernels again at every start (and leaves another 1 MB in `numba/` each time). The starting page
 then asks to move Worst Route into Applications first (`loading_page`, when the executable lies
-under `/AppTranslocation/`); moved there, as its disk image invites, it runs from one path and
-compiles once.
+under `/AppTranslocation/`, `translocated`), and stays up while the kernels compile, where an
+app in one place goes on to the map as soon as the server listens; moved there, as its disk image
+invites, it runs from one path and compiles once.
 
 ## The basemap
 
@@ -357,6 +365,24 @@ other lanes kept the load average at 5–25:
   (Numba compiling, its cache 1.1 MB; the slowest the first run of a freshly built app, whose
   libraries macOS checks then, and an earlier probe's took 22 s), a second 1.7–3.4 s (5.2 s at a
   load average of 19).
+- **Starting, since the server listens first** (2026-11-01, Apple M5, the load average 2–6; the
+  frozen app with the builds' indexes and backends made after the server listens, against main's
+  at 7e7fd77, the two alternated on the same data pack; seconds from the launch, by the app's own
+  log): a later start, headless, listens at 0.7 s (main's 1.6–2.3 s), its kernels loaded at
+  1.5–1.6 s; a first start (a new user directory, the app launched before) listens at 0.9–1.1 s
+  (main's 3.8–4.4 s, which compiled first), its kernels compiled at 3.8–4.3 s. In the window, which
+  opens at 0.5–0.8 s (main's at 0.5–0.7 s on a later start and 0.9–1.6 s on a first, which copied
+  the basemap's labels first), the app's page asks for `/api/config` at 1.5–1.6 s on a later start
+  (main's 2.1–3.0 s) and at 1.9–2.7 s on a first start (main's 5.8–6.7 s), the kernels ready at
+  2.4–2.8 s and 5.2–6.6 s. The cut, on a later start: the spatial indexes' KD-trees (0.44 s in the
+  frozen app) and the kernels' load with Numba's import (0.39 s), now after the server listens, and
+  scipy's and pyproj's imports (0.26 s and more), now at their first use. What remains before it
+  listens: the app's imports (0.2 s), the places indexes (0.3–0.5 s, pyarrow and pandas reading
+  format 1's parquet files, which format 2 has replaced since: **Without pyarrow**), the builds'
+  arrays and geometry mapped (0.05 s), uvicorn (0.05 s). The first launch of a freshly built app
+  spends 2.3–2.8 s before its code runs, macOS checking its libraries, either way. The 6 s measured
+  on the installed app's window earlier that day did not recur on an idle machine (2.0–2.9 s to
+  listening in main's window).
 - **Planning** (`tools/desktop_smoke.py --budget 30 --long`, seed 1, eight runs of each trip):
   Powell's to Reed College on Portland's build 65.31–65.55× (504–506 km, converging in about
   20 s); Portland to Bend on `us-t3` 10.47–11.58× (2,684–2,968 km); New York to Los Angeles on

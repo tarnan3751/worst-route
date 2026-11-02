@@ -235,7 +235,10 @@ it but no proxy, a visitor could name any address. The API's stream already send
   or a place searched for; a job's lines with its id, its end with its outcome and route.
 - **`/api/ready`**: 200 when every build served, the route store, a places index for each region
   (its own, or a served one covering its states) and the basemap are there, else 503 naming what
-  is missing; `/api/health` only says the process lives.
+  is missing; `/api/health` only says the process lives. It does not wait for the Numba kernels:
+  on a cold cache (a new image, or an empty `/state/numba`) the server listens and `/ready` says
+  ready before they are compiled, in a thread of its own (`docs/reference/api.md`, **Running
+  it**), and the first job waits for them, a few seconds.
 
 ## Sizing
 

@@ -1,22 +1,51 @@
+/* The theme's colours, fonts and shapes are custom properties on :root, which theme/apply.ts
+   writes from the theme chosen: this stylesheet styles through them and holds no colour, font or
+   radius of its own but the shadows' black and a step's radius, at most 4px. The values below
+   are studio's, the default theme's (themeProperties(studio), which a test holds them to), so the
+   page is styled before the script has run; the theme chosen is written over them. */
 :root {
-  --ink: #1f2328;
-  --muted: #6b7280;
-  --line: #d6d9de;
-  --panel: #f7f7f5;
-  --accent: #d7191c;
-  --start: #1a9850;
-  --via: #2c7fb8;
-  --end: #d7191c;
+  color-scheme: light;
+  --panel: #ffffff;
+  --ink: #101418;
+  --muted: #677383;
+  --line: #e5e8ec;
+  --hover: #fff5f2;
+  --field: #ffffff;
+  --accent: #ff5a1f;
+  --accent-ink: #ffffff;
+  --link: #ff5a1f;
+  --map-bg: #f2f4f7;
+  --start: #0ea5a4;
+  --via: #677383;
+  --end: #ff5a1f;
+  --marker-ink: #ffffff;
+  --route: #ff5a1f;
+  --route-casing: #ffffff;
+  --ghost: rgb(255 255 255 / 70%);
+  --attribution: rgb(255 255 255 / 50%);
+  --attribution-ink: rgb(16 20 24 / 75%);
+  --baseline: #7c8796;
+  --flash: #0ea5a4;
+  --highlight: #0ea5a4;
+  --draw: #ff5a1f;
+  --par: #7c8796;
+  --toast: #fff1eb;
+  --toast-ink: #9a3412;
   --error-bg: #fde8e8;
   --error-ink: #8a1c1c;
-  font-family:
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    Roboto,
-    sans-serif;
+  --font-display: Manrope, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-body: Manrope, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-numbers: Manrope, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --radius: 10px;
+  --marker-radius: 50%;
+  --brand-case: none;
+  font-family: var(--font-body);
   font-size: 14px;
   color: var(--ink);
+  /* Never a faked bold: every theme loads the weights it uses, and some faces exist at one weight
+     only (arcade's pixel faces, at 400), which a synthesized bold would smear. A slant may still
+     be synthesized: no theme loads an italic face, and the directions' jokes are in italics. */
+  font-synthesis: style;
 }
 
 * {
@@ -44,7 +73,9 @@ body {
 
 #panel header h1 {
   margin: 0;
+  font-family: var(--font-display);
   font-size: 22px;
+  text-transform: var(--brand-case);
 }
 
 .tagline {
@@ -59,6 +90,7 @@ body {
 
 #panel h2 {
   margin: 0 0 8px;
+  font-family: var(--font-display);
   font-size: 13px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -75,6 +107,7 @@ body {
 #map {
   position: relative;
   flex: 1;
+  background: var(--map-bg);
 }
 
 /* The toasts, under the map */
@@ -87,7 +120,8 @@ body {
   height: 40px;
   padding: 0 16px;
   border-top: 1px solid var(--line);
-  background: var(--panel);
+  background: var(--toast);
+  color: var(--toast-ink);
   cursor: pointer;
 }
 
@@ -125,7 +159,7 @@ body {
   width: 100%;
   margin-bottom: 8px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius);
 }
 
 .daily-image[hidden] {
@@ -137,7 +171,7 @@ body {
   margin: 0 12px 12px 0;
   padding: 0;
   font: inherit;
-  color: var(--via);
+  color: var(--link);
   text-decoration: underline;
   background: none;
   border: none;
@@ -157,12 +191,12 @@ body {
   align-items: flex-start;
   gap: 8px;
   padding: 6px;
-  border-radius: 6px;
+  border-radius: var(--radius);
 }
 
 .challenge.current {
-  background: #eef4fa;
-  outline: 1px solid var(--via);
+  background: var(--hover);
+  outline: 1px solid var(--link);
 }
 
 .challenge .body {
@@ -182,10 +216,10 @@ body {
   line-height: 20px;
   text-align: center;
   font-weight: 700;
-  color: #fff;
+  color: var(--marker-ink);
   border: 1px solid var(--line);
-  border-radius: 50%;
-  background: #fff;
+  border-radius: var(--marker-radius);
+  background: var(--field);
 }
 
 .challenge.done .challenge-badge {
@@ -197,7 +231,7 @@ body {
   margin: 4px 0 0;
   font-size: 12px;
   font-weight: 600;
-  color: var(--via);
+  color: var(--link);
 }
 
 .challenge button {
@@ -206,8 +240,8 @@ body {
   font: inherit;
   font-size: 12px;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #fff;
+  border-radius: var(--radius);
+  background: var(--field);
   cursor: pointer;
 }
 
@@ -265,15 +299,15 @@ body {
   padding: 5px 8px;
   font: inherit;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius);
 }
 
 .place-search button {
   padding: 5px 10px;
   font: inherit;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #fff;
+  border-radius: var(--radius);
+  background: var(--field);
   cursor: pointer;
 }
 
@@ -303,12 +337,12 @@ body {
   text-align: left;
   border: none;
   border-bottom: 1px solid var(--line);
-  background: #fff;
+  background: var(--field);
   cursor: pointer;
 }
 
 .place-results .place:hover:not(:disabled) {
-  background: #eef4fa;
+  background: var(--hover);
 }
 
 .place-results .place:disabled {
@@ -320,7 +354,7 @@ body {
   display: flex;
   gap: 8px;
   padding: 6px;
-  border-radius: 6px;
+  border-radius: var(--radius);
 }
 
 .stop.has-error {
@@ -371,15 +405,15 @@ body {
   width: 24px;
   height: 24px;
   flex: none;
-  border-radius: 50%;
-  color: #fff;
+  border-radius: var(--marker-radius);
+  color: var(--marker-ink);
   font-weight: 700;
   font-size: 12px;
   background: var(--via);
 }
 
 .stop-marker {
-  border: 2px solid #fff;
+  border: 2px solid var(--route-casing);
   box-shadow: 0 1px 4px rgb(0 0 0 / 40%);
   cursor: grab;
 }
@@ -401,8 +435,8 @@ body {
 .stop-ghost {
   width: 10px;
   height: 10px;
-  border-radius: 50%;
-  background: rgb(255 255 255 / 70%);
+  border-radius: var(--marker-radius);
+  background: var(--ghost);
   border: 2px dashed var(--ink);
 }
 
@@ -417,7 +451,7 @@ body {
   gap: 8px;
   align-items: baseline;
   padding: 8px 12px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--error-bg);
   color: var(--error-ink);
   box-shadow: 0 1px 4px rgb(0 0 0 / 20%);
@@ -435,8 +469,8 @@ body {
   padding: 2px 8px;
   font: inherit;
   border: 1px solid var(--error-ink);
-  border-radius: 6px;
-  background: #fff;
+  border-radius: var(--radius);
+  background: var(--field);
   color: inherit;
   cursor: pointer;
 }
@@ -485,7 +519,7 @@ body {
 .field.has-error {
   margin: -4px -4px 2px;
   padding: 4px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--error-bg);
   outline: 1px solid var(--error-ink);
 }
@@ -539,16 +573,18 @@ body {
   padding: 7px;
   font: inherit;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #fff;
+  border-radius: var(--radius);
+  background: var(--field);
   cursor: pointer;
 }
 
 .buttons button.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
+  font-family: var(--font-display);
   font-weight: 700;
+  text-transform: var(--brand-case);
 }
 
 .buttons button:disabled {
@@ -558,8 +594,8 @@ body {
 
 .buttons button.draw-it {
   grid-column: 1 / -1;
-  border-color: #7c3aed;
-  color: #7c3aed;
+  border-color: var(--draw);
+  color: var(--draw);
   font-weight: 600;
 }
 
@@ -576,7 +612,7 @@ body {
 }
 
 .draw-you {
-  color: #7c3aed;
+  color: var(--draw);
   font-weight: 700;
 }
 
@@ -603,6 +639,7 @@ body {
 }
 
 .stat-ratio {
+  font-family: var(--font-numbers);
   font-size: 34px;
   font-weight: 800;
   color: var(--accent);
@@ -653,7 +690,7 @@ body {
 .step {
   padding: 3px 6px 3px calc(6px + 3.4em);
   text-indent: -3.4em;
-  border-radius: 4px;
+  border-radius: min(var(--radius), 4px);
   font-size: 13px;
 }
 
@@ -679,12 +716,12 @@ body {
 
 .step[data-k]:hover,
 .step[data-k]:focus {
-  background: #eef4fa;
+  background: var(--hover);
   outline: none;
 }
 
 .step[data-k]:focus-visible {
-  outline: 2px solid var(--via);
+  outline: 2px solid var(--link);
 }
 
 .step-stop,
@@ -712,8 +749,8 @@ body {
   padding: 5px 10px;
   font: inherit;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #fff;
+  border-radius: var(--radius);
+  background: var(--field);
   cursor: pointer;
 }
 
@@ -725,6 +762,46 @@ body {
   color: var(--muted);
 }
 
+#share a {
+  color: var(--link);
+}
+
 #credits a {
   color: inherit;
+}
+
+/* MapLibre's controls, in the theme's colours (#map outranks maplibre-gl.css, which comes later):
+   the zoom buttons on --field, their icons drawn in --ink through their own shapes as masks, and
+   the attribution's strip and links */
+
+#map .maplibregl-ctrl-group {
+  background: var(--field);
+}
+
+#map .maplibregl-ctrl-group button + button {
+  border-top-color: var(--line);
+}
+
+#map .maplibregl-ctrl button.maplibregl-ctrl-zoom-in .maplibregl-ctrl-icon,
+#map .maplibregl-ctrl button.maplibregl-ctrl-zoom-out .maplibregl-ctrl-icon {
+  background: var(--ink);
+  mask-position: center;
+  mask-repeat: no-repeat;
+}
+
+#map .maplibregl-ctrl button.maplibregl-ctrl-zoom-in .maplibregl-ctrl-icon {
+  mask-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='29' height='29' viewBox='0 0 29 29'%3E%3Cpath d='M14.5 8.5c-.75 0-1.5.75-1.5 1.5v3h-3c-.75 0-1.5.75-1.5 1.5S9.25 16 10 16h3v3c0 .75.75 1.5 1.5 1.5S16 19.75 16 19v-3h3c.75 0 1.5-.75 1.5-1.5S19.75 13 19 13h-3v-3c0-.75-.75-1.5-1.5-1.5'/%3E%3C/svg%3E");
+}
+
+#map .maplibregl-ctrl button.maplibregl-ctrl-zoom-out .maplibregl-ctrl-icon {
+  mask-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='29' height='29' viewBox='0 0 29 29'%3E%3Cpath d='M10 13c-.75 0-1.5.75-1.5 1.5S9.25 16 10 16h9c.75 0 1.5-.75 1.5-1.5S19.75 13 19 13z'/%3E%3C/svg%3E");
+}
+
+#map .maplibregl-ctrl.maplibregl-ctrl-attrib {
+  background-color: var(--attribution);
+  color: var(--ink);
+}
+
+#map .maplibregl-ctrl-attrib a {
+  color: var(--attribution-ink);
 }

@@ -12,6 +12,7 @@
 // job, and a drawing's par.
 // The basemap the server names (GET /config) goes under the route's layers once the map has
 // loaded (OpenFreeMap's once its style has); the most seeds a job runs there goes to the settings.
+// The page's colours, fonts and shapes are a theme's, classic's (theme/), put on it at once.
 import "./style.css";
 import { API_BASE, errorBody, getConfig, getRegions } from "./api/client";
 import { mountBanner } from "./banner";
@@ -34,10 +35,14 @@ import { DEFAULT_SETTINGS, IDLE_RUN, Store, type Stop } from "./state";
 import { RegionPicker } from "./stops/pick";
 import { PlaceSearch, mountPlaceSearch } from "./stops/search";
 import { mountStopList, placeStop } from "./stops/stopList";
+import { applyTheme } from "./theme/apply";
+import { classic } from "./theme/presets/classic";
 import { Toasts, mountToasts } from "./toasts";
 import { bboxBounds, unionBbox } from "./util/geo";
 
 const byId = (id: string): HTMLElement => document.getElementById(id) as HTMLElement;
+
+void applyTheme(classic);
 
 const url = decodeUrlState(location.search);
 const store = new Store({
